@@ -53,7 +53,7 @@ class BrandAssetsTests(unittest.TestCase):
     def test_every_declared_variant_is_regenerated_without_changing_catalog_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             assets = Path(directory)
-            for name in ("AppIcon.brandassets", "SplashScreenLogo.imageset", "TwozzPixelLogo.imageset"):
+            for name in ("AppIcon.brandassets", "SplashScreenLogo.imageset", "StrozzPixelLogo.imageset"):
                 for source in (brand_assets.ASSETS / name).rglob("Contents.json"):
                     target = assets / source.relative_to(brand_assets.ASSETS)
                     target.parent.mkdir(parents=True, exist_ok=True)
@@ -85,7 +85,7 @@ class BrandAssetsTests(unittest.TestCase):
                         self.assertEqual(image.mode, "RGB", str(relative))
                     else:
                         self.assertEqual(set(np.unique(np.array(image)[..., 3])), {0, 255})
-            self.assertEqual((assets / "TwozzPixelLogo.imageset/twozz_logo.svg").read_bytes(),
+            self.assertEqual((assets / "StrozzPixelLogo.imageset/strozz_logo.svg").read_bytes(),
                              brand_assets.LOGO.read_bytes())
             self.assertEqual(metadata, {path: path.read_bytes() for path in metadata})
 

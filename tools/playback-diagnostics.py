@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pull and summarize Twozz playback diagnostics without external dependencies."""
+"""Pull and summarize Strozz playback diagnostics without external dependencies."""
 
 from __future__ import annotations
 
@@ -768,7 +768,7 @@ def print_entries(entries: list[dict[str, Any]], indent: str = "  ") -> None:
 
 
 def print_text(report: dict[str, Any]) -> None:
-    print("Twozz playback diagnostics")
+    print("Strozz playback diagnostics")
     print(f"Source: {report['source']}")
     print(f"Selection: {report['selection']}")
     for session in report["sessions"]:
@@ -862,7 +862,7 @@ def default_output_path() -> Path:
 
 def pull(device: str | None, bundle: str, output: Path) -> Path:
     if not device:
-        raise DiagnosticsError("pass --device <device-id> or set TWOZZ_DEVICE_ID")
+        raise DiagnosticsError("pass --device <device-id> or set STROZZ_DEVICE_ID")
     if shutil.which("xcrun") is None:
         raise DiagnosticsError("xcrun is required for pull but was not found on PATH")
     if output.exists():
@@ -911,7 +911,7 @@ def add_selection_arguments(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Pull and cautiously summarize Twozz playback JSONL logs."
+        description="Pull and cautiously summarize Strozz playback JSONL logs."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     analyze_parser = subparsers.add_parser(
@@ -924,8 +924,8 @@ def build_parser() -> argparse.ArgumentParser:
         "pull", help="copy PlaybackDiagnostics from a paired Apple TV, then analyze it"
     )
     pull_parser.add_argument(
-        "--device", default=os.environ.get("TWOZZ_DEVICE_ID"),
-        help="paired device identifier (or set TWOZZ_DEVICE_ID)",
+        "--device", default=os.environ.get("STROZZ_DEVICE_ID") or os.environ.get("TWOZZ_DEVICE_ID"),
+        help="paired device identifier (or set STROZZ_DEVICE_ID)",
     )
     pull_parser.add_argument("--bundle", default=DEFAULT_BUNDLE, help="app bundle identifier")
     pull_parser.add_argument(

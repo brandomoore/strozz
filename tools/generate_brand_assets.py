@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Regenerate Twozz's logos, layered tvOS icons, and static Top Shelf artwork.
+"""Regenerate Strozz's logos, layered tvOS icons, and static Top Shelf artwork.
 
-The supplied pixel-art mark in Branding/twozz_logo.svg is the source of truth.
+The supplied pixel-art mark in Branding/strozz_logo.svg is the source of truth.
 The charcoal radial background follows Plozz's brand treatment, tinted purple.
 Existing catalog filenames, dimensions, and parallax layer ordering stay intact.
 """
@@ -17,8 +17,8 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LOGO = ROOT / "Branding/twozz_logo.svg"
-ASSETS = ROOT / "Twozz/Assets.xcassets"
+LOGO = ROOT / "Branding/strozz_logo.svg"
+ASSETS = ROOT / "Strozz/Assets.xcassets"
 BASE_GRAY = (28, 28, 30)
 ACCENT_PURPLE = (143, 82, 246)
 GLOW_STRENGTH = 0.09
@@ -71,7 +71,7 @@ def save_images(imageset: Path, width: int, height: int, render) -> list[Path]:
 
 def generate(assets: Path = ASSETS) -> list[Path]:
     logo = render_logo()
-    vector = assets / "TwozzPixelLogo.imageset/twozz_logo.svg"
+    vector = assets / "StrozzPixelLogo.imageset/strozz_logo.svg"
     shutil.copyfile(LOGO, vector)
     outputs = [vector]
     brand = assets / "AppIcon.brandassets"

@@ -1,1 +1,1 @@
-Open-source Apple TV client for Twitch with native external emote support.
+Your streams, together on Apple TV. Watch Twitch and YouTube, follow supported Kick simulcasts, and enjoy live chat with 7TV, BTTV, and FFZ emotes.

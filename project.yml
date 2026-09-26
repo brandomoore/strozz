@@ -1,5 +1,6 @@
-name: Twozz
+name: Strozz
 options:
+  # Preserve the shipping Apple identity so Strozz updates the existing app.
   bundleIdPrefix: com.thatcube.Twozz
   deploymentTarget:
     tvOS: "18.0"
@@ -10,7 +11,7 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "6.0"
     GENERATE_INFOPLIST_FILE: NO
-    INFOPLIST_FILE: Twozz/App/Info.plist
+    INFOPLIST_FILE: Strozz/App/Info.plist
     TARGETED_DEVICE_FAMILY: "3" # Apple TV
 configFiles:
   Debug: Config/App.xcconfig
@@ -26,11 +27,11 @@ packages:
     url: https://github.com/SDWebImage/SDWebImageWebPCoder.git
     from: 0.14.6
 targets:
-  Twozz:
+  Strozz:
     type: application
     platform: tvOS
     sources:
-      - path: Twozz
+      - path: Strozz
     dependencies:
       - package: SDWebImage
         product: SDWebImage
@@ -45,7 +46,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Twozz
         DEVELOPMENT_TEAM: N8Z5T4AK3X
         CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_ENTITLEMENTS: Twozz/App/Twozz.entitlements
+        CODE_SIGN_ENTITLEMENTS: Strozz/App/Strozz.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
   TopShelfExtension:
     type: com.apple.product-type.tv-app-extension
@@ -53,9 +54,9 @@ targets:
     sources:
       - path: TopShelfExtension/ContentProvider.swift
       - path: TopShelfExtension/TopShelfLiveFeed.swift
-      - path: Twozz/Shared/TopShelfSnapshot.swift
-      - path: Twozz/Shared/TopShelfStore.swift
-      - path: Twozz/Shared/TopShelfCredentialStore.swift
+      - path: Strozz/Shared/TopShelfSnapshot.swift
+      - path: Strozz/Shared/TopShelfStore.swift
+      - path: Strozz/Shared/TopShelfCredentialStore.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Twozz.TopShelfExtension
@@ -71,36 +72,36 @@ targets:
         # ExtensionKit/XPC runtime and instantiates ContentProvider.
         LD_ENTRY_POINT: _NSExtensionMain
         CODE_SIGN_ENTITLEMENTS: TopShelfExtension/TopShelfExtension.entitlements
-  TwozzTests:
+  StrozzTests:
     type: bundle.unit-test
     platform: tvOS
     sources:
-      - path: TwozzTests
+      - path: StrozzTests
     dependencies:
-      - target: Twozz
+      - target: Strozz
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Twozz.Tests
         DEVELOPMENT_TEAM: N8Z5T4AK3X
         CODE_SIGN_STYLE: Automatic
-        # These pure-logic tests use `@testable import Twozz`, so the bundle is
+        # These pure-logic tests use `@testable import Strozz`, so the bundle is
         # hosted by the app. Override the project-wide Info.plist settings, which
         # point at the app's own plist, with a generated one for the test bundle.
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_FILE: ""
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Twozz.app/Twozz"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Strozz.app/Strozz"
         BUNDLE_LOADER: "$(TEST_HOST)"
 schemes:
-  Twozz:
+  Strozz:
     build:
       targets:
-        Twozz: all
+        Strozz: all
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - TwozzTests
+        - StrozzTests
     profile:
       config: Release
     analyze:

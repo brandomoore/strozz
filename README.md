@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="Branding/twozz_logo.svg" alt="Twozz logo" width="128" />
+  <img src="Branding/strozz_logo.svg" alt="Strozz logo" width="128" />
 </p>
 
-<h1 align="center">Twozz</h1>
+<h1 align="center">Strozz</h1>
 
 <p align="center">
-  Watch Twitch on your Apple TV, chat and all — a chat-first big-screen viewer with native 7TV, BTTV, and FFZ emotes.
+  Your streams, together on Apple TV — Twitch, YouTube, and Kick simulcasts, with chat and native emotes.
 </p>
 
 <p align="center">
@@ -14,11 +14,11 @@
   <a href="https://github.com/sponsors/thatcube"><img src="https://img.shields.io/badge/Donate-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white" alt="Donate" /></a>
 </p>
 
-Twozz brings Twitch to the living room the way it should be: the stream and the
-chat, side by side, on the big screen. It's built for the Apple TV remote and
-the tvOS focus engine — not a stretched phone app — and it shows chat the way
-your favorite streamers actually look, with the third-party emotes Twitch itself
-doesn't render. It's free and open source.
+Strozz brings live streams and chat together on the big screen. Watch Twitch and
+YouTube, follow supported creators across their YouTube and Kick simulcasts, or
+watch several channels in multi-view. It's built for the Apple TV remote and the
+tvOS focus engine — not a stretched phone app — with native 7TV, BTTV, and FFZ
+emotes. It's free and open source.
 
 ## Features
 
@@ -32,7 +32,7 @@ doesn't render. It's free and open source.
 - **Rewind live.** Seek back within the live window (DVR) to catch what you
   missed without leaving the stream.
 - **Pick your quality.** Choose Auto or an explicit resolution, ordered
-  highest-to-lowest, and Twozz remembers your choice.
+  highest-to-lowest, and Strozz remembers your choice.
 - **Audio-only mode.** Drop to audio with a reactive visualizer — handy for
   music streams, Just Chatting, or background listening.
 - **Sleep timer.** Set a timer or "end of stream," with a gentle "still
@@ -87,7 +87,7 @@ doesn't render. It's free and open source.
 
 ## Getting started
 
-Twozz is an early, non-commercial project and isn't on the App Store. To run it
+Strozz is an early, non-commercial project and isn't on the App Store. To run it
 you'll build it yourself from source with Xcode and your own Twitch developer
 `client_id`. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full setup.
 
@@ -101,7 +101,7 @@ You'll want:
 ## Reporting bugs & requesting features
 
 Found a bug or have an idea? Please open a
-[GitHub issue](https://github.com/thatcube/Twozz/issues). Including your Apple TV
+[GitHub issue](https://github.com/brandomoore/strozz/issues). Including your Apple TV
 model, tvOS version, and the stream where something went wrong helps a lot. See
 **[CONTRIBUTING.md](CONTRIBUTING.md)** for details.
 
@@ -114,7 +114,16 @@ the low-latency playback work are in
 
 ### Brand assets
 
-`Branding/twozz_logo.svg` is the canonical Twozz mark. The in-app SVG and
+Strozz is the new name of this app. The Xcode project, scheme, source module,
+assets, and repository use Strozz. Apple bundle IDs, the shared App Group, and the
+watch-rewards Keychain service intentionally retain their existing `Twozz`
+identifiers: changing those would create a different app or discard access to
+saved sign-ins. New channel links use `strozz://`; existing `twozz://` and
+`twizz://` links still open. Shared build/cleanup protocol identifiers also stay
+unchanged for interoperability. Historical Git branches and commits are not
+renamed or rewritten.
+
+`Branding/strozz_logo.svg` is the canonical Strozz mark. The in-app SVG and
 transparent splash artwork use it unchanged; the layered tvOS icons and static
 Top Shelf images pair it with charcoal (`#1C1C1E`) and a subtle purple radial
 glow. The background follows Plozz's smooth treatment, without grain or static.
@@ -130,7 +139,7 @@ python3 -m unittest discover -s tools/tests -p 'test_brand_assets.py'
 ### Go Live Alerts
 
 In-app live-channel alerts are **off by default**, including after updating from
-the old opt-out behavior. Twozz asks once on Home after Twitch sign-in: keep
+the old opt-out behavior. Strozz asks once on Home after Twitch sign-in: keep
 alerts off, enable **All Channels**, or **Choose Channels** individually. You
 can change this later under **Settings > Go Live Alerts**.
 **Review Options** reopens the introduction without resetting your selections
@@ -142,9 +151,9 @@ Turning every individual switch back on does not opt into future follows; use
 Enable All for that. Search-based bulk actions affect only matching channels.
 Turning alerts off also dismisses any pending alerts and clears the queue.
 
-These settings stay on this Apple TV and affect only Twozz's in-app alerts.
+These settings stay on this Apple TV and affect only Strozz's in-app alerts.
 Twitch's supported [Get Followed Channels API](https://dev.twitch.tv/docs/api/reference/#get-followed-channels)
-does not expose notification-bell preferences, so Twozz does not sync them or
+does not expose notification-bell preferences, so Strozz does not sync them or
 change Twitch notifications on other devices.
 
 ### YouTube live-source selection
@@ -160,7 +169,7 @@ YouTube source uses the existing bounded retry and Twitch fallback notice.
 ### Playback diagnostics
 
 Live playback lets AVPlayer buffer before starting instead of forcing an
-immediate first frame. With **Prefer YouTube** enabled, Twozz gives source
+immediate first frame. With **Prefer YouTube** enabled, Strozz gives source
 selection up to four seconds before falling back to Twitch; it does not start
 Twitch and then automatically interrupt it with a YouTube switch. YouTube uses
 an eight-second forward-buffer preference to help absorb short delivery gaps.
@@ -182,7 +191,7 @@ category, or search list. Stream-card identity follows the streamer, not the
 broadcast ID or ranking, so tvOS can retain focus through live-status updates
 and reordering. Return refreshes do not force focus back to the first card.
 
-When you return to a stream, Twozz restarts its stall-detection window rather
+When you return to a stream, Strozz restarts its stall-detection window rather
 than counting time spent in the background as a freeze. An empty buffer or
 expired playlist triggers a live-status check and recovery, not a "stream ended"
 verdict: that message requires Twitch to confirm the channel is offline.
@@ -219,14 +228,14 @@ names or chat text.
 ### Twitch rewards and polls (experimental)
 
 In **Settings > Accounts > Twitch Rewards**, connect watch rewards using
-the same Twitch account as your normal Twozz login. This is a separate,
+the same Twitch account as your normal Strozz login. This is a separate,
 unofficial Twitch TV device-code connection: approve it on Twitch's activation
-page using your phone. Twozz never asks for your password. The rewards session
+page using your phone. Strozz never asks for your password. The rewards session
 is stored in a device-only Keychain item, not in preferences or the Top Shelf
 shared container. Disconnecting removes the saved rewards session from the TV;
 it does not sign out your normal account or revoke other Twitch sessions.
 
-When connected, Twozz reports one minute only after observing a minute of
+When connected, Strozz reports one minute only after observing a minute of
 advancing, visible Twitch live playback. Pauses, buffering, seeking, background
 time, previews, YouTube playback, and VODs do not count. In multiview, only the
 selected audio pane is reported; opening the full player stops reporting the
@@ -237,10 +246,10 @@ The gift button in the live Twitch player opens **Polls & Rewards** without
 leaving the video. View your channel-point balance, cast one free vote in the
 current poll, or redeem streamer rewards, highlighted messages, and random,
 chosen, or modified emote unlocks. Each redemption requires confirmation;
-Twozz rechecks the current price, availability, and balance before submitting.
+Strozz rechecks the current price, availability, and balance before submitting.
 Bits purchases, paid poll votes, predictions, and sub-only-message redemptions
 are not supported. Rewards marked **Available on Twitch** cannot be redeemed
-from Twozz.
+from Strozz.
 
 **Collect watch bonuses** is enabled with the rewards connection and can be
 turned off in Accounts. It claims only Twitch-provided bonuses during observed,
@@ -255,10 +264,10 @@ An accepted watch report is **not** proof that Twitch credited it: eligibility
 and streak updates remain Twitch's decision. The integration can stop working
 if Twitch changes its private endpoints; errors are surfaced instead of
 silently claiming success. Twitch TV sessions may have no scheduled expiry
-(`expires_in: 0`); Twozz still validates them on first use after launch and
+(`expires_in: 0`); Strozz still validates them on first use after launch and
 hourly during viewing. Expired or revoked rewards sessions require reconnecting.
 
-Twozz keeps a bounded, local JSONL playback log in its app cache so lag reports
+Strozz keeps a bounded, local JSONL playback log in its app cache so lag reports
 can be examined after the fact. Logging samples playback state about every two
 seconds and records noteworthy state changes, stalls, access/error-log updates,
 seeks, and recovery actions. It is diagnostic observation only; enabling it does
@@ -276,13 +285,13 @@ most recent session:
 python3 tools/playback-diagnostics.py pull --device <device-id>
 ```
 
-Select a paired Apple TV with `--device` or the `TWOZZ_DEVICE_ID` environment
-variable. The default bundle is `com.thatcube.Twozz`. Every pull goes into a new
+Select a paired Apple TV with `--device` or the `STROZZ_DEVICE_ID` environment
+variable. The default bundle is `com.thatcube.Strozz`. Every pull goes into a new
 UTC-stamped directory under the gitignored `playback-diagnostics/` directory:
 
 ```bash
 python3 tools/playback-diagnostics.py pull \
-  --device <device-id> --bundle com.thatcube.Twozz
+  --device <device-id> --bundle com.thatcube.Strozz
 python3 tools/playback-diagnostics.py pull --device <device-id> --session <session-uuid> --json
 ```
 
@@ -347,7 +356,7 @@ not mistaken for the latest request.
 
 ## Donate
 
-Twozz is free and open source, and it always will be. There's no paywall, no
+Strozz is free and open source, and it always will be. There's no paywall, no
 ads, and no obligation to give anything.
 
 If the app has been useful to you and you'd like to chip in toward its upkeep —
@@ -360,7 +369,7 @@ or recurring, whatever suits you.
 
 ## Credits
 
-Twozz is an unofficial, non-commercial Twitch client. It is **not affiliated
+Strozz is an unofficial, non-commercial Twitch client. It is **not affiliated
 with, endorsed by, or sponsored by** Twitch Interactive, Inc. or Amazon. Twitch
 is a trademark of its owner.
 
@@ -386,7 +395,7 @@ services, and belongs to them.
   &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
   <a href="https://github.com/thatcube/Plozz" title="Plozz — Movies &amp; TV on Apple TV, iPhone &amp; iPad"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/thatcube/brando/main/logos/lockups/plozz-dark.svg" /><img src="https://raw.githubusercontent.com/thatcube/brando/main/logos/lockups/plozz-light.svg" height="40" alt="Plozz" /></picture></a>
   &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://github.com/thatcube/Twozz" title="Twozz — Twitch on Apple TV, with real emotes"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/thatcube/brando/main/logos/lockups/twozz-dark.svg" /><img src="https://raw.githubusercontent.com/thatcube/brando/main/logos/lockups/twozz-light.svg" height="40" alt="Twozz" /></picture></a>
+  <a href="https://github.com/brandomoore/strozz" title="Strozz — Twitch on Apple TV, with real emotes"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/thatcube/brando/main/logos/lockups/strozz-dark.svg" /><img src="https://raw.githubusercontent.com/thatcube/brando/main/logos/lockups/strozz-light.svg" height="40" alt="Strozz" /></picture></a>
 </p>
 
 <p align="center">

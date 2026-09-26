@@ -130,7 +130,7 @@ func fetchPlaylist(url: URL) async throws -> String {
 }
 
 func run(channel: String) async {
-  print("=== Twozz Phase 0 — playback POC ===")
+  print("=== Strozz Phase 0 — playback POC ===")
   print("Channel: \(channel)\n")
   do {
     print("[1/3] Requesting PlaybackAccessToken (no integrity token)...")

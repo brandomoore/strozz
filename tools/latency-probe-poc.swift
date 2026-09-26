@@ -305,7 +305,7 @@ func report(_ r: ProbeResult) {
 }
 
 func run(twitch: String, youtubeArg: String?) async {
-  print("=== Twozz — lower-latency alt-source spike ===")
+  print("=== Strozz — lower-latency alt-source spike ===")
   print("Twitch channel: \(twitch)\n")
 
   var results: [ProbeResult] = []

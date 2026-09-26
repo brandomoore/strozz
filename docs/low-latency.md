@@ -29,7 +29,7 @@ on-device observation). Hypotheses go under "Open questions" until proven.
    variants into `StreamQuality` values (each with a direct media-playlist URL).
 2. `PlayerView` plays it with `AVPlayer`.
 3. `LowLatencyHLSProxy` sits in front of the playlists via an
-   `AVAssetResourceLoaderDelegate` on a custom URL scheme (`twozz-ll://`). It is
+   `AVAssetResourceLoaderDelegate` on a custom URL scheme (`strozz-ll://`). It is
    attached whenever prefetch promotion **or** Stream Rewind is on.
 4. Prefetch promotion is **on by default** and powers both Auto profiles. It is
    no longer a user-facing toggle; an advanced **Prefetch Proxy** kill-switch
@@ -39,7 +39,7 @@ on-device observation). Hypotheses go under "Open questions" until proven.
 
 Both Auto rows stay on the adaptive master (ABR active) and keep prefetch
 promotion on; they differ only in how they trade quality for latency. The
-concrete tuning lives in `Twozz/Models/LivePlaybackProfile.swift`:
+concrete tuning lives in `Strozz/Models/LivePlaybackProfile.swift`:
 
 - **Auto · Low Latency** (default) — shallow forward buffer (~3s) to sit near
   the edge (and resume fast after a dip rather than waiting to refill a deep
@@ -202,7 +202,7 @@ of stalling, and the slow-down rides out short buffer dips.
   true edge by ~1–2 segments no matter how buffers are tuned.
 - **tvOS has no `WKWebView`.** Frosty (iOS) reaches low latency by hosting
   Twitch's JS web player in a web view. That escape hatch does not exist on
-  tvOS, so it is not an option for Twozz.
+  tvOS, so it is not an option for Strozz.
 
 ### The proxy
 - The proxy rewrites the **master** playlist (variant + `URI="..."` lines onto

@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HELPER="$ROOT/tools/lib/apple_build_lease.py"
 SHELL_LIB="$ROOT/tools/lib/apple-build-lease.sh"
 WRAPPER="$ROOT/tools/with-apple-build-lease.sh"
-TMP="$(mktemp -d -t twozz-build-interlock-tests)"
+TMP="$(mktemp -d -t strozz-build-interlock-tests)"
 FIXTURE_PIDS=()
 
 cleanup() {
@@ -599,88 +599,88 @@ FAKE_BIN="$TMP/fake-bin"
 mkdir -p "$FAKE_BIN"
 cat > "$FAKE_BIN/xcodebuild" <<'SH'
 #!/usr/bin/env bash
-. "$TWOZZ_SHELL_LIB"
-acquire_apple_build_shared_lease test/twozz-xcbuild-child
+. "$STROZZ_SHELL_LIB"
+acquire_apple_build_shared_lease test/strozz-xcbuild-child
 leases="$HOME/.config/smart-disk-maintenance/apple-build-interlock-v1/leases"
 count="$(find "$leases" -mindepth 1 -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')"
 printf '%s %s %s %s %s\n' \
   "$APPLE_BUILD_LEASE_MODE" "$APPLE_BUILD_LEASE_OWNER" \
   "$APPLE_BUILD_LEASE_LOCAL_ROLE" "$count" \
-  "$APPLE_BUILD_LEASE_ID" > "$TWOZZ_FAKE_RESULT"
+  "$APPLE_BUILD_LEASE_ID" > "$STROZZ_FAKE_RESULT"
 release_apple_build_lease
 SH
 cat > "$FAKE_BIN/xcodegen" <<'SH'
 #!/usr/bin/env bash
-. "$TWOZZ_SHELL_LIB"
-acquire_apple_build_shared_lease test/twozz-xcodegen-child
+. "$STROZZ_SHELL_LIB"
+acquire_apple_build_shared_lease test/strozz-xcodegen-child
 leases="$HOME/.config/smart-disk-maintenance/apple-build-interlock-v1/leases"
 count="$(find "$leases" -mindepth 1 -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')"
 line="$(printf '%s %s %s %s %s %s\n' \
-  "${TWOZZ_FAKE_PHASE:-xcodegen}" \
+  "${STROZZ_FAKE_PHASE:-xcodegen}" \
   "$APPLE_BUILD_LEASE_MODE" "$APPLE_BUILD_LEASE_OWNER" \
   "$APPLE_BUILD_LEASE_LOCAL_ROLE" "$count" \
   "$APPLE_BUILD_LEASE_ID")"
-if [[ "${TWOZZ_FAKE_APPEND:-0}" == "1" ]]; then
-  printf '%s\n' "$line" >> "$TWOZZ_FAKE_RESULT"
+if [[ "${STROZZ_FAKE_APPEND:-0}" == "1" ]]; then
+  printf '%s\n' "$line" >> "$STROZZ_FAKE_RESULT"
 else
-  printf '%s\n' "$line" > "$TWOZZ_FAKE_RESULT"
+  printf '%s\n' "$line" > "$STROZZ_FAKE_RESULT"
 fi
 release_apple_build_lease
 SH
 chmod 755 "$FAKE_BIN/xcodebuild" "$FAKE_BIN/xcodegen"
 
-HOME_XCBUILD="$(new_home twozz-xcbuild)"
+HOME_XCBUILD="$(new_home strozz-xcbuild)"
 XCBUILD_RESULT="$TMP/xcbuild.result"
 test_env "$HOME_XCBUILD" env \
   PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
-  TWOZZ_FAKE_RESULT="$XCBUILD_RESULT" \
-  TWOZZ_SHELL_LIB="$SHELL_LIB" \
+  STROZZ_FAKE_RESULT="$XCBUILD_RESULT" \
+  STROZZ_SHELL_LIB="$SHELL_LIB" \
   "$ROOT/tools/xcbuild.sh" -version >/dev/null
-assert_contains "$XCBUILD_RESULT" "shared twozz/xcbuild inherited 1"
+assert_contains "$XCBUILD_RESULT" "shared strozz/xcbuild inherited 1"
 wait_for_no_records "$HOME_XCBUILD"
 
-HOME_GENERATE="$(new_home twozz-generate-project)"
+HOME_GENERATE="$(new_home strozz-generate-project)"
 GENERATE_RESULT="$TMP/generate-project.result"
 test_env "$HOME_GENERATE" env \
   PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
-  TWOZZ_FAKE_RESULT="$GENERATE_RESULT" \
-  TWOZZ_SHELL_LIB="$SHELL_LIB" \
+  STROZZ_FAKE_RESULT="$GENERATE_RESULT" \
+  STROZZ_SHELL_LIB="$SHELL_LIB" \
   "$ROOT/tools/generate-project.sh" >/dev/null
-assert_contains "$GENERATE_RESULT" "xcodegen shared twozz/generate-project inherited 1"
+assert_contains "$GENERATE_RESULT" "xcodegen shared strozz/generate-project inherited 1"
 wait_for_no_records "$HOME_GENERATE"
 
 # Fastlane's real `sh` action must preserve the authenticated descriptors when
 # it invokes the protected generator. The xcodegen binary remains a fixture.
 FASTLANE_BIN="$(command -v fastlane || true)"
 [[ -n "$FASTLANE_BIN" ]] || fail "fastlane is required for descriptor inheritance coverage"
-HOME_FASTLANE="$(new_home twozz-fastlane-generate)"
+HOME_FASTLANE="$(new_home strozz-fastlane-generate)"
 FASTLANE_RESULT="$TMP/fastlane-generate.result"
 test_env "$HOME_FASTLANE" env \
   PATH="$FAKE_BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
   FASTLANE_SKIP_UPDATE_CHECK=1 \
   FASTLANE_HIDE_CHANGELOG=1 \
   FASTLANE_SKIP_DOCS=1 \
-  TWOZZ_FAKE_RESULT="$FASTLANE_RESULT" \
-  TWOZZ_SHELL_LIB="$SHELL_LIB" \
+  STROZZ_FAKE_RESULT="$FASTLANE_RESULT" \
+  STROZZ_SHELL_LIB="$SHELL_LIB" \
   "$FASTLANE_BIN" generate_project >/dev/null
-assert_contains "$FASTLANE_RESULT" "xcodegen shared twozz/fastlane/generate-project inherited 1"
+assert_contains "$FASTLANE_RESULT" "xcodegen shared strozz/fastlane/generate-project inherited 1"
 wait_for_no_records "$HOME_FASTLANE"
 
 # Load the actual Fastfile with fixture actions and exercise its lane nesting.
 # This verifies that beta/release retain one outer owner and lease ID through
 # generation, archive/export, upload, and the gaps between those phases.
-HOME_FASTLANE_LANES="$(new_home twozz-fastlane-lanes)"
+HOME_FASTLANE_LANES="$(new_home strozz-fastlane-lanes)"
 FASTLANE_LANE_RESULT="$TMP/fastlane-lanes.result"
 test_env "$HOME_FASTLANE_LANES" env \
   PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
-  TWOZZ_FAKE_RESULT="$FASTLANE_LANE_RESULT" \
-  TWOZZ_FAKE_APPEND=1 \
-  TWOZZ_SHELL_LIB="$SHELL_LIB" \
+  STROZZ_FAKE_RESULT="$FASTLANE_LANE_RESULT" \
+  STROZZ_FAKE_APPEND=1 \
+  STROZZ_SHELL_LIB="$SHELL_LIB" \
   ROOT="$ROOT" \
   /usr/bin/ruby <<'RUBY'
 $lanes = {}
 $expected_owner = nil
-$result = ENV.fetch("TWOZZ_FAKE_RESULT")
+$result = ENV.fetch("STROZZ_FAKE_RESULT")
 
 def desc(*)
 end
@@ -725,12 +725,12 @@ ENV["ASC_KEY_PATH"] = "/fixture/AuthKey.p8"
 Dir.chdir(File.join(ENV.fetch("ROOT"), "fastlane")) do
   load File.expand_path("Fastfile")
 
-  $expected_owner = "twozz/fastlane/beta"
-  ENV["TWOZZ_FAKE_PHASE"] = "beta-generate"
+  $expected_owner = "strozz/fastlane/beta"
+  ENV["STROZZ_FAKE_PHASE"] = "beta-generate"
   beta
 
-  $expected_owner = "twozz/fastlane/release"
-  ENV["TWOZZ_FAKE_PHASE"] = "release-generate"
+  $expected_owner = "strozz/fastlane/release"
+  ENV["STROZZ_FAKE_PHASE"] = "release-generate"
   release
 end
 RUBY
@@ -751,12 +751,12 @@ for line in raw_lines:
         lines.append((line[0], line[1], line[2]))
 
 expected = [
-    ("beta-generate", "twozz/fastlane/beta"),
-    ("build", "twozz/fastlane/beta"),
-    ("testflight", "twozz/fastlane/beta"),
-    ("release-generate", "twozz/fastlane/release"),
-    ("build", "twozz/fastlane/release"),
-    ("app-store", "twozz/fastlane/release"),
+    ("beta-generate", "strozz/fastlane/beta"),
+    ("build", "strozz/fastlane/beta"),
+    ("testflight", "strozz/fastlane/beta"),
+    ("release-generate", "strozz/fastlane/release"),
+    ("build", "strozz/fastlane/release"),
+    ("app-store", "strozz/fastlane/release"),
 ]
 if [(phase, owner) for phase, owner, _ in lines] != expected:
     raise SystemExit(f"unexpected Fastlane phases: {lines!r}")
@@ -767,14 +767,14 @@ for offset in (0, 3):
 PY
 wait_for_no_records "$HOME_FASTLANE_LANES"
 
-# Every current Twozz writer surface is tied to the protocol. Legacy worktrees,
+# Every current Strozz writer surface is tied to the protocol. Legacy worktrees,
 # raw tools, and future writer categories remain blocked by rollout policy.
-assert_source_contains "fastlane/Fastfile" 'AppleBuildLease.with_shared("twozz/fastlane/generate-project")'
-assert_source_contains "fastlane/Fastfile" 'AppleBuildLease.with_shared("twozz/fastlane/build")'
-assert_source_contains "fastlane/Fastfile" 'AppleBuildLease.with_shared("twozz/fastlane/beta")'
-assert_source_contains "fastlane/Fastfile" 'AppleBuildLease.with_shared("twozz/fastlane/release")'
-assert_source_contains "tools/generate-project.sh" 'acquire_apple_build_shared_lease "twozz/generate-project"'
-assert_source_contains "tools/xcbuild.sh" 'acquire_apple_build_shared_lease "twozz/xcbuild"'
+assert_source_contains "fastlane/Fastfile" 'AppleBuildLease.with_shared("strozz/fastlane/generate-project")'
+assert_source_contains "fastlane/Fastfile" 'AppleBuildLease.with_shared("strozz/fastlane/build")'
+assert_source_contains "fastlane/Fastfile" 'AppleBuildLease.with_shared("strozz/fastlane/beta")'
+assert_source_contains "fastlane/Fastfile" 'AppleBuildLease.with_shared("strozz/fastlane/release")'
+assert_source_contains "tools/generate-project.sh" 'acquire_apple_build_shared_lease "strozz/generate-project"'
+assert_source_contains "tools/xcbuild.sh" 'acquire_apple_build_shared_lease "strozz/xcbuild"'
 assert_source_contains "tools/bootstrap-worktree.sh" './tools/generate-project.sh'
 assert_source_contains "AGENTS.md" 'Do not bypass these wrappers with raw `xcodebuild` or'
 assert_source_contains "CONTRIBUTING.md" './tools/generate-project.sh'

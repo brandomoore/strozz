@@ -1,4 +1,4 @@
-# Fastfile — App Store Connect automation for Twozz (tvOS)
+# Fastfile — App Store Connect automation for Strozz (tvOS)
 #
 # Authentication uses an App Store Connect API key (no Apple ID / 2FA needed),
 # which is required for unattended runs and CI. Provide these via env vars
@@ -18,8 +18,8 @@ require "shellwords"
 require File.expand_path("../tools/lib/apple_build_lease", __dir__)
 
 APP_IDENTIFIER = "com.thatcube.Twozz"
-SCHEME         = "Twozz"
-XCODEPROJ      = "Twozz.xcodeproj"
+SCHEME         = "Strozz"
+XCODEPROJ      = "Strozz.xcodeproj"
 OUTPUT_DIR     = "build"
 # tvOS apps are a distinct App Store "platform"; deliver/pilot default to iOS
 # unless told otherwise, so every upload must specify this explicitly.
@@ -44,14 +44,14 @@ end
 
 desc "Regenerate the Xcode project from project.yml via XcodeGen"
 lane :generate_project do
-  AppleBuildLease.with_shared("twozz/fastlane/generate-project") do
+  AppleBuildLease.with_shared("strozz/fastlane/generate-project") do
     sh("cd .. && ./tools/generate-project.sh")
   end
 end
 
 desc "Archive and export a signed App Store .ipa (no upload)"
 lane :build do |options|
-  AppleBuildLease.with_shared("twozz/fastlane/build") do
+  AppleBuildLease.with_shared("strozz/fastlane/build") do
     generate_project
     # Let Xcode create/download the distribution certificate and provisioning
     # profile on first run, authenticating with the same App Store Connect API key.
@@ -80,7 +80,7 @@ end
 
 desc "Build and upload a new build to TestFlight"
 lane :beta do
-  AppleBuildLease.with_shared("twozz/fastlane/beta") do
+  AppleBuildLease.with_shared("strozz/fastlane/beta") do
     api_key = asc_api_key
     build
     upload_to_testflight(
@@ -109,7 +109,7 @@ end
 
 desc "Build, upload to App Store, and push metadata"
 lane :release do
-  AppleBuildLease.with_shared("twozz/fastlane/release") do
+  AppleBuildLease.with_shared("strozz/fastlane/release") do
     api_key = asc_api_key
     build
     upload_to_app_store(

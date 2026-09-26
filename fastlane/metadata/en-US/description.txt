@@ -1,10 +1,13 @@
-Twozz is a fast, native Apple TV player for Twitch — free and open source.
+Strozz brings live streams and chat together on Apple TV — free and open source.
 
 • Native tvOS experience built for the big screen
+• Watch Twitch and YouTube live streams
+• Follow supported creators across YouTube and Kick simulcasts
+• Watch several channels at once with multi-view
 • Live Twitch chat with 7TV, BTTV, and FFZ emote support
-• Combine Twitch and YouTube live chat in a single view
+• Combine supported Twitch, YouTube, and Kick live chats in a single view
 • Incoming raid detection so you can follow the action
 • Deep chat appearance customization
 • Dark, Light, and OLED themes
 
-Twozz is open source and not affiliated with, endorsed by, or sponsored by Twitch or Amazon. All trademarks are the property of their respective owners.
+Strozz is open source and not affiliated with, endorsed by, or sponsored by Twitch, Amazon, YouTube, Google, or Kick. All trademarks are the property of their respective owners.

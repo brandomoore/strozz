@@ -30,6 +30,12 @@ directory `ASC_KEY_PATH` points at); only its path is referenced.
 
 ## Shipping a build
 
+The project and scheme are `Strozz`. Keep `APP_IDENTIFIER` set to
+`com.thatcube.Twozz`: Apple identifies the existing app and its TestFlight builds
+by this immutable bundle ID, not by the displayed name. The App Store Connect
+name and the metadata in `metadata/en-US` use **Strozz**. Do not create a second
+app record or replace the App Group/Keychain identifiers during a rename.
+
 ```bash
 fastlane beta --env fastlane
 ```

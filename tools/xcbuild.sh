@@ -28,7 +28,7 @@
 # -----
 #   ./tools/xcbuild.sh <any xcodebuild args>
 #
-#   e.g. ./tools/xcbuild.sh -project Twozz.xcodeproj -scheme Twozz \
+#   e.g. ./tools/xcbuild.sh -project Strozz.xcodeproj -scheme Strozz \
 #          -destination "platform=tvOS,id=$DEVICE_ID" build
 #
 set -euo pipefail
@@ -42,7 +42,7 @@ fi
 _xcbuild_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 source "$_xcbuild_root/tools/lib/apple-build-lease.sh"
-acquire_apple_build_shared_lease "twozz/xcbuild"
+acquire_apple_build_shared_lease "strozz/xcbuild"
 install_apple_build_lease_traps
 
 # Non-fatal secrets sanity check. The app's Config/App.xcconfig pulls local

@@ -2,7 +2,7 @@
 #
 # bump-version.sh — bump the app's marketing version (CFBundleShortVersionString).
 #
-# Twozz uses an industry-standard two-number scheme:
+# Strozz uses an industry-standard two-number scheme:
 #   * MARKETING_VERSION (CFBundleShortVersionString) — the semver marketing
 #     version shown to users, e.g. 0.2.0. Bumped one MINOR per merged feature.
 #   * CURRENT_PROJECT_VERSION / CFBundleVersion — a monotonic build number

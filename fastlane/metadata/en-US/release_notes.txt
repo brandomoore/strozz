@@ -1,1 +1,1 @@
-Initial TestFlight build. Native Apple TV Twitch player with 7TV/BTTV/FFZ emotes, combined Twitch + YouTube chat, raids, and Dark/Light/OLED themes.
+Meet Strozz, the new name for your Apple TV streaming viewer. Your existing sign-ins, preferences, and watch-rewards pairing stay in place. Watch Twitch and YouTube, follow supported Kick simulcasts, and bring streams together with multi-view and live chat.

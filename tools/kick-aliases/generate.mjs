@@ -24,7 +24,7 @@ const KICK_CHANNEL_API = "https://kick.com/api/v2/channels/";
 const KICK_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 
-const SEED_PATH = "Twozz/Resources/KickAliases.json";
+const SEED_PATH = "Strozz/Resources/KickAliases.json";
 const OUTPUT_PATH = process.env.KICK_ALIASES_OUTPUT ?? "kick-aliases.json";
 const TOP_GAMES = 28;
 const PER_GAME = 30;

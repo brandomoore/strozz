@@ -21,7 +21,7 @@ const TWITCH_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"; // public web client 
 const MODELS_ENDPOINT = "https://models.github.ai/inference/chat/completions";
 const MODEL = "openai/gpt-4o-mini";
 
-const SEED_PATH = "Twozz/Resources/StreamerAffinity.json";
+const SEED_PATH = "Strozz/Resources/StreamerAffinity.json";
 const OUTPUT_PATH = process.env.AFFINITY_OUTPUT ?? "streamer-affinity.json";
 const TOP_GAMES = 28; // top categories to harvest streamers from
 const PER_GAME = 30; // Twitch caps anonymous queries at 30 / page

@@ -112,7 +112,7 @@ enum TopShelfLiveFeed {
         request.setValue("Bearer \(credentials.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue(credentials.clientID, forHTTPHeaderField: "Client-Id")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("Twozz/0.1 tvOS TopShelf", forHTTPHeaderField: "User-Agent")
+        request.setValue("Strozz/0.1 tvOS TopShelf", forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1

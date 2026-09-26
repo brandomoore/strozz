@@ -1,7 +1,7 @@
 import TVServices
 
 /// Supplies content for the tvOS Top Shelf — the banner shown above the app
-/// grid when Twozz is in the top row of the Home screen.
+/// grid when Strozz is in the top row of the Home screen.
 ///
 /// This runs in a separate, short-lived process. It fetches the currently-live
 /// streams directly from Twitch at render time so the shelf always reflects

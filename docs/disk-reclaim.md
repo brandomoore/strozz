@@ -1,9 +1,9 @@
 # Disk reclaim safety
 
-Twozz participates in the same release-safe Apple build/cleanup interlock used
+Strozz participates in the same release-safe Apple build/cleanup interlock used
 by the other apps on this machine. This repository does not contain or enable
 the destructive cleanup implementation. It only publishes shared build leases
-so an approved cleanup tool can refuse to run while Twozz owns build resources.
+so an approved cleanup tool can refuse to run while Strozz owns build resources.
 
 ## Current rollout status: destructive cleanup disabled
 
@@ -40,7 +40,7 @@ data denies cleanup. There is no environment or command-line bypass.
 This change implements only `twozz-current-writers` in this branch. Plozz's
 current-writer implementation landed separately. Remaining blockers include:
 
-- the 137 linked Twozz checkouts other than this worktree, including the
+- the 137 linked Strozz checkouts other than this worktree, including the
   primary checkout, inventoried on 2026-09-06 without this protocol;
 - direct/manual Xcode, raw `xcodebuild`, raw `xcodegen`, Swift compiler tools,
   and third-party build tools that bypass repository wrappers;
@@ -101,9 +101,9 @@ There is deliberately no automatic stale-record deletion. Investigate the
 record and its owner while cleanup remains suspended before resolving any exact
 fixture or production record.
 
-## Twozz writer coverage
+## Strozz writer coverage
 
-Current Twozz entrypoints acquire a shared lease before their first relevant
+Current Strozz entrypoints acquire a shared lease before their first relevant
 write:
 
 - Fastlane `generate_project`, `build`, `beta`, and `release`; outer
@@ -131,7 +131,7 @@ reinterpret them.
 
 The protocol was copied from the Plozz tree at frozen commit
 `b1d24c0de` (the release-safe interlock originated in `5407b2508`). The three
-language helpers are vendored byte-for-byte so Twozz and Plozz use one wire
+language helpers are vendored byte-for-byte so Strozz and Plozz use one wire
 protocol without a runtime dependency on another worktree:
 
 | File | SHA-256 |
@@ -141,7 +141,7 @@ protocol without a runtime dependency on another worktree:
 | `tools/lib/apple_build_lease.rb` | `c7726eaf3470da9dacbacbdf65d86ce353770f47da15882624be4455b7008372` |
 
 `tools/with-apple-build-lease.sh` is also copied from that frozen commit. Its
-repository-relative working-directory behavior already matches Twozz, so no
+repository-relative working-directory behavior already matches Strozz, so no
 path adaptation was required.
 
 ## Defense in depth

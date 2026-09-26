@@ -3,7 +3,7 @@
 
 app_identifier "com.thatcube.Twozz"
 
-# Twozz has no in-app purchases; skip that precheck step.
+# Strozz has no in-app purchases; skip that precheck step.
 precheck_include_in_app_purchases false
 
 # We manage screenshots/binary explicitly per-lane.

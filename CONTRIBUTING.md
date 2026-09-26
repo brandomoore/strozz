@@ -1,16 +1,16 @@
-# Contributing to Twozz
+# Contributing to Strozz
 
-Thanks for your interest in Twozz. This document covers everything you need to
-build, run, and develop the app. For what Twozz is and does, see the
+Thanks for your interest in Strozz. This document covers everything you need to
+build, run, and develop the app. For what Strozz is and does, see the
 [README](README.md).
 
-Twozz is a solo, non-commercial hobby project. Bug reports, feature ideas, and
+Strozz is a solo, non-commercial hobby project. Bug reports, feature ideas, and
 pull requests are welcome, but please keep in mind that reviews and merges may
 take a while.
 
 ## Reporting bugs & requesting features
 
-Please open a [GitHub issue](https://github.com/thatcube/Twozz/issues). For
+Please open a [GitHub issue](https://github.com/brandomoore/strozz/issues). For
 bugs, include your Apple TV model and tvOS version, the channel or stream where
 it happened, and steps to reproduce. For feature ideas, a short description of
 what you want and why is plenty.
@@ -26,7 +26,7 @@ what you want and why is plenty.
 
 ## Building and running
 
-`Twozz.xcodeproj` is generated from `project.yml` (the source of truth), so
+`Strozz.xcodeproj` is generated from `project.yml` (the source of truth), so
 generate it first:
 
 ```bash
@@ -37,8 +37,8 @@ Build for the tvOS simulator:
 
 ```bash
 ./tools/xcbuild.sh \
-	-project Twozz.xcodeproj \
-	-scheme Twozz \
+	-project Strozz.xcodeproj \
+	-scheme Strozz \
 	-configuration Debug \
 	-destination 'generic/platform=tvOS Simulator' \
 	build | xcbeautify
@@ -89,7 +89,7 @@ regenerates the Xcode project. Without it, builds fail with
 
 ## Versioning & releases
 
-Twozz follows the standard Apple two-number scheme, and both numbers update
+Strozz follows the standard Apple two-number scheme, and both numbers update
 automatically — you should not normally edit version numbers by hand:
 
 - **Marketing version** — `CFBundleShortVersionString`, a semver like `0.2.0`,
@@ -120,7 +120,7 @@ lanes: `fastlane build` (archive only, no upload), `fastlane release`,
 
 ## How playback works
 
-Apple TV has no official Twitch playback SDK. Twozz resolves playback via the
+Apple TV has no official Twitch playback SDK. Strozz resolves playback via the
 Twitch GraphQL PlaybackAccessToken and Usher HLS playlists, similar in spirit to
 open-source clients like Streamlink and Frosty. Playback is AVPlayer-backed with
 custom overlay controls and an in-process low-latency HLS proxy — see
@@ -138,7 +138,7 @@ This project is non-commercial and ad-respecting.
 - A Top Shelf app extension for the tvOS home screen.
 - XcodeGen project generation (`project.yml` is the source of truth).
 
-## Things Twozz intentionally does not do
+## Things Strozz intentionally does not do
 
 - **Automatically spend points or farm unseen channels.** The optional rewards
   connection can collect Twitch-provided watch bonuses only during real,
@@ -148,6 +148,6 @@ This project is non-commercial and ad-respecting.
   separate Twitch TV connection because Twitch rejects the app's ordinary
   OAuth login on its private rewards API. Authentication happens on Twitch's
   own device-activation page, not through an in-app password form.
-- **Follow / unfollow.** Twozz can show who you follow, but Twitch now blocks
+- **Follow / unfollow.** Strozz can show who you follow, but Twitch now blocks
   follow/unfollow mutations from this app context with integrity checks. Use the
   official Twitch app or website to change follows.
