@@ -166,7 +166,37 @@ extension ChatService {
     let parsedMessages = await ingestPipeline.parseAndTokenize(messagePieces)
     guard !Task.isCancelled, sessionID == session, ircTransportID == transport,
       !ircFailurePending, !parsedMessages.isEmpty else { return }
-    enqueue(parsedMessages)
+    enqueue(contextualizeCommunityGifts(parsedMessages))
+  }
+
+  private func contextualizeCommunityGifts(_ messages: [ChatMessage]) -> [ChatMessage] {
+    var result = messages
+    var minecraftGiftIndices: [Int] = []
+    for index in result.indices {
+      guard let gift = result[index].communityGiftNotice else { continue }
+      if let count = gift.massGiftCount, count > 0,
+        gift.senderLogin != "minecraft" {
+        if communityGiftBatches[gift.id] == nil {
+          communityGiftBatchOrder.append(gift.id)
+        }
+        communityGiftBatches[gift.id] = (result[index].username, count)
+        if communityGiftBatchOrder.count > 32 {
+          communityGiftBatches.removeValue(forKey: communityGiftBatchOrder.removeFirst())
+        }
+      } else if gift.senderLogin == "minecraft" {
+        minecraftGiftIndices.append(index)
+      }
+    }
+    for index in minecraftGiftIndices {
+      guard let gift = result[index].communityGiftNotice,
+        let batch = communityGiftBatches[gift.id],
+        !batch.gifter.isEmpty,
+        gift.senderLogin != batch.gifter.lowercased(),
+        let original = result[index].systemMessage else { continue }
+      result[index].systemMessage =
+        "Bonus on \(batch.gifter)'s \(batch.count)-sub gift: \(original)"
+    }
+    return result
   }
 
   private static func ircFields(_ line: String) -> [Substring] {

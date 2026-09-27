@@ -208,6 +208,8 @@ final class ChatService {
   /// existing `enqueue()` → sync → `appendVisible` path. Serial, so order is
   /// preserved. See `ChatIngestPipeline`.
   let ingestPipeline = ChatIngestPipeline()
+  @ObservationIgnored var communityGiftBatches: [String: (gifter: String, count: Int)] = [:]
+  @ObservationIgnored var communityGiftBatchOrder: [String] = []
 
   // MARK: - Adaptive UI coalescing (frame-bucketed appends)
 
@@ -395,6 +397,8 @@ final class ChatService {
   /// Tear down the connection and clear the buffer.
   func disconnect() {
     sessionID = UUID()
+    communityGiftBatches.removeAll()
+    communityGiftBatchOrder.removeAll()
     emoteCatalogTask?.cancel()
     emoteCatalogTask = nil
     emoteCatalogNeedsRetry = false

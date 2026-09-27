@@ -106,6 +106,103 @@ final class ChatReliabilityTests: XCTestCase {
     chat.disconnect()
   }
 
+  func testMinecraftBonusIdentifiesPurchaserFromSharedCommunityGiftID() async throws {
+    let chat = ChatService()
+    defer { chat.disconnect() }
+    let header = giftNotice(
+      kind: "submysterygift", sender: "Viewer", batchID: "batch-1", count: 5,
+      text: "Viewer is gifting 5 Tier 1 Subs to the community!"
+    )
+    let bonus = giftNotice(
+      kind: "subgift", sender: "Minecraft", batchID: "batch-1",
+      text: "Minecraft gifted a Tier 1 sub to Recipient!"
+    )
+    let purchaserGifts = (1...5).map { recipient in
+      giftNotice(
+        kind: "subgift", sender: "Viewer", batchID: "batch-1",
+        text: "Viewer gifted a Tier 1 sub to Recipient\(recipient)!"
+      )
+    }
+
+    await chat.handle(header)
+    await chat.handle(([bonus] + purchaserGifts).joined(separator: "\r\n"))
+
+    let notices = chat.messages + chat.pendingAppends
+    XCTAssertEqual(notices.count, 7)
+    XCTAssertEqual(notices[0].systemMessage, "Viewer is gifting 5 Tier 1 Subs to the community!")
+    XCTAssertEqual(
+      notices[1].systemMessage,
+      "Bonus on Viewer's 5-sub gift: Minecraft gifted a Tier 1 sub to Recipient!"
+    )
+    XCTAssertEqual(
+      notices.dropFirst(2).compactMap(\.systemMessage),
+      (1...5).map { "Viewer gifted a Tier 1 sub to Recipient\($0)!" }
+    )
+  }
+
+  func testMinecraftBonusCorrelatesWhenHeaderComesLaterInSameFrame() async throws {
+    let chat = ChatService()
+    defer { chat.disconnect() }
+    await chat.handle(
+      giftNotice(
+        kind: "subgift", sender: "Minecraft", batchID: "batch-2",
+        text: "Minecraft gifted a Tier 1 sub to Recipient!"
+      ) + "\r\n" + giftNotice(
+        kind: "submysterygift", sender: "Viewer", batchID: "batch-2", count: 10,
+        text: "Viewer is gifting 10 Tier 1 Subs to the community!"
+      )
+    )
+
+    XCTAssertEqual(
+      chat.messages.first?.systemMessage,
+      "Bonus on Viewer's 10-sub gift: Minecraft gifted a Tier 1 sub to Recipient!"
+    )
+  }
+
+  func testIndependentMinecraftGiftsAndUnrelatedBatchesKeepTwitchWording() async throws {
+    let chat = ChatService()
+    defer { chat.disconnect() }
+    let independent = giftNotice(
+      kind: "subgift", sender: "Minecraft", batchID: "unrelated",
+      text: "Minecraft gifted a Tier 1 sub to Recipient!"
+    )
+    await chat.handle(giftNotice(
+      kind: "submysterygift", sender: "Viewer", batchID: "batch-3", count: 5,
+      text: "Viewer is gifting 5 Tier 1 Subs to the community!"
+    ))
+    await chat.handle(independent)
+
+    XCTAssertEqual(
+      (chat.messages + chat.pendingAppends).last?.systemMessage,
+      "Minecraft gifted a Tier 1 sub to Recipient!"
+    )
+
+    chat.disconnect()
+    await chat.handle(giftNotice(
+      kind: "subgift", sender: "Minecraft", batchID: "batch-3",
+      text: "Minecraft gifted a Tier 1 sub to Recipient!"
+    ))
+    XCTAssertEqual(chat.messages.first?.systemMessage, "Minecraft gifted a Tier 1 sub to Recipient!")
+  }
+
+  func testMinecraftOwnCommunityGiftsAreNotCalledPurchaserBonuses() async throws {
+    let chat = ChatService()
+    defer { chat.disconnect() }
+    await chat.handle(giftNotice(
+      kind: "submysterygift", sender: "Minecraft", batchID: "minecraft-batch", count: 5,
+      text: "Minecraft is gifting 5 Tier 1 Subs to the community!"
+    ))
+    await chat.handle(giftNotice(
+      kind: "subgift", sender: "Minecraft", batchID: "minecraft-batch",
+      text: "Minecraft gifted a Tier 1 sub to Recipient!"
+    ))
+
+    XCTAssertEqual(
+      (chat.messages + chat.pendingAppends).last?.systemMessage,
+      "Minecraft gifted a Tier 1 sub to Recipient!"
+    )
+  }
+
   func testJoinConfirmationMustMatchCurrentChannel() async {
     let chat = ChatService()
     chat.channel = "example"
@@ -338,6 +435,14 @@ final class ChatReliabilityTests: XCTestCase {
 
   private func message(_ text: String) throws -> ChatMessage {
     try XCTUnwrap(ChatMessage(ircLine: ":viewer!viewer@host PRIVMSG #example :\(text)"))
+  }
+
+  private func giftNotice(
+    kind: String, sender: String, batchID: String, count: Int? = nil, text: String
+  ) -> String {
+    let countTag = count.map { ";msg-param-mass-gift-count=\($0)" } ?? ""
+    let escaped = text.replacingOccurrences(of: " ", with: "\\s")
+    return "@msg-id=\(kind);login=\(sender.lowercased());display-name=\(sender);msg-param-community-gift-id=\(batchID)\(countTag);system-msg=\(escaped) :tmi.twitch.tv USERNOTICE #example"
   }
 }
 

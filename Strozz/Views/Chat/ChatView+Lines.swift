@@ -321,9 +321,9 @@ extension ChatView {
   }
 
   /// Wraps a highlighted USERNOTICE (subscription or watch-streak) in the shared
-  /// rounded highlight card: a glyph in a filled accent circle, the ready-made
-  /// `system-msg` text, and — when the viewer attached a comment — their normal
-  /// chat line beneath it.
+  /// rounded highlight card: a glyph in a filled accent circle, the notice
+  /// text, and — when the viewer attached a comment — their normal chat line
+  /// beneath it.
   private func eventNoticeHighlight<IconContent: View, Content: View>(
     systemMessage: String,
     accent: Color,

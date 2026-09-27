@@ -29,6 +29,12 @@ enum SystemNoticeIcon {
     case watchStreak
 }
 
+struct CommunityGiftNotice: Sendable {
+    let id: String
+    let senderLogin: String
+    let massGiftCount: Int?
+}
+
 /// A single chat line parsed from Twitch IRC or YouTube Live Chat.
 struct ChatMessage: Identifiable, Sendable {
     let id = UUID()
@@ -59,16 +65,19 @@ struct ChatMessage: Identifiable, Sendable {
     /// The platform this message came from (Twitch or YouTube).
     let source: ChatSource
     /// Non-nil when this line is a Twitch subscription/event notice (USERNOTICE).
-    /// Holds the ready-to-display text from the IRC `system-msg` tag, e.g.
-    /// "So-and-so subscribed at Tier 1. They've subscribed for 6 months!".
+    /// Holds the IRC `system-msg` text, optionally contextualized when a
+    /// Minecraft bonus gift shares a community-gift ID with a purchaser's batch.
     /// When set, the line is rendered with a highlighted subscription treatment.
-    let systemMessage: String?
+    var systemMessage: String?
     /// Styling for the highlighted notice when `systemMessage` is set. Ignored
     /// for ordinary chat lines.
     var systemNoticeStyle: SystemNoticeStyle = .subscription
     /// Which glyph to show on the highlighted notice (Prime/gift/sub/streak).
     /// Ignored for ordinary chat lines.
     var systemNoticeIcon: SystemNoticeIcon = .sub
+    /// Twitch ties a community-gift header and its recipient gifts (including
+    /// promotional bonuses) together with this ID.
+    var communityGiftNotice: CommunityGiftNotice? = nil
     /// Twitch login of the user this line replies to, from the IRC
     /// `reply-parent-user-login` tag (threaded replies only). Used as a robust
     /// secondary signal for "this line mentions me" highlighting, alongside the
@@ -315,6 +324,16 @@ extension ChatMessage {
         self.systemMessage = systemMsg
         self.systemNoticeStyle = noticeStyle
         self.systemNoticeIcon = noticeIcon
+        if (msgID == "submysterygift" || msgID == "subgift"),
+            let giftID = tags["msg-param-community-gift-id"], !giftID.isEmpty,
+            let senderLogin = tags["login"], !senderLogin.isEmpty {
+            self.communityGiftNotice = CommunityGiftNotice(
+                id: giftID,
+                senderLogin: senderLogin.lowercased(),
+                massGiftCount: msgID == "submysterygift"
+                    ? tags["msg-param-mass-gift-count"].flatMap(Int.init) : nil
+            )
+        }
         self.timestamp = Date()
     }
 
