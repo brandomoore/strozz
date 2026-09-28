@@ -67,18 +67,19 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
   }
 }
 
-/// Centralized policy for **live** stream preview thumbnails. These must NEVER be
-/// served from a cache — a live preview has to reflect the current moment of the
-/// stream — but they MAY be requested at a smaller size for smaller cards.
+/// Centralized policy for **live** stream preview thumbnails. Each presentation
+/// gets a new URL rather than reusing an old cached preview, and cards MAY
+/// request a smaller size.
 ///
-/// `LiveThumbnail` is the single render-time path for live previews everywhere in
-/// the app (stream cards and the channel page). Unlike `CachedAsyncImage`, it
-/// deliberately routes through plain `AsyncImage` (no SDWebImage disk/memory
-/// cache) and rewrites every URL so it:
+/// `LiveThumbnail` is the render-time path for stream cards and the channel
+/// page. Unlike `CachedAsyncImage`, it routes through plain `AsyncImage` (no
+/// SDWebImage disk/memory cache) and rewrites every URL so it:
 ///   1. carries a per-presentation cache-busting token (so even `URLSession`'s
 ///      own `URLCache` can't hand back a stale frame), and
 ///   2. requests the Twitch preview at the size bucket that fits the card it's
 ///      rendered into, instead of always pulling the full 640x360.
+/// The player loading poster uses the same fresh URL policy with SDWebImage's
+/// existing renderer to avoid changing the player view tree.
 enum LiveThumbnailPolicy {
   /// Twitch live-preview size buckets (`{width}x{height}`), smallest first.
   static let sizeBuckets: [(width: Int, height: Int)] = [
@@ -98,6 +99,17 @@ enum LiveThumbnailPolicy {
     let bucket = bucket(forRenderedWidth: renderedWidth, scale: scale)
     let sized = resizingTwitchPreview(url, to: bucket)
     return appendingCacheBust(sized, token: token)
+  }
+
+  /// Keep VOD/offline art cached, but give Twitch live loading posters a new
+  /// URL on each load instead of replaying an old SDWebImage disk entry. Twitch's
+  /// CDN can still serve a preview a few minutes behind the actual video.
+  static func loadingPosterURL(from url: URL?, token: String) -> URL? {
+    guard let url else { return nil }
+    guard url.host == "static-cdn.jtvnw.net",
+      url.path.hasPrefix("/previews-ttv/live_user_"),
+      url.path.hasSuffix(".jpg") else { return url }
+    return freshURL(from: url, renderedWidth: 640, scale: 1, token: token)
   }
 
   /// Rewrite the `-{width}x{height}.jpg` segment of a Twitch preview URL. Returns

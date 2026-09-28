@@ -48,7 +48,8 @@ extension PlayerView {
           StreamLoadingView(
             posterURL: posterURL,
             avatarURL: channelAvatarURL,
-            title: isVOD ? activeVOD?.title : offlineDisplayName
+            title: isVOD ? activeVOD?.title : offlineDisplayName,
+            isLoading: isLoading
           )
           .padding(.trailing, loadingChatInset)
           .opacity(isLoading && errorMessage == nil && !isOffline ? 1 : 0)
