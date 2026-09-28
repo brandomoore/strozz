@@ -24,8 +24,8 @@ import SwiftUI
 /// there's no art it falls back to the active `ThemePalette` so the Light theme
 /// stays legible instead of assuming a dark background.
 struct StreamLoadingView: View {
-  /// The stream's last frame, shown aspect-fit as the poster. `nil` falls back
-  /// to a plain backdrop.
+  /// A stream preview, shown aspect-fit as the poster. `nil` falls back to a
+  /// plain backdrop.
   var posterURL: URL? = nil
   /// Channel avatar shown beside the name.
   var avatarURL: URL? = nil
@@ -63,10 +63,20 @@ struct StreamLoadingView: View {
         }
 
         if let posterURL {
-          CachedAsyncImage(url: posterURL) { image in
-            image.resizable().scaledToFit()
-          } placeholder: {
-            Color.clear
+          Group {
+            if LiveThumbnailPolicy.isLivePreview(posterURL) {
+              LiveThumbnail(url: posterURL, maxPixelWidth: 1920) { image in
+                image.resizable().scaledToFit()
+              } placeholder: {
+                Color.clear
+              }
+            } else {
+              CachedAsyncImage(url: posterURL) { image in
+                image.resizable().scaledToFit()
+              } placeholder: {
+                Color.clear
+              }
+            }
           }
           .overlay(Color.black.opacity(0.28))
         }

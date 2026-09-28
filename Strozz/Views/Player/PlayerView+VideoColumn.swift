@@ -45,15 +45,17 @@ extension PlayerView {
         // escaping to fullscreen. Reveal video as soon as native playback
         // starts; fading this cover would hide video that's already audible.
         .overlay {
-          StreamLoadingView(
-            posterURL: posterURL,
-            avatarURL: channelAvatarURL,
-            title: isVOD ? activeVOD?.title : offlineDisplayName
-          )
-          .padding(.trailing, loadingChatInset)
-          .opacity(isLoading && errorMessage == nil && !isOffline ? 1 : 0)
-          .allowsHitTesting(false)
-          .animation(nil, value: isLoading)
+          if isLoading && errorMessage == nil && !isOffline {
+            StreamLoadingView(
+              posterURL: activeChannel.isEmpty
+                || activeChannel.caseInsensitiveCompare(channel) == .orderedSame ? posterURL : nil,
+              avatarURL: channelAvatarURL,
+              title: isVOD ? activeVOD?.title : offlineDisplayName
+            )
+            .padding(.trailing, loadingChatInset)
+            .allowsHitTesting(false)
+            .transaction { $0.animation = nil }
+          }
         }
 
       if isAudioOnlyActive, !isLoading, errorMessage == nil, !isOffline {

@@ -67,37 +67,48 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
   }
 }
 
-/// Centralized policy for **live** stream preview thumbnails. These must NEVER be
-/// served from a cache — a live preview has to reflect the current moment of the
-/// stream — but they MAY be requested at a smaller size for smaller cards.
+/// Centralized policy for **live** stream preview thumbnails. These must not
+/// reuse the app's long-lived image cache, but Twitch's own CDN can still return
+/// a preview a few minutes behind live. Request smaller sizes for smaller cards.
 ///
-/// `LiveThumbnail` is the single render-time path for live previews everywhere in
-/// the app (stream cards and the channel page). Unlike `CachedAsyncImage`, it
+/// `LiveThumbnail` is the single render-time path for Twitch live previews in
+/// stream cards and loading posters. Unlike `CachedAsyncImage`, it
 /// deliberately routes through plain `AsyncImage` (no SDWebImage disk/memory
 /// cache) and rewrites every URL so it:
 ///   1. carries a per-presentation cache-busting token (so even `URLSession`'s
-///      own `URLCache` can't hand back a stale frame), and
+///      own `URLCache` can't hand back an old response), and
 ///   2. requests the Twitch preview at the size bucket that fits the card it's
 ///      rendered into, instead of always pulling the full 640x360.
 enum LiveThumbnailPolicy {
   /// Twitch live-preview size buckets (`{width}x{height}`), smallest first.
   static let sizeBuckets: [(width: Int, height: Int)] = [
-    (320, 180), (480, 270), (640, 360),
+    (320, 180), (480, 270), (640, 360), (1280, 720), (1920, 1080),
   ]
 
   /// Smallest bucket whose pixel width covers the rendered card width, so a
   /// 6-across card fetches 320x180 while a 2-across card fetches 640x360.
-  static func bucket(forRenderedWidth width: CGFloat, scale: CGFloat) -> (width: Int, height: Int) {
-    let neededPixels = max(width, 1) * max(scale, 1)
+  static func bucket(
+    forRenderedWidth width: CGFloat, scale: CGFloat, maxPixelWidth: Int = 640
+  ) -> (width: Int, height: Int) {
+    let neededPixels = min(max(width, 1) * max(scale, 1), CGFloat(maxPixelWidth))
     return sizeBuckets.first { CGFloat($0.width) >= neededPixels } ?? sizeBuckets[sizeBuckets.count - 1]
   }
 
-  /// Produce a guaranteed-fresh, card-sized URL from a live preview URL.
-  static func freshURL(from url: URL?, renderedWidth: CGFloat, scale: CGFloat, token: String) -> URL? {
+  /// Produce a per-presentation URL sized for a card or player loading poster.
+  static func freshURL(
+    from url: URL?, renderedWidth: CGFloat, scale: CGFloat, token: String,
+    maxPixelWidth: Int = 640
+  ) -> URL? {
     guard let url else { return nil }
-    let bucket = bucket(forRenderedWidth: renderedWidth, scale: scale)
+    let bucket = bucket(forRenderedWidth: renderedWidth, scale: scale, maxPixelWidth: maxPixelWidth)
     let sized = resizingTwitchPreview(url, to: bucket)
     return appendingCacheBust(sized, token: token)
+  }
+
+  static func isLivePreview(_ url: URL) -> Bool {
+    url.host == "static-cdn.jtvnw.net"
+      && url.path.hasPrefix("/previews-ttv/live_user_")
+      && url.path.hasSuffix(".jpg")
   }
 
   /// Rewrite the `-{width}x{height}.jpg` segment of a Twitch preview URL. Returns
@@ -125,23 +136,27 @@ enum LiveThumbnailPolicy {
 /// Drop-in, **non-caching** image view for live stream preview thumbnails. Mirrors
 /// the `CachedAsyncImage` API but enforces `LiveThumbnailPolicy`: it measures the
 /// card it's rendered into, requests the matching Twitch size bucket, and appends
-/// a fresh cache-busting token on every presentation so the preview is always the
-/// current moment of the stream. Static art (avatars, box art, VOD/clip
+/// a new cache-busting token on every presentation so the app requests the most
+/// recent preview Twitch's CDN has available. Static art (avatars, box art, VOD/clip
 /// thumbnails, banners) must keep using `CachedAsyncImage`.
 struct LiveThumbnail<Content: View, Placeholder: View>: View {
   private let url: URL?
+  private let maxPixelWidth: Int
   private let content: (Image) -> Content
   private let placeholder: () -> Placeholder
 
   @Environment(\.displayScale) private var displayScale
   @State private var cacheBustToken = UUID().uuidString
+  @State private var hasAppeared = false
 
   init(
     url: URL?,
+    maxPixelWidth: Int = 640,
     @ViewBuilder content: @escaping (Image) -> Content,
     @ViewBuilder placeholder: @escaping () -> Placeholder
   ) {
     self.url = url
+    self.maxPixelWidth = maxPixelWidth
     self.content = content
     self.placeholder = placeholder
   }
@@ -150,7 +165,8 @@ struct LiveThumbnail<Content: View, Placeholder: View>: View {
     GeometryReader { geo in
       AsyncImage(
         url: LiveThumbnailPolicy.freshURL(
-          from: url, renderedWidth: geo.size.width, scale: displayScale, token: cacheBustToken)
+          from: url, renderedWidth: geo.size.width, scale: displayScale,
+          token: cacheBustToken, maxPixelWidth: maxPixelWidth)
       ) { image in
         content(image)
       } placeholder: {
@@ -159,9 +175,15 @@ struct LiveThumbnail<Content: View, Placeholder: View>: View {
       .frame(width: geo.size.width, height: geo.size.height)
       .clipped()
     }
-    // Re-bust on every appearance so a recycled/re-shown card refetches fresh
-    // rather than reusing the token (and therefore the URL) from last time.
-    .onAppear { cacheBustToken = UUID().uuidString }
+    // The initial token is already fresh. Only re-bust on a later appearance;
+    // changing it immediately on first appearance would request the image twice.
+    .onAppear {
+      if hasAppeared {
+        cacheBustToken = UUID().uuidString
+      } else {
+        hasAppeared = true
+      }
+    }
   }
 }
 
