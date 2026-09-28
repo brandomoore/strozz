@@ -31,6 +31,9 @@ struct StreamLoadingView: View {
   var avatarURL: URL? = nil
   /// Channel display name or content title.
   var title: String? = nil
+  /// The full player's loading overlay stays mounted at zero opacity between
+  /// loads, so it passes its loading state to refresh the poster on each retry.
+  var isLoading: Bool = true
   /// Whether to paint the theme's letterbox backdrop behind the poster. The
   /// full player and clip player letterbox over `playerBackdrop`; multiview
   /// tiles sit on their own black pane wall, so they pass `false` and let it
@@ -40,6 +43,7 @@ struct StreamLoadingView: View {
   @Environment(\.themePalette) private var palette
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var pulse = false
+  @State private var posterToken = UUID().uuidString
 
   private var hasArt: Bool { posterURL != nil }
 
@@ -63,7 +67,9 @@ struct StreamLoadingView: View {
         }
 
         if let posterURL {
-          CachedAsyncImage(url: posterURL) { image in
+          CachedAsyncImage(
+            url: LiveThumbnailPolicy.loadingPosterURL(from: posterURL, token: posterToken)
+          ) { image in
             image.resizable().scaledToFit()
           } placeholder: {
             Color.clear
@@ -82,6 +88,9 @@ struct StreamLoadingView: View {
       withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
         pulse = true
       }
+    }
+    .onChange(of: isLoading) { _, loading in
+      if loading { posterToken = UUID().uuidString }
     }
   }
 
