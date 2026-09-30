@@ -140,10 +140,14 @@ struct PlaybackService {
     /// `targetBitrate <= 0` pins the highest "Source" rendition; otherwise the
     /// highest rendition at or below the target is chosen (falling back to the
     /// lowest available). The parsed variant list is cached per channel so
-    /// repeated tier swaps in multiview don't re-hit the network.
-    static func pinnedHLSURL(for channel: String, targetBitrate: Int) async throws -> URL {
+    /// repeated tier swaps in multiview don't re-hit the network. After the app
+    /// returns from background, bypass the cached variants so expired live
+    /// playlist URLs cannot keep the wall frozen.
+    static func pinnedHLSURL(
+        for channel: String, targetBitrate: Int, forceRefresh: Bool = false
+    ) async throws -> URL {
         let normalized = channel.lowercased()
-        let qualities = try await cachedQualities(for: normalized)
+        let qualities = try await cachedQualities(for: normalized, forceRefresh: forceRefresh)
         let video = qualities.filter { !$0.isAudioOnly }
         guard !video.isEmpty else { return try await hlsURL(for: normalized) }
 
@@ -160,8 +164,10 @@ struct PlaybackService {
 
     /// Resolve and cache a channel's parsed quality variants (TTL-bounded), so the
     /// multiview wall can pick a pinned rendition per tile without re-resolving.
-    private static func cachedQualities(for channel: String) async throws -> [StreamQuality] {
-        if let cached = await qualitiesCache.value(for: channel, now: Date()) {
+    private static func cachedQualities(
+        for channel: String, forceRefresh: Bool = false
+    ) async throws -> [StreamQuality] {
+        if !forceRefresh, let cached = await qualitiesCache.value(for: channel, now: Date()) {
             return cached
         }
         let playback = try await resolve(for: channel)

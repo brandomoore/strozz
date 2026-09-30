@@ -47,6 +47,7 @@ struct MultiviewPlayerView: View {
   /// The pane escalated to the full single-stream player, presented over the
   /// still-mounted wall so Back returns to multiview instantly (no flash).
   @State private var escalatedChannel: FollowedChannel?
+  @State private var needsForegroundReload = false
 
   init(
     channels: [FollowedChannel],
@@ -162,9 +163,20 @@ struct MultiviewPlayerView: View {
       }
       watchTracker.stop()
     }
-    .onChange(of: scenePhase) { _, _ in updateWatchRewards() }
+    .onChange(of: scenePhase) { _, phase in
+      updateWatchRewards()
+      if phase == .background {
+        needsForegroundReload = true
+        controller.suspend()
+      } else if phase == .active {
+        reloadWallIfNeeded()
+      }
+    }
     .onChange(of: escalatedChannel?.id) { _, _ in watchTracker.stop() }
-    .onChange(of: showingAddPicker) { _, _ in watchTracker.stop() }
+    .onChange(of: showingAddPicker) { _, _ in
+      watchTracker.stop()
+      reloadWallIfNeeded()
+    }
     .onExitCommand {
       if showingControls {
         hideControls()
@@ -182,7 +194,9 @@ struct MultiviewPlayerView: View {
     .fullScreenCover(item: $escalatedChannel, onDismiss: {
       // Returning from the single stream: resume the wall in place. Because the
       // multiview view stayed mounted underneath, its layout/focus are intact.
-      controller.resume()
+      if !reloadWallIfNeeded(), scenePhase == .active {
+        controller.resume()
+      }
     }) { channel in
       PlayerView(channel: channel.login, auth: auth, goLive: goLive, posterURL: channel.thumbnailURL)
         .environment(\.themePalette, palette)
@@ -190,6 +204,15 @@ struct MultiviewPlayerView: View {
   }
 
   // MARK: Controls
+
+  @discardableResult
+  private func reloadWallIfNeeded() -> Bool {
+    guard needsForegroundReload, scenePhase == .active,
+      escalatedChannel == nil, !showingAddPicker else { return false }
+    needsForegroundReload = false
+    controller.reloadAfterForeground()
+    return true
+  }
 
   private func updateWatchRewards() {
     guard scenePhase == .active, escalatedChannel == nil, !showingAddPicker,

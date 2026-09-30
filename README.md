@@ -202,6 +202,10 @@ near live avoid an unnecessary reload. Deliberate pauses, rewinds, and VOD
 positions are preserved. "LIVE" means the source's playable live position,
 including its normal buffering margin, not zero broadcast/network latency.
 
+Multiview pauses its wall when Strozz goes into the background. On return, it
+re-resolves each pane's live playlist and resumes all streams without changing
+the chosen grid/spotlight layout or audio selection.
+
 Chat's timed read pause releases its frozen snapshot when the countdown ends;
 collapsing chat or changing channels also resets scrolling state. The live list
 follows a permanent bottom anchor as its bounded message buffer rotates. While
