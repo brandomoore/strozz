@@ -114,6 +114,12 @@ final class YouTubeConcurrentViewersService {
     else { return nil }
 
     let html = String(decoding: data, as: UTF8.self)
+    return concurrentViewers(inWatchHTML: html)
+  }
+
+  /// Also used by the merged-chat bootstrap, which already fetches this same
+  /// live watch page even for streamers absent from the shared alias snapshot.
+  static func concurrentViewers(inWatchHTML html: String) -> Int? {
     guard firstMatch(in: html, pattern: "\"isLiveNow\":true") != nil else { return nil }
     if let raw = firstMatch(in: html, pattern: "\"originalViewCount\":\"([0-9]+)\""),
       let value = Int(raw), value > 0 {

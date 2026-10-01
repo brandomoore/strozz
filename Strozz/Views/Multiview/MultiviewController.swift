@@ -123,6 +123,8 @@ final class MultiviewPane: Identifiable {
 final class MultiviewController {
   private(set) var panes: [MultiviewPane]
   private(set) var audiblePaneID: String?
+  @ObservationIgnored private var isSuspended = false
+  @ObservationIgnored private let resolvePinnedURL: (String, Int, Bool) async throws -> URL
 
   /// Active on-screen arrangement.
   private(set) var layout: MultiviewLayout = .grid
@@ -130,7 +132,13 @@ final class MultiviewController {
   /// pane. Always points at a pane that still exists.
   private(set) var primaryPaneID: String?
 
-  init(channels: [FollowedChannel]) {
+  init(
+    channels: [FollowedChannel],
+    resolvePinnedURL: @escaping (String, Int, Bool) async throws -> URL = {
+      try await PlaybackService.pinnedHLSURL(
+        for: $0, targetBitrate: $1, forceRefresh: $2)
+    }
+  ) {
     // Dedupe on `channelKey` rather than `id`: the same streamer arrives with a
     // different `id` depending on which pool they came from (see
     // `FollowedChannel.channelKey`), so an unfiltered selection could open the
@@ -138,6 +146,7 @@ final class MultiviewController {
     var seen = Set<String>()
     let unique = channels.filter { seen.insert($0.channelKey).inserted }
     self.panes = unique.prefix(multiviewPaneLimit).map(MultiviewPane.init)
+    self.resolvePinnedURL = resolvePinnedURL
     self.primaryPaneID = panes.first?.id
   }
 
@@ -151,6 +160,7 @@ final class MultiviewController {
 
   /// Resolve and begin playback for every pane.
   func start() {
+    isSuspended = false
     syncQualityTiers()
     for pane in panes { load(pane) }
   }
@@ -161,16 +171,17 @@ final class MultiviewController {
   /// re-pin (a `replaceCurrentItem` on the same player) reads as a quick poster
   /// flash rather than a black tile — and never spins up a second concurrent
   /// decoder, which is what the hardware can't afford.
-  func load(_ pane: MultiviewPane) {
+  func load(_ pane: MultiviewPane, forceRefresh: Bool = false) {
     pane.isLoading = true
     pane.hasError = false
     pane.resolveTask?.cancel()
     let tier = pane.qualityTier
-    pane.resolveTask = Task { [weak pane] in
+    let resolvePinnedURL = resolvePinnedURL
+    pane.resolveTask = Task { [weak self, weak pane] in
       guard let pane else { return }
       do {
-        let url = try await PlaybackService.pinnedHLSURL(
-          for: pane.channel.login, targetBitrate: tier.targetBitrate)
+        let url = try await resolvePinnedURL(
+          pane.channel.login, tier.targetBitrate, forceRefresh)
         guard !Task.isCancelled, pane.qualityTier == tier else { return }
         let asset = AVURLAsset(
           url: url,
@@ -180,7 +191,7 @@ final class MultiviewController {
         item.preferredForwardBufferDuration = tier.forwardBufferDuration
         pane.player.replaceCurrentItem(with: item)
         pane.player.isMuted = !pane.isAudible
-        pane.player.play()
+        if self?.isSuspended == false { pane.player.play() }
 
         // Hold the loading state (poster shown) until the first frame is actually
         // decodable so the tile reveals cleanly rather than flashing black.
@@ -306,6 +317,7 @@ final class MultiviewController {
   /// is layered on top (escalated to full-screen), so the wall's audio/video
   /// don't compete and battery isn't wasted decoding hidden video.
   func suspend() {
+    isSuspended = true
     for pane in panes {
       pane.player.pause()
     }
@@ -313,14 +325,26 @@ final class MultiviewController {
 
   /// Resume playback after a suspend, restoring each pane's audible/mute state.
   func resume() {
+    isSuspended = false
     for pane in panes {
       pane.player.isMuted = !pane.isAudible
       pane.player.play()
     }
   }
 
+  /// AVPlayer can remain parked on a stale live playlist after tvOS backgrounds
+  /// the wall. Re-resolve every pane (not just a newly spotlighted pane) and
+  /// replace each item on its existing player so playback resumes at live.
+  func reloadAfterForeground() {
+    isSuspended = false
+    for pane in panes {
+      load(pane, forceRefresh: true)
+    }
+  }
+
   /// Stop everything and release the player items. Call on disappear.
   func teardown() {
+    isSuspended = true
     for pane in panes {
       pane.resolveTask?.cancel()
       pane.resolveTask = nil

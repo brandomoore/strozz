@@ -99,6 +99,8 @@ final class ChatService {
   private(set) var cheermotes: [Cheermote] = []
   private(set) var condensedMessagesCount = 0
   var youtubeStatusMessage: String?
+  /// Concurrent viewers from the merged chat's live watch page, when known.
+  var youtubeConcurrentViewers: Int?
   var kickStatusMessage: String?
   /// Set when a raid USERNOTICE arrives. Cleared by the consumer after handling.
   var pendingRaid: RaidEvent?

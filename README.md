@@ -60,6 +60,8 @@ emotes. It's free and open source.
   incoming/outgoing raids appear as calm, display-only overlays.
 - **Simulcast chat merge (experimental).** When a streamer you're watching is
   also live on YouTube or Kick, their chats can be merged into a single pane.
+  When YouTube chat connects, the player can show its live viewer count even
+  if the streamer is not in the shared YouTube alias catalog.
 
 ### Discover
 
@@ -201,6 +203,10 @@ rather than leaving playback paused at the old point. Brief trips that remain
 near live avoid an unnecessary reload. Deliberate pauses, rewinds, and VOD
 positions are preserved. "LIVE" means the source's playable live position,
 including its normal buffering margin, not zero broadcast/network latency.
+
+Multiview pauses its wall when Strozz goes into the background. On return, it
+re-resolves each pane's live playlist and resumes all streams without changing
+the chosen grid/spotlight layout or audio selection.
 
 Chat's timed read pause releases its frozen snapshot when the countdown ends;
 collapsing chat or changing channels also resets scrolling state. The live list

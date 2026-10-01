@@ -28,6 +28,7 @@ extension ChatService {
   func stopYouTubeLoop(clearStatus: Bool) {
     youtubeReceiveTask?.cancel()
     youtubeReceiveTask = nil
+    youtubeConcurrentViewers = nil
     if clearStatus {
       youtubeStatusMessage = nil
     }
@@ -67,6 +68,7 @@ extension ChatService {
           continuationToken = bootstrap.continuation
           apiKey = bootstrap.apiKey
           clientVersion = bootstrap.clientVersion
+          youtubeConcurrentViewers = bootstrap.concurrentViewers
           youtubeStatusMessage = "YouTube chat connected."
         }
 
@@ -113,6 +115,7 @@ extension ChatService {
       } catch {
         if Task.isCancelled { break }
         youtubeStatusMessage = "YouTube chat unavailable right now."
+        youtubeConcurrentViewers = nil
 
         // Re-bootstrap after failures because continuation tokens can expire.
         videoID = nil
@@ -200,6 +203,7 @@ extension ChatService {
     let apiKey: String
     let clientVersion: String
     let continuation: String
+    let concurrentViewers: Int?
   }
 
   private struct YouTubePollEntry {
@@ -260,7 +264,8 @@ extension ChatService {
     return YouTubeBootstrap(
       apiKey: Self.decodeEscapedJSONString(apiKey),
       clientVersion: Self.decodeEscapedJSONString(clientVersion),
-      continuation: Self.decodeEscapedJSONString(continuation)
+      continuation: Self.decodeEscapedJSONString(continuation),
+      concurrentViewers: YouTubeConcurrentViewersService.concurrentViewers(inWatchHTML: html)
     )
   }
 
