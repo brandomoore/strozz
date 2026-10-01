@@ -13,11 +13,13 @@ extension PlayerView {
   /// extra request and no metered YouTube Data API call. Falls back to the public
   /// snapshot the Home cards use (keyed by the streamer's YouTube channel ID from
   /// followed-channel enrichment or the Twitch→YouTube alias table) when the live
-  /// resolve hasn't produced a count yet; a count is never shown unless that
-  /// YouTube channel is currently live.
+  /// resolve hasn't produced a count yet. For streamers missing from the shared
+  /// alias snapshot, the merged live chat can supply the count from its already
+  /// fetched watch page. Only live sources contribute a count.
   var youtubeViewerCountForCurrentStream: Int? {
     guard !isVOD else { return nil }
     if let live = youtubeViewerCount { return live }
+    if let merged = chat.youtubeConcurrentViewers { return merged }
 
     let login = activeChannel.isEmpty ? channel : activeChannel
     guard !login.isEmpty else { return nil }

@@ -60,6 +60,8 @@ emotes. It's free and open source.
   incoming/outgoing raids appear as calm, display-only overlays.
 - **Simulcast chat merge (experimental).** When a streamer you're watching is
   also live on YouTube or Kick, their chats can be merged into a single pane.
+  When YouTube chat connects, the player can show its live viewer count even
+  if the streamer is not in the shared YouTube alias catalog.
 
 ### Discover
 
