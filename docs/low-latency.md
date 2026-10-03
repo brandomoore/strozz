@@ -411,18 +411,26 @@ changing the app, installing on Apple TV, or uploading to TestFlight:
   watchdog recovery, UI, and adaptive rendition switching. It retains the default
   rewind playlist history but never initiates user scrubs.
   This is a proxy/policy baseline, not a complete running Strozz session.
-- **Candidate:** progressively reads the same Twitch rendition, uses an existing
-  local FFmpeg executable to remux H.264/AAC without re-encoding, and independently
-  parses fragmented MP4 sample durations to publish roughly 300ms LL-HLS parts.
-  Keyframe-aligned parents, preload hints, blocking reloads, bounded retained
-  bytes, and HTTP/2 are implemented in the experimental relay.
+- **Candidate:** when Twitch supplies CMAF, reads its in-progress segments,
+  groups complete original fragments into roughly 400ms parts, and preserves
+  their encoded bytes, decode timestamps, and source program-date anchor.
+  `PART-TARGET=0.45` and `PART-HOLD-BACK=1.5` allow AVPlayer to choose its
+  low-latency mode without repeated seeks or a custom catch-up controller.
+  The candidate's default buffer preference is 1s. Keyframe-aligned parents,
+  preload hints, blocking reloads, gzip playlists, and bounded retained bytes
+  are provided by the experimental origin.
+  The older MPEG-TS/FFmpeg remux experiment remains available but does not yet
+  preserve source program-date mapping; it is **not** a verified low-latency path.
 - **Evidence:** first decoded frame, fresh decoded-frame coverage, stationary
   playhead/paused/waiting fractions, buffer levels, native errors, and actual
   HTTP/2/part requests. A low-resolution luminance fingerprint provides a
   tentative relative alignment only when both players sustain decoding and the
-  best alignment is distinguishable. It is not a glass-to-glass latency reading.
-  The candidate currently has no program-date mapping; inventing one from
-  remuxed timestamps would make that metric misleading.
+  best alignment is distinguishable. Alignment uses short windows so drift
+  cannot smear the whole run into an ambiguous match. Source program-date
+  differences cross-check the decoded-video matches; absolute program-date age
+  still depends on the broadcaster's clock and is not glass-to-glass latency.
+  Native AVFoundation segment metrics also verify direct-CDN byte-range requests
+  without storing the signed URLs.
 
 The bridge does not support adaptive quality, rewind, ad transitions, encryption,
 or discontinuities. It stops explicitly on unsupported transitions rather than
@@ -430,9 +438,10 @@ skipping ads or concealing a broken timeline. Signed upstream URLs stay in
 memory; evidence contains no playback tokens, audio, or full-resolution video.
 All servers and subprocesses are owned by the bounded run.
 
-Prerequisites: macOS/Xcode, Python 3.10+, an explicitly installed FFmpeg supporting
-fragmented MP4, and OpenSSL supporting `req -addext`. The HTTP/2 server dependency
-is separate from app dependencies:
+Prerequisites: macOS/Xcode and Python 3.10+. CMAF needs no FFmpeg. The old TS
+experiment requires an explicitly installed FFmpeg supporting fragmented MP4.
+The HTTPS experiment also requires OpenSSL supporting `req -addext`.
+The server dependency is separate from app dependencies:
 
 ```bash
 ./tools/with-apple-build-lease.sh strozz/ll-hls-probe-setup -- /bin/bash -c \
@@ -443,7 +452,32 @@ PYTHONDONTWRITEBYTECODE=1 build/ll-hls-probe/venv/bin/python -m unittest discove
   -s tools/tests -p test_ll_hls_probe.py
 ```
 
-**Certificate approval is required before a native comparison.** AVPlayer does
+There are two usable transports:
+
+- **HTTPS/HTTP2 local origin:** serves playlists and cached parts. This proves
+  the native protocol behavior, but requires the temporary-certificate approval
+  described below.
+- **Resource-loader playlists + direct CDN ranges:** `--resource-loader
+  --direct-media` fulfills playlist requests through a custom scheme and gives
+  AVPlayer real `BYTERANGE` parts on Twitch's original trusted HTTPS URLs.
+  Preload requests redirect once their actual source byte range exists.
+  This path does **not** create or trust a certificate and avoids a local
+  media server. The prototype still uses a loopback Python process for
+  playlist generation; a production port would generate those responses
+  in-process in Swift. The source reader and AVPlayer currently download
+  overlapping data, so reducing that overhead is a production requirement.
+
+```bash
+# No certificate or keychain changes; requires a channel with source CMAF.
+bash tools/run-ll-hls-probe.sh CHANNEL /absolute/path/to/new-evidence 240 \
+  --resource-loader --direct-media
+```
+
+`--resource-loader` **without** `--direct-media` is a negative-control experiment:
+AVPlayer rejects custom-scheme media bytes with `custom url not redirect`.
+This is why the practical path retains native HTTPS media delivery.
+
+**Certificate approval is required for the HTTPS-origin comparison.** AVPlayer does
 not accept the generated localhost certificate via the resource-loader trust
 callback. With explicit approval, `--trust-localhost` temporarily adds only that
 run's certificate to the login keychain, then removes its trust and exact
@@ -459,15 +493,20 @@ bash tools/run-ll-hls-probe.sh CHANNEL /absolute/path/to/new-evidence 90 --trust
 
 The duration is bounded to 30-300 seconds. Evidence is kept in the supplied
 directory; output directories are never overwritten. `report.json` distinguishes
-`native_candidate_playback_verified` from `comparison_valid` and
-`partial_delivery_observed`. Exit status is nonzero unless both paths sustain
-native decoding **and** the candidate requests parts. Even some part requests
-do not establish sustained low latency; inspect the whole-segment requests too.
+`native_candidate_playback_verified`, `comparison_valid`,
+`sustained_partial_delivery_observed`, and `latency_improvement_observed`.
+Exit status is nonzero unless both paths sustain native decoding, parts
+continue across multiple post-startup windows, and at least two distinctive
+decoded-video alignment windows show a candidate lead of at least one second.
+The candidate must also have at least 99% fresh-frame coverage and at most
+0.5% stationary-playhead samples. Some part requests alone are not a success.
+Direct-CDN mode uses native segment/byte-range metrics rather than counting
+local redirects as downloaded video.
 A frozen baseline must not be presented as a latency win. Check
 `temporary_certificate_removed`; a cleanup
 failure is an error and preserves the certificate identity for recovery.
 
-**Observed on macOS, 2026-10-02:** a plain HTTP/1.1 origin was rejected with
+**Initial macOS prototype:** a plain HTTP/1.1 origin was rejected with
 `Low Latency: Server must support http2 ECN and SACK`. After switching to HTTPS/
 HTTP2 and approved temporary trust, a 90-second H.264 run produced 359 candidate
 decoded-frame samples, no post-startup waiting samples, 371 HTTP/2 requests,
@@ -496,11 +535,52 @@ fingerprint matching did not produce a sufficiently distinct alignment to report
 a reliable relative delay. Startup times also exclude origin warm-up and must
 not be compared as end-to-end channel-switch performance.
 
-The remaining gate is understanding AVPlayer's live-offset and part-selection
-behavior, then proving the same result on tvOS without importing desktop-only
-keychain trust or Python/FFmpeg machinery into the shipping app. No new engine
-or dependency is enabled in Strozz. Keep these results separate from StreamNook's
-hls.js observations.
+### Native low-latency activation and follow-up results
+
+The missing activation requirement was **`EXT-X-PROGRAM-DATE-TIME`**.
+Appendix B.1 of the HLS specification requires it on every LL-HLS Media Playlist;
+gzip delivery is also required. Preserving the original CMAF timeline avoids
+inventing a mapping for remuxed timestamps.
+
+A negative control removed **only** program-date tags from the otherwise-working
+CMAF/gzip/HTTP2 path. AVPlayer reverted to a 6s configured/recommended offset,
+requested 31 whole segments, and fetched zero parts in 60 seconds. With the
+source date mapping present, it selected a 1.5s offset and continued fetching
+parts. Merely writing a smaller `configuredTimeOffsetFromLive` was insufficient:
+an early assignment was overwritten during preparation, and even a ready-time
+assignment did not activate sustained parts in the timestamp-free stream.
+
+Follow-up live measurements on two CMAF channels:
+
+| Run | Candidate result | Delay evidence |
+| --- | --- | --- |
+| 3-minute HTTPS run, second channel | 425 post-startup parts, zero whole segments; continuous decoded frames, no waiting/stationary samples | Median source program-date age 2.15s; distinctive frame matches 12.5s and 19.25s ahead of the reduced baseline |
+| 5-minute HTTPS soak | 725 post-startup parts, zero whole segments, zero failed local requests; continuous decoded frames, no waiting/stationary samples | Median source program-date age 3.54s; matched windows 11.25-25s ahead as the baseline drifted |
+| 4-minute certificate-free direct-CDN soak | 270 native partial byte-range request events across the run; continuous decoded frames, no waiting/stationary samples | Median source program-date age 3.27s; matched windows 10.25s, 21.5s and 22.25s ahead |
+
+The direct-CDN run also contained native events with a 2s duration. It is not
+described as parts-only delivery; some requests use complete source objects.
+The native metrics prove partial ranges continue throughout playback. A separate
+2-minute direct-CDN run produced 301 partial-range events and a 1.5s native
+offset, but only one distinctive alignment window, so its conservative
+`latency_improvement_observed` result remained false.
+
+These are **macOS AVPlayer prototype** results against the reduced
+proxy/policy harness, not a comparison with the full shipping tvOS app.
+The baseline slows and accumulates delay; its increasing gap must not be
+marketed as a universal latency reduction. Program-date age is source-clock
+dependent; the 1.5s native offset is not total capture-to-display delay.
+Decoded video was measured while audio was muted, so audible synchronization,
+long sessions, ad transitions, codec changes, and impaired-network behavior
+remain unverified.
+
+No native LL-HLS engine or dependency is enabled in Strozz. The production
+route is a gated Swift implementation of source-fragment indexing and
+playlist generation, with original-CDN byte-range delivery. It must preserve
+adaptive quality, user-selected rewind positions, ad/raid transitions, and
+the existing fallback. MPEG-TS support needs a real timestamp-preserving
+repackager or another verified source path; it must not be silently claimed
+from the CMAF results. Device testing is still required.
 
 ### Upstream implementation comparison and reuse
 
@@ -516,11 +596,13 @@ not MIT/BSD-style unrestricted reuse. Do not copy or translate its engine and
 relabel the result as MIT. Streamlink is BSD-2-Clause; hls.js is Apache-2.0;
 reusing their code would still require preserving applicable notices and terms.
 This prototype copies no StreamNook implementation. It uses the HLS/MP4 protocol
-structures and existing local FFmpeg as an external experimental tool, not as a
+structures. The successful CMAF path does not remux or re-encode video. The older
+TS comparison uses local FFmpeg as an external experimental tool, not as a
 new bundled app dependency.
 
 References:
 [Apple LL-HLS](https://developer.apple.com/documentation/http-live-streaming/enabling-low-latency-http-live-streaming-hls),
+[LL-HLS server profile](https://www.ietf.org/archive/id/draft-pantos-hls-rfc8216bis-19.html#appendix-B.1),
 [StreamNook license](https://github.com/StreamNook/StreamNook/blob/76b81ca0d935cd01b8e3cffaafcfc23de716aae9/LICENSE),
 [Streamlink Twitch plugin](https://github.com/streamlink/streamlink/blob/master/src/streamlink/plugins/twitch.py).
 

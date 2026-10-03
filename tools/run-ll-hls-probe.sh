@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-if [[ $# -lt 2 || $# -gt 4 ]]; then
-  echo "usage: bash tools/run-ll-hls-probe.sh CHANNEL NEW_OUTPUT_DIRECTORY [SECONDS=90] [--trust-localhost]" >&2
+if [[ $# -lt 2 ]]; then
+  echo "usage: bash tools/run-ll-hls-probe.sh CHANNEL NEW_OUTPUT_DIRECTORY [SECONDS=90] [probe options...]" >&2
   exit 2
+fi
+channel="$1"
+output="$2"
+shift 2
+seconds=90
+if [[ $# -gt 0 && "$1" != --* ]]; then
+  seconds="$1"
+  shift
 fi
 source tools/lib/apple-build-lease.sh
 acquire_apple_build_shared_lease "strozz/ll-hls-probe"
@@ -18,7 +26,6 @@ xcrun swiftc -parse-as-library -O \
   Strozz/Services/LowLatencyHLSProxy.swift \
   Strozz/Models/LivePlaybackProfile.swift \
   -o build/ll-hls-probe/player
-extra=()
-if [[ $# -eq 4 ]]; then extra+=("$4"); fi
-build/ll-hls-probe/venv/bin/python tools/ll-hls-probe.py "$1" --output "$2" --seconds "${3:-90}" \
-  --player "$PWD/build/ll-hls-probe/player" ${extra[@]+"${extra[@]}"}
+PYTHONDONTWRITEBYTECODE=1 build/ll-hls-probe/venv/bin/python tools/ll-hls-probe.py \
+  "$channel" --output "$output" --seconds "$seconds" \
+  --player "$PWD/build/ll-hls-probe/player" "$@"

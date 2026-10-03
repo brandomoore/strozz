@@ -1,5 +1,9 @@
 import importlib.util
 import io
+import gzip
+from datetime import datetime, timezone
+import base64
+import hashlib
 from pathlib import Path
 import socket
 import struct
@@ -65,6 +69,11 @@ class MP4Tests(unittest.TestCase):
         with self.assertRaises(probe.ProbeError):
             probe.fragment_timing(box(b"traf", traf), (1, 90000, 0, 0))
 
+    def test_absolute_offsets_are_not_reused_as_relative_fragment_offsets(self):
+        traf = box(b"tfhd", words(1, 1, 0, 100))
+        with self.assertRaises(probe.ProbeError):
+            probe.fragment_timing(box(b"traf", traf), (1, 90000, 3000, 0))
+
 
 class PlaylistTests(unittest.TestCase):
     def test_prefetch_has_contiguous_identity(self):
@@ -83,6 +92,112 @@ class PlaylistTests(unittest.TestCase):
         text = ('#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\n#EXT-X-DISCONTINUITY-SEQUENCE:0\n'
                 '#EXT-X-DATERANGE:ID="clock",CLASS="timestamp"\n#EXT-X-MAP:URI="init.mp4"\na.mp4\n')
         self.assertEqual(len(probe.media_entries(text, "https://example.test/")), 1)
+
+    def test_program_dates_come_from_source_timeline_not_receipt_time(self):
+        text = ('#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:8\n'
+                '#EXT-X-PROGRAM-DATE-TIME:2026-10-02T20:00:00.250-04:00\n'
+                '#EXTINF:2,\na.mp4\n#EXTINF:2,\nb.mp4\n'
+                '#EXT-X-TWITCH-PREFETCH:c.mp4\n')
+        dates = probe.playlist_dates(text)
+        self.assertEqual(dates[8].isoformat(), "2026-10-03T00:00:00.250000+00:00")
+        self.assertEqual((dates[9] - dates[8]).total_seconds(), 2)
+        self.assertNotIn(10, dates)
+        with self.assertRaises(probe.ProbeError):
+            probe.playlist_dates(text.replace("-04:00", ""))
+
+
+class CMAFPartsTests(unittest.TestCase):
+    def test_original_fragments_are_grouped_with_original_program_dates(self):
+        origin = probe.Origin(part_target=0.9)
+        origin.init = b"init"
+        anchor = datetime(2026, 10, 2, tzinfo=timezone.utc)
+        parts = probe.CMAFParts(origin, anchor)
+        for index in range(41):
+            parts.push(bytes([index]), (100 + index * 0.1, 0.1, index % 20 == 0))
+            if index % 20 == 19:
+                parts.flush(complete=True)
+        parts.flush()
+        self.assertEqual(len(origin.segments), 3)
+        first = origin.segments[0]
+        self.assertEqual(b"".join(p[0] for p in first.parts), bytes(range(20)))
+        self.assertEqual([round(p[1], 2) for p in first.parts], [0.8, 0.8, 0.4])
+        self.assertEqual(first.program_date, anchor)
+        self.assertAlmostEqual((origin.segments[1].program_date - anchor).total_seconds(), 2)
+        self.assertIn(b"#EXT-X-PROGRAM-DATE-TIME:2026-10-02T00:00:00.000Z", origin.playlist())
+        self.assertIn(b"PART-HOLD-BACK=2.700", origin.playlist())
+
+    def test_non_independent_start_or_clock_gap_is_rejected(self):
+        origin = probe.Origin(part_target=0.9)
+        parts = probe.CMAFParts(origin, datetime(2026, 10, 2, tzinfo=timezone.utc))
+        with self.assertRaises(probe.ProbeError):
+            parts.push(b"a", (10, 0.1, False))
+        parts.push(b"a", (10, 0.1, True))
+        with self.assertRaises(probe.ProbeError):
+            parts.push(b"b", (10.4, 0.1, False))
+
+    def test_finished_parent_hints_the_next_segment_not_a_nonexistent_part(self):
+        origin = probe.Origin(part_target=0.45)
+        origin.init = b"init"
+        parts = probe.CMAFParts(origin, datetime(2026, 10, 2, tzinfo=timezone.utc))
+        for index in range(20):
+            parts.push(bytes([index]), (index * 0.1, 0.1, index == 0))
+        parts.flush(complete=True)
+        text = origin.playlist().decode()
+        self.assertIn('TYPE=PART,URI="part/1/0.mp4"', text)
+        self.assertNotIn('TYPE=PART,URI="part/0/5.mp4"', text)
+
+    def test_direct_ranges_preserve_upstream_offsets_and_do_not_copy_url_into_a_part_name(self):
+        origin = probe.Origin(part_target=0.45)
+        origin.init = b"init"
+        origin.direct_media = True
+        origin.upstream_init = "https://cdn.example/init.mp4"
+        parts = probe.CMAFParts(origin, datetime(2026, 10, 2, tzinfo=timezone.utc))
+        source = "https://cdn.example/segment.m4s?opaque=signed"
+        for index in range(20):
+            parts.push(bytes([index]), (index * 0.1, 0.1, index == 0), (source, 100 + index * 20, 20))
+        parts.flush(complete=True)
+        playlist = origin.playlist().decode()
+        self.assertIn('URI="https://cdn.example/init.mp4"', playlist)
+        self.assertIn(f'URI="{source}",INDEPENDENT=YES,BYTERANGE="80@100"', playlist)
+        self.assertIn('BYTERANGE="80@180"', playlist)
+        self.assertIn(f"#EXTINF:2.000000,\n{source}", playlist)
+        status, body, kind = origin.respond("/part/0/1.mp4", {})
+        self.assertEqual((status, kind), (200, "application/json"))
+        self.assertEqual(probe.json.loads(body), {"url": source, "offset": 180, "length": 80})
+
+    def test_direct_ranges_cannot_cross_source_objects(self):
+        parts = probe.CMAFParts(probe.Origin(part_target=0.45), datetime(2026, 10, 2, tzinfo=timezone.utc))
+        parts.push(b"a", (0, 0.1, True), ("https://example/one", 0, 1))
+        with self.assertRaises(probe.ProbeError):
+            parts.push(b"b", (0.1, 0.1, False), ("https://example/two", 1, 1))
+
+
+class AlignmentTests(unittest.TestCase):
+    @staticmethod
+    def samples(lead_frames):
+        fingerprint = lambda index: base64.b64encode(hashlib.sha256(str(index).encode()).digest()).decode()
+        return [{
+            "t": i / 4,
+            "baseline": {"state": "playing", "clock": i / 4, "fingerprint": fingerprint(i), "program_date_age": 8},
+            "candidate": {"state": "playing", "clock": i / 4, "fingerprint": fingerprint(i + lead_frames),
+                          "program_date_age": 8 - lead_frames / 4},
+        } for i in range(400)]
+
+    def test_alignment_recovers_signed_relative_delay(self):
+        for frames in (8, -8):
+            with self.subTest(frames=frames):
+                matches = probe.align_frames(self.samples(frames))
+                self.assertGreaterEqual(len(matches), 2)
+                self.assertTrue(all(m["candidate_lead_seconds_estimate"] == frames / 4 for m in matches))
+
+    def test_success_requires_sustained_parts_and_measured_lower_delay(self):
+        origin = probe.Origin()
+        origin.stats.update(parts_requested=100, http2_requests=200, steady_parts_served=90,
+                            part_windows={"1": 10, "2": 10, "3": 10})
+        self.assertTrue(probe.summarize(self.samples(8), origin)["success"])
+        self.assertFalse(probe.summarize(self.samples(-8), origin)["success"])
+        origin.stats["part_windows"] = {"1": 10}
+        self.assertFalse(probe.summarize(self.samples(8), origin)["success"])
 
 
 class OriginTests(unittest.TestCase):
@@ -129,8 +244,31 @@ class OriginTests(unittest.TestCase):
         self.assertEqual(results[0][1], b"new")
 
     def test_invalid_delivery_directive_fails_immediately(self):
-        for query in ({"_HLS_msn": ["bad"]}, {"_HLS_msn": ["500"]}, {"_HLS_msn": ["-1"]}):
+        for query in ({"_HLS_msn": ["bad"]}, {"_HLS_msn": ["500"]}, {"_HLS_msn": ["-1"]},
+                      {"_HLS_part": ["1"]}, {"_HLS_msn": ["1", "2"]}):
             self.assertEqual(self.origin.respond("/live.m3u8", query)[0], 400)
+
+    def test_whole_segment_directive_does_not_unblock_on_its_first_part(self):
+        results = []
+        thread = threading.Thread(target=lambda: results.append(
+            self.origin.respond("/live.m3u8", {"_HLS_msn": ["3"]})))
+        thread.start()
+        time.sleep(0.03)
+        self.assertFalse(results)
+        self.origin.finish_segment()
+        thread.join(timeout=1)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(results[0][0], 200)
+
+    def test_stop_during_blocking_reload_does_not_serve_stale_success(self):
+        results = []
+        thread = threading.Thread(target=lambda: results.append(
+            self.origin.respond("/live.m3u8", {"_HLS_msn": ["4"], "_HLS_part": ["0"]})))
+        thread.start()
+        time.sleep(0.03)
+        self.origin.fail("source ended")
+        thread.join(timeout=1)
+        self.assertEqual(results[0][0], 503)
 
     def test_declared_duration_and_timeline_are_enforced(self):
         with self.assertRaises(probe.ProbeError):
@@ -164,7 +302,7 @@ class OriginTests(unittest.TestCase):
         self.assertTrue(report["native_candidate_playback_verified"])
         self.assertFalse(report["comparison_valid"])
         self.assertFalse(report["success"])
-        self.assertNotIn("frame_alignment", report)
+        self.assertEqual(report["frame_alignment_windows"], [])
 
     def test_playable_whole_segment_fallback_is_not_a_low_latency_success(self):
         self.origin.stats["http2_requests"] = 10
@@ -177,7 +315,7 @@ class OriginTests(unittest.TestCase):
         self.assertTrue(report["comparison_valid"])
         self.assertFalse(report["partial_delivery_observed"])
         self.assertFalse(report["success"])
-        self.assertNotIn("frame_alignment", report, "Static video is not a reliable alignment")
+        self.assertEqual(report["frame_alignment_windows"], [], "Static video is not a reliable alignment")
 
     @unittest.skipUnless(importlib.util.find_spec("hypercorn"), "HTTP/2 test requires the probe venv")
     def test_real_tls_http2_transport_without_system_trust(self):
@@ -198,6 +336,7 @@ class OriginTests(unittest.TestCase):
                         client.send_headers(1, [
                             (":method", "GET"), (":scheme", "https"),
                             (":authority", f"127.0.0.1:{port}"), (":path", "/live.m3u8"),
+                            ("accept-encoding", "gzip"),
                         ], end_stream=True)
                         connection.sendall(client.data_to_send())
                         body = bytearray()
@@ -214,7 +353,7 @@ class OriginTests(unittest.TestCase):
                             pending = client.data_to_send()
                             if pending:
                                 connection.sendall(pending)
-                        self.assertIn(b"#EXT-X-PART:", body)
+                        self.assertIn(b"#EXT-X-PART:", gzip.decompress(body))
                 self.assertGreater(self.origin.stats["http2_requests"], 0)
                 self.assertFalse(server.trust_attempted)
             finally:
@@ -223,6 +362,24 @@ class OriginTests(unittest.TestCase):
                     self.origin.condition.notify_all()
                 server.close()
             self.assertFalse(Path(server.temporary.name).exists())
+            self.assertFalse(server.thread.is_alive())
+
+    @unittest.skipUnless(importlib.util.find_spec("hypercorn"), "Transport test requires the probe venv")
+    def test_resource_loader_transport_never_creates_or_trusts_a_certificate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            server = probe.Transport(self.origin, Path(directory), use_tls=False)
+            try:
+                server.check_ready()
+                self.assertTrue(server.url.startswith("http://127.0.0.1:"))
+                self.assertIsNone(server.temporary)
+                with self.assertRaises(probe.ProbeError):
+                    server.trust_for_native()
+                self.assertFalse(server.trust_attempted)
+            finally:
+                self.origin.stopped.set()
+                with self.origin.condition:
+                    self.origin.condition.notify_all()
+                server.close()
             self.assertFalse(server.thread.is_alive())
 
 
