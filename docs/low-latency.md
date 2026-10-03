@@ -16,8 +16,9 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   **Auto · High Quality** — that differ only in buffer depth and gentle
   catch-up (see `LivePlaybackPolicy`). An explicit rendition pick is a third,
   fixed-quality case.
-- AVPlayer on tvOS cannot match the Twitch app's sub-second player; ~2–6s
-  behind the freshest segment is the realistic floor here.
+- The current whole-segment proxy typically sits several seconds behind the
+  available edge. This is not a proven AVPlayer limit: a standards-compliant
+  partial-segment bridge is a separate approach (see the isolated prototype below).
 - Sharpness, freezes, and "jumps" are governed by buffering and ABR behavior,
   not by playback speed. Those are still being tuned; use the Diagnostics
   overlay to gather real data.
@@ -392,11 +393,136 @@ of stalling, and the slow-down rides out short buffer dips.
 
 ## Realistic floor
 
-Twitch's app renders sub-second LL-HLS *parts* in a custom player. We can only
-hand AVPlayer whole ~2s prefetch segments plus AVPlayer's own buffering. So
-matching the Twitch app's ~5–7s is unlikely on AVPlayer/tvOS. Being a few
-seconds behind the freshest segment is the realistic target. This is the same
-wall Frosty's native (non-web-view) path hits.
+Our shipping proxy hands AVPlayer whole prefetch segments; it does not generate
+LL-HLS partial segments. Its observed delay does not establish a minimum delay
+for AVPlayer itself. AVPlayer supports Apple's LL-HLS protocol, including partial
+segments and blocking playlist reloads, but the origin must also satisfy its
+transport requirements. A Twitch-to-LL-HLS bridge needs measurement on the target
+device before assigning a latency target.
+
+### Isolated native A/B prototype
+
+`tools/run-ll-hls-probe.sh` runs two muted macOS AVPlayers side by side, without
+changing the app, installing on Apple TV, or uploading to TestFlight:
+
+- **Baseline:** compiles the actual `LowLatencyHLSProxy` and
+  `LivePlaybackPolicy` from this checkout, uses the same selected rendition,
+  and reproduces the low-latency rate policy. It deliberately excludes app
+  watchdog recovery, UI, and adaptive rendition switching. It retains the default
+  rewind playlist history but never initiates user scrubs.
+  This is a proxy/policy baseline, not a complete running Strozz session.
+- **Candidate:** progressively reads the same Twitch rendition, uses an existing
+  local FFmpeg executable to remux H.264/AAC without re-encoding, and independently
+  parses fragmented MP4 sample durations to publish roughly 300ms LL-HLS parts.
+  Keyframe-aligned parents, preload hints, blocking reloads, bounded retained
+  bytes, and HTTP/2 are implemented in the experimental relay.
+- **Evidence:** first decoded frame, fresh decoded-frame coverage, stationary
+  playhead/paused/waiting fractions, buffer levels, native errors, and actual
+  HTTP/2/part requests. A low-resolution luminance fingerprint provides a
+  tentative relative alignment only when both players sustain decoding and the
+  best alignment is distinguishable. It is not a glass-to-glass latency reading.
+  The candidate currently has no program-date mapping; inventing one from
+  remuxed timestamps would make that metric misleading.
+
+The bridge does not support adaptive quality, rewind, ad transitions, encryption,
+or discontinuities. It stops explicitly on unsupported transitions rather than
+skipping ads or concealing a broken timeline. Signed upstream URLs stay in
+memory; evidence contains no playback tokens, audio, or full-resolution video.
+All servers and subprocesses are owned by the bounded run.
+
+Prerequisites: macOS/Xcode, Python 3.10+, an explicitly installed FFmpeg supporting
+fragmented MP4, and OpenSSL supporting `req -addext`. The HTTP/2 server dependency
+is separate from app dependencies:
+
+```bash
+./tools/with-apple-build-lease.sh strozz/ll-hls-probe-setup -- /bin/bash -c \
+  'python3 -m venv build/ll-hls-probe/venv &&
+   build/ll-hls-probe/venv/bin/pip install -r tools/requirements-ll-hls-probe.txt'
+
+PYTHONDONTWRITEBYTECODE=1 build/ll-hls-probe/venv/bin/python -m unittest discover \
+  -s tools/tests -p test_ll_hls_probe.py
+```
+
+**Certificate approval is required before a native comparison.** AVPlayer does
+not accept the generated localhost certificate via the resource-loader trust
+callback. With explicit approval, `--trust-localhost` temporarily adds only that
+run's certificate to the login keychain, then removes its trust and exact
+fingerprint in cleanup. It never changes system trust, existing certificates,
+or TCP settings. Without the flag the experiment makes no keychain changes,
+and native playback is expected to fail certificate validation. Do not grant
+trust on the user's behalf without asking.
+
+```bash
+# Only after approval; choose a live channel and a NEW evidence directory.
+bash tools/run-ll-hls-probe.sh CHANNEL /absolute/path/to/new-evidence 90 --trust-localhost
+```
+
+The duration is bounded to 30-300 seconds. Evidence is kept in the supplied
+directory; output directories are never overwritten. `report.json` distinguishes
+`native_candidate_playback_verified` from `comparison_valid` and
+`partial_delivery_observed`. Exit status is nonzero unless both paths sustain
+native decoding **and** the candidate requests parts. Even some part requests
+do not establish sustained low latency; inspect the whole-segment requests too.
+A frozen baseline must not be presented as a latency win. Check
+`temporary_certificate_removed`; a cleanup
+failure is an error and preserves the certificate identity for recovery.
+
+**Observed on macOS, 2026-10-02:** a plain HTTP/1.1 origin was rejected with
+`Low Latency: Server must support http2 ECN and SACK`. After switching to HTTPS/
+HTTP2 and approved temporary trust, a 90-second H.264 run produced 359 candidate
+decoded-frame samples, no post-startup waiting samples, 371 HTTP/2 requests,
+7 part requests, and 46 whole-segment requests. The baseline, in the original no-history harness configuration, stopped advancing
+after about 15 seconds, so this run establishes native
+candidate playback, **not** a reliable latency improvement or sustained
+parts-only delivery. No Apple TV result or audio-sync guarantee is established.
+The temporary certificate was removed and its absence verified.
+
+In the final 90-second comparison, restoring the baseline's default history
+retention kept **both** players advancing throughout the measurement:
+
+| Observation | Baseline proxy/policy | Candidate origin |
+| --- | --- | --- |
+| Fresh decoded-frame samples | 356 | 359 |
+| Post-startup decoded-frame coverage | 100% | 100% |
+| Median buffered media | 2.92s | 3.93s |
+| Native playback errors | None | None |
+
+The candidate made 365 HTTP/2 requests and 315 blocking playlist requests, but
+requested **47 complete segments and zero parts**, despite 457 parts being
+published. Its reported configured live offset was 6s. The result is a valid
+native playback comparison, **not successful sustained partial-segment playback
+or a demonstrated reduction in delay**. Buffer duration is not live latency;
+fingerprint matching did not produce a sufficiently distinct alignment to report
+a reliable relative delay. Startup times also exclude origin warm-up and must
+not be compared as end-to-end channel-switch performance.
+
+The remaining gate is understanding AVPlayer's live-offset and part-selection
+behavior, then proving the same result on tvOS without importing desktop-only
+keychain trust or Python/FFmpeg machinery into the shipping app. No new engine
+or dependency is enabled in Strozz. Keep these results separate from StreamNook's
+hls.js observations.
+
+### Upstream implementation comparison and reuse
+
+The comparison used StreamNook commit
+[`76b81ca`](https://github.com/StreamNook/StreamNook/tree/76b81ca0d935cd01b8e3cffaafcfc23de716aae9).
+Its selected-rendition local origin generates parts for hls.js, with
+headroom-aware rate control and per-channel cushion adaptation. Its current
+settings enable the parts engine by default, despite older comments calling it
+opt-in. Its latency targets are not independently measured tvOS results.
+
+StreamNook's license is **PolyForm Noncommercial with additional permissions**,
+not MIT/BSD-style unrestricted reuse. Do not copy or translate its engine and
+relabel the result as MIT. Streamlink is BSD-2-Clause; hls.js is Apache-2.0;
+reusing their code would still require preserving applicable notices and terms.
+This prototype copies no StreamNook implementation. It uses the HLS/MP4 protocol
+structures and existing local FFmpeg as an external experimental tool, not as a
+new bundled app dependency.
+
+References:
+[Apple LL-HLS](https://developer.apple.com/documentation/http-live-streaming/enabling-low-latency-http-live-streaming-hls),
+[StreamNook license](https://github.com/StreamNook/StreamNook/blob/76b81ca0d935cd01b8e3cffaafcfc23de716aae9/LICENSE),
+[Streamlink Twitch plugin](https://github.com/streamlink/streamlink/blob/master/src/streamlink/plugins/twitch.py).
 
 ## Open questions (NOT yet confirmed — under investigation)
 
