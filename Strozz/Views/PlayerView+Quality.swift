@@ -160,7 +160,10 @@ extension PlayerView {
   /// full labels ("Auto · Low Latency" / "Auto · High Quality"), and a pinned
   /// rendition shows its own name, so options are surfaced verbatim.
   func qualityDisplayLabel(_ option: String) -> String {
-    option
+    if option == LivePlaybackProfile.nativeLowLatency.pickerLabel, model.nativeFallbackReason != nil {
+      return "\(option) — fallback"
+    }
+    return option
   }
 
   func selectQuality(at index: Int) {

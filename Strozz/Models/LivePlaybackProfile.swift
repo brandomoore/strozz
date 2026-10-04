@@ -16,6 +16,12 @@ enum LivePlaybackProfile: String, CaseIterable, Identifiable {
 
   var id: String { rawValue }
 
+  var requestsNativePlayback: Bool { self == .nativeLowLatency }
+
+  func promotesPrefetch(legacyEnabled: Bool, unstable: Bool) -> Bool {
+    !unstable && (requestsNativePlayback || legacyEnabled)
+  }
+
   /// Default for new installs; the old profile raw values remain selectable.
   static let `default`: LivePlaybackProfile = .nativeLowLatency
 

@@ -302,7 +302,7 @@ extension PlayerView {
     currentSourceURL = url
     let reuseNative = model.nativeHLS?.sourceURL == url && preferredQuality == "Auto"
       && livePlaybackProfile == .nativeLowLatency && model.nativeFallbackReason == nil
-      && !isVOD && !isUsingAltSource && !isStreamUnstable && lowLatencyProxyEnabled
+      && !isVOD && !isUsingAltSource && !isStreamUnstable
       ? model.nativeHLS : nil
     if reuseNative == nil { model.nativeHLS?.stop() }
     model.nativeHLS = nil
@@ -333,7 +333,8 @@ extension PlayerView {
     // `isStreamUnstable` we drop promotion and — when Rewind isn't holding the
     // proxy on for DVR — detach the proxy entirely and play the plain Twitch
     // playlist, exactly as a manual "LL proxy off" would.
-    let promotePrefetch = lowLatencyProxyEnabled && !isStreamUnstable
+    let promotePrefetch = livePlaybackProfile.promotesPrefetch(
+      legacyEnabled: lowLatencyProxyEnabled, unstable: isStreamUnstable)
     let useProxy = promotePrefetch || streamRewindEnabled
     lowLatencyProxy.configure(
       promotePrefetch: promotePrefetch,
@@ -341,7 +342,7 @@ extension PlayerView {
       windowSeconds: rewindWindowSeconds
     )
     let useNative = preferredQuality == "Auto" && livePlaybackProfile == .nativeLowLatency
-      && !isVOD && !isUsingAltSource && !isStreamUnstable && lowLatencyProxyEnabled
+      && !isVOD && !isUsingAltSource && !isStreamUnstable
       && model.nativeFallbackReason == nil
     if useNative {
       let generation = model.nativeGeneration
@@ -464,7 +465,11 @@ extension PlayerView {
     if isLatencyWarmingUp {
       return "Estimating latency…"
     }
-    return "~\(formatLatencySeconds(seconds)) behind live"
+    let delay = "~\(formatLatencySeconds(seconds)) behind live"
+    if livePlaybackProfile == .nativeLowLatency, !model.isUsingNativeHLS, !isUsingAltSource {
+      return "Standard playback · \(delay)"
+    }
+    return delay
   }
 
   func formatLatencySeconds(_ seconds: Double) -> String {

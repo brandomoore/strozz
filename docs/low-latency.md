@@ -19,6 +19,18 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   mode uses AVPlayer's LL-HLS timing, not the legacy variable-rate controller.
   Choosing native mode explicitly selects Twitch rather than a YouTube simulcast.
   Fixed-quality selections keep their existing stable-buffer policy.
+- Native mode is independent of the legacy Diagnostics **Prefetch Proxy**
+  kill-switch. Its unsupported-source fallback enables prefetch promotion unless
+  stability mode has vetoed it. The legacy profiles continue honoring their
+  existing kill-switch. The selected native row and latency badge explicitly
+  identify standard playback after fallback; selection is not proof of activation.
+
+**Physical-device finding:** the first installed integration was blocked by a
+persisted legacy proxy-off setting. Device telemetry on Caedrel showed
+`native_ll_hls=false`, `promotes_prefetch=false`, and roughly 20.6s source-date
+age despite the native row being selected. The gate has been corrected. Caedrel's
+inspected H.264 feed was MPEG-TS rather than CMAF, so it uses the prefetch fallback,
+not the 1.5s native-parts path. This feed has no verified native latency result.
 
 - Twitch's own low-latency relies on a proprietary HLS tag AVPlayer ignores.
 - We close most of that gap with an in-process proxy that promotes those

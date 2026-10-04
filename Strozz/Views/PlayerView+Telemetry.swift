@@ -285,7 +285,8 @@ extension PlayerView {
         metrics: ["preferred_forward_buffer_seconds": item.preferredForwardBufferDuration],
         flags: [
           "uses_proxy": usesProxy,
-          "promotes_prefetch": usesProxy && lowLatencyProxyEnabled && !isStreamUnstable,
+          "promotes_prefetch": usesProxy && livePlaybackProfile.promotesPrefetch(
+            legacyEnabled: lowLatencyProxyEnabled, unstable: isStreamUnstable),
           "retains_history": usesProxy && streamRewindEnabled,
           "stream_unstable": isStreamUnstable,
         ]

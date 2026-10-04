@@ -246,6 +246,9 @@ struct QualityMenu: View, Equatable {
       }
 
       Menu {
+        if let engineStatus {
+          Text(engineStatus)
+        }
         // NOTE (tvOS 27 dev-beta regression, build 24J5289o): on a focused
         // submenu row the white focus pill correctly inverts the row's text and
         // leading icon to dark, but the *system* trailing disclosure chevron does
@@ -272,9 +275,6 @@ struct QualityMenu: View, Equatable {
             }
           }
           .pickerStyle(.inline)
-          if let engineStatus {
-            Text(engineStatus)
-          }
         } label: {
           Label(qualityMenuLabel, systemImage: "rectangle.on.rectangle")
         }

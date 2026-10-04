@@ -19,6 +19,16 @@ final class LivePlaybackPolicyTests: XCTestCase {
     XCTAssertEqual(LivePlaybackProfile.higherQuality.rawValue, "higherQuality")
   }
 
+  func testNativeModeIsIndependentOfLegacyProxyDisable() {
+    XCTAssertTrue(LivePlaybackProfile.nativeLowLatency.requestsNativePlayback)
+    XCTAssertTrue(LivePlaybackProfile.nativeLowLatency.promotesPrefetch(legacyEnabled: false, unstable: false))
+    XCTAssertFalse(LivePlaybackProfile.lowerLatency.promotesPrefetch(legacyEnabled: false, unstable: false))
+    XCTAssertFalse(LivePlaybackProfile.higherQuality.promotesPrefetch(legacyEnabled: false, unstable: false))
+    for profile in LivePlaybackProfile.allCases {
+      XCTAssertFalse(profile.promotesPrefetch(legacyEnabled: true, unstable: true))
+    }
+  }
+
   func testPickerLabels() {
     XCTAssertEqual(LivePlaybackProfile.lowerLatency.pickerLabel, "Auto · Low Latency")
     XCTAssertEqual(LivePlaybackProfile.higherQuality.pickerLabel, "Auto · High Quality")
