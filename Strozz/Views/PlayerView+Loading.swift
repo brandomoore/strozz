@@ -10,7 +10,7 @@ extension PlayerView {
     let login = activeChannel
     let sessionID = model.playbackTelemetry.sessionID
     let generation = model.altRecovery.generation
-    if preferYouTubeSource, !didManuallySelectSource {
+    if preferYouTubeSource, livePlaybackProfile != .nativeLowLatency, !didManuallySelectSource {
       do {
         let source = try await LivePlaybackStartup.resolveYouTube {
           let target = await Self.resolveYouTubeTarget(forTwitchLogin: login)
@@ -143,6 +143,15 @@ extension PlayerView {
         guard telemetrySessionID == model.playbackTelemetry.sessionID,
           loadingChannel == activeChannel, sourceGeneration == model.altRecovery.generation else { return }
         if !started {
+          if model.isUsingNativeHLS {
+            fallbackFromNativeHLS(.unavailable)
+            if await waitForPlaybackStart() {
+              startLatencyMonitor()
+              startPlaybackWatchdog()
+              isLoading = false
+              return
+            }
+          }
           throw LoadTimeoutError.noPlaybackProgress
         }
 
@@ -291,6 +300,15 @@ extension PlayerView {
 
   func makeItem(url: URL) -> AVPlayerItem {
     currentSourceURL = url
+    let reuseNative = model.nativeHLS?.sourceURL == url && preferredQuality == "Auto"
+      && livePlaybackProfile == .nativeLowLatency && model.nativeFallbackReason == nil
+      && !isVOD && !isUsingAltSource && !isStreamUnstable && lowLatencyProxyEnabled
+      ? model.nativeHLS : nil
+    if reuseNative == nil { model.nativeHLS?.stop() }
+    model.nativeHLS = nil
+    model.isUsingNativeHLS = false
+    model.nativeParts = 0
+    if reuseNative == nil { model.nativeGeneration = UUID() }
     // Detach the outgoing item's resources before building its replacement so
     // nothing accumulates across quality/channel switches:
     //  - remove the previous decode-freeze frame tap (an AVPlayerItemVideoOutput
@@ -322,12 +340,29 @@ extension PlayerView {
       retainHistory: streamRewindEnabled,
       windowSeconds: rewindWindowSeconds
     )
-    let assetURL = useProxy ? lowLatencyProxy.proxyURL(for: url) : url
+    let useNative = preferredQuality == "Auto" && livePlaybackProfile == .nativeLowLatency
+      && !isVOD && !isUsingAltSource && !isStreamUnstable && lowLatencyProxyEnabled
+      && model.nativeFallbackReason == nil
+    if useNative {
+      let generation = model.nativeGeneration
+      let native = reuseNative ?? NativeLowLatencyHLS(sourceURL: url, headers: PlaybackService.streamHeaders,
+        history: streamRewindEnabled ? rewindWindowSeconds : 12) { reason in
+          Task { @MainActor in
+            guard generation == model.nativeGeneration, model.isUsingNativeHLS else { return }
+            fallbackFromNativeHLS(reason)
+          }
+        }
+      model.nativeHLS = native
+      model.isUsingNativeHLS = true
+    }
+    let assetURL = model.nativeHLS?.assetURL ?? (useProxy ? lowLatencyProxy.proxyURL(for: url) : url)
     let asset = AVURLAsset(
       url: assetURL,
       options: ["AVURLAssetHTTPHeaderFieldsKey": PlaybackService.streamHeaders]
     )
-    if useProxy {
+    if let native = model.nativeHLS {
+      asset.resourceLoader.setDelegate(native, queue: native.queue)
+    } else if useProxy {
       // Promotes Twitch's #EXT-X-TWITCH-PREFETCH segments (which AVPlayer would
       // otherwise ignore) and/or retains seen segments to grow the rewind window.
       asset.resourceLoader.setDelegate(lowLatencyProxy, queue: lowLatencyProxy.callbackQueue)
@@ -352,6 +387,30 @@ extension PlayerView {
     playerItemVideoOutput = videoOutput
     videoDecodeFrozenSince = nil
     return item
+  }
+
+  func fallbackFromNativeHLS(_ reason: NativeHLSError) {
+    guard model.isUsingNativeHLS else { return }
+    let position = (!pinnedToLive || isUserPaused) ? player.currentItem?.currentDate() : nil
+    let paused = isUserPaused
+    model.nativeFallbackReason = reason.rawValue
+    recordPlaybackEvent("native_hls_fallback", level: .warning, attributes: ["reason": reason.rawValue])
+    guard let source = currentSourceURL else { return }
+    let item = makeItem(url: source)
+    replacePlaybackItem(with: item)
+    if let position {
+      Task { @MainActor in
+        for _ in 0..<100 {
+          guard item === player.currentItem else { return }
+          if item.status == .readyToPlay { break }
+          try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard item === player.currentItem else { return }
+        let restored = await item.seek(to: position)
+        recordPlaybackEvent("native_hls_position_restore", flags: ["restored": restored])
+        if !paused { startPlayback() }
+      }
+    } else if !paused { startPlayback() }
   }
 
   /// "Behind live" as the viewer actually experiences it: how far behind the real
@@ -464,6 +523,7 @@ extension PlayerView {
   /// anti-stall slow-down reacts to a draining buffer well before it empties.
   func startRateController() {
     stopRateController()
+    guard !model.isUsingNativeHLS else { return }
     rateControlTask = Task {
       while !Task.isCancelled {
         await MainActor.run {
@@ -1285,6 +1345,7 @@ extension PlayerView {
   /// Applies the adaptive live playback rate without fighting an intentional pause
   /// or an in-progress scrub.
   func applyLiveLatencyCorrection() {
+    guard !model.isUsingNativeHLS else { return }
     guard isPlaybackActive else { return }
     guard !isVOD, model.startupProgress.allowsRateAdjustment(
       isPlaying: player.timeControlStatus == .playing,

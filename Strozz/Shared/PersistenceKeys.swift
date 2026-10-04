@@ -108,6 +108,7 @@ enum PersistenceKey {
 
   static let preferredQuality = "preferredQuality"
   static let livePlaybackProfile = "livePlaybackProfile"
+  static let nativePlaybackDefaultApplied = "nativePlaybackDefaultApplied"
   static let autoClaimWatchBonuses = "autoClaimWatchBonuses"
 
   // MARK: Chat appearance — live controls (bound via `@AppStorage` in PlayerView)

@@ -128,6 +128,7 @@ extension PlayerView {
         QualityMenu(
           options: qualityOptions,
           selectedOption: selectedQualityOption,
+          engineStatus: qualityEngineStatus,
           buttonLabel: qualityButtonLabel,
           reservedWidthLabels: qualityButtonLabelCandidates,
           displayLabel: { qualityDisplayLabel($0) },
@@ -345,6 +346,9 @@ extension PlayerView {
     }
     let pin = preferredQuality == "Auto" ? "Auto/adaptive" : "\(preferredQuality) (pinned)"
     lines.append("Mode: \(mode) · \(pin)")
+    if let status = qualityEngineStatus {
+      lines.append("Engine: \(status) · parts indexed: \(model.nativeParts)")
+    }
 
     // Stream source readout (moved here from the settings panel). When the
     // YouTube simulcast is active, surface the detailed alt-source proof

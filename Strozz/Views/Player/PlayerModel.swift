@@ -54,6 +54,11 @@ final class PlayerModel {
   /// Retained for the player's lifetime: `AVURLAsset` only holds its resource
   /// loader delegate weakly, so the proxy must be owned here to stay alive.
   let lowLatencyProxy = LowLatencyHLSProxy(headers: PlaybackService.streamHeaders)
+  @ObservationIgnored var nativeHLS: NativeLowLatencyHLS?
+  @ObservationIgnored var nativeGeneration = UUID()
+  var nativeFallbackReason: String?
+  var nativeParts = 0
+  var isUsingNativeHLS = false
 
   /// Always-on structured playback recorder. It mirrors key events to OSLog and
   /// persists a bounded JSONL session for agent-driven postmortem analysis.

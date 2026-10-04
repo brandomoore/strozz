@@ -15,7 +15,9 @@ extension PlayerView {
   /// deep-buffer stability fallback (smoothness over latency).
   var activeLivePlaybackPolicy: LivePlaybackPolicy {
     if isStreamUnstable { return .stabilityFallback }
-    return LivePlaybackPolicy.live(profile: livePlaybackProfile, isPinned: preferredQuality != "Auto")
+    let profile = livePlaybackProfile == .nativeLowLatency && !model.isUsingNativeHLS
+      ? LivePlaybackProfile.lowerLatency : livePlaybackProfile
+    return LivePlaybackPolicy.live(profile: profile, isPinned: preferredQuality != "Auto")
   }
 
   /// Applies the active policy to the live item without swapping the source —
@@ -45,7 +47,8 @@ extension PlayerView {
   }
 
   var qualityOptions: [String] {
-    [LivePlaybackProfile.lowerLatency.pickerLabel,
+    [LivePlaybackProfile.nativeLowLatency.pickerLabel,
+     LivePlaybackProfile.lowerLatency.pickerLabel,
      LivePlaybackProfile.higherQuality.pickerLabel]
       + (playback?.qualities.map(\.name) ?? [])
   }
@@ -55,6 +58,13 @@ extension PlayerView {
   /// rendition selects itself.
   var selectedQualityOption: String {
     preferredQuality == "Auto" ? livePlaybackProfile.pickerLabel : preferredQuality
+  }
+
+  var qualityEngineStatus: String? {
+    guard preferredQuality == "Auto", livePlaybackProfile == .nativeLowLatency, !isUsingAltSource else { return nil }
+    if let reason = model.nativeFallbackReason { return "Standard playback · \(reason)" }
+    if model.isUsingNativeHLS { return model.nativeParts > 0 ? "Native LL-HLS" : "Preparing Native LL-HLS" }
+    return "Standard playback"
   }
 
   /// Text shown on the player's quality button: the selected variant (e.g.
@@ -162,7 +172,17 @@ extension PlayerView {
       // One of the two Auto rows: stay on the adaptive master, just switch the
       // latency-vs-quality profile and re-apply its buffer/catch-up policy.
       livePlaybackProfile = profile
-      if preferredQuality != "Auto" {
+      if profile == .nativeLowLatency || previousProfile == LivePlaybackProfile.nativeLowLatency.rawValue {
+        model.nativeFallbackReason = nil
+        preferredQuality = "Auto"
+        if isUsingAltSource, profile == .nativeLowLatency {
+          didManuallySelectSource = true
+          switchToTwitchSource()
+        } else if let playback {
+          replacePlaybackItem(with: makeItem(url: playback.master))
+          startPlayback()
+        }
+      } else if preferredQuality != "Auto" {
         preferredQuality = "Auto"
         applyQualityPreference("Auto")
       } else {

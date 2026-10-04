@@ -88,6 +88,12 @@ extension PlayerView {
     .task { await monitorWatchRewards() }
     .task {
       if activeChannel.isEmpty { activeChannel = channel }
+      if !UserDefaults.standard.bool(forKey: PersistenceKey.nativePlaybackDefaultApplied) {
+        if preferredQuality == "Auto", livePlaybackProfile == .lowerLatency {
+          livePlaybackProfile = .nativeLowLatency
+        }
+        UserDefaults.standard.set(true, forKey: PersistenceKey.nativePlaybackDefaultApplied)
+      }
       if isVOD {
         beginPlaybackTelemetry()
         await startVOD()
@@ -221,6 +227,9 @@ extension PlayerView {
         attributes: PlaybackTelemetryRecorder.errorAttributes(error)
       )
       recordCurrentErrorLog()
+      if model.isUsingNativeHLS {
+        fallbackFromNativeHLS(.unavailable)
+      }
       if isUsingAltSource, let master = altYouTubeMasterURL, currentSourceURL == master {
         model.altRecovery.noteTerminalFailure()
         recoverAltSourceIfNeeded(reason: "failed_to_play_to_end")

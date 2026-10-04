@@ -85,6 +85,7 @@ extension PlayerView {
   /// Only relevant while the prefetch proxy is the active (destabilizing)
   /// strategy; if it's already off there is nothing to drop.
   func checkPredictedInstability() {
+    guard !model.isUsingNativeHLS else { return }
     guard !isVOD, !isStreamUnstable, lowLatencyProxyEnabled else { return }
     guard !isUserPaused, !isScrubbing else { return }
     guard lowLatencyProxy.predictedUnstable else { return }
@@ -327,6 +328,7 @@ extension PlayerView {
   }
 
   func resetDiagnostics() {
+    model.nativeFallbackReason = nil
     diagStallCount = 0
     diagJumpCount = 0
     diagReloadCount = 0

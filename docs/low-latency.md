@@ -9,6 +9,17 @@ on-device observation). Hypotheses go under "Open questions" until proven.
 
 ## TL;DR
 
+- **Auto · Native Low Latency** is the new default Twitch profile. The original
+  **Auto · Low Latency**, **Auto · High Quality**, and fixed-quality options
+  remain available. Native source-CMAF indexing and original-CDN byte ranges
+  now run in Swift in the app; no desktop helper or certificate is required.
+  The adaptive master is preserved. Unsupported formats and transitions fall
+  back to the existing player, with the reason in the quality menu/diagnostics.
+- Choose the old **Auto · Low Latency** row for an immediate comparison. Native
+  mode uses AVPlayer's LL-HLS timing, not the legacy variable-rate controller.
+  Choosing native mode explicitly selects Twitch rather than a YouTube simulcast.
+  Fixed-quality selections keep their existing stable-buffer policy.
+
 - Twitch's own low-latency relies on a proprietary HLS tag AVPlayer ignores.
 - We close most of that gap with an in-process proxy that promotes those
   segments. It is always on for live and is the real, stable latency win.
@@ -574,9 +585,13 @@ Decoded video was measured while audio was muted, so audible synchronization,
 long sessions, ad transitions, codec changes, and impaired-network behavior
 remain unverified.
 
-No native LL-HLS engine or dependency is enabled in Strozz. The production
-route is a gated Swift implementation of source-fragment indexing and
-playlist generation, with original-CDN byte-range delivery. It must preserve
+The native app implementation now lives in `NativeCMAF.swift` and
+`NativeLowLatencyHLS.swift`. It indexes source fragments, generates adaptive
+playlists, and delivers original-CDN byte ranges. The old profiles remain
+unchanged. Runtime format changes and unsupported streams fall back for the
+channel session rather than repeatedly restarting the native path. It retains
+bounded source metadata for rewind, but never caches the media itself.
+The production path must continue to preserve
 adaptive quality, user-selected rewind positions, ad/raid transitions, and
 the existing fallback. MPEG-TS support needs a real timestamp-preserving
 repackager or another verified source path; it must not be silently claimed

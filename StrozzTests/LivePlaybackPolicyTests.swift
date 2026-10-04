@@ -3,8 +3,14 @@ import XCTest
 @testable import Strozz
 
 final class LivePlaybackPolicyTests: XCTestCase {
-  func testDefaultProfileIsLowerLatency() {
-    XCTAssertEqual(LivePlaybackProfile.default, .lowerLatency)
+  func testNewDefaultDoesNotReplaceLegacyProfiles() {
+    XCTAssertEqual(LivePlaybackProfile.default, .nativeLowLatency)
+    XCTAssertEqual(LivePlaybackProfile.nativeLowLatency.pickerLabel, "Auto · Native Low Latency")
+    XCTAssertEqual(LivePlaybackProfile.allCases.count, 3)
+    let policy = LivePlaybackPolicy.live(profile: .nativeLowLatency, isPinned: false)
+    XCTAssertEqual(policy.preferredForwardBufferDuration, 1)
+    XCTAssertEqual(policy.minPlaybackRate, 1)
+    XCTAssertEqual(policy.maxCatchUpRate, 1)
   }
 
   func testProfileRawValuesAreStable() {

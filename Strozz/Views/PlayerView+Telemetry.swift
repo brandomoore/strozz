@@ -118,6 +118,16 @@ extension PlayerView {
     snapshot.flags["video_output_observed"] = model.playbackTelemetry.videoFrameAge != nil
     snapshot.metrics["video_frame_age_seconds"] = model.playbackTelemetry.videoFrameAge
     snapshot.flags["using_alt_source"] = isUsingAltSource
+    snapshot.flags["native_ll_hls"] = model.isUsingNativeHLS
+    snapshot.counters["native_parts_indexed"] = model.nativeParts
+    snapshot.attributes["native_fallback"] = model.nativeFallbackReason
+    if let native = model.nativeHLS {
+      Task { @MainActor in
+        let stats = await native.origin.snapshot()
+        guard model.nativeHLS === native else { return }
+        model.nativeParts = stats.parts
+      }
+    }
     snapshot.attributes["watch_rewards_state"] = model.watchTracker.state.rawValue
     snapshot.counters["watch_rewards_reports_accepted"] = model.watchTracker.acceptedReports
     snapshot.counters["watch_rewards_streak"] = model.watchTracker.streak
@@ -254,6 +264,12 @@ extension PlayerView {
   }
 
   func replacePlaybackItem(with item: AVPlayerItem?) {
+    if (item?.asset as? AVURLAsset)?.url.scheme != NativeLowLatencyHLS.scheme {
+      model.nativeHLS?.stop()
+      model.nativeHLS = nil
+      model.isUsingNativeHLS = false
+      model.nativeGeneration = UUID()
+    }
     if item !== player.currentItem {
       resetPlaybackHealth()
       model.startupProgress = LivePlaybackStartup.Progress()

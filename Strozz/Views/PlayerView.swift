@@ -451,7 +451,7 @@ struct PlayerView: View {
   var targetLiveEdgeSeconds: Double {
     // YouTube's native seekable end already reflects configuredTimeOffsetFromLive.
     // Subtracting that offset again would unnecessarily double the DVR margin.
-    isUsingAltSource ? 0 : 3.5
+    isUsingAltSource || model.isUsingNativeHLS ? 0 : 3.5
   }
   let edgeLatencyUnavailableEpsilonSeconds: Double = 0.2
   let edgeLatencyUnavailableSamples = 4
