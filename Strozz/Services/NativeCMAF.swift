@@ -6,6 +6,11 @@ enum NativeHLSError: String, Error, Sendable {
   case invalidMedia = "The stream's media timeline could not be verified."
   case unavailable = "The native live stream is unavailable."
   case timeout = "The native live stream did not respond in time."
+  case indexerOverrun = "The native stream indexer could not keep up with the incoming data."
+  case transportTable = "The transport stream has an unsupported program table."
+  case transportCodec = "The transport stream does not contain H.264 and AAC."
+  case transportKeyframe = "The transport segment did not start at a verified H.264 keyframe."
+  case partDuration = "A partial segment exceeded the supported duration."
 }
 
 /// Byte-level indexing only: encoded audio/video remains on Twitch's CDN.
@@ -137,7 +142,8 @@ enum NativeCMAF {
   }
 
   struct Manifest: Sendable {
-    let initialization: URL
+    let initialization: URL?
+    let targetDuration: Int
     let discontinuity: Int
     let entries: [Entry]
   }
@@ -162,6 +168,7 @@ enum NativeCMAF {
     var map: URL?
     var sequence: Int?
     var discontinuity = 0
+    var targetDuration = 6
     var duration: Double?
     var date: Date?
     var entries: [Entry] = []
@@ -178,6 +185,9 @@ enum NativeCMAF {
           .contains(attributes(value)["CLASS"] ?? "") else { throw NativeHLSError.transition }
       } else if line.hasPrefix("#EXT-X-MEDIA-SEQUENCE:") {
         sequence = Int(value)
+      } else if line.hasPrefix("#EXT-X-TARGETDURATION:") {
+        guard let target = Int(value), (1...10).contains(target) else { throw NativeHLSError.invalidMedia }
+        targetDuration = target
       } else if line.hasPrefix("#EXT-X-DISCONTINUITY-SEQUENCE:") {
         guard let number = Int(value) else { throw NativeHLSError.invalidMedia }
         discontinuity = number
@@ -210,8 +220,8 @@ enum NativeCMAF {
         prefetch = prefetch || isPrefetch
       }
     }
-    guard prefetch, let map, map.scheme == "https",
+    guard prefetch, map == nil || map?.scheme == "https",
       entries.contains(where: { $0.date != nil }) else { throw NativeHLSError.unsupported }
-    return Manifest(initialization: map, discontinuity: discontinuity, entries: entries)
+    return Manifest(initialization: map, targetDuration: targetDuration, discontinuity: discontinuity, entries: entries)
   }
 }

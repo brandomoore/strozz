@@ -18,6 +18,14 @@ enum LivePlaybackProfile: String, CaseIterable, Identifiable {
 
   var requestsNativePlayback: Bool { self == .nativeLowLatency }
 
+  static func available(nativeAvailable: Bool) -> [Self] {
+    nativeAvailable ? [.nativeLowLatency, .lowerLatency, .higherQuality] : [.lowerLatency, .higherQuality]
+  }
+
+  func effectiveSelection(nativeAvailable: Bool) -> Self {
+    self == .nativeLowLatency && !nativeAvailable ? .lowerLatency : self
+  }
+
   func promotesPrefetch(legacyEnabled: Bool, unstable: Bool) -> Bool {
     !unstable && (requestsNativePlayback || legacyEnabled)
   }

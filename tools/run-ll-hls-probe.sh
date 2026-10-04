@@ -24,6 +24,11 @@ mkdir -p build/ll-hls-probe
 xcrun swiftc -parse-as-library -O \
   tools/ll-hls-player.swift \
   Strozz/Services/LowLatencyHLSProxy.swift \
+  Strozz/Services/NativeCMAF.swift \
+  Strozz/Services/NativeTransportStream.swift \
+  Strozz/Services/NativeHLSMediaServer.swift \
+  Strozz/Services/NativeHLSChunkReader.swift \
+  Strozz/Services/NativeLowLatencyHLS.swift \
   Strozz/Models/LivePlaybackProfile.swift \
   -o build/ll-hls-probe/player
 PYTHONDONTWRITEBYTECODE=1 build/ll-hls-probe/venv/bin/python tools/ll-hls-probe.py \

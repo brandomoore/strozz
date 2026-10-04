@@ -271,6 +271,7 @@ extension PlayerView {
       model.nativeGeneration = UUID()
     }
     if item !== player.currentItem {
+      model.nativeStartupAligned = false
       resetPlaybackHealth()
       model.startupProgress = LivePlaybackStartup.Progress()
     }

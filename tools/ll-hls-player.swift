@@ -22,6 +22,7 @@ struct ProbeConfiguration: Decodable {
   let candidateLiveOffset: Double?
   let candidateForwardBuffer: Double?
   let candidateResourceLoader: Bool?
+  let candidateNativeApp: Bool?
 }
 
 final class ProbeResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
@@ -160,19 +161,22 @@ final class ProbePlayer {
   private var metricPartWindows: [String: Int] = [:]
   private var metricHTTP2Requests = 0
   private var metricErrors = 0
+  private var metricErrorMessages: [String] = []
   private var metricRangeRequests = 0
   private var metricRangeWindows: [String: Int] = [:]
   private var metricDurations: [String: Int] = [:]
 
   init(url: URL, headers: [String: String], proxy: LowLatencyHLSProxy? = nil,
        liveOffset: Double? = nil, forwardBuffer: Double? = nil,
-       resourceLoader: ProbeResourceLoader? = nil) {
+       resourceLoader: ProbeResourceLoader? = nil, nativeEngine: NativeLowLatencyHLS? = nil) {
     usesProxyRatePolicy = proxy != nil
     requestedLiveOffset = liveOffset
     let asset = AVURLAsset(
-      url: resourceLoader?.assetURL ?? proxy?.proxyURL(for: url) ?? url,
+      url: nativeEngine?.assetURL ?? resourceLoader?.assetURL ?? proxy?.proxyURL(for: url) ?? url,
       options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
-    if let proxy {
+    if let nativeEngine {
+      asset.resourceLoader.setDelegate(nativeEngine, queue: nativeEngine.queue)
+    } else if let proxy {
       asset.resourceLoader.setDelegate(proxy, queue: proxy.callbackQueue)
     } else if let resourceLoader {
       asset.resourceLoader.setDelegate(resourceLoader, queue: resourceLoader.queue)
@@ -194,8 +198,12 @@ final class ProbePlayer {
         do {
           for try await event in item.metrics(forType: AVMetricHLSMediaSegmentRequestEvent.self) {
             guard let self else { break }
-            if event.mediaResourceRequestEvent?.errorEvent != nil {
+            if let error = event.mediaResourceRequestEvent?.errorEvent {
               self.metricErrors += 1
+              if self.metricErrorMessages.count < 8 {
+                self.metricErrorMessages.append(error.error.localizedDescription.replacingOccurrences(
+                  of: #"https?://[^\s"]+"#, with: "[redacted URL]", options: .regularExpression))
+              }
             } else if !event.isMapSegment {
               let window = String(Int((ProcessInfo.processInfo.systemUptime - start) / 10))
               let duration = String(format: "%.2f", event.segmentDuration)
@@ -238,11 +246,16 @@ final class ProbePlayer {
       "metric_part_windows": metricPartWindows,
       "metric_http2_requests": metricHTTP2Requests,
       "metric_errors": metricErrors,
+      "metric_error_messages": metricErrorMessages,
       "metric_range_requests": metricRangeRequests,
       "metric_range_windows": metricRangeWindows,
       "metric_segment_durations": metricDurations,
     ]
     if clock.isFinite { row["clock"] = clock }
+    row["native_error_events"] = item.errorLog()?.events.suffix(6).map {
+      "\($0.errorDomain):\($0.errorStatusCode) " + ($0.errorComment ?? "").replacingOccurrences(
+        of: #"https?://[^\s"]+"#, with: "[redacted URL]", options: .regularExpression)
+    } ?? []
     if let error = item.error as NSError? {
       row["error"] = "\(error.domain):\(error.code)"
       row["error_comments"] = item.errorLog()?.events.compactMap(\.errorComment).map {
@@ -326,15 +339,20 @@ struct LLHLSPlayerProbe {
       candidateProxy?.configure(promotePrefetch: true, retainHistory: true, windowSeconds: 1800)
       let resourceLoader = config.candidateResourceLoader == true
         ? try ProbeResourceLoader(origin: config.candidate) : nil
+      let nativeEngine = config.candidateNativeApp == true
+        ? NativeLowLatencyHLS(sourceURL: config.candidate, headers: config.headers, history: 1800) { error in
+          FileHandle.standardError.write(Data("Native engine failed: \(error.rawValue)\n".utf8))
+        } : nil
       let candidate = ProbePlayer(
         url: config.candidate, headers: config.headers,
         proxy: candidateProxy, liveOffset: config.candidateLiveOffset,
-        forwardBuffer: config.candidateForwardBuffer, resourceLoader: resourceLoader)
+        forwardBuffer: config.candidateForwardBuffer, resourceLoader: resourceLoader, nativeEngine: nativeEngine)
       defer {
         for probe in [baseline, candidate] {
           probe.stop()
         }
         resourceLoader?.stop()
+        nativeEngine?.stop()
       }
       let start = ProcessInfo.processInfo.systemUptime
       baseline.player.play()

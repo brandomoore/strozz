@@ -163,6 +163,7 @@ extension PlayerView {
   /// coalesced, tolerant seek so the viewer can spam left/right fluidly without
   /// each press triggering a full rebuffer hiccup.
   func rewindStep(_ delta: Double) {
+    if model.isUsingNativeHLS { player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false }
     guard let window = currentSeekWindow() else { return }
     let liveCap = isVOD ? window.end : max(window.end - targetLiveEdgeSeconds, window.start)
     let base = scrubTargetSeconds ?? window.now
@@ -202,6 +203,7 @@ extension PlayerView {
 
   /// Toggles between pausing in place (DVR window keeps growing) and resuming.
   func toggleRewindPlayPause() {
+    if model.isUsingNativeHLS { player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false }
     if isUserPaused {
       isUserPaused = false
       if !isVOD, let window = currentSeekWindow() {
@@ -255,6 +257,7 @@ extension PlayerView {
   /// A real swipe has started (finger moved past the tap threshold). Pause the
   /// live video entirely so scrubbing never fights playback, and anchor the orb.
   func beginScrub() {
+    if model.isUsingNativeHLS { player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false }
     guard let window = currentSeekWindow() else { return }
     isScrubbing = true
     scrubCommitTask?.cancel()

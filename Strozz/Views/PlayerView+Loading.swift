@@ -372,6 +372,7 @@ extension PlayerView {
     // Buffer depth comes from the active profile: shallower for lower latency,
     // deeper to let ABR hold higher quality. (See LivePlaybackPolicy.)
     item.preferredForwardBufferDuration = activeLivePlaybackPolicy.preferredForwardBufferDuration
+    item.automaticallyPreservesTimeOffsetFromLive = model.isUsingNativeHLS && pinnedToLive && !isUserPaused
     // The adaptive-rate controller nudges the live rate a few percent either side
     // of 1.0 (anti-stall slow-down / gentle catch-up); time-domain pitch correction
     // keeps the audio natural through those small changes.
@@ -1008,6 +1009,19 @@ extension PlayerView {
   func recoverFromPlaybackStall(reason: String) async {
     guard !isRecoveringPlayback, !isOffline, !isLoading, !isVOD, !isUsingAltSource,
       shouldPlayAltSource, let item = player.currentItem else { return }
+    if model.isUsingNativeHLS {
+      guard pinnedToLive, !isUserPaused, !isScrubbing else { return }
+      let now = Date()
+      model.nativeRecoveryTimes.removeAll { now.timeIntervalSince($0) > 60 }
+      if model.nativeRecoveryTimes.count >= 2 {
+       fallbackFromNativeHLS(.unavailable)
+       return
+      }
+      model.nativeRecoveryTimes.append(now)
+      recordPlaybackEvent("native_live_recovery", level: .warning, attributes: ["reason": reason])
+      reloadToLiveEdge()
+      return
+    }
     model.offlineProbeTask?.cancel()
     model.offlineProbeTask = nil
     mon.offlineProbeInFlight = false
@@ -1200,6 +1214,18 @@ extension PlayerView {
       isPlaying: status == .playing,
       now: ProcessInfo.processInfo.systemUptime
     )
+    if model.isUsingNativeHLS, !model.nativeStartupAligned, model.startupProgress.hasStarted,
+      pinnedToLive, !isUserPaused, !isScrubbing, !vodHandoffTransitionInFlight {
+      model.nativeStartupAligned = true
+      item.automaticallyPreservesTimeOffsetFromLive = true
+      let generation = model.nativeGeneration
+      player.seek(to: .positiveInfinity) { finished in
+        Task { @MainActor in
+          guard generation == model.nativeGeneration else { return }
+          recordPlaybackEvent("native_startup_live_alignment", flags: ["finished": finished])
+        }
+      }
+    }
     let hasSeekableRange = item.seekableTimeRanges.last?.timeRangeValue != nil
     let currentSeconds = CMTimeGetSeconds(item.currentTime())
     let hasAdvancedTime = currentSeconds.isFinite && currentSeconds > 0

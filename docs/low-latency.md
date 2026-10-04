@@ -24,13 +24,38 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   stability mode has vetoed it. The legacy profiles continue honoring their
   existing kill-switch. The selected native row and latency badge explicitly
   identify standard playback after fallback; selection is not proof of activation.
+- The native engine now indexes both H.264/AAC MPEG-TS and CMAF. TS parts are
+  packet-aligned, retain PAT/PMT initialization, and use measured PES timestamps.
+  Both formats serve short, bounded media chunks through an app-owned
+  **127.0.0.1-only** listener. This avoids an observed AVPlayer/CDN range mismatch
+  on large source segments (`-12939`, cached bytes starting at zero instead of the
+  requested offset). No re-encoding, certificate, external process, or remote
+  service is required. Retained media is capped at 96 MiB; older rewind media
+  continues using original CDN segment URLs.
+- Native startup waits until the indexer has actual live-prefetch content and
+  aligns once to live after native playback begins. Returning to live preserves
+  the engine; native stalls no longer invoke the legacy backward-seeking
+  stability strategy. A bounded native recovery budget still permits a visible
+  fallback if playback cannot recover. Deliberate pauses and rewinds disable
+  automatic offset preservation.
+- When native activation fails, its row disappears for that channel and the
+  checkmark moves to the actual fallback mode. The old **Auto · Low Latency**
+  label refers to the original prefetch engine, not native partial playback.
 
 **Physical-device finding:** the first installed integration was blocked by a
 persisted legacy proxy-off setting. Device telemetry on Caedrel showed
 `native_ll_hls=false`, `promotes_prefetch=false`, and roughly 20.6s source-date
 age despite the native row being selected. The gate has been corrected. Caedrel's
-inspected H.264 feed was MPEG-TS rather than CMAF, so it uses the prefetch fallback,
-not the 1.5s native-parts path. This feed has no verified native latency result.
+inspected H.264 feed was MPEG-TS rather than CMAF. The subsequent TS implementation
+and physical-device verification supersede that original format limitation.
+
+**Physical TV verification (2026-10-04):** `NativeTwitchDeviceTests`, explicitly
+run on the paired Apple TV, passed with MPEG-TS at 50/50 fresh-frame samples and
+3.75s median source-date age. The CMAF case produced 48/50 fresh-frame samples,
+3.47s initially and 6.47s after forced quality changes, with no native error-log
+entries. Both used a 1.5s native live offset. These are bounded measurements,
+not a universal latency guarantee or proof that all network/ad transitions
+work. Follow-up changes realign after a native quality transition as well.
 
 - Twitch's own low-latency relies on a proprietary HLS tag AVPlayer ignores.
 - We close most of that gap with an in-process proxy that promotes those
@@ -455,7 +480,7 @@ changing the app, installing on Apple TV, or uploading to TestFlight:
   Native AVFoundation segment metrics also verify direct-CDN byte-range requests
   without storing the signed URLs.
 
-The bridge does not support adaptive quality, rewind, ad transitions, encryption,
+The original desktop comparison bridge does not support adaptive quality, rewind, ad transitions, encryption,
 or discontinuities. It stops explicitly on unsupported transitions rather than
 skipping ads or concealing a broken timeline. Signed upstream URLs stay in
 memory; evidence contains no playback tokens, audio, or full-resolution video.
@@ -605,9 +630,9 @@ channel session rather than repeatedly restarting the native path. It retains
 bounded source metadata for rewind, but never caches the media itself.
 The production path must continue to preserve
 adaptive quality, user-selected rewind positions, ad/raid transitions, and
-the existing fallback. MPEG-TS support needs a real timestamp-preserving
-repackager or another verified source path; it must not be silently claimed
-from the CMAF results. Device testing is still required.
+the existing fallback. The app's later MPEG-TS path is independently packet-indexed and physically
+verified as described above; those results do not come from the CMAF-only
+prototype. Continuous device observation and transition coverage remain important.
 
 ### Upstream implementation comparison and reuse
 

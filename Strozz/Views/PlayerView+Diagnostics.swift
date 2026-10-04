@@ -106,6 +106,9 @@ extension PlayerView {
   }
 
   private func recordInstabilityEvent() {
+    // Native LL-HLS owns its live-offset recovery. The legacy stability mode
+    // seeks backward and latches prefetch off, silently replacing the selected engine.
+    guard !model.isUsingNativeHLS else { return }
     guard !isVOD, !isStreamUnstable else { return }
     let now = Date()
     lastStallAt = now
@@ -135,6 +138,7 @@ extension PlayerView {
   /// the live edge keeps the safe strategy until the viewer changes channel
   /// (`resetDiagnostics`); we never flap back and risk re-destabilizing it.
   func enterStreamStabilityMode() {
+    guard !model.isUsingNativeHLS else { return }
     // Never engage on the alternate source: stability mode is a Twitch-pipeline
     // strategy (drop the prefetch proxy, ride a deep buffer behind the edge) and
     // would seek the alt item backward or reload it into Twitch.
@@ -328,6 +332,7 @@ extension PlayerView {
   }
 
   func resetDiagnostics() {
+    model.nativeRecoveryTimes.removeAll()
     model.nativeFallbackReason = nil
     diagStallCount = 0
     diagJumpCount = 0

@@ -59,6 +59,8 @@ final class PlayerModel {
   var nativeFallbackReason: String?
   var nativeParts = 0
   var isUsingNativeHLS = false
+  @ObservationIgnored var nativeStartupAligned = false
+  @ObservationIgnored var nativeRecoveryTimes: [Date] = []
 
   /// Always-on structured playback recorder. It mirrors key events to OSLog and
   /// persists a bounded JSONL session for agent-driven postmortem analysis.

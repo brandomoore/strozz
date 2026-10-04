@@ -46,7 +46,7 @@ final class NativeCMAFTests: XCTestCase {
 
   func testPlaylistPreservesSourceIdentityAndTime() throws {
     let parsed = try NativeCMAF.manifest(playlist, url: URL(string: "https://example.test/live.m3u8")!)
-    XCTAssertEqual(parsed.initialization.absoluteString, "https://example.test/init.mp4")
+    XCTAssertEqual(parsed.initialization?.absoluteString, "https://example.test/init.mp4")
     XCTAssertEqual(parsed.entries.map(\.sequence), [42, 43])
     XCTAssertEqual(parsed.entries[0].duration, 2)
     XCTAssertNotNil(parsed.entries[0].date)
@@ -57,7 +57,6 @@ final class NativeCMAFTests: XCTestCase {
   func testUnsupportedStreamsAndAdsFailRatherThanDisappear() {
     let url = URL(string: "https://example.test/live.m3u8")!
     for changed in [
-      playlist.replacingOccurrences(of: "#EXT-X-MAP:URI=\"init.mp4\"", with: ""),
       playlist.replacingOccurrences(of: "#EXT-X-TWITCH-PREFETCH:43.mp4", with: ""),
       playlist + "\n#EXT-X-DISCONTINUITY",
       playlist + "\n#EXT-X-KEY:METHOD=AES-128",
@@ -71,6 +70,14 @@ final class NativeCMAFTests: XCTestCase {
 
   func testAttributeParserRetainsCommasInsideQuotes() {
     XCTAssertEqual(NativeCMAF.attributes("CODECS=\"avc1,mp4a\",BANDWIDTH=123")["CODECS"], "avc1,mp4a")
+  }
+
+  func testTransportStreamPlaylistDoesNotRequireCMAFMap() throws {
+    let parsed = try NativeCMAF.manifest(
+      playlist.replacingOccurrences(of: "#EXT-X-MAP:URI=\"init.mp4\"", with: ""),
+      url: URL(string: "https://example.test/live.m3u8")!)
+    XCTAssertNil(parsed.initialization)
+    XCTAssertEqual(parsed.targetDuration, 6)
   }
 
   func testStoppedOriginNeverResurrectsNetworking() async {

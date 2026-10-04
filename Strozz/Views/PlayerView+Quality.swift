@@ -47,9 +47,7 @@ extension PlayerView {
   }
 
   var qualityOptions: [String] {
-    [LivePlaybackProfile.nativeLowLatency.pickerLabel,
-     LivePlaybackProfile.lowerLatency.pickerLabel,
-     LivePlaybackProfile.higherQuality.pickerLabel]
+    LivePlaybackProfile.available(nativeAvailable: model.nativeFallbackReason == nil && !isStreamUnstable).map(\.pickerLabel)
       + (playback?.qualities.map(\.name) ?? [])
   }
 
@@ -57,7 +55,9 @@ extension PlayerView {
   /// adaptive master ("Auto") that's whichever profile row is active; a pinned
   /// rendition selects itself.
   var selectedQualityOption: String {
-    preferredQuality == "Auto" ? livePlaybackProfile.pickerLabel : preferredQuality
+    preferredQuality == "Auto"
+      ? livePlaybackProfile.effectiveSelection(nativeAvailable: model.nativeFallbackReason == nil && !isStreamUnstable).pickerLabel
+      : preferredQuality
   }
 
   var qualityEngineStatus: String? {
@@ -117,6 +117,10 @@ extension PlayerView {
     // Assign only on change: this runs every second, and rewriting the same
     // `@State` value still re-executes the player body (flashing focus).
     if resolvedQualityName != resolved {
+      if model.isUsingNativeHLS, resolvedQualityName != nil, resolved != nil,
+        pinnedToLive, !isUserPaused, !isScrubbing {
+        model.nativeStartupAligned = false
+      }
       resolvedQualityName = resolved
     }
   }
@@ -160,9 +164,6 @@ extension PlayerView {
   /// full labels ("Auto · Low Latency" / "Auto · High Quality"), and a pinned
   /// rendition shows its own name, so options are surfaced verbatim.
   func qualityDisplayLabel(_ option: String) -> String {
-    if option == LivePlaybackProfile.nativeLowLatency.pickerLabel, model.nativeFallbackReason != nil {
-      return "\(option) — fallback"
-    }
     return option
   }
 
