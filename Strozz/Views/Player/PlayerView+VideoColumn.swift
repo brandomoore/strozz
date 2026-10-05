@@ -70,7 +70,7 @@ extension PlayerView {
           audioLevelMonitor.start(
             audioPlaylistURL: audioOnlyPlaylistURL,
             headers: PlaybackService.streamHeaders,
-            currentDate: { [weak player] in player?.currentItem?.currentDate() }
+            currentDate: { [weak model] in model?.player.currentItem?.currentDate() }
           )
         }
         .onDisappear { audioLevelMonitor.stop() }

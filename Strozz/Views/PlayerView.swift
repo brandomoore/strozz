@@ -976,7 +976,7 @@ struct PlayerView: View {
       isLive: !isVOD,
       isReady: !isLoading && errorMessage == nil && !isOffline,
       timingOffset: captionsTimingOffset,
-      playerClock: { [weak player] in player?.currentItem?.currentDate() }
+      playerClock: { [weak model] in model?.player.currentItem?.currentDate() }
     )
   }
 

@@ -117,10 +117,6 @@ extension PlayerView {
     // Assign only on change: this runs every second, and rewriting the same
     // `@State` value still re-executes the player body (flashing focus).
     if resolvedQualityName != resolved {
-      if model.isUsingNativeHLS, resolvedQualityName != nil, resolved != nil,
-        pinnedToLive, !isUserPaused, !isScrubbing {
-        model.nativeStartupAligned = false
-      }
       resolvedQualityName = resolved
     }
   }

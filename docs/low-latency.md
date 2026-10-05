@@ -466,6 +466,37 @@ of stalling, and the slow-down rides out short buffer dips.
 
 ## Background return and release review
 
+### Coordinated native catch-up
+
+Native playback no longer seeks automatically on every resolution change.
+`NativeLiveCatchUp` requires four seconds of steady quality and advancing
+playback, at least one second of buffered media, and a sustained forward gap
+of at least three seconds beyond the native live target. A stream already
+near live gets no automatic seek. The normal LL-HLS hold-back remains unchanged.
+
+Only one catch-up seek may own the current item. It expires after five seconds
+and cannot immediately restart (15-second completion/cancellation cooldown).
+Manual pause, scrub, source/item changes, backgrounding, and recovery invalidate
+the request before cancelling its AVPlayer seek. A late completion cannot
+resume playback or overwrite another request. The legacy numeric live-edge
+resync does not run on the native path, and the watchdog waits for a bounded
+catch-up to finish before issuing its own recovery.
+
+Buddha's captured black-screen sequence also showed replacement attempts
+followed by `currentItem == nil` and an indefinite `noItemToPlay` wait.
+The app now rebuilds an AVPlayer in terminal failure (as required by AVFoundation),
+or one that rejects its replacement item. Player-level status/errors are recorded
+separately from item failures. A missing requested item triggers bounded recovery
+instead of leaving a blank player indefinitely. Caption/visualizer clocks follow
+the replacement player.
+
+Deterministic tests cover the observed startup quality churn, cooldowns, timeout,
+stale completions, manual interruption, native-vs-legacy recovery exclusion, and
+failed/rejected-player replacement. A bounded three-minute full-app simulator
+run on Buddha included forced quality changes, advancing video and fresh decoded
+frame observations, with no native fallback. Simulator results do not establish
+that every cause of the physical-device black screen has been eliminated.
+
 Native playback now stops its indexers and invalidates old callbacks when the
 app backgrounds. On return it resolves a fresh signed Twitch master and creates
 a new native engine instead of reusing a suspended engine with stale media URLs.

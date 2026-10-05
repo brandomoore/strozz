@@ -39,7 +39,7 @@ final class PlayerModel {
 
   // MARK: Playback
 
-  let player = AVPlayer()
+  var player = AVPlayer()
 
   /// Drives the audio-only visualizer orb. Reacts to real audio when the player
   /// item exposes a tappable audio track (best effort on live HLS), otherwise
@@ -59,7 +59,9 @@ final class PlayerModel {
   var nativeFallbackReason: String?
   var nativeParts = 0
   var isUsingNativeHLS = false
-  @ObservationIgnored var nativeStartupAligned = false
+  @ObservationIgnored var nativeCatchUp = NativeLiveCatchUp()
+  @ObservationIgnored var nativeCatchUpTask: Task<Void, Never>?
+  @ObservationIgnored var nativeCatchUpItem: AVPlayerItem?
   @ObservationIgnored var nativeRecoveryTimes: [Date] = []
   @ObservationIgnored var fallbackRestoreTask: Task<Void, Never>?
   @ObservationIgnored var nativeNeedsRefresh = false

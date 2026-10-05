@@ -299,6 +299,7 @@ extension PlayerView {
   }
 
   func makeItem(url: URL) -> AVPlayerItem {
+    cancelNativeCatchUp(reason: "source_change")
     model.nativeNeedsRefresh = false
     currentSourceURL = url
     let reuseNative = model.nativeHLS?.sourceURL == url && preferredQuality == "Auto"
@@ -437,6 +438,7 @@ extension PlayerView {
   }
 
   func suspendNativePlayback() {
+    cancelNativeCatchUp(reason: "background")
     guard model.isUsingNativeHLS else { return }
     model.nativeNeedsRefresh = true
     model.nativeResumePosition = (!pinnedToLive || isUserPaused) ? player.currentItem?.currentDate() : nil
@@ -600,6 +602,7 @@ extension PlayerView {
           latencyReadout.update(color: latencyColor, label: latencyLabel)
           updateRewindReadout()
         }
+        await updateNativeCatchUp()
         await updateChatSyncBaseline()
         try? await Task.sleep(for: .seconds(1))
       }
@@ -628,6 +631,7 @@ extension PlayerView {
   }
 
   func stopLatencyMonitor(clearPlaybackIntent: Bool = true) {
+    cancelNativeCatchUp(reason: "monitor_stopped")
     latencyTask?.cancel()
     latencyTask = nil
     stopRateController()
@@ -745,6 +749,7 @@ extension PlayerView {
       return
     }
     lastRecoveryAttemptAt = now
+    cancelNativeCatchUp(reason: "recovery_requested")
     recordPlaybackEvent(
       "recovery_requested",
       level: .warning,
@@ -772,6 +777,7 @@ extension PlayerView {
   /// `recoverFromPlaybackStall` causes. Throttled, and escalates to a full reload
   /// only after repeated resyncs fail to hold the edge.
   func triggerLiveEdgeResyncIfAllowed(item: AVPlayerItem, edge: Double) {
+    guard !model.isUsingNativeHLS else { return }
     guard !isRecoveringPlayback, !isUserPaused, !isScrubbing else { return }
     let now = Date()
     guard now.timeIntervalSince(lastLiveResyncAt) >= liveResyncCooldownSeconds else { return }
@@ -840,6 +846,7 @@ extension PlayerView {
     // is not a stall, so reset the watchdog counters and bail before they trip.
     // An in-progress scrub holds/repositions the playhead the same way.
     guard shouldPlayAltSource else {
+      cancelNativeCatchUp(reason: "playback_intent")
       resetPlaybackHealth()
       return
     }
@@ -848,7 +855,12 @@ extension PlayerView {
     // before the behavioral stall/jump counters below ever fire.
     checkPredictedInstability()
 
+    if player.status == .failed {
+      triggerRecoveryIfAllowed(reason: "player failed")
+      return
+    }
     guard let item = player.currentItem else {
+      if didRequestPlayback { triggerRecoveryIfAllowed(reason: "missing player item") }
       stalledPlaybackSamples = 0
       lastObservedPlaybackTimeSeconds = nil
       return
@@ -856,6 +868,13 @@ extension PlayerView {
 
     if item.status == .failed {
       triggerRecoveryIfAllowed(reason: "item failed")
+      return
+    }
+    if model.nativeCatchUp.inFlight != nil {
+      if model.nativeCatchUp.timedOut(at: ProcessInfo.processInfo.systemUptime) {
+        cancelNativeCatchUp(reason: "timeout")
+        resetPlaybackHealth()
+      }
       return
     }
 
@@ -917,7 +936,7 @@ extension PlayerView {
     // The viewer is left tens of seconds behind live, slowly playing, forever.
     // Detect that directly from the edge gap and snap back with a light seek —
     // but NOT while in stability mode, where riding behind the edge is the point.
-    if !isVOD, pinnedToLive, !isStreamUnstable, let edge = liveSeekableEdgeSeconds(item) {
+    if !model.isUsingNativeHLS, !isVOD, pinnedToLive, !isStreamUnstable, let edge = liveSeekableEdgeSeconds(item) {
       let gap = edge - currentSeconds
       if gap.isFinite, gap > liveEdgeResyncThresholdSeconds {
         triggerLiveEdgeResyncIfAllowed(item: item, edge: edge)
@@ -1094,8 +1113,9 @@ extension PlayerView {
 
   func recoverFromPlaybackStall(reason: String) async {
     guard !isRecoveringPlayback, !isOffline, !isLoading, !isVOD, !isUsingAltSource,
-      shouldPlayAltSource, let item = player.currentItem else { return }
-    if model.isUsingNativeHLS {
+      shouldPlayAltSource else { return }
+    cancelNativeCatchUp(reason: "recovery")
+    if model.isUsingNativeHLS, currentSourceURL != nil {
       guard pinnedToLive, !isUserPaused, !isScrubbing else { return }
       let now = Date()
       model.nativeRecoveryTimes.removeAll { now.timeIntervalSince($0) > 60 }
@@ -1106,6 +1126,10 @@ extension PlayerView {
       model.nativeRecoveryTimes.append(now)
       recordPlaybackEvent("native_live_recovery", level: .warning, attributes: ["reason": reason])
       reloadToLiveEdge()
+      return
+    }
+    guard let item = player.currentItem else {
+      await load(maxAttempts: 2, reason: reason)
       return
     }
     model.offlineProbeTask?.cancel()
@@ -1300,22 +1324,6 @@ extension PlayerView {
       isPlaying: status == .playing,
       now: ProcessInfo.processInfo.systemUptime
     )
-    if model.isUsingNativeHLS, !model.nativeStartupAligned, model.startupProgress.hasStarted,
-      pinnedToLive, !isUserPaused, !isScrubbing, !vodHandoffTransitionInFlight {
-      model.nativeStartupAligned = true
-      item.automaticallyPreservesTimeOffsetFromLive = true
-      let generation = model.nativeGeneration
-      Task { @MainActor in
-        guard let native = model.nativeHLS, let target = await native.origin.liveTargetDate(),
-          generation == model.nativeGeneration, item === player.currentItem,
-          pinnedToLive, !isUserPaused, !isScrubbing else { return }
-        let finished = await item.seek(to: target)
-        guard generation == model.nativeGeneration else { return }
-        recordPlaybackEvent("native_startup_live_alignment",
-          metrics: ["target_source_age_seconds": Date().timeIntervalSince(target)],
-          flags: ["finished": finished])
-      }
-    }
     let hasSeekableRange = item.seekableTimeRanges.last?.timeRangeValue != nil
     let currentSeconds = CMTimeGetSeconds(item.currentTime())
     let hasAdvancedTime = currentSeconds.isFinite && currentSeconds > 0

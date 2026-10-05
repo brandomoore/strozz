@@ -163,6 +163,7 @@ extension PlayerView {
   /// coalesced, tolerant seek so the viewer can spam left/right fluidly without
   /// each press triggering a full rebuffer hiccup.
   func rewindStep(_ delta: Double) {
+    cancelNativeCatchUp(reason: "manual_seek")
     model.nativePositionIntent = UUID()
     model.fallbackRestoreTask?.cancel()
     if model.isUsingNativeHLS { player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false }
@@ -205,6 +206,7 @@ extension PlayerView {
 
   /// Toggles between pausing in place (DVR window keeps growing) and resuming.
   func toggleRewindPlayPause() {
+    cancelNativeCatchUp(reason: "manual_pause")
     if model.isUsingNativeHLS { player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false }
     if isUserPaused {
       isUserPaused = false
@@ -259,6 +261,7 @@ extension PlayerView {
   /// A real swipe has started (finger moved past the tap threshold). Pause the
   /// live video entirely so scrubbing never fights playback, and anchor the orb.
   func beginScrub() {
+    cancelNativeCatchUp(reason: "manual_scrub")
     model.nativePositionIntent = UUID()
     model.fallbackRestoreTask?.cancel()
     if model.isUsingNativeHLS { player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false }
@@ -392,6 +395,7 @@ extension PlayerView {
   /// The proxy retains the DVR buffers across the swap, so the rewind
   /// window is preserved and the viewer can scrub back again immediately.
   func reloadToLiveEdge() {
+    cancelNativeCatchUp(reason: "live_reload")
     scrubCommitTask?.cancel()
     guard let source = currentSourceURL else {
       // No known source to reload — fall back to a tail seek so we still resume.
