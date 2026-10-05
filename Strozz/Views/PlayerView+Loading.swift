@@ -299,6 +299,7 @@ extension PlayerView {
   }
 
   func makeItem(url: URL) -> AVPlayerItem {
+    model.nativeNeedsRefresh = false
     currentSourceURL = url
     let reuseNative = model.nativeHLS?.sourceURL == url && preferredQuality == "Auto"
       && livePlaybackProfile == .nativeLowLatency && model.nativeFallbackReason == nil
@@ -392,27 +393,108 @@ extension PlayerView {
   }
 
   func fallbackFromNativeHLS(_ reason: NativeHLSError) {
-    guard model.isUsingNativeHLS else { return }
+    guard model.isUsingNativeHLS, !model.nativeNeedsRefresh, backgroundedAt == nil else { return }
     let position = (!pinnedToLive || isUserPaused) ? player.currentItem?.currentDate() : nil
-    let paused = isUserPaused
     model.nativeFallbackReason = reason.rawValue
     recordPlaybackEvent("native_hls_fallback", level: .warning, attributes: ["reason": reason.rawValue])
     guard let source = currentSourceURL else { return }
     let item = makeItem(url: source)
     replacePlaybackItem(with: item)
+    let generation = model.nativeGeneration
     if let position {
-      Task { @MainActor in
-        for _ in 0..<100 {
-          guard item === player.currentItem else { return }
-          if item.status == .readyToPlay { break }
-          try? await Task.sleep(for: .milliseconds(100))
-        }
-        guard item === player.currentItem else { return }
-        let restored = await item.seek(to: position)
-        recordPlaybackEvent("native_hls_position_restore", flags: ["restored": restored])
-        if !paused { startPlayback() }
+      let intent = model.nativePositionIntent
+      model.fallbackRestoreTask = Task { @MainActor in
+        await restoreNativePosition(position, item: item, generation: generation, intent: intent)
       }
-    } else if !paused { startPlayback() }
+    } else if canResumeFallback(item: item, generation: generation) { startPlayback() }
+  }
+
+  func canResumeFallback(item: AVPlayerItem, generation: UUID) -> Bool {
+    !Task.isCancelled && item === player.currentItem && generation == model.nativeGeneration
+      && shouldPlayAltSource && !isOffline && !vodHandoffTransitionInFlight
+  }
+
+  func restoreNativePosition(_ position: Date, item: AVPlayerItem, generation: UUID, intent: UUID) async {
+    for _ in 0..<100 {
+      guard !Task.isCancelled, item === player.currentItem, generation == model.nativeGeneration,
+        intent == model.nativePositionIntent else { return }
+      if item.status == .readyToPlay || item.status == .failed { break }
+      do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+    }
+    guard !Task.isCancelled, item === player.currentItem, generation == model.nativeGeneration,
+      intent == model.nativePositionIntent else { return }
+    let restored = item.status == .readyToPlay ? await item.seek(to: position) : false
+    guard !Task.isCancelled, item === player.currentItem, generation == model.nativeGeneration,
+      intent == model.nativePositionIntent else { return }
+    recordPlaybackEvent("native_hls_position_restore", flags: ["restored": restored])
+    guard restored else {
+      player.pause()
+      errorMessage = String(localized: "Couldn't restore the previous playback position. Return to live to continue.")
+      recordPlaybackEvent("native_hls_position_restore_failed", level: .error)
+      return
+    }
+    if canResumeFallback(item: item, generation: generation) { startPlayback() }
+  }
+
+  func suspendNativePlayback() {
+    guard model.isUsingNativeHLS else { return }
+    model.nativeNeedsRefresh = true
+    model.nativeResumePosition = (!pinnedToLive || isUserPaused) ? player.currentItem?.currentDate() : nil
+    model.nativeRefreshTask?.cancel()
+    model.fallbackRestoreTask?.cancel()
+    model.nativeGeneration = UUID()
+    model.nativeHLS?.stop()
+    model.nativeHLS = nil
+    player.pause()
+    recordPlaybackEvent("native_hls_suspended")
+  }
+
+  func refreshNativeAfterSuspension(
+    resolve: (@MainActor () async throws -> StreamPlayback)? = nil
+  ) {
+    guard model.nativeNeedsRefresh else { return }
+    model.beginPlaybackLoad()
+    model.nativeRefreshTask?.cancel()
+    let generation = model.nativeGeneration
+    let sessionID = model.playbackTelemetry.sessionID
+    let channel = activeChannel
+    let position = model.nativeResumePosition
+    let intent = model.nativePositionIntent
+    model.nativeRefreshTask = Task { @MainActor in
+      do {
+        let resolved: StreamPlayback
+        if let resolve { resolved = try await resolve() }
+        else { resolved = try await resolvePlaybackWithTimeout() }
+        guard !Task.isCancelled, model.nativeNeedsRefresh, generation == model.nativeGeneration,
+          sessionID == model.playbackTelemetry.sessionID, channel == activeChannel,
+          backgroundedAt == nil, !isUsingAltSource, !isVOD else { return }
+        playback = resolved
+        model.nativeFallbackReason = nil
+        let item = makeItem(url: resolved.url(forQuality: preferredQuality))
+        replacePlaybackItem(with: item)
+        recordPlaybackEvent("native_hls_fresh_source_after_suspension")
+        if let position {
+          await restoreNativePosition(position, item: item, generation: model.nativeGeneration, intent: intent)
+          if item === player.currentItem { isLoading = false }
+        } else if shouldPlayAltSource {
+          startPlayback()
+        } else {
+          isLoading = false
+        }
+        guard !Task.isCancelled, item === player.currentItem, backgroundedAt == nil else { return }
+        if !isVOD {
+          startLatencyMonitor()
+          startPlaybackWatchdog()
+        }
+      } catch {
+        guard !Task.isCancelled, generation == model.nativeGeneration,
+          sessionID == model.playbackTelemetry.sessionID else { return }
+        errorMessage = error.localizedDescription
+        isLoading = false
+        recordPlaybackEvent("native_hls_resume_failed", level: .error,
+          attributes: PlaybackTelemetryRecorder.errorAttributes(error))
+      }
+    }
   }
 
   /// "Behind live" as the viewer actually experiences it: how far behind the real
@@ -621,6 +703,10 @@ extension PlayerView {
   func resumePlaybackAfterAbsence(restoreLive: Bool) {
     guard !isOffline, !isSleeping, backgroundedAt == nil, channelPageTarget == nil,
       !model.livePlaybackReturn.isAway else { return }
+    if model.nativeNeedsRefresh {
+      refreshNativeAfterSuspension()
+      return
+    }
     if shouldPlayAltSource, !vodHandoffTransitionInFlight {
       if isVOD {
         resumePlayback()

@@ -478,11 +478,13 @@ class CMAFParts:
 
     def push(self, fragment, timing, source=None):
         start, duration, independent = timing
+        if not 0 < duration <= self.origin.part_target:
+            raise ProbeError("Source fragment exceeds declared PART-TARGET")
         if self.anchor_clock is None:
             if not independent:
                 raise ProbeError("CMAF entry is not a random-access fragment")
             self.anchor_clock = start
-        if self.pending and independent:
+        if self.pending and (independent or self.duration + duration > self.origin.part_target):
             self.flush()
         if not self.pending:
             self.start, self.independent = start, independent

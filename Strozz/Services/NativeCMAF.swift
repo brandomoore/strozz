@@ -84,6 +84,12 @@ enum NativeCMAF {
     let independent: Bool
   }
 
+  static func shouldFlushPart(accumulated: Double, next: Double) throws -> Bool {
+    guard accumulated.isFinite, next.isFinite, accumulated >= 0, next > 0,
+      accumulated <= 0.45, next <= 0.45 else { throw NativeHLSError.partDuration }
+    return accumulated > 0 && accumulated + next > 0.45
+  }
+
   static func timing(_ moof: Data, track: Track) throws -> Timing {
     for box in try boxes(moof) where box.type == "traf" {
       let tfhd = try child(box.payload, "tfhd")

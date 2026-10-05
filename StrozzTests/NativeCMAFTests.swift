@@ -62,8 +62,9 @@ final class NativeCMAFTests: XCTestCase {
     ] {
       XCTAssertThrowsError(try NativeCMAF.manifest(changed, url: url))
     }
+  }
 
-    func testDiscontinuityAndAdMetadataStayAttachedToTheirOwnSegments() throws {
+  func testDiscontinuityAndAdMetadataStayAttachedToTheirOwnSegments() throws {
       let text = """
       #EXTM3U
       #EXT-X-TARGETDURATION:6
@@ -126,10 +127,17 @@ final class NativeCMAFTests: XCTestCase {
       XCTAssertTrue(text.contains("#EXT-X-ENDLIST"))
       XCTAssertFalse(text.contains("#EXT-X-PRELOAD-HINT"))
     }
-  }
 
   func testAttributeParserRetainsCommasInsideQuotes() {
     XCTAssertEqual(NativeCMAF.attributes("CODECS=\"avc1,mp4a\",BANDWIDTH=123")["CODECS"], "avc1,mp4a")
+  }
+
+  func testPartGroupingFlushesBeforeValidFragmentsOverflowTheTarget() throws {
+    XCTAssertTrue(try NativeCMAF.shouldFlushPart(accumulated: 0.25, next: 0.25))
+    XCTAssertFalse(try NativeCMAF.shouldFlushPart(accumulated: 0, next: 0.25))
+    XCTAssertFalse(try NativeCMAF.shouldFlushPart(accumulated: 0.2, next: 0.2))
+    XCTAssertThrowsError(try NativeCMAF.shouldFlushPart(accumulated: 0, next: 0.6))
+    XCTAssertThrowsError(try NativeCMAF.shouldFlushPart(accumulated: 0.2, next: .nan))
   }
 
   func testModernAudioOnlyVariantCannotEnterTheVideoIndexer() {

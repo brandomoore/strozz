@@ -464,6 +464,32 @@ of stalling, and the slow-down rides out short buffer dips.
   false-trips it. On-device the fast tier logs
   "offline forced (edge frozen + hard stall)".
 
+## Background return and release review
+
+Native playback now stops its indexers and invalidates old callbacks when the
+app backgrounds. On return it resolves a fresh signed Twitch master and creates
+a new native engine instead of reusing a suspended engine with stale media URLs.
+This addresses the captured Charli failure immediately after a roughly one-hour
+background absence. Pause and rewind intent are preserved; an unavailable old
+position is reported instead of silently resuming somewhere else.
+
+The release review also corrected:
+
+- Legacy Auto profile changes while watching a YouTube simulcast no longer
+  replace its item with Twitch while leaving the source state set to YouTube.
+- Async fallback restoration rechecks the current item, generation, user seek
+  intent, pause, and visibility before resuming. New items and manual scrubs
+  invalidate old restoration work.
+- CMAF aggregation flushes an accumulated part before adding a valid fragment
+  that would exceed the part target. Two valid 250ms fragments are emitted as
+  separate parts instead of being combined into an invalid 500ms part.
+- Previously nested test functions are now actual discovered XCTest methods.
+
+The final simulator run passed 344 tests, with three physical-device-only tests
+skipped. The standalone probe suite passed 31 tests. Background recovery was
+covered deterministically without waking the physical TV; these checks do not
+replace future observation of long background/foreground trips on hardware.
+
 ## Chat synchronization: extra delay, not total video latency
 
 **Sync Chat to Extra Delay** is on by default. A one-time app-launch migration

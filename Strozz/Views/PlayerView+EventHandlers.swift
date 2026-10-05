@@ -133,6 +133,7 @@ extension PlayerView {
     ) { _ in
       model.beginPlaybackAbsence(.background, isVOD: isVOD)
       backgroundedAt = Date()
+      suspendNativePlayback()
       updateWatchRewards()
       recordPlaybackEvent("app_backgrounded")
       recordPlaybackTelemetrySnapshot()
@@ -248,6 +249,8 @@ extension PlayerView {
     }
     .onDisappear {
       model.watchTracker.stop()
+      model.nativeRefreshTask?.cancel()
+      model.nativeNeedsRefresh = false
       model.livePlaybackReturn = LivePlaybackReturnState()
       backgroundedAt = nil
       hideTask?.cancel()

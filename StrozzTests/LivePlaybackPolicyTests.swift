@@ -27,14 +27,14 @@ final class LivePlaybackPolicyTests: XCTestCase {
     for profile in LivePlaybackProfile.allCases {
       XCTAssertFalse(profile.promotesPrefetch(legacyEnabled: true, unstable: true))
     }
+  }
 
-    func testUnavailableNativeModeCannotRemainOfferedOrChecked() {
-      XCTAssertFalse(LivePlaybackProfile.available(nativeAvailable: false).contains(.nativeLowLatency))
-      XCTAssertEqual(LivePlaybackProfile.nativeLowLatency.effectiveSelection(nativeAvailable: false), .lowerLatency)
-      XCTAssertEqual(LivePlaybackProfile.nativeLowLatency.effectiveSelection(nativeAvailable: true), .nativeLowLatency)
-      XCTAssertEqual(LivePlaybackProfile.higherQuality.effectiveSelection(nativeAvailable: false), .higherQuality)
-      XCTAssertEqual(LivePlaybackProfile.available(nativeAvailable: true), [.nativeLowLatency, .lowerLatency, .higherQuality])
-    }
+  func testUnavailableNativeModeCannotRemainOfferedOrChecked() {
+    XCTAssertFalse(LivePlaybackProfile.available(nativeAvailable: false).contains(.nativeLowLatency))
+    XCTAssertEqual(LivePlaybackProfile.nativeLowLatency.effectiveSelection(nativeAvailable: false), .lowerLatency)
+    XCTAssertEqual(LivePlaybackProfile.nativeLowLatency.effectiveSelection(nativeAvailable: true), .nativeLowLatency)
+    XCTAssertEqual(LivePlaybackProfile.higherQuality.effectiveSelection(nativeAvailable: false), .higherQuality)
+    XCTAssertEqual(LivePlaybackProfile.available(nativeAvailable: true), [.nativeLowLatency, .lowerLatency, .higherQuality])
   }
 
   func testPickerLabels() {

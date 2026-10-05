@@ -190,7 +190,8 @@ actor NativeHLSOrigin {
   private func media(_ path: String) async -> Data? {
     let fields = path.split(separator: "/")
     guard fields.count == 4, fields[0] == "part", let index = Int(fields[1]),
-      let sequence = Int(fields[2]), let number = Int(fields[3].split(separator: ".")[0]),
+      let sequence = Int(fields[2]), let name = fields[3].split(separator: ".").first,
+      let number = Int(name),
       number >= 0 else { return nil }
     lastActive = index
     sources[index]?.lastRequest = Date()
@@ -290,7 +291,8 @@ actor NativeHLSOrigin {
         if let error { throw error }
         guard let source = sources[index] else { throw CancellationError() }
         if components.first == "part", components.count == 4,
-          let sequence = Int(components[2]), let number = Int(components[3].split(separator: ".")[0]),
+          let sequence = Int(components[2]), let name = components[3].split(separator: ".").first,
+          let number = Int(name),
           number >= 0, let segment = source.segments.first(where: { $0.sequence == sequence }),
           segment.parts.indices.contains(number) {
           let part = segment.parts[number]
@@ -522,7 +524,14 @@ actor NativeHLSOrigin {
           if box.type == "moof" {
             guard timing == nil else { throw NativeHLSError.invalidMedia }
             guard let track else { throw NativeHLSError.invalidMedia }
-            timing = try NativeCMAF.timing(box.payload, track: track)
+            let nextTiming = try NativeCMAF.timing(box.payload, track: track)
+            if try NativeCMAF.shouldFlushPart(accumulated: partDuration, next: nextTiming.duration) {
+              try publish(index, Part(offset: partOffset, length: offset - partOffset,
+                                      duration: partDuration, independent: independent, media: cmafPending))
+              cmafPending.removeAll(keepingCapacity: true)
+              partDuration = 0
+            }
+            timing = nextTiming
             fragmentOffset = offset
             cmafPending.append(boxData)
           } else if box.type == "mdat" {

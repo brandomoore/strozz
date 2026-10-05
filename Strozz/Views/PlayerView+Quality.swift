@@ -176,15 +176,19 @@ extension PlayerView {
       // One of the two Auto rows: stay on the adaptive master, just switch the
       // latency-vs-quality profile and re-apply its buffer/catch-up policy.
       livePlaybackProfile = profile
-      if profile == .nativeLowLatency || previousProfile == LivePlaybackProfile.nativeLowLatency.rawValue {
-        model.nativeFallbackReason = nil
-        preferredQuality = "Auto"
-        if isUsingAltSource, profile == .nativeLowLatency {
+      if isUsingAltSource {
+        if profile == .nativeLowLatency {
+          model.nativeFallbackReason = nil
+          preferredQuality = "Auto"
           didManuallySelectSource = true
           switchToTwitchSource()
-        } else if let playback {
+        }
+      } else if profile == .nativeLowLatency || previousProfile == LivePlaybackProfile.nativeLowLatency.rawValue {
+        model.nativeFallbackReason = nil
+        preferredQuality = "Auto"
+        if let playback {
           replacePlaybackItem(with: makeItem(url: playback.master))
-          startPlayback()
+          if shouldPlayAltSource { startPlayback() }
         }
       } else if preferredQuality != "Auto" {
         preferredQuality = "Auto"

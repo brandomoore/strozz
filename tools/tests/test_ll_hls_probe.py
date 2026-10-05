@@ -107,6 +107,16 @@ class PlaylistTests(unittest.TestCase):
 
 
 class CMAFPartsTests(unittest.TestCase):
+    def test_valid_quarter_second_fragments_are_not_combined_past_target(self):
+        origin = probe.Origin(part_target=0.45)
+        origin.init = b"init"
+        parts = probe.CMAFParts(origin, datetime(2026, 10, 2, tzinfo=timezone.utc))
+        parts.push(b"first", (0, 0.25, True))
+        parts.push(b"second", (0.25, 0.25, False))
+        parts.flush(complete=True)
+        self.assertEqual([part[1] for part in origin.segments[0].parts], [0.25, 0.25])
+        self.assertEqual(b"".join(part[0] for part in origin.segments[0].parts), b"firstsecond")
+
     def test_original_fragments_are_grouped_with_original_program_dates(self):
         origin = probe.Origin(part_target=0.9)
         origin.init = b"init"

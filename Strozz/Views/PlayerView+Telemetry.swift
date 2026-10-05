@@ -269,12 +269,16 @@ extension PlayerView {
 
   func replacePlaybackItem(with item: AVPlayerItem?) {
     if (item?.asset as? AVURLAsset)?.url.scheme != NativeLowLatencyHLS.scheme {
+      model.nativeNeedsRefresh = false
+      model.nativeRefreshTask?.cancel()
       model.nativeHLS?.stop()
       model.nativeHLS = nil
       model.isUsingNativeHLS = false
       model.nativeGeneration = UUID()
     }
     if item !== player.currentItem {
+      model.fallbackRestoreTask?.cancel()
+      model.fallbackRestoreTask = nil
       model.chatSyncItemID = UUID()
       model.chatSyncBaseline.itemChanged()
       model.chatSyncSendAnchor = nil

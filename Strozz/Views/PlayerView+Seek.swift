@@ -163,6 +163,8 @@ extension PlayerView {
   /// coalesced, tolerant seek so the viewer can spam left/right fluidly without
   /// each press triggering a full rebuffer hiccup.
   func rewindStep(_ delta: Double) {
+    model.nativePositionIntent = UUID()
+    model.fallbackRestoreTask?.cancel()
     if model.isUsingNativeHLS { player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false }
     guard let window = currentSeekWindow() else { return }
     let liveCap = isVOD ? window.end : max(window.end - targetLiveEdgeSeconds, window.start)
@@ -257,6 +259,8 @@ extension PlayerView {
   /// A real swipe has started (finger moved past the tap threshold). Pause the
   /// live video entirely so scrubbing never fights playback, and anchor the orb.
   func beginScrub() {
+    model.nativePositionIntent = UUID()
+    model.fallbackRestoreTask?.cancel()
     if model.isUsingNativeHLS { player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false }
     guard let window = currentSeekWindow() else { return }
     isScrubbing = true
