@@ -466,7 +466,10 @@ of stalling, and the slow-down rides out short buffer dips.
 
 ## Chat synchronization: extra delay, not total video latency
 
-**Sync Chat to Extra Delay** keeps the existing preference (off by default).
+**Sync Chat to Extra Delay** is on by default. A one-time app-launch migration
+enables it on every existing install, including previously stored off values.
+The toggle remains available; turning it off after that migration is respected
+on subsequent launches.
 It never delays the outbound send API. Incoming messages, including the echo of
 your own sent message, are held only for the estimated **extra** video delay.
 

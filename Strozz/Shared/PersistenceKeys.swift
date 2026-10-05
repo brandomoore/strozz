@@ -124,6 +124,7 @@ enum PersistenceKey {
   static let chatHighlightKeywords = "chatHighlightKeywords"
   static let chatLayoutMode = "chatLayoutMode"
   static let chatSyncToStream = "chatSyncToStream"
+  static let extraDelayChatDefaultApplied = "extraDelayChatDefaultApplied"
 
   // MARK: Experimental cross-platform chat merge (bound via `@AppStorage` in PlayerView)
 

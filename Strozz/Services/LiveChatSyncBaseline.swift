@@ -1,5 +1,15 @@
 import Foundation
 
+enum ChatSyncDefaultsMigration {
+  static func runIfNeeded(_ defaults: UserDefaults = .standard) {
+    guard !defaults.bool(forKey: PersistenceKey.extraDelayChatDefaultApplied) else { return }
+    // Intentionally enable the new extra-delay behavior for existing installs,
+    // including a previously stored false. Later user changes remain untouched.
+    defaults.set(true, forKey: PersistenceKey.chatSyncToStream)
+    defaults.set(true, forKey: PersistenceKey.extraDelayChatDefaultApplied)
+  }
+}
+
 /// Estimates this session's extra video delay, not other viewers' latency.
 /// Native comparisons use two dates on the same source clock, so clock skew cancels.
 struct LiveChatSyncBaseline {

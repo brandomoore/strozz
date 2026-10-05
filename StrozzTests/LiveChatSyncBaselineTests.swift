@@ -1,6 +1,59 @@
 import XCTest
 @testable import Strozz
 
+final class ChatSyncDefaultsMigrationTests: XCTestCase {
+  private func withDefaults(_ body: (UserDefaults) throws -> Void) throws {
+    let name = "ChatSyncDefaultsMigrationTests.\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+    defer { defaults.removePersistentDomain(forName: name) }
+    try body(defaults)
+  }
+
+  func testFreshInstallEnablesExtraDelaySync() throws {
+    try withDefaults { defaults in
+      ChatSyncDefaultsMigration.runIfNeeded(defaults)
+      XCTAssertTrue(defaults.bool(forKey: PersistenceKey.chatSyncToStream))
+      XCTAssertTrue(defaults.bool(forKey: PersistenceKey.extraDelayChatDefaultApplied))
+    }
+  }
+
+  func testExistingInstallIsEnabledEvenWhenPreviouslyOff() throws {
+    try withDefaults { defaults in
+      defaults.set(false, forKey: PersistenceKey.chatSyncToStream)
+      ChatSyncDefaultsMigration.runIfNeeded(defaults)
+      XCTAssertTrue(defaults.bool(forKey: PersistenceKey.chatSyncToStream))
+    }
+  }
+
+  func testAlreadyEnabledInstallStaysEnabled() throws {
+    try withDefaults { defaults in
+      defaults.set(true, forKey: PersistenceKey.chatSyncToStream)
+      ChatSyncDefaultsMigration.runIfNeeded(defaults)
+      XCTAssertTrue(defaults.bool(forKey: PersistenceKey.chatSyncToStream))
+    }
+  }
+
+  func testLaterOptOutSurvivesSubsequentLaunches() throws {
+    try withDefaults { defaults in
+      ChatSyncDefaultsMigration.runIfNeeded(defaults)
+      defaults.set(false, forKey: PersistenceKey.chatSyncToStream)
+      ChatSyncDefaultsMigration.runIfNeeded(defaults)
+      ChatSyncDefaultsMigration.runIfNeeded(defaults)
+      XCTAssertFalse(defaults.bool(forKey: PersistenceKey.chatSyncToStream))
+    }
+  }
+
+  func testMigrationDoesNotChangePlaybackQualityOrOtherPreferences() throws {
+    try withDefaults { defaults in
+      defaults.set("720p60", forKey: PersistenceKey.preferredQuality)
+      defaults.set(LivePlaybackProfile.higherQuality.rawValue, forKey: PersistenceKey.livePlaybackProfile)
+      ChatSyncDefaultsMigration.runIfNeeded(defaults)
+      XCTAssertEqual(defaults.string(forKey: PersistenceKey.preferredQuality), "720p60")
+      XCTAssertEqual(defaults.string(forKey: PersistenceKey.livePlaybackProfile), LivePlaybackProfile.higherQuality.rawValue)
+    }
+  }
+}
+
 final class LiveChatSyncBaselineTests: XCTestCase {
   private let item = UUID()
   private let epoch = Date(timeIntervalSince1970: 1000)

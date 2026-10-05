@@ -97,7 +97,7 @@ struct PlayerView: View {
   /// normalized list by `chatHighlightKeywordList`.
   @AppStorage(PersistenceKey.chatHighlightKeywords) var chatHighlightKeywords = ""
   @AppStorage(PersistenceKey.chatLayoutMode) var chatLayoutModeRaw = ChatLayoutMode.side.rawValue
-  @AppStorage(PersistenceKey.chatSyncToStream) var chatSyncToStream = false
+  @AppStorage(PersistenceKey.chatSyncToStream) var chatSyncToStream = true
   @AppStorage(PersistenceKey.experimentalYouTubeMergeEnabled) var experimentalYouTubeMergeEnabled = true
   /// Optional manual override for the YouTube merge target. Kept per-channel and
   /// non-persistent so a value entered for one streamer never leaks into another
