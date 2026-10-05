@@ -312,7 +312,8 @@ of stalling, and the slow-down rides out short buffer dips.
 - There are two different "latency" numbers, and they mean different things:
   - **Wall-clock behind-live** = `Date()` − `PROGRAM-DATE-TIME` of the current
     frame. This is how far behind the real broadcast the on-screen picture is —
-    the metric a viewer actually experiences (and the one used for chat sync).
+    the metric a viewer actually experiences. Chat sync uses **excess** delay
+    relative to normal live playback, not this entire value.
     For Twitch low-latency this is typically ~5–15s.
   - **Edge gap** = how far the playhead trails the freshest segment we can fetch
     (the seekable-window end). This is ~2–6s; it collapses to ~0 at the edge and
@@ -462,6 +463,46 @@ of stalling, and the slow-down rides out short buffer dips.
   and, in stability mode, rides a deep non-starved buffer, so neither tier
   false-trips it. On-device the fast tier logs
   "offline forced (edge frozen + hard stall)".
+
+## Chat synchronization: extra delay, not total video latency
+
+**Sync Chat to Extra Delay** keeps the existing preference (off by default).
+It never delays the outbound send API. Incoming messages, including the echo of
+your own sent message, are held only for the estimated **extra** video delay.
+
+`LiveChatSyncBaseline` tracks a reference per channel and video source:
+
+- Native playback compares the displayed program date with the origin's
+  `liveTargetDate()` (fresh indexed media minus the native hold-back).
+  These dates share the same source clock, so broadcaster/device clock skew
+  cancels. This is our stream's reachable live position, not a measurement
+  of other Twitch viewers.
+- Five steady, advancing samples over at least four seconds may establish
+  a normal playback cushion. Native calibration must be within two seconds
+  of the origin target. Startup, pause, scrubbing, recovery, deep-buffered
+  profiles, and unhealthy playback cannot teach a larger baseline.
+- On legacy playback, a previously learned baseline survives item reloads,
+  fallback and quality changes. A baseline can also be learned during healthy
+  Auto Low Latency playback near its reachable edge. A fresh high-quality or
+  unsupported-source fallback cannot assume a universal three-second baseline.
+- A stall or rewind cannot raise an established baseline. Fresh, consistently
+  faster live playback can lower it. Switching channels or video sources resets
+  it; VOD handoff continues to use the existing timestamped chat replay.
+- Missing/stale timestamps leave chat live and expose an unavailable reference
+  in settings/telemetry instead of inventing a delay. Differences under 0.75s
+  are ignored to avoid holding chat for ordinary segment-delivery jitter.
+
+With a learned 3s normal delay, 3s playback adds no chat hold, 8s adds 5s,
+and 23s adds 20s. Existing queued live messages are retimed in **both**
+directions as playback falls behind or catches up; unrelated backlog trickling
+is unchanged. The previous 30s startup ramp is removed because calibration
+already gates uncertain startup, and ramping a real rewind delay would leak
+messages ahead of the picture. Returning to normal releases queued messages.
+The local "Sent — appears in..." indicator follows the current additional hold;
+the message has already been sent to Twitch.
+
+This is an estimate of this session's extra delay. It is not proof of exact
+social synchronization with all viewers or a guarantee against every spoiler.
 
 ## Realistic floor
 

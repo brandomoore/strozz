@@ -154,7 +154,7 @@ extension PlayerView {
         settingsSectionHeader("Stream Delay")
 
         settingsPill(
-          title: "Sync Chat to Stream Delay",
+          title: "Sync Chat to Extra Delay",
           isSelected: chatSyncToStream,
           focusTag: .chatSyncToggle
         ) {
@@ -162,6 +162,14 @@ extension PlayerView {
           applyChatSyncSettings()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        Text("Keeps chat live near the live edge and holds it when the video falls behind. Your messages are sent immediately.")
+          .font(.caption)
+          .foregroundStyle(chatSettingsForeground.opacity(0.8))
+        if chatSyncToStream, model.chatSyncReference == .unavailable {
+          Text("Measuring live timing. Chat stays live until a reference is available.")
+            .font(.caption)
+            .foregroundStyle(chatSettingsForeground.opacity(0.8))
+        }
       }
 
       settingsDisclosureRow(

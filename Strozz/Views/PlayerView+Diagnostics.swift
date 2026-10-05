@@ -332,6 +332,8 @@ extension PlayerView {
   }
 
   func resetDiagnostics() {
+    model.chatSyncBaseline = LiveChatSyncBaseline()
+    chat.configureChatSync(enabled: false, delaySeconds: 0)
     model.nativeRecoveryTimes.removeAll()
     model.nativeFallbackReason = nil
     diagStallCount = 0

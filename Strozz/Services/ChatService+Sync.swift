@@ -15,8 +15,7 @@ private func uuidPrecedes(_ a: UUID, _ b: UUID) -> Bool {
 }
 
 /// Stream-sync delay and message-release scheduling for `ChatService`: holds
-/// incoming messages so chat lines up with the delayed video, eases the delay in
-/// during a warm-up window, trickles large bursts in so they read like live
+/// incoming messages for extra video delay, trickles large bursts so they read like live
 /// chat, and drains/flushes the pending buffer into the visible message list.
 extension ChatService {
   struct PendingChatMessage {
@@ -24,18 +23,6 @@ extension ChatService {
     var releaseAt: Date
     /// Nil for deliberate backlog trickling, which is independent of video delay.
     var syncAnchor: Date? = nil
-  }
-
-  /// Sync delay actually applied right now. Eases from 0 up to the full
-  /// `chatSyncDelaySeconds` over `chatSyncWarmupSeconds` after a fresh connect,
-  /// so live messages from both platforms surface almost immediately at the
-  /// start and gradually settle into video-sync.
-  private func effectiveSyncDelay(now: Date) -> Double {
-    guard chatSyncEnabled else { return 0 }
-    let full = chatSyncDelaySeconds
-    guard let start = syncWarmupStart, chatSyncWarmupSeconds > 0 else { return full }
-    let progress = min(max(now.timeIntervalSince(start) / chatSyncWarmupSeconds, 0), 1)
-    return full * progress
   }
 
   /// Attach segments off the main actor (via the ingest pipeline), then enqueue.
@@ -64,13 +51,13 @@ extension ChatService {
     }
 
     let now = Date()
-    let delay = effectiveSyncDelay(now: now)
+    let delay = chatSyncDelaySeconds
     // The synced playhead at full delay; anything older is true scrollback.
     let fullPlayhead = now.addingTimeInterval(-chatSyncDelaySeconds)
 
     var immediate: [ChatMessage] = []
     var backlog: [ChatMessage] = []
-    // Never hold a message longer than the (effective) delay: a future clock
+    // Never hold a message longer than the selected delay: a future clock
     // skew on a server timestamp must not push a genuinely-live message past
     // the playhead. (Past/old timestamps already fall through to immediate.)
     let maxReleaseAt = now.addingTimeInterval(delay)
@@ -83,7 +70,7 @@ extension ChatService {
         // Behind the synced playhead: old scrollback, subject to the cap.
         backlog.append(message)
       } else {
-        // In-window or live but releasable now (e.g. during warm-up): always show.
+        // In-window or live but already releasable: always show.
         immediate.append(message)
       }
     }
@@ -123,27 +110,26 @@ extension ChatService {
     }
   }
 
-  /// Returning to live must release chat against the new video position, not
-  /// deadlines calculated while the suspended/rewound picture was far behind.
-  func shortenPendingSyncDelay() {
-    let delay = effectiveSyncDelay(now: Date())
+  /// Rewind and catch-up move deadlines in either direction. Backlog trickling
+  /// has no video-sync anchor and must not be retimed.
+  func retimePendingSyncDelay() {
+    let delay = chatSyncDelaySeconds
     var changed = false
     for index in syncBuffer.indices {
       guard let anchor = syncBuffer[index].syncAnchor else { continue }
       let releaseAt = anchor.addingTimeInterval(delay)
-      if releaseAt < syncBuffer[index].releaseAt {
+      if releaseAt != syncBuffer[index].releaseAt {
         syncBuffer[index].releaseAt = releaseAt
         changed = true
       }
     }
     guard changed else { return }
     sortSyncBuffer()
-    startSyncDrainIfNeeded()
+    restartSyncDrain()
   }
 
   /// Surfaces a batch that is releasable right now. Small batches appear
-  /// instantly; a large fill (typically the connect-time backlog + in-window
-  /// burst while the warm-up delay is still ~0) is trickled in over a short
+  /// instantly; a large fill (typically connect-time backlog) is trickled in over a short
   /// window via the sync buffer so it reads like live chat instead of a wall.
   private func scheduleImmediate(_ messages: [ChatMessage], now: Date) {
     guard !messages.isEmpty else { return }

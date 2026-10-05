@@ -144,6 +144,10 @@ extension PlayerView {
     snapshot.counters["chat_frozen_messages"] = chatFrozenMessages?.count ?? 0
     snapshot.counters["chat_pending_sync"] = chat.pendingSyncMessageCount
     snapshot.flags["chat_sync_enabled"] = chat.chatSyncEnabled
+    snapshot.attributes["chat_sync_reference"] = model.chatSyncBaseline.reference.rawValue
+    snapshot.metrics["chat_sync_normal_delay_seconds"] = model.chatSyncBaseline.normalDelay
+    snapshot.metrics["chat_sync_native_cushion_seconds"] = model.chatSyncBaseline.nativeCushion
+    snapshot.metrics["chat_sync_extra_delay_seconds"] = model.chatSyncBaseline.extraDelay
     snapshot.flags["chat_sync_drain_active"] = chat.syncDrainTask != nil
     snapshot.metrics["chat_sync_delay_seconds"] = chat.chatSyncDelaySeconds
     snapshot.metrics["chat_sync_next_release_seconds"] = chat.syncBuffer.first.map {
@@ -271,6 +275,12 @@ extension PlayerView {
       model.nativeGeneration = UUID()
     }
     if item !== player.currentItem {
+      model.chatSyncItemID = UUID()
+      model.chatSyncBaseline.itemChanged()
+      model.chatSyncSendAnchor = nil
+      chatSyncSendClearTask?.cancel()
+      chatSyncSendDeadline = nil
+      applyChatSyncSettings()
       model.nativeStartupAligned = false
       resetPlaybackHealth()
       model.startupProgress = LivePlaybackStartup.Progress()

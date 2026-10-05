@@ -66,6 +66,10 @@ final class PlayerModel {
   /// persists a bounded JSONL session for agent-driven postmortem analysis.
   let playbackTelemetry = PlaybackTelemetryRecorder()
   @ObservationIgnored var startupProgress = LivePlaybackStartup.Progress()
+  @ObservationIgnored var chatSyncBaseline = LiveChatSyncBaseline()
+  @ObservationIgnored var chatSyncItemID = UUID()
+  @ObservationIgnored var chatSyncSendAnchor: Date?
+  var chatSyncReference: LiveChatSyncBaseline.Reference = .unavailable
 
   // MARK: Monitoring boxes
   // Plain (non-`@Observable`) reference boxes for the once-per-second / per-frame

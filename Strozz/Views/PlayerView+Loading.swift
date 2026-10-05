@@ -512,13 +512,13 @@ extension PlayerView {
           updateResolvedQuality()
           updateSmoothedLatency()
           sampleDiagnostics()
-          applyChatSyncSettings()
           updateAltSourceDiagnostics()
           // Push the rendered badge values into the observed readout (deduped),
           // so only the badge leaf updates — not the whole player every tick.
           latencyReadout.update(color: latencyColor, label: latencyLabel)
           updateRewindReadout()
         }
+        await updateChatSyncBaseline()
         try? await Task.sleep(for: .seconds(1))
       }
     }

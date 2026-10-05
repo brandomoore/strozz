@@ -382,19 +382,18 @@ final class ChatReliabilityTests: XCTestCase {
     XCTAssertGreaterThan(pending.releaseAt.timeIntervalSince(arrival), 16.9)
   }
 
-  func testShortenedDelayHonorsStartupRampAndDoesNotPostponeOldMessages() throws {
+  func testExtraDelayIsAppliedFullyAndRetimesExistingMessagesBothDirections() throws {
     let chat = ChatService()
     defer { chat.disconnect() }
-    chat.syncWarmupStart = Date().addingTimeInterval(-15)
     chat.configureChatSync(enabled: true, delaySeconds: 60)
-    let held = try message("warming up")
+    let held = try message("held for extra video delay")
     chat.enqueue([held])
     chat.configureChatSync(enabled: true, delaySeconds: 20)
 
     let pending = try XCTUnwrap(chat.syncBuffer.first)
-    XCTAssertEqual(pending.releaseAt.timeIntervalSince(held.timestamp), 10, accuracy: 0.1)
+    XCTAssertEqual(pending.releaseAt.timeIntervalSince(held.timestamp), 20, accuracy: 0.1)
     chat.configureChatSync(enabled: true, delaySeconds: 60)
-    XCTAssertEqual(chat.syncBuffer.first?.releaseAt, pending.releaseAt)
+    XCTAssertEqual(try XCTUnwrap(chat.syncBuffer.first).releaseAt.timeIntervalSince(held.timestamp), 60, accuracy: 0.1)
   }
 
   func testVideoDelayChangeDoesNotCollapseBacklogTrickle() throws {
@@ -431,6 +430,35 @@ final class ChatReliabilityTests: XCTestCase {
     XCTAssertEqual(chat.pendingSyncMessageCount, 0)
     XCTAssertNil(chat.syncDrainTask)
     XCTAssertNil(chat.syncDrainDeadline)
+  }
+
+  func testReturningToNormalLiveFlushesQueuedChatWithoutTurningPreferenceOff() async throws {
+    let chat = ChatService()
+    defer { chat.disconnect() }
+    chat.configureChatSync(enabled: true, delaySeconds: 20)
+    let held = try message("delayed reaction")
+    chat.enqueue([held])
+    XCTAssertEqual(chat.pendingSyncMessageCount, 1)
+    chat.configureChatSync(enabled: true, delaySeconds: 0)
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertEqual(chat.messages.map(\.id), [held.id])
+    XCTAssertEqual(chat.pendingSyncMessageCount, 0)
+    XCTAssertNil(chat.syncDrainTask)
+  }
+
+  func testIncreasingExtraDelayDoesNotReleasePreviouslyQueuedMessagesEarly() async throws {
+    let chat = ChatService()
+    defer { chat.disconnect() }
+    chat.configureChatSync(enabled: true, delaySeconds: 0.8)
+    let held = try message("before rewind")
+    chat.enqueue([held])
+    let oldTask = try XCTUnwrap(chat.syncDrainTask)
+    chat.configureChatSync(enabled: true, delaySeconds: 10)
+    await oldTask.value
+    try await Task.sleep(for: .seconds(1))
+    XCTAssertTrue(chat.messages.isEmpty)
+    XCTAssertEqual(chat.pendingSyncMessageCount, 1)
+    XCTAssertEqual(try XCTUnwrap(chat.syncBuffer.first).releaseAt.timeIntervalSince(held.timestamp), 10, accuracy: 0.1)
   }
 
   private func message(_ text: String) throws -> ChatMessage {
