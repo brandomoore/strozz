@@ -135,13 +135,12 @@ concrete tuning lives in `Strozz/Models/LivePlaybackProfile.swift`:
   latency. No rate games (always 1.0×); it never sacrifices quality on its own.
 - **Pinned rendition** — a stable buffer (~8s) with no rate games; ABR is off, so
   it holds exactly that rendition (and rebuffers rather than downshifting).
-- **Stability fallback** (automatic, all profiles) — a runtime override, not a
+- **Stability fallback** (automatic, legacy playback) — a runtime override, not a
   user-selectable row. A **stream-stability watchdog** counts destabilizing
   events — stalls plus involuntary backward playhead jumps (an AVPlayer rewind we
   never request) — in a rolling window (`unstableEventWindowSeconds`). Reaching
-  the threshold flags the stream *chronically unstable* — almost always a
-  struggling **broadcaster** encoder (lots of stalls/rewinds despite ample
-  observed bandwidth), not the viewer's connection. To stabilize a bad stream as
+  the threshold flags repeated instability; those symptoms alone do not identify
+  whether the source, network, or player caused it. To stabilize a bad stream as
   soon as you arrive, the trip is **aggressive and front-loaded**: during the
   first `unstableStartupGraceSeconds` of playback a **single** event trips it;
   after that any **two** events in the window do (so "2 stalls", "2 jumps", or "1
@@ -154,22 +153,36 @@ concrete tuning lives in `Strozz/Models/LivePlaybackProfile.swift`:
   **low-latency prefetch proxy** keeps promoting `#EXT-X-TWITCH-PREFETCH` segments
   and shoving the playhead at a live edge the source can't sustain, so it stalls,
   rewinds, and loops. The fallback inverts the trade-off:
-  - **Drops the prefetch proxy.** `makeItem` suppresses promotion while unstable
-    (`promotePrefetch = lowLatencyProxyEnabled && !isStreamUnstable`) and, when
-    Stream Rewind isn't separately holding the proxy on for DVR, detaches it
-    entirely so AVPlayer plays the plain Twitch playlist — exactly what a manual
-    "LL proxy off" does. Entering stability triggers a lightweight reload so the
-    pipeline rebuilds without the proxy.
+  - **Stops prefetch promotion in place.** The current proxy stops promoting
+    segments but retains its DVR history and the current AVPlayer item. Stability
+    entry does not reload or seek backward; it never replays watched content to
+    manufacture a buffer. Later necessary recovery loads also suppress promotion.
   - **Deep forward buffer (~12s), no catch-up, edge-resync suppressed.** The
     anti-stall slow-down stays on as the last line of defence.
-  This is the single biggest win for a bad stream in practice: with the proxy off
-  the deep buffer actually *fills* and playback goes rock-solid (riding ~15-20s
-  behind) instead of stuttering near the edge. The flag **latches for the whole
+  AVPlayer can rebuffer at the current position rather than deliberately rewinding.
+  This does not guarantee smooth playback on a broken feed. The flag **latches for the whole
   channel session** — a stream that has proven it can't hold the edge keeps the
   safe strategy until the viewer changes channel (there is no auto-recovery; we
   never flap the proxy back on and risk re-destabilizing it). Surfaced in the
   Diagnostics overlay as "LL proxy auto-off (unstable)" + "⚠︎ STABILITY MODE".
   Resets on every new channel session (`resetDiagnostics`).
+
+An October 5 Ludwig capture on build 1908 showed a native stall/fallback followed
+by an app-requested `stability_buffer` seek: the playhead was around 23.5 seconds,
+the advertised seekable edge was only 22.061 seconds, and subtracting the old
+20-second cushion sent playback to 2 seconds. Source-date age increased from
+roughly 16.7 to 38.6 seconds. That automatic backward-seek path is removed.
+The same capture exposed a second mismatch: the stored native profile could
+enable legacy prefetch promotion after native failure even with the legacy
+switch off. Item construction now uses the same effective fallback profile as
+the quality menu, preserving the disabled switch while retaining DVR.
+
+`StandardPlaybackStabilityTests` reproduces the lagging-edge numbers, verifies
+zero seeks/item reloads on stability entry, checks paused/background/alternate
+source exclusions, and verifies native fallback honors the legacy switch. The
+capture does not identify the original upstream/native failure beyond
+`unavailable`; preventing this app-induced rewind is not proof that native
+fallbacks can no longer occur.
 
 ### Predictive instability (manifest analysis)
 
@@ -179,7 +192,7 @@ of a chronically-bad stream. The **predictive** path closes that gap by reading
 the stream's own HLS media playlists — which the low-latency proxy already
 parses on every refresh — and flagging a struggling encoder *before* playback
 stutters. When it fires it trips the exact same `enterStreamStabilityMode()`
-path (drop the prefetch proxy, deep-buffer, reload), so all the behavior above is
+path (stop promotion in place and deepen buffering without a seek/reload), so all the behavior above is
 reused unchanged; only the *trigger* is earlier.
 
 It lives in `LowLatencyHLSProxy` (`recordInstabilitySignals`), accumulates a

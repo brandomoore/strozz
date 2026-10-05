@@ -335,7 +335,9 @@ extension PlayerView {
     // `isStreamUnstable` we drop promotion and — when Rewind isn't holding the
     // proxy on for DVR — detach the proxy entirely and play the plain Twitch
     // playlist, exactly as a manual "LL proxy off" would.
-    let promotePrefetch = livePlaybackProfile.promotesPrefetch(
+    let effectiveProfile = livePlaybackProfile.effectiveSelection(
+      nativeAvailable: model.nativeFallbackReason == nil)
+    let promotePrefetch = effectiveProfile.promotesPrefetch(
       legacyEnabled: lowLatencyProxyEnabled, unstable: isStreamUnstable)
     let useProxy = promotePrefetch || streamRewindEnabled
     lowLatencyProxy.configure(

@@ -514,10 +514,6 @@ struct PlayerView: View {
   /// of making you watch it sort itself out.
   let unstableStartupEventThreshold = 1
   let unstableStartupGraceSeconds: Double = 12
-  /// On entering stability mode, seek back to roughly this far behind the live
-  /// edge to build a cushion (and skip past a stuck near-edge segment). Only used
-  /// when the proxy was already off; otherwise a reload repositions the timeline.
-  let stabilityTargetBehindEdgeSeconds: Double = 20
   /// Predictive stability: the proxy (`LowLatencyHLSProxy`) analyzes each HLS
   /// media-playlist refresh and latches a `predictedUnstable` verdict when a
   /// struggling encoder's manifests show structural trouble (media-sequence

@@ -153,6 +153,22 @@ final class LowLatencyHLSProxyTests: XCTestCase {
 
   // MARK: - Master playlist rewriting
 
+  func testDisablingPromotionInPlacePreservesDVRSequenceAndCompletedTail() {
+    let proxy = makeProxy()
+    _ = proxy.rewriteMediaPlaylistForTesting(
+      mediaPlaylist(mediaSequence: 100, segments: [("seg100", 2), ("seg101", 2)], prefetch: ["seg102"]),
+      sourceURL: source, promotePrefetch: true, retainHistory: true)
+    proxy.configure(promotePrefetch: false, retainHistory: true, windowSeconds: 1800)
+    let out = proxy.rewriteMediaPlaylistForTesting(
+      mediaPlaylist(mediaSequence: 101, segments: [("seg101", 2), ("seg102", 2)], prefetch: ["seg103"]),
+      sourceURL: source, promotePrefetch: false, retainHistory: true)
+    XCTAssertTrue(out.contains("#EXT-X-MEDIA-SEQUENCE:100"))
+    XCTAssertTrue(out.contains("seg100.ts"))
+    XCTAssertTrue(out.contains("seg102.ts"))
+    XCTAssertFalse(out.contains("seg103.ts"))
+    XCTAssertEqual(proxy.telemetrySnapshot.retainedSeconds, 6)
+  }
+
   func testMasterRewriteReroutesVariantAndMediaURIsOntoCustomScheme() {
     let proxy = makeProxy()
     let master = [
