@@ -47,23 +47,35 @@ final class MobileNavigationTests: XCTestCase {
     expectation(for: loaded, evaluatedWith: spinner)
     waitForExpectations(timeout: 45)
     XCTAssertFalse(app.buttons["Try again"].exists)
+    showControls(app)
     capture(app, name: "portrait-player")
     let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
-    video.tap()
-    let playPause = app.buttons["Play/Pause"]
+    let playPause = app.buttons["mobile-play-pause"]
     XCTAssertTrue(playPause.waitForExistence(timeout: 5))
-    if playPause.label == "Play" { playPause.tap() }
-    let fullscreen = app.buttons["Fullscreen Button"]
+    playPause.tap()
+    XCTAssertEqual(playPause.label, "Play")
+    playPause.tap()
+    XCTAssertEqual(playPause.label, "Pause")
+    let mute = app.buttons["Unmute"]
+    XCTAssertTrue(mute.exists)
+    mute.tap()
+    XCTAssertTrue(app.buttons["Mute"].exists)
+    app.buttons["Mute"].tap()
+    let fullscreen = app.buttons["Fullscreen"]
     XCTAssertTrue(fullscreen.waitForExistence(timeout: 5))
     fullscreen.tap()
-    app.tap()
-    capture(app, name: "native-fullscreen")
-    let exitFullscreen = app.buttons["Close Button"]
+    let exitFullscreen = app.buttons["Exit fullscreen"]
     XCTAssertTrue(exitFullscreen.waitForExistence(timeout: 5))
+    if UIDevice.current.userInterfaceIdiom == .phone {
+      expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
+      waitForExpectations(timeout: 10)
+    }
+    capture(app, name: "custom-fullscreen")
     exitFullscreen.tap()
+    showControls(app)
     XCTAssertTrue(app.buttons["Close player"].waitForExistence(timeout: 5))
-    video.tap()
-    if playPause.waitForExistence(timeout: 5), playPause.label == "Play" { playPause.tap() }
+    XCTAssertTrue(app.buttons["Back to live"].exists)
+    XCTAssertTrue(app.buttons["Share stream"].exists)
     app.buttons["Playback quality"].tap()
     XCTAssertTrue(app.buttons["Auto - Standard"].waitForExistence(timeout: 5))
     capture(app, name: "quality-menu")
@@ -83,6 +95,7 @@ final class MobileNavigationTests: XCTestCase {
     } else {
       XCTAssertFalse(app.staticTexts["Stream chat"].exists)
     }
+    showControls(app)
     capture(app, name: "landscape-player")
     XCTAssertTrue(app.buttons["Close player"].isHittable)
     app.buttons["Close player"].tap()
@@ -103,6 +116,40 @@ final class MobileNavigationTests: XCTestCase {
     field.typeText("buddha")
     XCTAssertTrue(app.buttons["stream-buddha"].waitForExistence(timeout: 30))
     capture(app, name: "search")
+  }
+
+  func testHomePlaysOnlyOneMutedPreviewWhileScrolling() throws {
+    guard ProcessInfo.processInfo.environment["STROZZ_MOBILE_LIVE_TESTS"] == "1" else {
+      throw XCTSkip("Set STROZZ_MOBILE_LIVE_TESTS=1 for muted Home previews.")
+    }
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_MUTE_PLAYBACK"] = "1"
+    app.launch()
+    defer { app.terminate() }
+    let previews = app.buttons.matching(NSPredicate(format: "value == 'Muted live preview'"))
+    XCTAssertTrue(previews.firstMatch.waitForExistence(timeout: 35))
+    XCTAssertEqual(previews.count, 1)
+    let first = previews.firstMatch.identifier
+    capture(app, name: "home-muted-preview")
+    app.scrollViews.firstMatch.swipeUp()
+    let next = previews.matching(NSPredicate(format: "identifier != %@", first)).firstMatch
+    XCTAssertTrue(next.waitForExistence(timeout: 35))
+    XCTAssertEqual(previews.count, 1)
+    let selected = app.buttons[next.identifier]
+    XCTAssertTrue(selected.isHittable, "The preview must belong to an on-screen card")
+    capture(app, name: "home-next-preview")
+    selected.tap()
+    XCTAssertTrue(app.buttons["Close player"].waitForExistence(timeout: 5))
+    XCTAssertEqual(previews.count, 0)
+    app.buttons["Close player"].tap()
+    app.buttons["Browse"].firstMatch.tap()
+    XCTAssertEqual(previews.count, 0)
+  }
+
+  private func showControls(_ app: XCUIApplication) {
+    if !app.buttons["mobile-play-pause"].exists {
+      app.descendants(matching: .any).matching(identifier: "mobile-controls-toggle").firstMatch.tap()
+    }
   }
 
   private func capture(_ app: XCUIApplication, name: String) {

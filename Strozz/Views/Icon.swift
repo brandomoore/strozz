@@ -29,6 +29,7 @@ enum Glyph: String {
   case cards
   case clock
   case send
+  case share = "share-2"
   case sidebarRightExpand = "layout-sidebar-right-expand"
   case sidebarRightCollapse = "layout-sidebar-right-collapse"
   case circleCheckFilled = "circle-check-filled"

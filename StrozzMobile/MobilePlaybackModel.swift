@@ -30,6 +30,8 @@ final class MobilePlaybackModel {
   private(set) var isActive = false
   private(set) var isReadyForDisplay = false
   private(set) var isPaused = false
+  private(set) var isMuted: Bool
+  private(set) var isExternalPlayback = false
 
   @ObservationIgnored private var channel = ""
   @ObservationIgnored private var generation = UUID()
@@ -39,6 +41,7 @@ final class MobilePlaybackModel {
   @ObservationIgnored private var monitorTask: Task<Void, Never>?
   @ObservationIgnored private var jumpObserver: NSObjectProtocol?
   @ObservationIgnored private var rateObserver: NSKeyValueObservation?
+  @ObservationIgnored private var routeObserver: NSKeyValueObservation?
   @ObservationIgnored private var baseline = LiveChatSyncBaseline()
   @ObservationIgnored private var catchUp = NativeLiveCatchUp()
   @ObservationIgnored private var followsLive = true
@@ -46,7 +49,7 @@ final class MobilePlaybackModel {
   @ObservationIgnored private var loadingPosition: Position?
   @ObservationIgnored private var audioSessionActive = false
   @ObservationIgnored private var triedDecodeRecovery = false
-  @ObservationIgnored private let muted: Bool
+  @ObservationIgnored private let muteForTesting: Bool
   @ObservationIgnored private let resolve: (String) async throws -> StreamPlayback
   private static let logger = Logger(subsystem: "com.thatcube.Twozz", category: "mobile-playback")
 
@@ -58,12 +61,13 @@ final class MobilePlaybackModel {
   init(muted: Bool = false,
        resolve: @escaping (String) async throws -> StreamPlayback = { try await PlaybackService.resolve(for: $0) }) {
     #if targetEnvironment(simulator)
-    self.muted = muted || ProcessInfo.processInfo.environment["STROZZ_MUTE_PLAYBACK"] == "1"
+    muteForTesting = ProcessInfo.processInfo.environment["STROZZ_MUTE_PLAYBACK"] == "1"
     #else
-    self.muted = muted
+    muteForTesting = false
     #endif
+    isMuted = muted || muteForTesting
     self.resolve = resolve
-    player.isMuted = self.muted
+    player.isMuted = isMuted
   }
 
   var qualityLabel: String {
@@ -93,7 +97,8 @@ final class MobilePlaybackModel {
   }
 
   func select(_ quality: MobileQuality) {
-    guard quality != selection, quality != .native || nativeFailure == nil else { return }
+    guard quality != selection,
+          quality != .native || (nativeFailure == nil && !isExternalPlayback) else { return }
     let position = position()
     selection = quality
     triedDecodeRecovery = false
@@ -104,6 +109,31 @@ final class MobilePlaybackModel {
   func goLive() {
     followsLive = true
     load(position: Position(shouldPlay: true, date: nil))
+  }
+
+  func togglePlayPause() {
+    guard !isLoading, errorMessage == nil, player.currentItem != nil else { return }
+    if isPaused {
+      isPaused = false
+      player.play()
+    } else {
+      stopFollowingLive()
+      isPaused = true
+      player.pause()
+    }
+  }
+
+  func toggleMute() {
+    isMuted.toggle()
+    player.isMuted = isMuted || muteForTesting
+  }
+
+  func prepareForAirPlay() {
+    // A remote AirPlay receiver cannot fetch the native engine's loopback URLs.
+    if selection == .native {
+      select(.automatic)
+      recoveryNotice = "AirPlay uses standard playback."
+    }
   }
 
   func retry() {
@@ -156,6 +186,7 @@ final class MobilePlaybackModel {
     monitorTask?.cancel()
     monitorTask = nil
     rateObserver = nil
+    routeObserver = nil
     if let jumpObserver { NotificationCenter.default.removeObserver(jumpObserver) }
     jumpObserver = nil
     player.currentItem?.cancelPendingSeeks()
@@ -222,7 +253,8 @@ final class MobilePlaybackModel {
           player = AVPlayer(playerItem: item)
         }
         guard player.currentItem === item else { throw MobilePlaybackError.unavailable }
-        player.isMuted = muted
+        player.isMuted = isMuted || muteForTesting
+        player.allowsExternalPlayback = selection != .native
         if position.shouldPlay && position.date == nil { player.play() }
         let deadline = ContinuousClock.now.advanced(by: .seconds(30))
         while item.status != .readyToPlay {
@@ -303,6 +335,12 @@ final class MobilePlaybackModel {
   }
 
   private func installIntentObservers(item: AVPlayerItem, request: UUID) {
+    routeObserver = player.observe(\.isExternalPlaybackActive, options: [.initial, .new]) { [weak self] _, _ in
+      Task { @MainActor [weak self] in
+        guard let self, self.isCurrent(request) else { return }
+        self.isExternalPlayback = self.player.isExternalPlaybackActive
+      }
+    }
     rateObserver = player.observe(\.rate, options: [.initial, .new]) { [weak self] player, _ in
       let paused = player.rate == 0 && player.timeControlStatus == .paused
       Task { @MainActor [weak self] in
@@ -358,9 +396,9 @@ final class MobilePlaybackModel {
           lastVideoFrame = uptime
           receivedVideoFrame = true
         }
-        if paused || isAudioOnly { lastVideoFrame = uptime }
+        if paused || isAudioOnly || isExternalPlayback { lastVideoFrame = uptime }
         if uptime - lastVideoFrame > (receivedVideoFrame ? 20 : 8),
-           playing, uptime - lastProgress < 2, !isAudioOnly {
+           playing, uptime - lastProgress < 2, !isAudioOnly, !isExternalPlayback {
           recoverMissingVideo()
           return
         }

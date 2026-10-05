@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct MobileHomeView: View {
+  let preview: MobileHomePreview
+  let previewsEnabled: Bool
   let onSelect: (FollowedChannel) -> Void
   @State private var service = RecommendationsService()
   @Environment(\.themePalette) private var palette
@@ -15,11 +17,17 @@ struct MobileHomeView: View {
         if let error = service.errorMessage {
           MobileStatusView(message: error) { Task { await service.refresh() } }
         }
-        MobileChannelGrid(channels: service.channels, onSelect: onSelect)
+        MobileChannelGrid(channels: service.channels, onSelect: onSelect, preview: preview)
         if service.isLoading { ProgressView("Loading streams").frame(maxWidth: .infinity) }
       }
       .padding()
+      .coordinateSpace(name: "mobile-home-content")
     }
+    .onScrollGeometryChange(for: CGRect.self) { $0.visibleRect } action: { _, viewport in
+      preview.updateViewport(viewport)
+    }
+    .onAppear { preview.setEnabled(previewsEnabled) }
+    .onDisappear { preview.stop() }
     .background(palette.backgroundColors.last ?? palette.cardOpaqueSurface)
     .navigationTitle("Strozz")
     .refreshable { await service.refresh() }
@@ -267,12 +275,13 @@ struct MobileCategoryGrid: View {
 struct MobileChannelGrid: View {
   let channels: [FollowedChannel]
   let onSelect: (FollowedChannel) -> Void
+  var preview: MobileHomePreview? = nil
 
   var body: some View {
     LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 20)], spacing: 24) {
       ForEach(channels, id: \.channelKey) { channel in
         Button { onSelect(channel) } label: {
-          MobileChannelCard(channel: channel)
+          MobileChannelCard(channel: channel, preview: preview)
         }
         .buttonStyle(.plain)
         .disabled(!channel.isLive)
@@ -285,6 +294,7 @@ struct MobileChannelGrid: View {
 
 struct MobileChannelCard: View {
   let channel: FollowedChannel
+  var preview: MobileHomePreview? = nil
   @Environment(\.themePalette) private var palette
 
   var body: some View {
@@ -297,6 +307,28 @@ struct MobileChannelCard: View {
       }
       .aspectRatio(16 / 9, contentMode: .fit)
       .clipShape(RoundedRectangle(cornerRadius: 12))
+      .overlay {
+        if let preview, preview.channel == channel.channelKey, preview.player.currentItem != nil {
+          MobilePreviewSurface(player: preview.player)
+            .opacity(preview.isReady ? 1 : 0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+      }
+      .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("mobile-home-content")) } action: {
+        if channel.isLive { preview?.updateFrame($0, for: channel.channelKey) }
+      }
+      .onDisappear { preview?.updateFrame(nil, for: channel.channelKey) }
+      .overlay(alignment: .bottomTrailing) {
+        if let preview, preview.channel == channel.channelKey, preview.isReady {
+          Icon(glyph: .volumeOff, size: 16)
+            .padding(6)
+            .background(palette.chromeOpaqueSurface, in: Capsule())
+            .foregroundStyle(palette.chromeOnOpaque)
+            .padding(8)
+            .accessibilityLabel("Muted live preview")
+        }
+      }
       HStack(alignment: .top, spacing: 10) {
         CachedAsyncImage(url: channel.profileImageURL) { image in
           image.resizable().scaledToFill()
@@ -318,6 +350,7 @@ struct MobileChannelCard: View {
     }
     .contentShape(Rectangle())
     .accessibilityElement(children: .combine)
+    .accessibilityValue(preview?.channel == channel.channelKey && preview?.isReady == true ? "Muted live preview" : "")
   }
 }
 

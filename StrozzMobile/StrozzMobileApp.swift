@@ -31,32 +31,41 @@ struct MobileRootView: View {
   @Environment(ThemeManager.self) private var theme
   @Environment(TwitchAuthSession.self) private var auth
   @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.scenePhase) private var scenePhase
   @State private var selectedChannel: FollowedChannel?
   @State private var playbackModel = MobilePlaybackModel()
+  @State private var preview = MobileHomePreview()
+  @State private var tab = 0
 
   var body: some View {
     let palette = theme.theme.palette(systemColorScheme: colorScheme)
-    TabView {
+    let previewsEnabled = tab == 0 && selectedChannel == nil && !playbackModel.isActive && scenePhase == .active
+    TabView(selection: $tab) {
       NavigationStack {
-        MobileHomeView(onSelect: select)
+        MobileHomeView(preview: preview, previewsEnabled: previewsEnabled, onSelect: select)
       }
       .tabItem { Label { Text("Live") } icon: { Image("tb-home") } }
+      .tag(0)
 
       NavigationStack {
         MobileFollowingView(onSelect: select)
           .id(auth.userID)
       }
       .tabItem { Label { Text("Following") } icon: { Image("tb-heart") } }
+      .tag(1)
 
       NavigationStack {
         MobileBrowseView(onSelect: select)
       }
       .tabItem { Label { Text("Browse") } icon: { Image("tb-layout-grid") } }
+      .tag(2)
 
       NavigationStack { MobileAccountView() }
         .tabItem { Label { Text("Account") } icon: { Image("tb-user-circle") } }
+        .tag(3)
     }
     .environment(\.themePalette, palette)
+    .onChange(of: previewsEnabled, initial: true) { _, enabled in preview.setEnabled(enabled) }
     .fullScreenCover(item: $selectedChannel, onDismiss: { playbackModel.stop() }) { channel in
       MobilePlayerView(channel: channel, model: playbackModel)
         .environment(\.themePalette, palette)
@@ -64,6 +73,7 @@ struct MobileRootView: View {
   }
 
   private func select(_ channel: FollowedChannel) {
+    preview.stop()
     playbackModel.stop()
     playbackModel = MobilePlaybackModel()
     selectedChannel = channel

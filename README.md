@@ -123,9 +123,20 @@ emotes. Sign in through **Account > Sign in to Twitch**, open the Twitch link,
 approve the displayed code, then return to Strozz. Browsing, playback, and
 reading chat also work anonymously.
 
+Home automatically previews one mostly visible stream at a time, nearest the
+middle of the screen. Previews are always muted and stop when you scroll away,
+switch tabs, open a stream, or background the app. Lower-bandwidth preview
+renditions are preferred; an undecodable preview gets one Source-quality retry.
+
 Video sits above chat on a portrait iPhone; landscape iPhone shows video alone.
 A wide iPad window places chat beside video, while narrow multitasking windows
-stack them. AVKit provides touch playback and fullscreen controls. System,
+stack them. Dedicated over-video controls provide play/pause, mute, quality,
+**Back to live** (return from paused/delayed playback), fullscreen/rotation,
+chat visibility, sharing the Twitch link, and Apple's AirPlay picker. Rendering
+still uses AVKit. Controls hide after inactivity and reappear on tap; they stay
+available when paused or using VoiceOver. AirPlay switches native low latency
+to standard playback because a receiver cannot access the app's loopback
+media server; keep the app open while using it. System,
 Dark, OLED, and Light appearances are available in Account, and chat follows
 Dynamic Type and Reduce Motion. App panels use opaque theme-aware surfaces.
 Browse shows three categories across on iPhone (two at accessibility text sizes)

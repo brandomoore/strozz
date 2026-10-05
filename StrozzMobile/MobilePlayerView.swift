@@ -14,6 +14,9 @@ struct MobilePlayerView: View {
   let channel: FollowedChannel
   @State private var model: MobilePlaybackModel
   @State private var hideChat = false
+  @State private var fullscreen = false
+  @State private var windowScene: UIWindowScene?
+  @State private var rotationError: String?
   @Environment(\.dismiss) private var dismiss
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.themePalette) private var palette
@@ -28,14 +31,17 @@ struct MobilePlayerView: View {
     GeometryReader { geometry in
       let layout = MobilePlayerLayout.resolve(
         size: CGSize(width: geometry.size.width, height: geometry.size.height + geometry.safeAreaInsets.bottom),
-        isPhone: UIDevice.current.userInterfaceIdiom == .phone, hideChat: hideChat,
+        isPhone: UIDevice.current.userInterfaceIdiom == .phone, hideChat: hideChat || fullscreen,
         phoneLandscape: verticalSizeClass == .compact)
+      let video = MobileVideoView(
+        model: model, channel: channel, hideChat: $hideChat, isFullscreen: layout == .videoOnly,
+        onClose: { dismiss() }, onFullscreen: { toggleFullscreen(exiting: layout == .videoOnly) },
+        onScene: { windowScene = $0 })
       VStack(spacing: 0) {
-        MobilePlayerToolbar(model: model, hideChat: $hideChat, onClose: { dismiss() })
         if layout == .sideBySide {
           HStack(spacing: 0) {
             VStack(spacing: 0) {
-              MobileVideoView(model: model)
+              video
               MobileStreamDetails(channel: channel, model: model)
             }
             .frame(minWidth: 0, maxWidth: .infinity)
@@ -44,7 +50,7 @@ struct MobilePlayerView: View {
               .frame(width: min(380, geometry.size.width * 0.36))
           }
         } else {
-          MobileVideoView(model: model)
+          video
             .frame(maxHeight: layout == .videoOnly ? .infinity
                    : min(geometry.size.width * 9 / 16, geometry.size.height * 0.42))
           if layout == .portrait {
@@ -61,120 +67,158 @@ struct MobilePlayerView: View {
       if phase == .background { model.suspend() }
       else if phase == .active { model.resume() }
     }
+    .alert("Display rotation", isPresented: Binding(
+      get: { rotationError != nil }, set: { if !$0 { rotationError = nil } }
+    )) {
+      Button("OK") { rotationError = nil }
+    } message: { Text(rotationError ?? "") }
   }
-}
 
-struct MobilePlayerToolbar: View {
-  let model: MobilePlaybackModel
-  @Binding var hideChat: Bool
-  let onClose: () -> Void
-
-  var body: some View {
-    HStack(spacing: 12) {
-      Button(action: onClose) { Icon(glyph: .x, size: 22).frame(width: 44, height: 44) }
-        .accessibilityLabel("Close player")
-      Menu {
-        if model.nativeFailure == nil {
-          Button { model.select(.native) } label: {
-            MobileQualityLabel(title: "Auto - Native Low Latency", selected: model.selection == .native)
-          }
-        }
-        Button { model.select(.automatic) } label: {
-          MobileQualityLabel(title: "Auto - Standard", selected: model.selection == .automatic)
-        }
-        ForEach(model.qualities) { quality in
-          Button { model.select(.fixed(quality.id)) } label: {
-            MobileQualityLabel(title: quality.name, selected: model.selection == .fixed(quality.id))
-          }
-        }
-      } label: {
-        Icon(glyph: .adjustmentsHorizontal, size: 22).frame(width: 44, height: 44)
-      }
-      .accessibilityLabel("Playback quality")
-      .accessibilityValue(model.qualityLabel)
-      .disabled(model.isLoading)
-      Spacer(minLength: 0)
-      Button("Go live") { model.goLive() }.disabled(model.isLoading)
-      Button { hideChat.toggle() } label: {
-        Icon(glyph: hideChat ? .sidebarRightExpand : .sidebarRightCollapse, size: 22)
-          .frame(width: 44, height: 44)
-      }
-      .accessibilityLabel(hideChat ? "Show chat" : "Hide chat")
+  private func toggleFullscreen(exiting: Bool) {
+    fullscreen = !exiting
+    hideChat = false
+    guard UIDevice.current.userInterfaceIdiom == .phone else { return }
+    guard let windowScene else {
+      rotationError = "Could not rotate this window. You can still rotate your device."
+      return
     }
-    .padding(.horizontal, 8)
-  }
-}
-
-struct MobileQualityLabel: View {
-  let title: String
-  let selected: Bool
-
-  var body: some View {
-    Label {
-      Text(title)
-    } icon: {
-      if selected { Image("tb-check") }
+    windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: exiting ? .portrait : .landscapeRight)) { error in
+      Task { @MainActor in rotationError = error.localizedDescription }
     }
   }
 }
 
 struct MobileVideoView: View {
   let model: MobilePlaybackModel
+  let channel: FollowedChannel
+  @Binding var hideChat: Bool
+  let isFullscreen: Bool
+  let onClose: () -> Void
+  let onFullscreen: () -> Void
+  let onScene: (UIWindowScene) -> Void
   @Environment(\.themePalette) private var palette
+  @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var controlsVisible = true
+  @State private var interaction = 0
+  @State private var showQuality = false
+  @State private var showShare = false
+  @State private var showRoutes = false
+
+  private struct HideState: Equatable {
+    let interaction: Int
+    let held: Bool
+  }
 
   var body: some View {
+    let held = model.isPaused || model.isLoading || model.errorMessage != nil
+      || (!model.isReadyForDisplay && !model.isAudioOnly && !model.isExternalPlayback)
+      || voiceOver || showQuality || showShare || showRoutes
     ZStack {
       palette.playerBackdrop
-      MobilePlayerSurface(player: model.player) { ready, player in
+      MobilePlayerSurface(player: model.player, onScene: onScene) { ready, player in
         model.displayReady(ready, for: player)
       }
         .id(ObjectIdentifier(model.player))
         .accessibilityIdentifier("mobile-video-surface")
-        .allowsHitTesting(!model.isLoading)
-      if model.isAudioOnly && !model.isLoading {
-        Label { Text("Audio only") } icon: { Icon(glyph: .volume, size: 24) }
+        .allowsHitTesting(false)
+      if (model.isAudioOnly || model.isExternalPlayback) && !model.isLoading {
+        Label {
+          Text(model.isExternalPlayback ? "Playing with AirPlay" : "Audio only")
+        } icon: { Icon(glyph: .volume, size: 24) }
           .padding().background(palette.chromeOpaqueSurface, in: RoundedRectangle(cornerRadius: 12))
           .allowsHitTesting(false)
       }
-      if model.isLoading || (!model.isReadyForDisplay && !model.isAudioOnly && !model.isPaused && model.errorMessage == nil) {
+      Color.clear.contentShape(Rectangle())
+        .onTapGesture {
+          controlsVisible.toggle()
+          interaction += 1
+        }
+        .accessibilityLabel(controlsVisible ? "Hide playback controls" : "Show playback controls")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHidden(voiceOver)
+        .accessibilityIdentifier("mobile-controls-toggle")
+      if model.isLoading || (!model.isReadyForDisplay && !model.isAudioOnly && !model.isPaused
+                             && !model.isExternalPlayback && model.errorMessage == nil) {
         ProgressView("Loading stream")
           .accessibilityIdentifier("mobile-video-loading")
           .padding().background(palette.chromeOpaqueSurface, in: RoundedRectangle(cornerRadius: 12))
           .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .contentShape(Rectangle())
+          .allowsHitTesting(false)
       }
       if let error = model.errorMessage {
         MobileStatusView(message: error) { model.retry() }
           .background(palette.chromeOpaqueSurface)
       }
+      if controlsVisible || held {
+        MobilePlayerControls(
+          model: model, viewerCount: channel.viewerCount, hideChat: $hideChat, isFullscreen: isFullscreen,
+          onClose: onClose,
+          onFullscreen: { interaction += 1; onFullscreen() },
+          onQuality: { showQuality = true },
+          onShare: { showShare = true },
+          onInteraction: { interaction += 1 },
+          onRoutes: { presenting in
+            showRoutes = presenting
+            if presenting { model.prepareForAirPlay() }
+          })
+      }
+    }
+    .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: controlsVisible)
+    .task(id: HideState(interaction: interaction, held: held)) {
+      guard !held else { return }
+      do { try await Task.sleep(for: .seconds(4)) } catch { return }
+      controlsVisible = false
+    }
+    .sheet(isPresented: $showQuality) {
+      MobileQualitySheet(model: model)
+        .presentationDetents([.medium, .large])
+    }
+    .sheet(isPresented: $showShare) {
+      MobileShareSheet(url: URL(string: "https://www.twitch.tv/")!.appendingPathComponent(channel.login))
+        .presentationDetents([.medium, .large])
     }
   }
 }
 
 struct MobilePlayerSurface: UIViewControllerRepresentable {
   let player: AVPlayer
+  let onScene: (UIWindowScene) -> Void
   let onReady: (Bool, AVPlayer) -> Void
 
   func makeCoordinator() -> Coordinator { Coordinator(onReady: onReady) }
 
-  func makeUIViewController(context: Context) -> AVPlayerViewController {
-    let controller = AVPlayerViewController()
+  func makeUIViewController(context: Context) -> MobileVideoController {
+    let controller = MobileVideoController()
+    controller.onScene = onScene
     controller.player = player
-    controller.showsPlaybackControls = true
+    // Keep AVKit rendering, but use the same dedicated-control approach as tvOS.
+    controller.showsPlaybackControls = false
+    controller.view.isUserInteractionEnabled = false
     controller.allowsPictureInPicturePlayback = false
     context.coordinator.observe(controller)
     return controller
   }
 
-  func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+  func updateUIViewController(_ controller: MobileVideoController, context: Context) {
     context.coordinator.onReady = onReady
+    controller.onScene = onScene
     if controller.player !== player { controller.player = player }
   }
 
-  static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Coordinator) {
+  static func dismantleUIViewController(_ controller: MobileVideoController, coordinator: Coordinator) {
     // Layout transitions can replace the surface without ending the stream.
     coordinator.observation = nil
     controller.player = nil
+  }
+
+  final class MobileVideoController: AVPlayerViewController {
+    var onScene: ((UIWindowScene) -> Void)?
+
+    override func viewDidAppear(_ animated: Bool) {
+      super.viewDidAppear(animated)
+      if let scene = view.window?.windowScene { onScene?(scene) }
+    }
   }
 
   @MainActor
