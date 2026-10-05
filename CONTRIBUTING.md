@@ -17,7 +17,7 @@ what you want and why is plenty.
 
 ## Requirements
 
-- macOS with Xcode installed (targets **tvOS 18+**).
+- macOS with Xcode installed (targets **tvOS 18+** and **iOS/iPadOS 18+**).
 - Homebrew tools:
 
   ```bash
@@ -47,6 +47,12 @@ Build for the tvOS simulator:
 For real Apple TV deployment, use a valid signing team and a device destination.
 Several features (live playback, Top Shelf) only work on real hardware.
 
+For the initial iPhone/iPad app, use scheme `StrozzMobile` and destination
+`generic/platform=iOS Simulator`. Its source selection shares services with the
+TV target but excludes the TV interface and Top Shelf extension. See the
+[mobile setup and scope](README.md#iphone-and-ipad) for supported features and
+simulator test commands. Use the build wrappers for both platforms.
+
 ## Twitch auth setup (no committed secrets)
 
 Twitch device auth needs a Twitch app `client_id`, but you don't commit it to
@@ -73,6 +79,8 @@ your ID stays local.
 
 On Apple TV, sign-in uses the Twitch Device Code flow: start sign-in on the TV,
 then complete approval on your phone or browser using the shown code/link.
+On iPhone/iPad, open the approval link from Account on that device and return to
+Strozz after approving.
 
 ### Working in git worktrees
 
@@ -107,7 +115,7 @@ automatically — you should not normally edit version numbers by hand:
 Manual bump (e.g. a major release): run `tools/bump-version.sh` or edit
 `MARKETING_VERSION` in `project.yml`, then `tools/generate-project.sh`.
 
-Releases ship to TestFlight with fastlane using an App Store Connect API key:
+The current **tvOS** release lanes ship to TestFlight with fastlane using an App Store Connect API key:
 
 ```bash
 cp .env.fastlane.example .env.fastlane   # fill in ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH

@@ -10,6 +10,7 @@ import io
 import json
 from pathlib import Path
 import shutil
+import argparse
 
 import cairosvg
 import numpy as np
@@ -100,9 +101,21 @@ def generate(assets: Path = ASSETS) -> list[Path]:
         assets / "SplashScreenLogo.imageset", 200, 200,
         lambda w, h: centered_logo(logo, w, h, 1),
     ))
+    outputs.extend(generate_mobile(assets))
     return outputs
 
 
+def generate_mobile(assets: Path = ASSETS) -> list[Path]:
+    image = radial_background(1024, 1024).convert("RGBA")
+    image.alpha_composite(centered_logo(render_logo(), 1024, 1024, ICON_LOGO_FRACTION))
+    output = assets / "MobileAppIcon.appiconset/mobile-icon.png"
+    image.convert("RGB").save(output)
+    return [output]
+
+
 if __name__ == "__main__":
-    for output in generate():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mobile-only", action="store_true")
+    args = parser.parse_args()
+    for output in generate_mobile() if args.mobile_only else generate():
         print(f"wrote {output.relative_to(ROOT)}")

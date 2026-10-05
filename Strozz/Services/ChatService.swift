@@ -520,7 +520,9 @@ final class ChatService {
   /// bounded caches don't sit full of dead entries.
   static func clearLineCaches() {
     RichChatLineView.clearSegmentCache()
+    #if os(tvOS)
     ChatView.clearLineCaches()
+    #endif
   }
 
   /// Registers a single process-wide memory-pressure observer that drops the
