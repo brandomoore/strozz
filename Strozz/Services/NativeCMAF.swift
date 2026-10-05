@@ -139,6 +139,9 @@ enum NativeCMAF {
     let url: URL
     let duration: Double?
     let date: Date?
+    let initialization: URL?
+    let discontinuity: Int
+    let tags: [String]
   }
 
   struct Manifest: Sendable {
@@ -146,6 +149,8 @@ enum NativeCMAF {
     let targetDuration: Int
     let discontinuity: Int
     let entries: [Entry]
+    let ended: Bool
+    let hasPrefetch: Bool
   }
 
   static func attributes(_ line: String) -> [String: String] {
@@ -156,11 +161,20 @@ enum NativeCMAF {
       if character == "\"" { quoted.toggle() }
       if character == ",", !quoted { fields.append(field); field = "" } else { field.append(character) }
     }
+
     fields.append(field)
     return fields.reduce(into: [:]) { result, field in
       let pair = field.split(separator: "=", maxSplits: 1).map(String.init)
       if pair.count == 2 { result[pair[0]] = pair[1].trimmingCharacters(in: CharacterSet(charactersIn: "\"")) }
     }
+  }
+
+  static func isAudioOnlyVariant(_ line: String) -> Bool {
+    let fields = attributes(String(line.dropFirst("#EXT-X-STREAM-INF:".count)))
+    if fields["VIDEO"] == "audio_only" { return true }
+    let codecs = (fields["CODECS"] ?? "").split(separator: ",")
+    return fields["RESOLUTION"] == nil && !codecs.isEmpty
+      && codecs.allSatisfy { $0.hasPrefix("mp4a") || $0.hasPrefix("ac-3") || $0.hasPrefix("ec-3") }
   }
 
   static func manifest(_ text: String, url: URL) throws -> Manifest {
@@ -173,16 +187,22 @@ enum NativeCMAF {
     var date: Date?
     var entries: [Entry] = []
     var prefetch = false
+    var ended = false
+    var tags: [String] = []
     for raw in text.components(separatedBy: .newlines) {
       let line = raw.trimmingCharacters(in: .whitespaces)
       let value = line.split(separator: ":", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
-      if line == "#EXT-X-DISCONTINUITY" || line == "#EXT-X-ENDLIST" || line == "#EXT-X-GAP"
+      if line == "#EXT-X-GAP"
         || line.hasPrefix("#EXT-X-KEY:") || line.hasPrefix("#EXT-X-BYTERANGE:") {
         throw NativeHLSError.transition
       }
-      if line.hasPrefix("#EXT-X-DATERANGE:") {
-        guard ["timestamp", "twitch-session", "twitch-stream-source", "twitch-trigger"]
-          .contains(attributes(value)["CLASS"] ?? "") else { throw NativeHLSError.transition }
+      if line == "#EXT-X-DISCONTINUITY" {
+        discontinuity += 1
+        date = nil
+      } else if line == "#EXT-X-ENDLIST" {
+        ended = true
+      } else if line.hasPrefix("#EXT-X-DATERANGE:") {
+        tags.append(line)
       } else if line.hasPrefix("#EXT-X-MEDIA-SEQUENCE:") {
         sequence = Int(value)
       } else if line.hasPrefix("#EXT-X-TARGETDURATION:") {
@@ -213,15 +233,17 @@ enum NativeCMAF {
         guard let number = sequence, let media = URL(string: path, relativeTo: url)?.absoluteURL,
           media.scheme == "https" else { throw NativeHLSError.invalidMedia }
         entries.append(Entry(sequence: number, url: media, duration: isPrefetch ? nil : duration,
-                             date: isPrefetch ? nil : date))
+                             date: isPrefetch ? nil : date, initialization: map,
+                             discontinuity: discontinuity, tags: tags))
+        tags.removeAll()
         sequence = number + 1
         if let duration { date = date?.addingTimeInterval(duration) }
         duration = nil
         prefetch = prefetch || isPrefetch
       }
     }
-    guard prefetch, map == nil || map?.scheme == "https",
+    guard !entries.isEmpty, map == nil || map?.scheme == "https",
       entries.contains(where: { $0.date != nil }) else { throw NativeHLSError.unsupported }
-    return Manifest(initialization: map, targetDuration: targetDuration, discontinuity: discontinuity, entries: entries)
+    return Manifest(initialization: map, targetDuration: targetDuration, discontinuity: discontinuity, entries: entries, ended: ended, hasPrefetch: prefetch)
   }
 }

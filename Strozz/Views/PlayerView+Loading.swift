@@ -1219,11 +1219,15 @@ extension PlayerView {
       model.nativeStartupAligned = true
       item.automaticallyPreservesTimeOffsetFromLive = true
       let generation = model.nativeGeneration
-      player.seek(to: .positiveInfinity) { finished in
-        Task { @MainActor in
-          guard generation == model.nativeGeneration else { return }
-          recordPlaybackEvent("native_startup_live_alignment", flags: ["finished": finished])
-        }
+      Task { @MainActor in
+        guard let native = model.nativeHLS, let target = await native.origin.liveTargetDate(),
+          generation == model.nativeGeneration, item === player.currentItem,
+          pinnedToLive, !isUserPaused, !isScrubbing else { return }
+        let finished = await item.seek(to: target)
+        guard generation == model.nativeGeneration else { return }
+        recordPlaybackEvent("native_startup_live_alignment",
+          metrics: ["target_source_age_seconds": Date().timeIntervalSince(target)],
+          flags: ["finished": finished])
       }
     }
     let hasSeekableRange = item.seekableTimeRanges.last?.timeRangeValue != nil

@@ -23,6 +23,7 @@ struct NativeTransportStream {
   private var partOffset = 0
   private var partNumber = 0
   private var lastContinuity: Int?
+  private var lastVideoPacket: Data?
   private var hasInitialIDR = false
   private var initialVideo = Data()
 
@@ -52,7 +53,10 @@ struct NativeTransportStream {
     if adaptation & 2 != 0 {
       position += 1 + Int(b[4])
       guard position <= 188 else { throw NativeHLSError.invalidMedia }
-      if b[4] > 0, b[5] & 0x80 != 0 { throw NativeHLSError.transition }
+      if b[4] > 0, b[5] & 0x80 != 0, pid == videoPID {
+        guard firstClock == nil else { throw NativeHLSError.transition }
+        lastContinuity = nil
+      }
     }
     let offset = byteCount
     byteCount += 188
@@ -66,9 +70,11 @@ struct NativeTransportStream {
     guard pid == videoPID else { return nil }
     let continuity = Int(b[3] & 15)
     if let lastContinuity, continuity != (lastContinuity + 1) % 16 {
+      if continuity == lastContinuity, lastVideoPacket == packet { return nil }
       throw NativeHLSError.transition
     }
     lastContinuity = continuity
+    lastVideoPacket = packet
     var result: Range?
     var videoOffset = 0
     if start {

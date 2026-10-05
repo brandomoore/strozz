@@ -67,6 +67,14 @@ final class NativeTransportStreamTests: XCTestCase {
     XCTAssertThrowsError(try value.append(video(frame: 2, clock: 3000)))
   }
 
+  func testIdenticalRetransmittedPacketDoesNotBreakContinuity() throws {
+    var value = try parser()
+    let first = video(frame: 0, clock: 0, idr: true)
+    _ = try value.append(first)
+    XCTAssertNil(try value.append(first))
+    XCTAssertNoThrow(try value.append(video(frame: 1, clock: 1500)))
+  }
+
   func testInvalidTimingAndNonRandomAccessStartFailExplicitly() throws {
     XCTAssertThrowsError(try NativeTransportStream.timestamp(Data(repeating: 0, count: 5), at: 0))
     var value = try parser()

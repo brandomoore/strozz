@@ -41,6 +41,19 @@ on-device observation). Hypotheses go under "Open questions" until proven.
 - When native activation fails, its row disappears for that channel and the
   checkmark moves to the actual fallback mode. The old **Auto · Low Latency**
   label refers to the original prefetch engine, not native partial playback.
+- Normal HLS discontinuities, initialization-map changes, and ad date ranges are
+  now retained per segment rather than treated as fatal. The native decoder
+  timeline resets at a period boundary; completed ad playlists without prefetch
+  use a conservative hold-back until live parts resume. Encryption, missing
+  packets, and malformed media still fail explicitly.
+- Native Auto excludes audio-only variants from its adaptive **video** master.
+  The existing explicit Audio Only quality remains available on the normal path.
+  Modern Twitch masters may identify audio-only entries solely by audio codecs
+  and absence of a resolution, without the old `VIDEO="audio_only"` attribute.
+- Cold startup seeds the rewind window from verified complete-segment metadata
+  instead of downloading all historical media. Only the newest segment and
+  live edge are indexed. Idle renditions resume their retained timeline, and
+  active media requests keep their indexer alive during adaptive switches.
 
 **Physical-device finding:** the first installed integration was blocked by a
 persisted legacy proxy-off setting. Device telemetry on Caedrel showed
@@ -56,6 +69,17 @@ run on the paired Apple TV, passed with MPEG-TS at 50/50 fresh-frame samples and
 entries. Both used a 1.5s native live offset. These are bounded measurements,
 not a universal latency guarantee or proof that all network/ad transitions
 work. Follow-up changes realign after a native quality transition as well.
+
+**Sustained full-app verification:** after the transition fixes, the actual
+`PlayerView` (including its recovery loops, not just a bare AVPlayer) completed
+six minutes each on live TS and CMAF broadcasts on the paired TV. Recorded samples
+from 20s through 350s stayed native with no fallback: roughly 2.78s source-date
+age for TS and 2.60s for CMAF. Both playback test cases passed their assertions.
+The overall Xcode command nevertheless returned 65 because its remote
+test-runner connection was invalidated afterward; that infrastructure error is
+not represented as a clean test-command pass. Earlier failed long runs are
+retained in session evidence. This does not establish unlimited-session or
+every-ad-transition reliability.
 
 - Twitch's own low-latency relies on a proprietary HLS tag AVPlayer ignores.
 - We close most of that gap with an in-process proxy that promotes those
