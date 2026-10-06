@@ -58,13 +58,16 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
     var itemBeforeDrift: AVPlayerItem?
     var initialDrift: Double?
     var remainingDrift: Double?
+    var previousCorrectionRate: Float = 1
+    var correctionTransitions = 0
     var ages: [Double] = []
     var observations: [String] = []
     var recoveryStartedAt: TimeInterval?
     var recoveryFinishedAt: TimeInterval?
     var steadySamples = 0
     var steadyFreshFrames = 0
-    for second in 0..<180 {
+    let durationSeconds = probeDrift ? 240 : 180
+    for second in 0..<durationSeconds {
       try await Task.sleep(for: .seconds(1))
       if !probeRecovery && !probeDrift && second == 45 { model.player.currentItem?.preferredPeakBitRate = 1_500_000 }
       if !probeRecovery && !probeDrift && second == 90 { model.player.currentItem?.preferredPeakBitRate = 0 }
@@ -75,14 +78,17 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
       if probeDrift && second == 45 {
         if let target = await model.nativeHLS?.origin.liveTargetDate(),
            let date = model.player.currentItem?.currentDate() {
-          initialDrift = target.timeIntervalSince(date)
+          initialDrift = target.timeIntervalSince(date) - (model.chatSyncBaseline.nativeCushion ?? 0)
         }
         model.player.play()
       }
       if probeDrift && second > 45,
          let target = await model.nativeHLS?.origin.liveTargetDate(),
          let date = model.player.currentItem?.currentDate() {
-        remainingDrift = target.timeIntervalSince(date)
+        remainingDrift = target.timeIntervalSince(date) - (model.chatSyncBaseline.nativeCushion ?? 0)
+        let correctionRate = model.nativeCatchUpAppliedRate
+        if abs(correctionRate - previousCorrectionRate) > 0.001 { correctionTransitions += 1 }
+        previousCorrectionRate = correctionRate
       }
       if probeRecovery && second == 60 {
         engineBeforeRetry = model.nativeHLS
@@ -92,6 +98,14 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
       maximumRate = max(maximumRate, model.player.rate)
       let clock = model.player.currentTime().seconds
       let freshFrame = model.playbackTelemetry.videoFrameAge.map { $0 < 4 } ?? false
+      if probeDrift && second == 15 {
+        XCTAssertTrue(model.nativeStartupComplete)
+        let targetDate = await model.nativeHLS?.origin.liveTargetDate()
+        let target = try XCTUnwrap(targetDate)
+        let displayed = try XCTUnwrap(model.player.currentItem?.currentDate())
+        XCTAssertLessThanOrEqual(target.timeIntervalSince(displayed), NativeLiveCatchUp.minimumExcessSeconds,
+                                 "Initial playback must start near live without manual correction")
+      }
       if probeRecovery, recoveryStartedAt != nil, recoveryFinishedAt == nil,
          model.nativeHLS !== engineBeforeRetry, model.isUsingNativeHLS, freshFrame,
          clock > previousClock + 0.05,
@@ -137,17 +151,20 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
       recoveryEvidence.lifetime = .keepAlways
       add(recoveryEvidence)
     } else {
-      XCTAssertGreaterThanOrEqual(freshFrames, 157, "An advancing clock alone is not proof of decoded video")
+      XCTAssertGreaterThanOrEqual(freshFrames, durationSeconds - 23, "An advancing clock alone is not proof of decoded video")
     }
-    XCTAssertGreaterThanOrEqual(advancing, 157)
+    XCTAssertGreaterThanOrEqual(advancing, durationSeconds - 23)
     XCTAssertLessThanOrEqual(maximumRate, NativeLiveCatchUp.maximumRate)
     if probeDrift {
       XCTAssertNotNil(itemBeforeDrift)
       XCTAssertTrue(model.player.currentItem === itemBeforeDrift, "Drift must not replace the player item")
       XCTAssertTrue(model.nativeRecovery.attempts.isEmpty, "Drift must not require native reloads")
       XCTAssertGreaterThanOrEqual(try XCTUnwrap(initialDrift), NativeLiveCatchUp.minimumExcessSeconds)
-      XCTAssertLessThan(try XCTUnwrap(remainingDrift), try XCTUnwrap(initialDrift) - 1)
+      XCTAssertLessThanOrEqual(try XCTUnwrap(remainingDrift), NativeLiveCatchUp.settledExcessSeconds + 0.5,
+                              "Catch-up must reach live, not merely reduce the delay")
       XCTAssertGreaterThan(maximumRate, 1, "Buffered drift should be corrected by rate")
+      XCTAssertEqual(model.player.rate, 1, "Rate should return to normal after reaching live")
+      XCTAssertEqual(correctionTransitions, 2, "One entry and one exit, not repeated speed changes")
     }
     let sortedAges = ages.sorted()
     XCTAssertFalse(sortedAges.isEmpty)

@@ -72,6 +72,33 @@ final class LiveChatSyncBaselineTests: XCTestCase {
     for t in 0...6 { observe(&state, time: Double(t), delay: delay, nativeAge: nativeAge) }
   }
 
+  func testTimestampJumpDuringAStallCannotHoldChatForTwentyNineMinutes() {
+    var state = LiveChatSyncBaseline()
+    calibrate(&state)
+    for second in 7...15 {
+      state.observe(context: "channel/twitch", itemID: item,
+        playbackDate: epoch.addingTimeInterval(3 - 1744), playbackTime: 3,
+        liveTarget: nil, canCalibrate: false,
+        now: epoch.addingTimeInterval(Double(second)), uptime: Double(second))
+      XCTAssertNil(state.extraDelay)
+      XCTAssertEqual(state.reference, .unavailable)
+      XCTAssertEqual(state.normalDelay, 3)
+    }
+    state.observe(context: "channel/twitch", itemID: item,
+      playbackDate: epoch.addingTimeInterval(4), playbackTime: 4,
+      liveTarget: epoch.addingTimeInterval(4), canCalibrate: false,
+      now: epoch.addingTimeInterval(16), uptime: 16)
+    XCTAssertEqual(state.extraDelay, 0)
+    XCTAssertEqual(state.reference, .nativeLiveTarget)
+  }
+
+  func testConsistentManualRewindKeepsItsRealChatDelay() {
+    XCTAssertTrue(PlaybackDateContinuity.isConsistent(
+      previousDate: epoch, previousClock: 100, date: epoch.addingTimeInterval(-60), clock: 40))
+    XCTAssertFalse(PlaybackDateContinuity.isConsistent(
+      previousDate: epoch, previousClock: 100, date: epoch.addingTimeInterval(-1744), clock: 100))
+  }
+
   func testNormalThreeSecondPlaybackDoesNotDelayChat() {
     var state = LiveChatSyncBaseline()
     calibrate(&state)

@@ -44,6 +44,7 @@ final class MobilePlaybackModel {
   @ObservationIgnored private var routeObserver: NSKeyValueObservation?
   @ObservationIgnored private var baseline = LiveChatSyncBaseline()
   @ObservationIgnored private var catchUp = NativeLiveCatchUp()
+  @ObservationIgnored private var catchUpRateChange: (uptime: TimeInterval, clock: Double, rate: Float)?
   @ObservationIgnored private var followsLive = true
   @ObservationIgnored private var suspendedPosition: Position?
   @ObservationIgnored private var loadingPosition: Position?
@@ -198,6 +199,7 @@ final class MobilePlaybackModel {
     engine?.stop()
     engine = nil
     catchUp = NativeLiveCatchUp()
+    catchUpRateChange = nil
     baseline.itemChanged()
     extraChatDelay = nil
     chat.configureChatSync(enabled: false, delaySeconds: 0)
@@ -260,24 +262,41 @@ final class MobilePlaybackModel {
         player.allowsExternalPlayback = selection != .native
         if position.shouldPlay && position.date == nil { player.play() }
         let deadline = ContinuousClock.now.advanced(by: .seconds(30))
-        while item.status != .readyToPlay {
+        while item.status != .readyToPlay ||
+          (selection == .native && position.shouldPlay && item.seekableTimeRanges.isEmpty) {
           guard isCurrent(request) else { return }
           if item.status == .failed { throw item.error ?? MobilePlaybackError.unavailable }
           if ContinuousClock.now >= deadline { throw MobilePlaybackError.timeout }
           try await Task.sleep(for: .milliseconds(100))
         }
         guard isCurrent(request) else { return }
-        if let date = position.date {
+        var needsLiveAlignment = selection == .native && position.shouldPlay && position.date == nil
+        if needsLiveAlignment, let native = engine {
+          let target = await native.origin.liveTargetDate()
+          guard isCurrent(request) else { return }
+          if let target, let displayed = item.currentDate(), player.timeControlStatus == .playing,
+             target.timeIntervalSince(displayed) <= NativeLiveCatchUp.minimumExcessSeconds {
+            needsLiveAlignment = false
+          }
+        }
+        if position.date != nil || needsLiveAlignment {
+          if selection == .native {
+            let offset = item.recommendedTimeOffsetFromLive
+            if offset.seconds.isFinite, offset.seconds >= 0 { item.configuredTimeOffsetFromLive = offset }
+            item.automaticallyPreservesTimeOffsetFromLive = false
+          }
           let timeout = Task { [weak self, weak item] in
             do { try await Task.sleep(for: .seconds(5)) } catch { return }
             guard self?.isCurrent(request) == true else { return }
             item?.cancelPendingSeeks()
           }
-          let restored = await player.seek(to: date)
+          let restored: Bool
+          if let date = position.date { restored = await player.seek(to: date) }
+          else { restored = await player.seek(to: .positiveInfinity) }
           timeout.cancel()
           guard isCurrent(request) else { return }
           if !restored {
-            throw MobilePlaybackError.positionUnavailable
+            throw position.date == nil ? MobilePlaybackError.timeout : MobilePlaybackError.positionUnavailable
           }
           if position.shouldPlay { player.play() }
         }
@@ -371,6 +390,13 @@ final class MobilePlaybackModel {
     ) { [weak self] _ in
       MainActor.assumeIsolated {
         guard let self, self.isCurrent(request) else { return }
+        if let change = self.catchUpRateChange {
+          let elapsed = ProcessInfo.processInfo.systemUptime - change.uptime
+          let advance = item.currentTime().seconds - change.clock
+          if (0...1).contains(elapsed), abs(advance - elapsed * Double(change.rate)) < 0.5 {
+            return
+          }
+        }
         self.stopFollowingLive()
       }
     }
@@ -381,7 +407,8 @@ final class MobilePlaybackModel {
     if catchUp.isActive, player.timeControlStatus == .playing, player.rate > 1 {
       player.rate = 1
     }
-    catchUp.interrupt()
+    catchUp.interrupt(at: ProcessInfo.processInfo.systemUptime)
+    catchUpRateChange = nil
   }
 
   private func startMonitor(item: AVPlayerItem, request: UUID) {
@@ -442,11 +469,12 @@ final class MobilePlaybackModel {
         let rate = catchUp.observe(.init(
           uptime: uptime, clock: clock, playbackDate: item.currentDate(), targetDate: target,
           rendition: "\(item.presentationSize)", isPlaying: playing, buffer: buffer,
-          allowed: followsLive && engine != nil && !isExternalPlayback,
+          allowed: followsLive && engine != nil && !isExternalPlayback && baseline.reference != .unavailable,
           hasFreshVideo: receivedVideoFrame && uptime - lastVideoFrame < 4,
-          playbackRate: player.rate
+          playbackRate: player.rate, normalOffset: baseline.nativeCushion ?? 0
         ))
         if player.timeControlStatus == .playing, abs(player.rate - rate) >= 0.005 {
+          catchUpRateChange = (ProcessInfo.processInfo.systemUptime, item.currentTime().seconds, rate)
           player.rate = rate
         }
       }

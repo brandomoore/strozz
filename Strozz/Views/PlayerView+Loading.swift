@@ -273,6 +273,10 @@ extension PlayerView {
         if item.status == .readyToPlay, isUserPaused || isScrubbing {
           return true
         }
+        if model.isUsingNativeHLS, !model.nativeStartupComplete {
+          try? await Task.sleep(for: .milliseconds(50))
+          continue
+        }
 
         if model.startupProgress.observe(
           clock: CMTimeGetSeconds(item.currentTime()),
@@ -470,10 +474,12 @@ extension PlayerView {
       recordPlaybackEvent("native_hls_position_restore_failed", level: .error)
       return
     }
+    model.nativeStartupComplete = true
     if canResumeFallback(item: item, generation: generation) { startPlayback() }
   }
 
   func suspendNativePlayback(reason: String = "background") {
+    cancelNativeStartup()
     cancelNativeCatchUp(reason: reason)
     guard model.isUsingNativeHLS else { return }
     model.nativeNeedsRefresh = true
@@ -553,7 +559,8 @@ extension PlayerView {
   /// The edge gap is kept only as a fallback when no PROGRAM-DATE-TIME is present,
   /// and is still surfaced separately in the Diagnostics overlay.
   var rawLatencySeconds: Double? {
-    wallClockLatencySeconds ?? liveEdgeLatencySeconds
+    if model.isUsingNativeHLS, wallClockLowConfidenceStreak >= wallClockUnavailableSamples { return nil }
+    return wallClockLatencySeconds ?? liveEdgeLatencySeconds
   }
 
   /// Smoothed value actually shown in the UI, to stop the number jumping around.
@@ -624,7 +631,11 @@ extension PlayerView {
       attributes: ["start_policy": "native_buffering"],
       metrics: ["rate": 1.0]
     )
-    // Let AVPlayer establish its startup/rebuffer cushion on both live sources.
+    if model.isUsingNativeHLS, !model.nativeStartupComplete, pinnedToLive {
+      startNativePlaybackAtLiveEdge()
+      return
+    }
+    if model.isUsingNativeHLS { model.nativeStartupComplete = true }
     player.play()
   }
 
@@ -1372,6 +1383,7 @@ extension PlayerView {
     if let playbackDate = item.currentDate() {
       let wallClock = Date().timeIntervalSince(playbackDate)
       let playbackSeconds = CMTimeGetSeconds(item.currentTime())
+      var mappingConsistent = true
 
       if let lastDate = lastPlaybackDateSample,
         let lastPlaybackSeconds = lastPlaybackTimeSampleSeconds,
@@ -1381,18 +1393,23 @@ extension PlayerView {
         let playbackAdvance = playbackSeconds - lastPlaybackSeconds
         let dateAdvance = playbackDate.timeIntervalSince(lastDate)
 
-        if playbackAdvance >= wallClockStalePlaybackAdvanceThresholdSeconds,
+        mappingConsistent = PlaybackDateContinuity.isConsistent(
+          previousDate: lastDate, previousClock: lastPlaybackSeconds,
+          date: playbackDate, clock: playbackSeconds)
+        if !mappingConsistent {
+          wallClockLowConfidenceStreak = wallClockUnavailableSamples
+        } else if playbackAdvance >= wallClockStalePlaybackAdvanceThresholdSeconds,
           abs(dateAdvance) <= wallClockStaleDateDeltaEpsilonSeconds
         {
           wallClockLowConfidenceStreak += 1
-        } else if wallClockLowConfidenceStreak > 0 {
+        } else if wallClockLowConfidenceStreak > 0, playbackAdvance > 0.2 {
           wallClockLowConfidenceStreak -= 1
         }
       }
 
-      lastPlaybackDateSample = playbackDate
-      if playbackSeconds.isFinite {
-        lastPlaybackTimeSampleSeconds = playbackSeconds
+      if mappingConsistent {
+        lastPlaybackDateSample = playbackDate
+        if playbackSeconds.isFinite { lastPlaybackTimeSampleSeconds = playbackSeconds }
       }
 
       let hasValidWallClock = wallClock.isFinite && wallClock >= 0
@@ -1402,7 +1419,7 @@ extension PlayerView {
 
       if hasReliableWallClock {
         wallClockLatencySeconds = wallClock
-      } else if !hasValidWallClock {
+      } else if !hasValidWallClock || !mappingConsistent {
         wallClockLatencySeconds = nil
       } else {
         // Wall-clock telemetry appears stale. Keep the last reliable

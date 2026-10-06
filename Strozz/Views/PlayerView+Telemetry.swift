@@ -124,6 +124,8 @@ extension PlayerView {
     snapshot.metrics["video_frame_age_seconds"] = model.playbackTelemetry.videoFrameAge
     snapshot.flags["using_alt_source"] = isUsingAltSource
     snapshot.flags["native_ll_hls"] = model.isUsingNativeHLS
+    snapshot.flags["native_startup_complete"] = model.nativeStartupComplete
+    snapshot.flags["playback_date_mapping_valid"] = wallClockLowConfidenceStreak < wallClockUnavailableSamples
     snapshot.flags["native_catch_up_active"] = model.nativeCatchUp.isActive
     snapshot.metrics["native_catch_up_rate"] = Double(model.nativeCatchUp.rate)
     snapshot.metrics["native_catch_up_excess_seconds"] = model.nativeCatchUp.extraDelay
@@ -290,6 +292,13 @@ extension PlayerView {
 
   func replacePlaybackItem(with item: AVPlayerItem?) {
     if item !== player.currentItem {
+      cancelNativeStartup()
+      model.nativeStartupComplete = (item?.asset as? AVURLAsset)?.url.scheme != NativeLowLatencyHLS.scheme
+      lastPlaybackDateSample = nil
+      lastPlaybackTimeSampleSeconds = nil
+      wallClockLowConfidenceStreak = 0
+      wallClockLatencySeconds = nil
+      smoothedLatencySeconds = nil
       cancelNativeCatchUp(reason: "item_replaced")
       model.nativeCatchUp = NativeLiveCatchUp()
     }

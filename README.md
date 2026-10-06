@@ -36,7 +36,8 @@ The feature list below describes the Apple TV app. See
   reading along.
 - **Low latency by default.** A low-latency mode closes most of the gap to the
   live edge, so you're not minutes behind the moment. Healthy playback that
-  drifts behind catches up gently (up to 1.08x), without an automatic seek/reload.
+  drifts behind uses a held 1.05x catch-up rate, without an automatic seek/reload
+  or repeated speed changes as the segment buffer fluctuates.
 - **Rewind live.** Seek back within the live window (DVR) to catch what you
   missed without leaving the stream.
 - **Pick your quality.** Choose Auto or an explicit resolution, ordered

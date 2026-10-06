@@ -505,21 +505,23 @@ of stalling, and the slow-down rides out short buffer dips.
 ### Coordinated native catch-up
 
 Native drift correction never seeks or replaces the player item.
-`NativeLiveCatchUp` requires four seconds of steady quality, advancing timestamps,
-fresh video and at least one second of buffered media before correcting a
-sustained gap of at least three seconds. It ramps at most 2% per sample, up to
-1.08x with pitch correction, and returns to 1x once excess is below 0.75 seconds.
-Available buffer headroom further limits the speed; at the one-second floor
-there is no speed-up. Low buffer, missing/stale timing or video, adaptive-quality
-changes, pause/scrub and leaving the live view remove the speed correction.
-The chat baseline is not recalibrated while speeding up.
+`NativeLiveCatchUp` requires four seconds of steady quality, advancing timestamps
+and fresh video before correcting sustained excess delay of at least three
+seconds. It enters at two seconds of forward buffer and **holds 1.05x**, rather
+than retargeting rate on each sample. It returns to 1x near the calibrated live
+position (0.75s excess), below 0.75s of buffer, on missing/stale timing or video,
+or if AVPlayer does not retain the requested rate. A fifteen-second cooldown
+prevents re-entry chatter. Pause/scrub, source changes and leaving live playback
+stop correction. The healthy native cushion is subtracted, and neither it nor
+chat's normal-delay baseline is recalibrated while speeding up.
 
 The reference is the rendition whose media is being requested, not the furthest
-ahead inactive rendition. AVPlayer establishes the initial native live start,
-then `automaticallyPreservesTimeOffsetFromLive` is turned off once startup
-progress/video is established. Leaving it enabled would let Apple seek forward
-on subsequent rebuffer, independently of the app; disabling it before startup
-can make AVPlayer start at the beginning of retained history. Explicit
+ahead inactive rendition. Startup is separate: prepare the native timeline behind
+the loading surface and verify that its initial position is near live. If not,
+perform one bounded initial live-edge alignment using AVPlayer's recommended
+offset before revealing playback. An already-live start is left untouched.
+`automaticallyPreservesTimeOffsetFromLive` is then off for ongoing playback so
+Apple cannot perform independent rebuffer seeks. Explicit
 viewer-requested seeks/Back to live still work, and genuinely failed/stalled
 playback retains bounded native recovery. Ordinary drift does not invoke it.
 
@@ -530,13 +532,21 @@ timeout, and a native hard-stall reload. There was no origin failure before the
 seek. This motivated replacing the automatic seek rather than shortening its
 timeout; it does not prove all Twitch interruptions are avoidable.
 
-A subsequent three-minute muted xQc simulator probe deliberately paused for
-five seconds to create drift. Rate correction then ran between 1x and 1.08x,
-reduced the extra delay, and retained the same native player item with no native
-recovery attempts. Existing advancing-clock/fresh-frame thresholds passed.
-The full TV suite executed 387 tests with six explicit opt-in tests skipped and
-zero failures. This bounded result is not a guarantee of interruption-free
-playback on every source or network.
+Build 1919's simulator check only established a reduction in delay, not full
+convergence. Physical TV telemetry then showed **129 rate commands in under three
+minutes, 128 followed by a time-jump notification within 300ms**, as latency grew
+from about three seconds to over nine. Rate was following the normal segment
+buffer sawtooth. The held-rate policy replaces that design; it does not restore
+the app-issued drift seek. The live convergence check now requires near-live
+startup, one catch-up entry and exit, return to normal rate, actual convergence
+to the calibrated edge, and no item replacement/native retries.
+
+A four-minute muted xQc simulator probe passed those stricter requirements after
+an induced five-second pause, including the existing advancing-clock/fresh-frame
+thresholds. The TV suite executed 396 tests with six opt-in skips and no failures;
+the mobile live-start/quality/foreground probe and six lifecycle tests also
+passed. These checks do not establish the corrected build's physical-TV outcome
+or eliminate every possible adaptive-rendition stall.
 
 Buddha's captured black-screen sequence also showed replacement attempts
 followed by `currentItem == nil` and an indefinite `noItemToPlay` wait.
@@ -592,6 +602,17 @@ final page. A gap before the first comment no longer causes repeated backward
 window resets. Network/parse failures show a replay error and retry with the
 same throttle instead of advertising successful readiness. Telemetry records
 live/replay mode, replay message count, frontier, requests, last refresh and errors.
+
+### Inconsistent timestamps during adaptive switches
+
+A later physical xQc switch from Source to 480p stalled at an unchanged player
+clock while `currentDate()` jumped backward by about 1744 seconds. The latency
+badge and chat sync inherited that false 29-minute delay; no matching backward
+seek occurred. Date continuity is now checked against playhead movement even
+while stalled, and rejected samples cannot replace the last trustworthy anchor.
+Invalid mappings are excluded from chat holds and rewind destinations; the
+latency display waits for trustworthy timing instead of substituting the
+inconsistent seekable window. Item replacement resets the mapping explicitly.
 
 ## Chat synchronization: extra delay, not total video latency
 

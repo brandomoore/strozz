@@ -1,5 +1,12 @@
 import Foundation
 
+enum PlaybackDateContinuity {
+  static func isConsistent(previousDate: Date, previousClock: Double, date: Date, clock: Double) -> Bool {
+    let difference = date.timeIntervalSince(previousDate) - (clock - previousClock)
+    return difference.isFinite && abs(difference) <= 0.5
+  }
+}
+
 enum ChatSyncDefaultsMigration {
   static func runIfNeeded(_ defaults: UserDefaults = .standard) {
     guard !defaults.bool(forKey: PersistenceKey.extraDelayChatDefaultApplied) else { return }
@@ -66,15 +73,14 @@ struct LiveChatSyncBaseline {
       return gap.isFinite ? gap : nil
     }
     let sample = Sample(time: uptime, clock: playbackTime, date: playbackDate, age: age, nativeGap: nativeGap)
-    defer { previous = sample }
 
     var progressing = false
     if let previous {
       let elapsed = uptime - previous.time
       let clockAdvance = playbackTime - previous.clock
-      let dateAdvance = playbackDate.timeIntervalSince(previous.date)
       // A stale AVPlayer date must not create an ever-growing chat delay.
-      if clockAdvance > 0.2, abs(dateAdvance - clockAdvance) > 0.5 {
+      if !PlaybackDateContinuity.isConsistent(
+        previousDate: previous.date, previousClock: previous.clock, date: playbackDate, clock: playbackTime) {
         calibration.removeAll()
         extraDelay = nil
         reference = .unavailable
@@ -83,6 +89,7 @@ struct LiveChatSyncBaseline {
       progressing = elapsed >= 0.5 && elapsed <= 2.5
         && clockAdvance >= elapsed * 0.8 && clockAdvance <= elapsed * 1.2
     }
+    defer { previous = sample }
 
     if canCalibrate, progressing, nativeGap.map({ (-0.75...2).contains($0) }) ?? true {
       if calibration.last.map({ ($0.nativeGap == nil) != (nativeGap == nil) }) == true {

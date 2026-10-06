@@ -6,6 +6,8 @@ extension PlayerView {
     model.isUsingNativeHLS && !model.nativeNeedsRefresh && !isVOD && !isUsingAltSource
       && !isLoading && !isOffline && errorMessage == nil && !isRecoveringPlayback
       && didRequestPlayback && model.startupProgress.hasStarted
+      && model.nativeStartupComplete
+      && wallClockLowConfidenceStreak < wallClockUnavailableSamples
       && pinnedToLive && shouldPlayAltSource && scrubTargetSeconds == nil
       && !vodHandoffTransitionInFlight && !model.livePlaybackReturn.isAway
   }
@@ -19,7 +21,7 @@ extension PlayerView {
       abs(player.rate - previousRate) < 0.001 {
       player.rate = 1
     }
-    model.nativeCatchUp.interrupt()
+    model.nativeCatchUp.interrupt(at: ProcessInfo.processInfo.systemUptime)
     model.nativeCatchUpAppliedRate = 1
     model.nativeCatchUpItem = nil
     if previousRate > 1 {
@@ -48,7 +50,7 @@ extension PlayerView {
       isPlaying: player.timeControlStatus == .playing,
       buffer: bufferAheadSeconds(item) ?? 0, allowed: allowsNativeCatchUp,
       hasFreshVideo: model.playbackTelemetry.videoFrameAge.map { $0 < 4 } ?? false,
-      playbackRate: player.rate))
+      playbackRate: player.rate, normalOffset: model.chatSyncBaseline.nativeCushion ?? 0))
     applyNativeCatchUpRate(rate, item: item)
   }
 
@@ -56,7 +58,16 @@ extension PlayerView {
     guard allowsNativeCatchUp, item === player.currentItem,
       player.timeControlStatus == .playing, player.rate > 0,
       rate.isFinite, (1...NativeLiveCatchUp.maximumRate).contains(rate) else { return }
-    guard abs(player.rate - rate) >= 0.005 else { return }
+    if rate > 1, model.nativeCatchUpItem === item, model.nativeCatchUpAppliedRate == rate {
+      return
+    }
+    guard abs(player.rate - rate) >= 0.005 else {
+      if rate == 1 {
+        model.nativeCatchUpItem = nil
+        model.nativeCatchUpAppliedRate = 1
+      }
+      return
+    }
     model.nativeCatchUpItem = rate > 1 ? item : nil
     model.nativeCatchUpAppliedRate = rate
     player.rate = rate

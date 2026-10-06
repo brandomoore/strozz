@@ -120,6 +120,7 @@ struct MobileVideoView: View {
         model.displayReady(ready, for: player)
       }
         .id(ObjectIdentifier(model.player))
+        .opacity(model.isLoading ? 0 : 1)
         .accessibilityIdentifier("mobile-video-surface")
         .allowsHitTesting(false)
       if (model.isAudioOnly || model.isExternalPlayback) && !model.isLoading {
