@@ -60,8 +60,8 @@ final class PlayerModel {
   var nativeParts = 0
   var isUsingNativeHLS = false
   @ObservationIgnored var nativeCatchUp = NativeLiveCatchUp()
-  @ObservationIgnored var nativeCatchUpTask: Task<Void, Never>?
   @ObservationIgnored var nativeCatchUpItem: AVPlayerItem?
+  @ObservationIgnored var nativeCatchUpAppliedRate: Float = 1
   @ObservationIgnored var nativeRecovery = NativePlaybackRecovery()
   @ObservationIgnored var nativeRestartSerial = 0
   @ObservationIgnored var fallbackRestoreTask: Task<Void, Never>?

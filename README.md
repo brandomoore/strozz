@@ -35,7 +35,8 @@ The feature list below describes the Apple TV app. See
   chat pane on the right, so you never have to choose between watching and
   reading along.
 - **Low latency by default.** A low-latency mode closes most of the gap to the
-  live edge, so you're not minutes behind the moment.
+  live edge, so you're not minutes behind the moment. Healthy playback that
+  drifts behind catches up gently (up to 1.08x), without an automatic seek/reload.
 - **Rewind live.** Seek back within the live window (DVR) to catch what you
   missed without leaving the stream.
 - **Pick your quality.** Choose Auto or an explicit resolution, ordered
@@ -61,6 +62,8 @@ The feature list below describes the Apple TV app. See
   like they are on the web.
 - **Read anonymously, or chat when signed in.** Chat connects anonymously by
   default and auto-reconnects; sign in to send messages.
+- **Replay keeps up with live recordings.** After a deep rewind, chat replay
+  checks for newly archived comments rather than stopping at the current last page.
 - **Make chat yours.** Adjust text and emote size, font (including
   OpenDyslexic), spacing, width, and layout — side, overlay, or glass.
 - **Live moments surfaced.** Polls, predictions, hype trains, creator goals, and

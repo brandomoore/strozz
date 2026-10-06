@@ -124,7 +124,7 @@ extension PlayerView {
     replacePlaybackItem(with: item)
     await seekReadyItem(item, to: offset)
     installVODTimeObserver()
-    replay.start(vodID: broadcast.id, channelLogin: channel.isEmpty ? nil : channel)
+    replay.start(vodID: broadcast.id, channelLogin: channel.isEmpty ? nil : channel, isGrowing: true)
     replay.update(toOffset: offset)
     scrubTargetSeconds = nil
     isUserPaused = false

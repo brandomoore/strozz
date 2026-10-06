@@ -82,6 +82,7 @@ struct ChatMessagesColumn: View {
       highlightKeywords: highlightKeywords,
       isConnected: isConnected,
       isReconnecting: chat.map { !$0.isConnected } ?? false,
+      connectionError: replay?.errorMessage,
       emoteURLs: emoteURLs,
       badgeURLs: badgeURLs,
       cheermotes: cheermotes,

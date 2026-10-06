@@ -497,7 +497,7 @@ extension PlayerView {
       && videoDecodeFrozenSince == nil && !diagIsFrozen
       && pinnedToLive && !isUserPaused && !isScrubbing && scrubTargetSeconds == nil
       && !vodHandoffTransitionInFlight && !isSleeping && backgroundedAt == nil
-      && channelPageTarget == nil && abs(player.rate - 1) < 0.02
+      && channelPageTarget == nil && !model.nativeCatchUp.isActive && abs(player.rate - 1) < 0.02
       && (bufferAheadSeconds(item) ?? 0) >= 0.75
       && (lastStallAt.map { Date().timeIntervalSince($0) >= 10 } ?? true)
     // Never calibrate a deliberately deep-buffered profile or an unverified

@@ -16,7 +16,14 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
     try await runLiveScenario(probeRecovery: true)
   }
 
-  private func runLiveScenario(probeRecovery: Bool) async throws {
+  func testOptInSimulatorBufferedDriftUsesRateWithoutReload() async throws {
+    guard ProcessInfo.processInfo.environment["STROZZ_NATIVE_RATE_PROBE"] == "1" else {
+      throw XCTSkip("Set STROZZ_NATIVE_RATE_PROBE=1 to create a bounded live drift.")
+    }
+    try await runLiveScenario(probeRecovery: false, probeDrift: true)
+  }
+
+  private func runLiveScenario(probeRecovery: Bool, probeDrift: Bool = false) async throws {
     #if targetEnvironment(simulator)
     guard let channel = ProcessInfo.processInfo.environment["STROZZ_CATCH_UP_LIVE_CHANNEL"],
       !channel.isEmpty, channel.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") })
@@ -47,9 +54,10 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
     var previousClock = 0.0
     var advancing = 0
     var freshFrames = 0
-    var distinctRequests = Set<UUID>()
-    var pendingSamples = 0
-    var maximumPendingSamples = 0
+    var maximumRate: Float = 1
+    var itemBeforeDrift: AVPlayerItem?
+    var initialDrift: Double?
+    var remainingDrift: Double?
     var ages: [Double] = []
     var observations: [String] = []
     var recoveryStartedAt: TimeInterval?
@@ -58,20 +66,30 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
     var steadyFreshFrames = 0
     for second in 0..<180 {
       try await Task.sleep(for: .seconds(1))
-      if !probeRecovery && second == 45 { model.player.currentItem?.preferredPeakBitRate = 1_500_000 }
-      if !probeRecovery && second == 90 { model.player.currentItem?.preferredPeakBitRate = 0 }
+      if !probeRecovery && !probeDrift && second == 45 { model.player.currentItem?.preferredPeakBitRate = 1_500_000 }
+      if !probeRecovery && !probeDrift && second == 90 { model.player.currentItem?.preferredPeakBitRate = 0 }
+      if probeDrift && second == 40 {
+        itemBeforeDrift = model.player.currentItem
+        model.player.pause()
+      }
+      if probeDrift && second == 45 {
+        if let target = await model.nativeHLS?.origin.liveTargetDate(),
+           let date = model.player.currentItem?.currentDate() {
+          initialDrift = target.timeIntervalSince(date)
+        }
+        model.player.play()
+      }
+      if probeDrift && second > 45,
+         let target = await model.nativeHLS?.origin.liveTargetDate(),
+         let date = model.player.currentItem?.currentDate() {
+        remainingDrift = target.timeIntervalSince(date)
+      }
       if probeRecovery && second == 60 {
         engineBeforeRetry = model.nativeHLS
         recoveryStartedAt = ProcessInfo.processInfo.systemUptime
         view.recoverNativeHLS(.unavailable)
       }
-      if let request = model.nativeCatchUp.inFlight {
-        distinctRequests.insert(request.id)
-        pendingSamples += 1
-        maximumPendingSamples = max(maximumPendingSamples, pendingSamples)
-      } else {
-        pendingSamples = 0
-      }
+      maximumRate = max(maximumRate, model.player.rate)
       let clock = model.player.currentTime().seconds
       let freshFrame = model.playbackTelemetry.videoFrameAge.map { $0 < 4 } ?? false
       if probeRecovery, recoveryStartedAt != nil, recoveryFinishedAt == nil,
@@ -93,7 +111,7 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
       }
       previousClock = clock
       if second.isMultiple(of: 5) {
-        observations.append("\(second) native=\(model.isUsingNativeHLS) clock=\(clock) frameAge=\(model.playbackTelemetry.videoFrameAge ?? -1) age=\(ages.last ?? -1) catchUp=\(model.nativeCatchUp.inFlight != nil) quality=\(model.resolvedQualityName ?? "-")")
+        observations.append("\(second) native=\(model.isUsingNativeHLS) clock=\(clock) frameAge=\(model.playbackTelemetry.videoFrameAge ?? -1) age=\(ages.last ?? -1) rate=\(model.player.rate) extra=\(model.nativeCatchUp.extraDelay ?? -1) quality=\(model.resolvedQualityName ?? "-")")
       }
       if model.errorMessage != nil || model.isOffline || model.nativeFallbackReason != nil { break }
     }
@@ -122,8 +140,15 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
       XCTAssertGreaterThanOrEqual(freshFrames, 157, "An advancing clock alone is not proof of decoded video")
     }
     XCTAssertGreaterThanOrEqual(advancing, 157)
-    XCTAssertLessThanOrEqual(maximumPendingSamples, 6, "Automatic seeks must have a bounded lifetime")
-    XCTAssertLessThanOrEqual(distinctRequests.count, 6, "Catch-up must not follow every rendition change")
+    XCTAssertLessThanOrEqual(maximumRate, NativeLiveCatchUp.maximumRate)
+    if probeDrift {
+      XCTAssertNotNil(itemBeforeDrift)
+      XCTAssertTrue(model.player.currentItem === itemBeforeDrift, "Drift must not replace the player item")
+      XCTAssertTrue(model.nativeRecovery.attempts.isEmpty, "Drift must not require native reloads")
+      XCTAssertGreaterThanOrEqual(try XCTUnwrap(initialDrift), NativeLiveCatchUp.minimumExcessSeconds)
+      XCTAssertLessThan(try XCTUnwrap(remainingDrift), try XCTUnwrap(initialDrift) - 1)
+      XCTAssertGreaterThan(maximumRate, 1, "Buffered drift should be corrected by rate")
+    }
     let sortedAges = ages.sorted()
     XCTAssertFalse(sortedAges.isEmpty)
     if !sortedAges.isEmpty { XCTAssertLessThan(sortedAges[sortedAges.count / 2], 10) }

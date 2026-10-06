@@ -103,7 +103,8 @@ extension PlayerView {
     if isVOD {
       snapshot.metrics["desired_vod_rate"] = Double(vodPlaybackRate)
     } else if !isUsingAltSource {
-      snapshot.metrics["desired_live_rate"] = Double(desiredLivePlaybackRate(policy: activeLivePlaybackPolicy))
+      snapshot.metrics["desired_live_rate"] = Double(model.isUsingNativeHLS
+        ? model.nativeCatchUp.rate : desiredLivePlaybackRate(policy: activeLivePlaybackPolicy))
     }
 
     snapshot.flags["loading"] = isLoading
@@ -123,7 +124,9 @@ extension PlayerView {
     snapshot.metrics["video_frame_age_seconds"] = model.playbackTelemetry.videoFrameAge
     snapshot.flags["using_alt_source"] = isUsingAltSource
     snapshot.flags["native_ll_hls"] = model.isUsingNativeHLS
-    snapshot.flags["native_catch_up_pending"] = model.nativeCatchUp.inFlight != nil
+    snapshot.flags["native_catch_up_active"] = model.nativeCatchUp.isActive
+    snapshot.metrics["native_catch_up_rate"] = Double(model.nativeCatchUp.rate)
+    snapshot.metrics["native_catch_up_excess_seconds"] = model.nativeCatchUp.extraDelay
     snapshot.counters["native_parts_indexed"] = model.nativeParts
     snapshot.attributes["native_fallback"] = model.nativeFallbackReason
     if let native = model.nativeHLS {
@@ -141,6 +144,19 @@ extension PlayerView {
     snapshot.flags["stream_rewind_enabled"] = streamRewindEnabled
     snapshot.flags["chat_visible"] = showChat
     snapshot.flags["chat_connected"] = chat.isConnected
+    snapshot.attributes["chat_mode"] = isVOD ? "replay" : "live"
+    if isVOD {
+      let state = replay.diagnostics
+      snapshot.flags["chat_replay_ready"] = replay.isReady
+      snapshot.flags["chat_replay_growing"] = state.growing
+      snapshot.flags["chat_replay_fetching"] = state.fetching
+      snapshot.flags["chat_replay_has_more"] = state.hasMore
+      snapshot.counters["chat_replay_messages"] = replay.messages.count
+      snapshot.metrics["chat_replay_offset_seconds"] = state.offset
+      snapshot.metrics["chat_replay_frontier_seconds"] = state.frontier
+      snapshot.metrics["chat_replay_refresh_age_seconds"] = replay.lastUpdatedAt.map { max(0, -$0.timeIntervalSinceNow) }
+      snapshot.attributes["chat_replay_error"] = replay.errorMessage
+    }
     snapshot.flags["chat_reading"] = chatIsFrozen
     snapshot.flags["chat_frozen_snapshot"] = chatFrozenMessages != nil
     snapshot.counters["chat_messages"] = chat.messages.count

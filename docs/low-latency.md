@@ -39,8 +39,9 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   temporary origin, timeline, startup, or watchdog failures. Each retry resolves
   a fresh signed master and replaces the failed engine instead of reusing it.
   Verified unsupported formats skip those futile attempts; repeated failure
-  still permits a visible legacy fallback. Deliberate pauses and rewinds disable
-  automatic offset preservation.
+  still permits a visible legacy fallback. Native drift is corrected by gentle
+  rate adjustment rather than seeks; automatic seek-on-rebuffer is disabled
+  once the initial native live start is established.
 - When native activation fails, its row disappears for that channel and the
   checkmark moves to the actual fallback mode. The old **Auto · Low Latency**
   label refers to the original prefetch engine, not native partial playback.
@@ -503,19 +504,39 @@ of stalling, and the slow-down rides out short buffer dips.
 
 ### Coordinated native catch-up
 
-Native playback no longer seeks automatically on every resolution change.
-`NativeLiveCatchUp` requires four seconds of steady quality and advancing
-playback, at least one second of buffered media, and a sustained forward gap
-of at least three seconds beyond the native live target. A stream already
-near live gets no automatic seek. The normal LL-HLS hold-back remains unchanged.
+Native drift correction never seeks or replaces the player item.
+`NativeLiveCatchUp` requires four seconds of steady quality, advancing timestamps,
+fresh video and at least one second of buffered media before correcting a
+sustained gap of at least three seconds. It ramps at most 2% per sample, up to
+1.08x with pitch correction, and returns to 1x once excess is below 0.75 seconds.
+Available buffer headroom further limits the speed; at the one-second floor
+there is no speed-up. Low buffer, missing/stale timing or video, adaptive-quality
+changes, pause/scrub and leaving the live view remove the speed correction.
+The chat baseline is not recalibrated while speeding up.
 
-Only one catch-up seek may own the current item. It expires after five seconds
-and cannot immediately restart (15-second completion/cancellation cooldown).
-Manual pause, scrub, source/item changes, backgrounding, and recovery invalidate
-the request before cancelling its AVPlayer seek. A late completion cannot
-resume playback or overwrite another request. The legacy numeric live-edge
-resync does not run on the native path, and the watchdog waits for a bounded
-catch-up to finish before issuing its own recovery.
+The reference is the rendition whose media is being requested, not the furthest
+ahead inactive rendition. AVPlayer establishes the initial native live start,
+then `automaticallyPreservesTimeOffsetFromLive` is turned off once startup
+progress/video is established. Leaving it enabled would let Apple seek forward
+on subsequent rebuffer, independently of the app; disabling it before startup
+can make AVPlayer start at the beginning of retained history. Explicit
+viewer-requested seeks/Back to live still work, and genuinely failed/stalled
+playback retains bounded native recovery. Ordinary drift does not invoke it.
+
+An October 6 physical xQc capture on build 1912 showed the earlier catch-up seek
+starting for 3.110 seconds of excess while 1080p60 video was advancing with about
+2.64 seconds buffered. It was followed by a 160p stall, a five-second seek
+timeout, and a native hard-stall reload. There was no origin failure before the
+seek. This motivated replacing the automatic seek rather than shortening its
+timeout; it does not prove all Twitch interruptions are avoidable.
+
+A subsequent three-minute muted xQc simulator probe deliberately paused for
+five seconds to create drift. Rate correction then ran between 1x and 1.08x,
+reduced the extra delay, and retained the same native player item with no native
+recovery attempts. Existing advancing-clock/fresh-frame thresholds passed.
+The full TV suite executed 387 tests with six explicit opt-in tests skipped and
+zero failures. This bounded result is not a guarantee of interruption-free
+playback on every source or network.
 
 Buddha's captured black-screen sequence also showed replacement attempts
 followed by `currentItem == nil` and an indefinite `noItemToPlay` wait.
@@ -525,8 +546,9 @@ separately from item failures. A missing requested item triggers bounded recover
 instead of leaving a blank player indefinitely. Caption/visualizer clocks follow
 the replacement player.
 
-Deterministic tests cover the observed startup quality churn, cooldowns, timeout,
-stale completions, manual interruption, native-vs-legacy recovery exclusion, and
+Deterministic tests cover the captured gap/buffer values, rate bounds/convergence,
+quality churn, buffer/frame gates, pause/stale-item protection, zero automatic
+seeks, active-rendition targeting, native-vs-legacy recovery exclusion, and
 failed/rejected-player replacement. A bounded three-minute full-app simulator
 run on Buddha included forced quality changes, advancing video and fresh decoded
 frame observations, with no native fallback. Simulator results do not establish
@@ -555,6 +577,21 @@ The final simulator run passed 344 tests, with three physical-device-only tests
 skipped. The standalone probe suite passed 31 tests. Background recovery was
 covered deterministically without waking the physical TV; these checks do not
 replace future observation of long background/foreground trips on hardware.
+
+### Chat replay while rewinding a live broadcast
+
+Rewinding into the in-progress VOD intentionally disconnects live IRC and uses
+timestamped replay comments. The October 6 chat report occurred in that mode;
+there was no frozen UI snapshot or delayed live-chat queue, but the older
+telemetry did not include replay state, so it cannot identify the precise pause.
+
+A current replay page with `hasNextPage=false` is now treated as temporary for
+an in-progress recording: the comment frontier is polled every five seconds,
+with deduplication, without reloading video. Completed VODs do not poll their
+final page. A gap before the first comment no longer causes repeated backward
+window resets. Network/parse failures show a replay error and retry with the
+same throttle instead of advertising successful readiness. Telemetry records
+live/replay mode, replay message count, frontier, requests, last refresh and errors.
 
 ## Chat synchronization: extra delay, not total video latency
 

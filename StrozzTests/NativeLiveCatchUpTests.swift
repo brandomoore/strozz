@@ -5,169 +5,212 @@ import os
 
 final class NativeLiveCatchUpTests: XCTestCase {
   private func sample(_ time: Double, gap: Double = 6, rendition: String? = "720p60",
-                      playing: Bool = true, buffer: Double = 2, allowed: Bool = true,
-                      clock: Double? = nil) -> NativeLiveCatchUp.Sample {
-    .init(uptime: time, clock: clock ?? time, playbackDate: Date(timeIntervalSince1970: 1000 + time),
-          targetDate: Date(timeIntervalSince1970: 1000 + time + gap), rendition: rendition,
-          isPlaying: playing, buffer: buffer, allowed: allowed)
+                      playing: Bool = true, buffer: Double = 3, allowed: Bool = true,
+                      clock: Double? = nil, fresh: Bool = true, rate: Float = 1) -> NativeLiveCatchUp.Sample {
+    let clock = clock ?? time
+    return .init(uptime: time, clock: clock, playbackDate: Date(timeIntervalSince1970: 1000 + clock),
+                 targetDate: Date(timeIntervalSince1970: 1000 + clock + gap), rendition: rendition,
+                 isPlaying: playing, buffer: buffer, allowed: allowed,
+                 hasFreshVideo: fresh, playbackRate: rate)
   }
 
-  private func start(_ state: inout NativeLiveCatchUp, from time: Double = 0) throws -> NativeLiveCatchUp.Request {
-    for step in 0..<4 { XCTAssertNil(state.observe(sample(time + Double(step)))) }
-    return try XCTUnwrap(state.observe(sample(time + 4)))
-  }
-
-  func testNativeStartupNearLiveDoesNotSeek() {
+  func testNormalLivePlaybackAndTransientGapsStayAtNormalRate() {
     for gap in [-5.0, 0, 1, 2.99] {
       var state = NativeLiveCatchUp()
-      for time in 0..<60 { XCTAssertNil(state.observe(sample(Double(time), gap: gap))) }
-      XCTAssertNil(state.inFlight)
+      for time in 0..<60 { XCTAssertEqual(state.observe(sample(Double(time), gap: gap)), 1) }
+      XCTAssertFalse(state.isActive)
+    }
+    var state = NativeLiveCatchUp()
+    for time in 0..<40 {
+      XCTAssertEqual(state.observe(sample(Double(time), gap: time.isMultiple(of: 3) ? 5 : 1)), 1)
     }
   }
 
-  func testPersistentDelaySeeksOnlyAfterFourSecondsOfSteadyPlayback() throws {
+  func testCapturedXqcGapRampsRateAfterSteadyPlayback() {
     var state = NativeLiveCatchUp()
-    let request = try start(&state)
-    XCTAssertEqual(request.target, Date(timeIntervalSince1970: 1010))
-    XCTAssertEqual(request.startedAt, 4)
+    for second in 0..<4 {
+      XCTAssertEqual(state.observe(sample(Double(second), gap: 3.110243, buffer: 2.639)), 1)
+    }
+    XCTAssertEqual(state.observe(sample(4, gap: 3.110243, buffer: 2.639)), 1.02, accuracy: 0.001)
+    XCTAssertEqual(state.observe(sample(5, gap: 3.110243, buffer: 2.639)), 1.04, accuracy: 0.001)
+    XCTAssertEqual(state.observe(sample(6, gap: 3.110243, buffer: 2.639)), 1.06, accuracy: 0.001)
   }
 
-  func testAnthonyZStartupQualityChurnDoesNotLaunchOverlappingSeeks() throws {
+  func testQualityChurnWaitsForSteadyPlaybackAndInterruptsAcceleration() {
     var state = NativeLiveCatchUp()
     for second in 0..<12 {
-      let rendition = ["1080p60", "480p", "160p", "360p"][second / 3]
-      XCTAssertNil(state.observe(sample(Double(second), rendition: rendition)))
+      XCTAssertEqual(state.observe(sample(Double(second),
+        rendition: ["1080p60", "480p", "160p", "360p"][second / 3])), 1)
     }
-    for second in 12..<16 { XCTAssertNil(state.observe(sample(Double(second), rendition: "720p60"))) }
-    let request = try XCTUnwrap(state.observe(sample(16, rendition: "720p60")))
-    for second in 17..<24 {
-      XCTAssertNil(state.observe(sample(Double(second), rendition: "1080p60")))
-      XCTAssertEqual(state.inFlight?.id, request.id)
-    }
+    for second in 12..<16 { XCTAssertEqual(state.observe(sample(Double(second))), 1) }
+    XCTAssertGreaterThan(state.observe(sample(16)), 1)
+    XCTAssertEqual(state.observe(sample(17, rendition: "1080p60")), 1)
   }
 
-  func testBufferingAndShallowBufferDoNotTriggerCatchUp() {
-    for (playing, buffer) in [(false, 5.0), (true, 0.9), (true, Double.nan)] {
+  func testLowBufferWaitingMissingFramesAndManualIntentStopAcceleration() {
+    for invalid in [
+      sample(5, buffer: 0.99), sample(5, buffer: .nan), sample(5, playing: false),
+      sample(5, allowed: false), sample(5, fresh: false), sample(5, rate: 0)
+    ] {
       var state = NativeLiveCatchUp()
-      for time in 0..<30 {
-        XCTAssertNil(state.observe(sample(Double(time), playing: playing, buffer: buffer)))
-      }
+      for time in 0...4 { _ = state.observe(sample(Double(time))) }
+      XCTAssertTrue(state.isActive)
+      XCTAssertEqual(state.observe(invalid), 1)
+      XCTAssertFalse(state.isActive)
     }
   }
 
-  func testStalledOrJumpingClockMustSettleAgain() throws {
+  func testDeepDelayIsRateLimitedAndConvergesWithoutSkippingVideo() {
     var state = NativeLiveCatchUp()
-    for time in 0..<20 { XCTAssertNil(state.observe(sample(Double(time), clock: 0))) }
-    for time in 20..<24 { XCTAssertNil(state.observe(sample(Double(time)))) }
-    XCTAssertNotNil(state.observe(sample(24)))
-  }
-
-  func testTransientGapCannotTriggerASeek() {
-    var state = NativeLiveCatchUp()
-    for second in 0..<40 {
-      XCTAssertNil(state.observe(sample(Double(second), gap: second.isMultiple(of: 3) ? 5 : 1)))
+    var clock = 0.0
+    var rate: Float = 1
+    var gap = 6.0
+    for second in 0..<180 {
+      gap = 6 + Double(second) - clock
+      rate = state.observe(sample(Double(second), gap: gap, clock: clock, rate: rate))
+      XCTAssertGreaterThanOrEqual(rate, 1)
+      XCTAssertLessThanOrEqual(rate, NativeLiveCatchUp.maximumRate)
+      clock += Double(rate)
     }
+
+    XCTAssertLessThanOrEqual(gap, NativeLiveCatchUp.settledExcessSeconds)
+    XCTAssertEqual(rate, 1)
+    XCTAssertGreaterThan(clock, 180)
   }
 
-  func testCompletionEnforcesCooldownBeforeAnotherCatchUp() throws {
+  func testBufferHeadroomLimitsSpeedWithoutPreventingSteadyOneSecondBufferSampling() {
     var state = NativeLiveCatchUp()
-    let request = try start(&state)
-    XCTAssertTrue(state.finish(request.id, at: 5))
-    for second in 6..<20 { XCTAssertNil(state.observe(sample(Double(second)))) }
-    XCTAssertNotNil(state.observe(sample(20)))
+    for time in 0..<4 { XCTAssertEqual(state.observe(sample(Double(time), buffer: 1.7)), 1) }
+    XCTAssertEqual(state.observe(sample(4, buffer: 1.7)), 1.02, accuracy: 0.001)
+    XCTAssertEqual(state.observe(sample(5, buffer: 1.7)), 1.04, accuracy: 0.001)
+    XCTAssertLessThanOrEqual(state.observe(sample(6, buffer: 1.7)), 1.05)
+    XCTAssertEqual(state.observe(sample(7, buffer: 1)), 1)
+    XCTAssertEqual(state.observe(sample(8, buffer: 0.9)), 1)
   }
 
-  func testTimeoutIsBoundedWithoutLaunchingASecondSeek() throws {
+  func testHysteresisContinuesUntilNearLiveThenReturnsToNormalRate() {
     var state = NativeLiveCatchUp()
-    let request = try start(&state)
-    XCTAssertFalse(state.timedOut(at: 8.99))
-    XCTAssertTrue(state.timedOut(at: 9))
-    state.interrupt(at: 9)
-    XCTAssertNil(state.inFlight)
-    XCTAssertFalse(state.finish(request.id, at: 10))
-    for second in 10..<24 { XCTAssertNil(state.observe(sample(Double(second)))) }
-    XCTAssertNotNil(state.observe(sample(24)))
+    for time in 0...4 { _ = state.observe(sample(Double(time))) }
+    XCTAssertGreaterThan(state.observe(sample(5, gap: 2)), 1)
+    XCTAssertEqual(state.observe(sample(6, gap: 0.75)), 1)
+    XCTAssertEqual(state.observe(sample(7, gap: 2)), 1)
   }
 
-  func testStaleCompletionCannotClearANewerRequest() throws {
-    var state = NativeLiveCatchUp()
-    let previous = try start(&state)
-    state.interrupt(at: 5)
-    let current = try start(&state, from: 20)
-    XCTAssertFalse(state.finish(previous.id, at: 25))
-    XCTAssertEqual(state.inFlight?.id, current.id)
-    XCTAssertTrue(state.finish(current.id, at: 26))
-  }
-
-  func testManualIntentAndLongSamplingGapResetSettling() {
-    var state = NativeLiveCatchUp()
-    for second in 0..<4 { XCTAssertNil(state.observe(sample(Double(second)))) }
-    XCTAssertNil(state.observe(sample(4, allowed: false)))
-    for second in 5..<9 { XCTAssertNil(state.observe(sample(Double(second)))) }
-    XCTAssertNotNil(state.observe(sample(9)))
-    state.interrupt(at: 10)
-    for second in 30..<34 { XCTAssertNil(state.observe(sample(Double(second)))) }
-    XCTAssertNil(state.observe(sample(60)))
-    for second in 61..<64 { XCTAssertNil(state.observe(sample(Double(second)))) }
-    XCTAssertNotNil(state.observe(sample(64)))
-  }
-
-  func testMissingOrStaleDatesCannotCauseASeek() {
+  func testMissingStaleOrJumpingTimelineAndLongSamplingGapCannotAccelerate() {
     var state = NativeLiveCatchUp()
     for second in 0..<30 {
       let time = Double(second)
-      XCTAssertNil(state.observe(.init(
+      XCTAssertEqual(state.observe(.init(
         uptime: time, clock: time, playbackDate: Date(timeIntervalSince1970: 1000),
         targetDate: Date(timeIntervalSince1970: 1010 + time), rendition: "720p60",
-        isPlaying: true, buffer: 3, allowed: true)))
+        isPlaying: true, buffer: 3, allowed: true)), 1)
     }
-    XCTAssertNil(state.observe(.init(uptime: 31, clock: 31, playbackDate: nil, targetDate: nil,
-      rendition: "720p60", isPlaying: true, buffer: 3, allowed: true)))
+    XCTAssertEqual(state.observe(.init(uptime: 31, clock: 31, playbackDate: nil, targetDate: nil,
+      rendition: "720p60", isPlaying: true, buffer: 3, allowed: true)), 1)
+    for second in 32..<36 { XCTAssertEqual(state.observe(sample(Double(second))), 1) }
+    XCTAssertGreaterThan(state.observe(sample(36)), 1)
+    XCTAssertEqual(state.observe(sample(37, clock: 100)), 1)
+    XCTAssertEqual(state.observe(sample(60, clock: 123)), 1)
+  }
+
+  func testLiveTargetUsesActiveRenditionRatherThanFasterInactiveOne() {
+    let url = URL(string: "https://example.invalid/video.m3u8")!
+    func source(_ date: TimeInterval, live: Bool = true) -> NativeHLSOrigin.Rendition {
+      var result = NativeHLSOrigin.Rendition(url: url, segments: [
+        .init(sequence: 1, url: url, date: Date(timeIntervalSince1970: date),
+              discontinuity: 0, tags: [], complete: true, declaredDuration: 2)
+      ])
+      result.reachedLiveEdge = live
+      return result
+    }
+    let sources = [0: source(100), 1: source(110), 2: source(120, live: false)]
+    XCTAssertEqual(NativeHLSOrigin.liveTargetDate(in: sources, active: 0), Date(timeIntervalSince1970: 100.5))
+    XCTAssertEqual(NativeHLSOrigin.liveTargetDate(in: sources, active: 1), Date(timeIntervalSince1970: 110.5))
+    XCTAssertNil(NativeHLSOrigin.liveTargetDate(in: sources, active: 2))
+    XCTAssertNil(NativeHLSOrigin.liveTargetDate(in: sources, active: 3))
   }
 }
 
 @MainActor
 final class NativeLiveCatchUpIntegrationTests: XCTestCase {
-  private func arm(_ model: PlayerModel) throws -> NativeLiveCatchUp.Request {
-    var request: NativeLiveCatchUp.Request?
-    for second in 0...4 {
-      request = model.nativeCatchUp.observe(.init(
-        uptime: Double(second), clock: Double(second),
-        playbackDate: Date(timeIntervalSince1970: Double(second)),
-        targetDate: Date(timeIntervalSince1970: Double(second + 6)),
-        rendition: "720p60", isPlaying: true, buffer: 3, allowed: true))
-    }
-    return try XCTUnwrap(request)
-  }
-
-  func testManualPauseCancelsTheOwnedSeekAndCannotBeUndoneByItsCompletion() throws {
+  private func playingModel() -> (PlayerModel, PlayerView, RateTrackingPlayer, TrackingPlayerItem) {
     let model = PlayerModel()
-    let view = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: model)
+    let player = RateTrackingPlayer()
+    model.player = player
     let item = TrackingPlayerItem(url: URL(fileURLWithPath: "/nonexistent-catch-up.m3u8"))
-    model.player.replaceCurrentItem(with: item)
-    let request = try arm(model)
-    model.nativeCatchUpItem = item
-    view.toggleRewindPlayPause()
-    XCTAssertNil(model.nativeCatchUp.inFlight)
-    XCTAssertEqual(item.cancellations, 1)
-    XCTAssertTrue(model.isUserPaused)
-    XCTAssertFalse(model.nativeCatchUp.finish(request.id, at: 10))
-    XCTAssertEqual(model.player.rate, 0)
-    model.player.replaceCurrentItem(with: nil)
+    player.replaceCurrentItem(with: item)
+    model.isUsingNativeHLS = true
+    model.isLoading = false
+    model.startupProgress.observe(clock: 0, isPlaying: true, now: 0)
+    model.startupProgress.observe(clock: 1, isPlaying: true, now: 1)
+    let view = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: model)
+    view.didRequestPlayback = true
+    return (model, view, player, item)
   }
 
-  func testItemReplacementInvalidatesPendingCatchUp() throws {
-    let model = PlayerModel()
-    let view = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: model)
-    let item = TrackingPlayerItem(url: URL(fileURLWithPath: "/nonexistent-old.m3u8"))
-    model.player.replaceCurrentItem(with: item)
-    let request = try arm(model)
-    model.nativeCatchUpItem = item
-    view.replacePlaybackItem(with: nil)
-    XCTAssertEqual(item.cancellations, 1)
-    XCTAssertNil(model.nativeCatchUp.inFlight)
+  func testRateCorrectionNeverSeeksOrReplacesTheItem() {
+    let (model, view, player, item) = playingModel()
+    defer { player.replaceCurrentItem(with: nil) }
+    view.applyNativeCatchUpRate(1.06, item: item)
+    XCTAssertEqual(player.rate, 1.06, accuracy: 0.001)
+    XCTAssertTrue(player.currentItem === item)
+    XCTAssertTrue(model.nativeCatchUpItem === item)
+    XCTAssertEqual(item.timeSeeks, 0)
+    XCTAssertEqual(item.cancellations, 0)
+  }
+
+  func testManualPauseStopsOwnedRateWithoutASeekOrResume() {
+    let (model, view, player, item) = playingModel()
+    defer { player.replaceCurrentItem(with: nil) }
+    view.applyNativeCatchUpRate(1.06, item: item)
+    view.toggleRewindPlayPause()
+    XCTAssertTrue(model.isUserPaused)
+    XCTAssertFalse(model.nativeCatchUp.isActive)
     XCTAssertNil(model.nativeCatchUpItem)
-    XCTAssertFalse(model.nativeCatchUp.finish(request.id, at: 20))
+    XCTAssertEqual(item.cancellations, 0)
+    XCTAssertEqual(item.timeSeeks, 0)
+    XCTAssertEqual(player.rate, 0)
+    view.applyNativeCatchUpRate(1.08, item: item)
+    XCTAssertEqual(player.rate, 0)
+  }
+
+  func testItemReplacementInvalidatesOwnedRateWithoutCancellingUserSeeks() {
+    let (model, view, player, item) = playingModel()
+    view.applyNativeCatchUpRate(1.06, item: item)
+    view.replacePlaybackItem(with: nil)
+    XCTAssertEqual(item.cancellations, 0)
+    XCTAssertFalse(model.nativeCatchUp.isActive)
+    XCTAssertNil(model.nativeCatchUpItem)
+    XCTAssertEqual(player.rate, 1)
+  }
+
+  func testCancellationDoesNotResumeAnAlreadyPausedPlayer() {
+    let (_, view, player, item) = playingModel()
+    defer { player.replaceCurrentItem(with: nil) }
+    view.applyNativeCatchUpRate(1.06, item: item)
+    player.pause()
+    view.cancelNativeCatchUp(reason: "paused")
+    XCTAssertEqual(player.rate, 0)
+  }
+
+  func testStaleItemOrBufferingWaitCannotReceiveANewPlaybackRate() {
+    let (_, view, player, item) = playingModel()
+    defer { player.replaceCurrentItem(with: nil) }
+    let stale = TrackingPlayerItem(url: URL(fileURLWithPath: "/nonexistent-stale.m3u8"))
+    view.applyNativeCatchUpRate(1.08, item: stale)
+    XCTAssertEqual(player.rate, 1)
+    player.waitForBuffer()
+    view.applyNativeCatchUpRate(1.08, item: item)
+    XCTAssertEqual(player.rate, 0)
+  }
+
+  func testNativePlaybackDisablesAVPlayersSeekOnRebufferAfterStartup() {
+    let (model, view, player, _) = playingModel()
+    defer { model.nativeHLS?.stop(); player.replaceCurrentItem(with: nil) }
+    let item = view.makeItem(url: URL(string: "https://example.invalid/live.m3u8")!)
+    player.replaceCurrentItem(with: item)
+    view.updateLatencyMetrics()
+    XCTAssertFalse(item.automaticallyPreservesTimeOffsetFromLive)
   }
 
   func testLegacyResyncCannotSeekDuringNativePlayback() {
@@ -244,4 +287,16 @@ private final class TrackingPlayerItem: AVPlayerItem, @unchecked Sendable {
     counters.withLock { $0.timeSeeks += 1 }
     completionHandler?(true)
   }
+}
+
+private final class RateTrackingPlayer: AVPlayer, @unchecked Sendable {
+  private nonisolated let state = OSAllocatedUnfairLock(
+    initialState: (rate: Float(1), control: AVPlayer.TimeControlStatus.playing))
+  override var rate: Float {
+    get { state.withLock { $0.rate } }
+    set { state.withLock { $0.rate = newValue } }
+  }
+  override var timeControlStatus: AVPlayer.TimeControlStatus { state.withLock { $0.control } }
+  override func pause() { state.withLock { $0.rate = 0; $0.control = .paused } }
+  func waitForBuffer() { state.withLock { $0.rate = 0; $0.control = .waitingToPlayAtSpecifiedRate } }
 }

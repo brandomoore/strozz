@@ -87,6 +87,7 @@ final class MobilePlaybackModel {
   func displayReady(_ ready: Bool, for source: AVPlayer) {
     guard player === source else { return }
     isReadyForDisplay = ready
+    if ready, engine != nil { player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false }
   }
 
   func start(channel: String) {
@@ -242,7 +243,8 @@ final class MobilePlaybackModel {
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = selection == .native ? 1 : 8
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-        item.automaticallyPreservesTimeOffsetFromLive = selection == .native && position.date == nil
+        item.automaticallyPreservesTimeOffsetFromLive = selection == .native && position.shouldPlay && position.date == nil
+        item.audioTimePitchAlgorithm = .timeDomain
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [:])
         item.add(output)
         videoOutput = output
@@ -368,7 +370,7 @@ final class MobilePlaybackModel {
       forName: AVPlayerItem.timeJumpedNotification, object: item, queue: .main
     ) { [weak self] _ in
       MainActor.assumeIsolated {
-        guard let self, self.isCurrent(request), self.catchUp.inFlight == nil else { return }
+        guard let self, self.isCurrent(request) else { return }
         self.stopFollowingLive()
       }
     }
@@ -376,9 +378,10 @@ final class MobilePlaybackModel {
 
   private func stopFollowingLive() {
     followsLive = false
-    if catchUp.inFlight != nil { player.currentItem?.cancelPendingSeeks() }
-    catchUp.interrupt(at: ProcessInfo.processInfo.systemUptime)
-    player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false
+    if catchUp.isActive, player.timeControlStatus == .playing, player.rate > 1 {
+      player.rate = 1
+    }
+    catchUp.interrupt()
   }
 
   private func startMonitor(item: AVPlayerItem, request: UUID) {
@@ -410,6 +413,7 @@ final class MobilePlaybackModel {
            videoOutput.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) != nil {
           lastVideoFrame = uptime
           receivedVideoFrame = true
+          if engine != nil { item.automaticallyPreservesTimeOffsetFromLive = false }
         }
         if paused || isAudioOnly || isExternalPlayback { lastVideoFrame = uptime }
         if uptime - lastVideoFrame > (receivedVideoFrame ? 20 : 8),
@@ -429,27 +433,21 @@ final class MobilePlaybackModel {
           .map { $0.end.seconds - clock }.max() ?? 0
         baseline.observe(context: "\(channel)|\(selection)", itemID: request, playbackDate: item.currentDate(),
                          playbackTime: clock, liveTarget: target,
-                         canCalibrate: followsLive && playing && buffer >= 1 && catchUp.inFlight == nil,
+                         canCalibrate: followsLive && playing && buffer >= 1 && !catchUp.isActive,
                          now: Date(), uptime: uptime)
         extraChatDelay = baseline.extraDelay
         chat.configureChatSync(
           enabled: UserDefaults.standard.bool(forKey: PersistenceKey.chatSyncToStream),
           delaySeconds: extraChatDelay ?? 0)
-        if catchUp.timedOut(at: uptime) {
-          item.cancelPendingSeeks()
-          catchUp.interrupt(at: uptime)
-        }
-        if let correction = catchUp.observe(.init(
+        let rate = catchUp.observe(.init(
           uptime: uptime, clock: clock, playbackDate: item.currentDate(), targetDate: target,
           rendition: "\(item.presentationSize)", isPlaying: playing, buffer: buffer,
-          allowed: followsLive && engine != nil
-        )) {
-          player.seek(to: correction.target) { [weak self] _ in
-            Task { @MainActor [weak self] in
-              guard let self, self.isCurrent(request) else { return }
-              self.catchUp.finish(correction.id, at: ProcessInfo.processInfo.systemUptime)
-            }
-          }
+          allowed: followsLive && engine != nil && !isExternalPlayback,
+          hasFreshVideo: receivedVideoFrame && uptime - lastVideoFrame < 4,
+          playbackRate: player.rate
+        ))
+        if player.timeControlStatus == .playing, abs(player.rate - rate) >= 0.005 {
+          player.rate = rate
         }
       }
     }

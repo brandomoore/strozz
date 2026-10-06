@@ -174,11 +174,16 @@ actor NativeHLSOrigin {
   }
 
   func liveTargetDate() -> Date? {
-    sources.values.compactMap { source -> Date? in
-      guard source.reachedLiveEdge, let last = source.segments.last else { return nil }
-      let holdBack = source.hasPrefetch ? 1.5 : Double(source.target * 3)
-      return last.date.addingTimeInterval(last.duration - holdBack)
-    }.max()
+    Self.liveTargetDate(in: sources, active: lastActive)
+  }
+
+  static func liveTargetDate(in sources: [Int: Rendition], active: Int) -> Date? {
+    // A faster inactive rendition is not evidence that the displayed rendition
+    // is behind. Use the source whose media AVPlayer is actually requesting.
+    guard let source = sources[active], source.reachedLiveEdge,
+      let last = source.segments.last else { return nil }
+    let holdBack = source.hasPrefetch ? 1.5 : Double(source.target * 3)
+    return last.date.addingTimeInterval(last.duration - holdBack)
   }
 
   func renderForTesting(_ segments: [Segment], ended: Bool = false) throws -> String {
@@ -324,11 +329,12 @@ actor NativeHLSOrigin {
   private func playlist(_ index: Int, base: URL) throws -> Data {
     guard let source = sources[index],
       let first = source.segments.first, let last = source.segments.last else { throw NativeHLSError.unavailable }
+    let holdBack = source.hasPrefetch ? 1.5 : Double(source.target * 3)
     var lines = ["#EXTM3U", "#EXT-X-VERSION:9", "#EXT-X-INDEPENDENT-SEGMENTS",
       "#EXT-X-TARGETDURATION:\(source.target)", "#EXT-X-MEDIA-SEQUENCE:\(first.sequence)",
       "#EXT-X-DISCONTINUITY-SEQUENCE:\(first.discontinuity)",
       "#EXT-X-PART-INF:PART-TARGET=0.45",
-      "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=\(source.hasPrefetch ? 1.5 : Double(source.target * 3))"]
+      "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=\(holdBack)"]
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     var remaining = source.segments.reduce(0) { $0 + $1.duration }

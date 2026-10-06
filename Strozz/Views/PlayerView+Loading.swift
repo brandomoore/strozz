@@ -390,6 +390,8 @@ extension PlayerView {
     // Buffer depth comes from the active profile: shallower for lower latency,
     // deeper to let ABR hold higher quality. (See LivePlaybackPolicy.)
     item.preferredForwardBufferDuration = activeLivePlaybackPolicy.preferredForwardBufferDuration
+    // Let AVPlayer establish the initial LL-HLS start, then disable its
+    // seek-on-rebuffer behavior as soon as startup progress is established.
     item.automaticallyPreservesTimeOffsetFromLive = model.isUsingNativeHLS && pinnedToLive && !isUserPaused
     // The adaptive-rate controller nudges the live rate a few percent either side
     // of 1.0 (anti-stall slow-down / gentle catch-up); time-domain pitch correction
@@ -909,14 +911,6 @@ extension PlayerView {
       triggerRecoveryIfAllowed(reason: "item failed")
       return
     }
-    if model.nativeCatchUp.inFlight != nil {
-      if model.nativeCatchUp.timedOut(at: ProcessInfo.processInfo.systemUptime) {
-        cancelNativeCatchUp(reason: "timeout")
-        resetPlaybackHealth()
-      }
-      return
-    }
-
     guard didRequestPlayback else {
       stalledPlaybackSamples = 0
       return
@@ -1356,6 +1350,9 @@ extension PlayerView {
       isPlaying: status == .playing,
       now: ProcessInfo.processInfo.systemUptime
     )
+    if model.isUsingNativeHLS, model.startupProgress.hasStarted {
+      item.automaticallyPreservesTimeOffsetFromLive = false
+    }
     let hasSeekableRange = item.seekableTimeRanges.last?.timeRangeValue != nil
     let currentSeconds = CMTimeGetSeconds(item.currentTime())
     let hasAdvancedTime = currentSeconds.isFinite && currentSeconds > 0
