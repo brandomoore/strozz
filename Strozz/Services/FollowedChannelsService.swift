@@ -196,7 +196,10 @@ final class FollowedChannelsService {
     guard auth.isAuthenticated, let userID = auth.userID else { return }
     guard let clientID = resolveClientID(),
           !Self.disallowedClientIDs.contains(clientID.lowercased())
-    else { return }
+    else {
+      directoryErrorMessage = "Could not load your follows. A valid Twitch application client ID is required."
+      return
+    }
 
     if !force, directoryLoadedAt != nil { return }
     if isLoadingDirectory { return }

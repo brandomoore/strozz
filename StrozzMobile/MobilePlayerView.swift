@@ -63,6 +63,7 @@ struct MobilePlayerView: View {
     }
     .background(palette.chatSideSurface)
     .task { model.start(channel: channel.login) }
+    .onDisappear { model.stop() }
     .onChange(of: scenePhase) { _, phase in
       if phase == .background { model.suspend() }
       else if phase == .active { model.resume() }

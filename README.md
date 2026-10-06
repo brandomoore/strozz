@@ -120,9 +120,10 @@ model, tvOS version, and the stream where something went wrong helps a lot. See
 
 ## iPhone and iPad
 
-The first mobile version includes live Twitch recommendations, followed live
-channels, category browsing, search, native low-latency playback, standard Auto
-and fixed qualities (including audio-only), and chat with Twitch/7TV/BTTV/FFZ
+The mobile version includes personalized Twitch recommendations, a full followed
+channel directory, channel profiles, past broadcasts with local resume, category
+browsing, search, native low-latency live playback, standard Auto
+and fixed qualities (including audio-only), and live chat with Twitch/7TV/BTTV/FFZ
 emotes. Sign in through **Account > Sign in to Twitch**, open the Twitch link,
 approve the displayed code, then return to Strozz. Browsing, playback, and
 reading chat also work anonymously.
@@ -137,10 +138,15 @@ middle of the screen. A small, leading-aligned heading scrolls with the feed
 instead of occupying a fixed navigation bar. Previews are always muted and stop when you scroll away,
 switch tabs, open a stream, or background the app. Lower-bandwidth preview
 renditions are preferred; an undecodable preview gets one Source-quality retry.
-Home contains **Following / Live** text tabs with an active underline and category filters, with
-**Home, Browse, and Account** in the bottom bar. Live shows up to six compact
-followed-channel shortcuts above the video feed; Following uses compact thumbnail
-rows. Large stream thumbnails show a red-dot **Live** badge at top-right,
+Home defaults to **For you**: live followed and most-watched channels lead the
+feed, followed by personalized discovery from the shared recommendation engine.
+Watch frequency on this device ranks familiar channels; global popular streams
+are only the signed-out/no-history or personalization-disabled feed.
+**Following** is a flat list of every followed channel, including offline ones.
+Tap an offline channel to open its profile and past broadcasts; long-press any
+followed row for its profile or a saved broadcast's Continue option.
+**Home, Browse, and Account** remain in the bottom bar. Home also shows up to six
+compact live-followed shortcuts. Large stream thumbnails show a red-dot **Live** badge at top-right,
 viewer counts at bottom-left, and the muted
 preview indicator at bottom-right. Compact Following thumbnails combine a red
 live dot and viewer count in one small badge, without a separate LIVE pill.
@@ -148,8 +154,15 @@ Anonymous/demo recommendations are
 never presented as personal follows.
 The category rail scrolls to the screen edges, and the feed draws behind the
 floating tab bar while leaving enough end-of-feed clearance to reach the last card.
-Following / Live pins below the status bar as you scroll; the Strozz heading and
+For you / Following pins below the status bar as you scroll; the Strozz heading and
 category filters scroll away.
+
+Past broadcasts use native on-demand controls with seeking. **Continue watching**
+on Home and channel profiles resumes saved progress; finished broadcasts leave
+that list. Watch history and resume positions stay on this device, are separated
+by signed-in account, and do not import Twitch's or the Apple TV's watch history.
+Account provides a personalization toggle and a confirmed history/progress reset.
+Signed-out/demo streams never masquerade as followed channels.
 
 Video sits above chat on a portrait iPhone; landscape iPhone shows video alone.
 A wide iPad window places chat beside video, while narrow multitasking windows
@@ -166,7 +179,7 @@ Browse shows three categories across on iPhone (two at accessibility text sizes)
 and an adaptive grid on iPad. Typing in Browse's search field switches to compact
 channel and category results with artwork and viewer counts.
 
-This is not full TV feature parity: VODs/clips, multiview, YouTube/Kick playback
+This is not full TV feature parity: VOD chat replay, clips, multiview, YouTube/Kick playback
 and chat merging, rewards, and advanced TV settings are not included. Playback
 stops in the background; Picture in Picture/background audio are not yet
 supported. Returning resolves fresh stream URLs instead of reviving an expired

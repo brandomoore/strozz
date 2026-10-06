@@ -41,6 +41,13 @@ targets:
           - "BrowseService.swift"
           - "SearchService.swift"
           - "RecommendationsService.swift"
+          - "PersonalizedRecommendationsService.swift"
+          - "WatchHistoryService.swift"
+          - "RecommendationFeedbackService.swift"
+          - "SimilarChannelsEngine.swift"
+          - "StreamerAffinityService.swift"
+          - "ChannelContentService.swift"
+          - "ChannelProfileService.swift"
           - "FollowedChannels*.swift"
           - "TwitchAuthSession*.swift"
           - "TwitchYouTubeAliasService.swift"
@@ -70,6 +77,7 @@ targets:
           - "TopShelfCredentialStore.swift"
           - "TopShelfSnapshot.swift"
       - path: Strozz/Views/Icon.swift
+      - path: Strozz/Resources/StreamerAffinity.json
       - path: Strozz/Views/RichChatLineView.swift
       - path: Strozz/Views/Chat/ChatColor.swift
     dependencies:

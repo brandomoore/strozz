@@ -3,8 +3,12 @@ import SwiftUI
 struct MobileAccountView: View {
   @Environment(TwitchAuthSession.self) private var auth
   @Environment(ThemeManager.self) private var theme
+  @Environment(WatchHistoryService.self) private var history
+  @Environment(MobileVODProgressStore.self) private var vodProgress
   @Environment(\.scenePhase) private var scenePhase
   @AppStorage(PersistenceKey.chatSyncToStream) private var chatSync = true
+  @AppStorage(RecommendationPreferences.enabledDefaultsKey) private var personalized = true
+  @State private var confirmingClearHistory = false
 
   var body: some View {
     @Bindable var theme = theme
@@ -46,11 +50,22 @@ struct MobileAccountView: View {
         Text("Chat stays live during normal playback. When video falls further behind, incoming chat waits to match it. Sending is always immediate.")
       }
       Section {
-        Text("This first mobile version supports Twitch live streams. VODs, clips, multiview, and merged chat are not included.")
+        Toggle("Personalized Home", isOn: $personalized)
+        Button("Clear watch history and broadcast progress", role: .destructive) {
+          confirmingClearHistory = true
+        }
+      } footer: {
+        Text("Home uses your follows and watches on this device. History and broadcast progress are stored only on this device, separately for each account.")
+      }
+      Section {
+        Text("Watch Twitch live streams and past broadcasts. Clips, multiview, and merged chat are not included.")
           .foregroundStyle(.secondary)
       }
     }
     .navigationTitle("Account")
+    .confirmationDialog("Clear this account's history on this device?", isPresented: $confirmingClearHistory) {
+      Button("Clear history", role: .destructive) { history.clear(); vodProgress.clear() }
+    }
     .onChange(of: scenePhase) { _, phase in
       if phase == .active { Task { await auth.validateSessionIfNeeded() } }
     }

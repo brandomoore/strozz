@@ -15,7 +15,8 @@ struct StrozzMobileApp: App {
 
   var body: some Scene {
     WindowGroup {
-      MobileRootView()
+      MobileRootView(accountID: auth.userID ?? "anonymous")
+        .id(auth.userID ?? "anonymous")
         .environment(auth)
         .environment(theme)
         .preferredColorScheme(theme.theme.preferredColorScheme)
@@ -35,20 +36,31 @@ struct MobileRootView: View {
   @State private var playbackModel = MobilePlaybackModel()
   @State private var preview = MobileHomePreview()
   @State private var tab = 0
+  @State private var history: WatchHistoryService
+  @State private var vodProgress: MobileVODProgressStore
+  @State private var homeProfile: FollowedChannel?
+  @State private var browseProfile: FollowedChannel?
+
+  init(accountID: String = "anonymous") {
+    _history = State(initialValue: WatchHistoryService(storageKey: PersistenceKey.mobileWatchHistory(accountID: accountID)))
+    _vodProgress = State(initialValue: MobileVODProgressStore(accountID: accountID))
+  }
 
   var body: some View {
     let palette = theme.theme.palette(systemColorScheme: colorScheme)
     let previewsEnabled = tab == 0 && selectedChannel == nil && !playbackModel.isActive && scenePhase == .active
     TabView(selection: $tab) {
       NavigationStack {
-        MobileHomeView(preview: preview, previewsEnabled: previewsEnabled,
-                       onSelect: select, onAccount: { tab = 2 })
+        MobileHomeView(preview: preview, previewsEnabled: previewsEnabled, history: history,
+                       onSelect: select, onProfile: { homeProfile = $0 }, onAccount: { tab = 2 })
+          .navigationDestination(item: $homeProfile) { MobileChannelProfileView(channel: $0, onLive: select) }
       }
       .tabItem { Label { Text("Home") } icon: { Image("tb-home") } }
       .tag(0)
 
       NavigationStack {
         MobileBrowseView(onSelect: select)
+          .navigationDestination(item: $browseProfile) { MobileChannelProfileView(channel: $0, onLive: select) }
       }
       .tabItem { Label { Text("Browse") } icon: { Image("tb-layout-grid") } }
       .tag(1)
@@ -58,14 +70,22 @@ struct MobileRootView: View {
         .tag(2)
     }
     .environment(\.themePalette, palette)
+    .environment(history)
+    .environment(vodProgress)
     .fullScreenCover(item: $selectedChannel, onDismiss: { playbackModel.stop() }) { channel in
       MobilePlayerView(channel: channel, model: playbackModel)
         .environment(\.themePalette, palette)
     }
+    .onDisappear { preview.stop() }
   }
 
   private func select(_ channel: FollowedChannel) {
     preview.stop()
+    guard channel.isLive else {
+      if tab == 0 { homeProfile = channel } else { browseProfile = channel }
+      return
+    }
+    history.record(channel)
     playbackModel.stop()
     playbackModel = MobilePlaybackModel()
     selectedChannel = channel
