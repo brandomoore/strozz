@@ -149,6 +149,9 @@ stops in the background; Picture in Picture/background audio are not yet
 supported. Returning resolves fresh stream URLs instead of reviving an expired
 native engine. Paused/rewound positions are preserved when still available; an
 expired position shows an error rather than silently jumping to live.
+Transient native-engine failures get up to two fresh native attempts in a
+rolling minute before standard fallback; unsupported formats still fail over
+explicitly instead of leaving playback stuck.
 If audio advances without decodable video, the mobile player makes one recovery
 attempt using the primary video rendition and displays the actual selected
 quality and a notice. A failed recovery shows an error instead of staying black.

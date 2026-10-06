@@ -229,7 +229,7 @@ extension PlayerView {
       )
       recordCurrentErrorLog()
       if model.isUsingNativeHLS {
-        fallbackFromNativeHLS(.unavailable)
+        recoverNativeHLS(.unavailable)
       }
       if isUsingAltSource, let master = altYouTubeMasterURL, currentSourceURL == master {
         model.altRecovery.noteTerminalFailure()

@@ -37,7 +37,7 @@ extension PlayerView {
         )
       }
     }
-    guard !Task.isCancelled else { return }
+    guard !Task.isCancelled, backgroundedAt == nil else { return }
     recordPlaybackEvent("initial_source_selected", attributes: ["source": "twitch"])
     await load(reason: reason)
   }
@@ -59,7 +59,7 @@ extension PlayerView {
   func load(maxAttempts: Int = 3, reason: String = "initial")
     async
   {
-    guard !Task.isCancelled else { return }
+    guard !Task.isCancelled, backgroundedAt == nil else { return }
     // While the experimental alternate source (YouTube simulcast) is active the
     // player holds a plain non-Twitch item. Every `load()` rebuilds the proxied
     // Twitch pipeline via `makeItem` and re-arms the Twitch control loops, which
@@ -88,7 +88,8 @@ extension PlayerView {
     var lastError: Error?
     for attempt in 1...maxAttempts {
       guard telemetrySessionID == model.playbackTelemetry.sessionID,
-        loadingChannel == activeChannel, sourceGeneration == model.altRecovery.generation else { return }
+        loadingChannel == activeChannel, sourceGeneration == model.altRecovery.generation,
+        backgroundedAt == nil else { return }
       let attemptStartedAt = ProcessInfo.processInfo.systemUptime
       recordPlaybackEvent(
         "load_attempt_started",
@@ -111,6 +112,7 @@ extension PlayerView {
         // Bail out instead of resurrecting playback on an orphaned AVPlayer, which
         // would keep audio running off-screen — and double up if the user reopens
         // the stream.
+        guard backgroundedAt == nil else { return }
         if Task.isCancelled {
           recordPlaybackEvent(
             "load_cancelled",
@@ -137,14 +139,14 @@ extension PlayerView {
         }
         playback = resolved
         replacePlaybackItem(with: makeItem(url: resolved.url(forQuality: preferredQuality)))
-        startPlayback()
+        if shouldPlayAltSource { startPlayback() }
 
         let started = await waitForPlaybackStart()
         guard telemetrySessionID == model.playbackTelemetry.sessionID,
           loadingChannel == activeChannel, sourceGeneration == model.altRecovery.generation else { return }
         if !started {
           if model.isUsingNativeHLS {
-            fallbackFromNativeHLS(.unavailable)
+            recoverNativeHLS(.timeout)
             if await waitForPlaybackStart() {
               startLatencyMonitor()
               startPlaybackWatchdog()
@@ -247,10 +249,19 @@ extension PlayerView {
   }
 
   func waitForPlaybackStart() async -> Bool {
-    let deadline = Date().addingTimeInterval(startupPlaybackTimeoutSeconds)
-    let startingItem = player.currentItem
+    var deadline = Date().addingTimeInterval(startupPlaybackTimeoutSeconds)
+    var startingItem = player.currentItem
+    var restartSerial = model.nativeRestartSerial
 
     while Date() < deadline {
+      if model.nativeNeedsRefresh || restartSerial != model.nativeRestartSerial {
+        guard let refresh = model.nativeRefreshTask else { return false }
+        await refresh.value
+        guard !Task.isCancelled, !model.nativeNeedsRefresh, backgroundedAt == nil else { return false }
+        restartSerial = model.nativeRestartSerial
+        startingItem = player.currentItem
+        deadline = Date().addingTimeInterval(startupPlaybackTimeoutSeconds)
+      }
       if Task.isCancelled || startingItem !== player.currentItem {
         return false
       }
@@ -258,6 +269,9 @@ extension PlayerView {
       if let item = player.currentItem {
         if item.status == .failed {
           return false
+        }
+        if item.status == .readyToPlay, isUserPaused || isScrubbing {
+          return true
         }
 
         if model.startupProgress.observe(
@@ -354,7 +368,7 @@ extension PlayerView {
         history: streamRewindEnabled ? rewindWindowSeconds : 12) { reason in
           Task { @MainActor in
             guard generation == model.nativeGeneration, model.isUsingNativeHLS else { return }
-            fallbackFromNativeHLS(reason)
+            recoverNativeHLS(reason)
           }
         }
       model.nativeHLS = native
@@ -412,6 +426,24 @@ extension PlayerView {
     } else if canResumeFallback(item: item, generation: generation) { startPlayback() }
   }
 
+  func recoverNativeHLS(
+    _ reason: NativeHLSError,
+    resolve: (@MainActor () async throws -> StreamPlayback)? = nil
+  ) {
+    guard model.isUsingNativeHLS, !model.nativeNeedsRefresh,
+      backgroundedAt == nil, !isUsingAltSource, !isVOD else { return }
+    guard model.nativeRecovery.takeRetry(for: reason) else {
+      fallbackFromNativeHLS(reason)
+      return
+    }
+    model.nativeRestartSerial += 1
+    recordPlaybackEvent("native_hls_retry", level: .warning,
+      attributes: ["reason": reason.rawValue],
+      counters: ["attempts_in_window": model.nativeRecovery.attempts.count])
+    suspendNativePlayback(reason: "native_retry")
+    refreshNativeAfterSuspension(reason: "native_retry", resolve: resolve)
+  }
+
   func canResumeFallback(item: AVPlayerItem, generation: UUID) -> Bool {
     !Task.isCancelled && item === player.currentItem && generation == model.nativeGeneration
       && shouldPlayAltSource && !isOffline && !vodHandoffTransitionInFlight
@@ -439,8 +471,8 @@ extension PlayerView {
     if canResumeFallback(item: item, generation: generation) { startPlayback() }
   }
 
-  func suspendNativePlayback() {
-    cancelNativeCatchUp(reason: "background")
+  func suspendNativePlayback(reason: String = "background") {
+    cancelNativeCatchUp(reason: reason)
     guard model.isUsingNativeHLS else { return }
     model.nativeNeedsRefresh = true
     model.nativeResumePosition = (!pinnedToLive || isUserPaused) ? player.currentItem?.currentDate() : nil
@@ -450,10 +482,11 @@ extension PlayerView {
     model.nativeHLS?.stop()
     model.nativeHLS = nil
     player.pause()
-    recordPlaybackEvent("native_hls_suspended")
+    recordPlaybackEvent("native_hls_suspended", attributes: ["reason": reason])
   }
 
   func refreshNativeAfterSuspension(
+    reason: String = "suspension",
     resolve: (@MainActor () async throws -> StreamPlayback)? = nil
   ) {
     guard model.nativeNeedsRefresh else { return }
@@ -462,8 +495,8 @@ extension PlayerView {
     let generation = model.nativeGeneration
     let sessionID = model.playbackTelemetry.sessionID
     let channel = activeChannel
-    let position = model.nativeResumePosition
-    let intent = model.nativePositionIntent
+    let initialPosition = model.nativeResumePosition
+    let initialIntent = model.nativePositionIntent
     model.nativeRefreshTask = Task { @MainActor in
       do {
         let resolved: StreamPlayback
@@ -472,11 +505,15 @@ extension PlayerView {
         guard !Task.isCancelled, model.nativeNeedsRefresh, generation == model.nativeGeneration,
           sessionID == model.playbackTelemetry.sessionID, channel == activeChannel,
           backgroundedAt == nil, !isUsingAltSource, !isVOD else { return }
+        let intent = model.nativePositionIntent
+        let position = intent == initialIntent ? initialPosition
+          : ((!pinnedToLive || isUserPaused) ? player.currentItem?.currentDate() : nil)
         playback = resolved
         model.nativeFallbackReason = nil
         let item = makeItem(url: resolved.url(forQuality: preferredQuality))
         replacePlaybackItem(with: item)
-        recordPlaybackEvent("native_hls_fresh_source_after_suspension")
+        recordPlaybackEvent(reason == "suspension"
+          ? "native_hls_fresh_source_after_suspension" : "native_hls_fresh_source_after_failure")
         if let position {
           await restoreNativePosition(position, item: item, generation: model.nativeGeneration, intent: intent)
           if item === player.currentItem { isLoading = false }
@@ -496,7 +533,7 @@ extension PlayerView {
         errorMessage = error.localizedDescription
         isLoading = false
         recordPlaybackEvent("native_hls_resume_failed", level: .error,
-          attributes: PlaybackTelemetryRecorder.errorAttributes(error))
+          attributes: PlaybackTelemetryRecorder.errorAttributes(error).merging(["reason": reason]) { _, new in new })
       }
     }
   }
@@ -1119,15 +1156,8 @@ extension PlayerView {
     cancelNativeCatchUp(reason: "recovery")
     if model.isUsingNativeHLS, currentSourceURL != nil {
       guard pinnedToLive, !isUserPaused, !isScrubbing else { return }
-      let now = Date()
-      model.nativeRecoveryTimes.removeAll { now.timeIntervalSince($0) > 60 }
-      if model.nativeRecoveryTimes.count >= 2 {
-       fallbackFromNativeHLS(.unavailable)
-       return
-      }
-      model.nativeRecoveryTimes.append(now)
       recordPlaybackEvent("native_live_recovery", level: .warning, attributes: ["reason": reason])
-      reloadToLiveEdge()
+      recoverNativeHLS(.unavailable)
       return
     }
     guard let item = player.currentItem else {

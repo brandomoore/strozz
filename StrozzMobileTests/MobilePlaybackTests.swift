@@ -69,6 +69,34 @@ final class MobilePlaybackTests: XCTestCase {
     model.stop()
     gate.finish()
   }
+
+  func testTransientNativeFailureResolvesAgainWithoutSelectingStandard() async throws {
+    var pending: [CheckedContinuation<StreamPlayback, Never>] = []
+    let model = MobilePlaybackModel(muted: true) { _ in
+      await withCheckedContinuation { pending.append($0) }
+    }
+    model.start(channel: "test")
+    for _ in 0..<100 {
+      if pending.count == 1 { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    model.recoverNative(.unavailable)
+    for _ in 0..<100 {
+      if pending.count == 2 { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    XCTAssertEqual(pending.count, 2)
+    XCTAssertEqual(model.selection, .native)
+    XCTAssertNil(model.nativeFailure)
+    XCTAssertTrue(model.isLoading)
+    model.stop()
+    for continuation in pending {
+      continuation.resume(returning: StreamPlayback(
+        master: URL(string: "https://example.com/stale.m3u8")!, qualities: []))
+    }
+    await Task.yield()
+    XCTAssertNil(model.player.currentItem)
+  }
 }
 
 @MainActor

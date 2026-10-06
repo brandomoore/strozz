@@ -63,6 +63,7 @@ extension PlayerView {
   var qualityEngineStatus: String? {
     guard preferredQuality == "Auto", livePlaybackProfile == .nativeLowLatency, !isUsingAltSource else { return nil }
     if let reason = model.nativeFallbackReason { return "Standard playback · \(reason)" }
+    if model.nativeNeedsRefresh { return "Reconnecting Native LL-HLS" }
     if model.isUsingNativeHLS { return model.nativeParts > 0 ? "Native LL-HLS" : "Preparing Native LL-HLS" }
     return "Standard playback"
   }

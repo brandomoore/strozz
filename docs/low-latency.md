@@ -13,16 +13,16 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   **Auto · Low Latency**, **Auto · High Quality**, and fixed-quality options
   remain available. Native source-CMAF indexing and original-CDN byte ranges
   now run in Swift in the app; no desktop helper or certificate is required.
-  The adaptive master is preserved. Unsupported formats and transitions fall
-  back to the existing player, with the reason in the quality menu/diagnostics.
+  The adaptive master is preserved. Transient failures retry native playback
+  before considering the existing player; fallback is explicit in the quality
+  menu/diagnostics.
 - Choose the old **Auto · Low Latency** row for an immediate comparison. Native
   mode uses AVPlayer's LL-HLS timing, not the legacy variable-rate controller.
   Choosing native mode explicitly selects Twitch rather than a YouTube simulcast.
   Fixed-quality selections keep their existing stable-buffer policy.
 - Native mode is independent of the legacy Diagnostics **Prefetch Proxy**
-  kill-switch. Its unsupported-source fallback enables prefetch promotion unless
-  stability mode has vetoed it. The legacy profiles continue honoring their
-  existing kill-switch. The selected native row and latency badge explicitly
+  kill-switch. Its fallback honors that legacy kill-switch, just like the legacy
+  profiles themselves. The selected native row and latency badge explicitly
   identify standard playback after fallback; selection is not proof of activation.
 - The native engine now indexes both H.264/AAC MPEG-TS and CMAF. TS parts are
   packet-aligned, retain PAT/PMT initialization, and use measured PES timestamps.
@@ -34,9 +34,12 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   continues using original CDN segment URLs.
 - Native startup waits until the indexer has actual live-prefetch content and
   aligns once to live after native playback begins. Returning to live preserves
-  the engine; native stalls no longer invoke the legacy backward-seeking
-  stability strategy. A bounded native recovery budget still permits a visible
-  fallback if playback cannot recover. Deliberate pauses and rewinds disable
+  the engine; native stalls no longer invoke legacy stability recovery.
+  A shared budget permits two fresh native attempts per rolling minute for
+  temporary origin, timeline, startup, or watchdog failures. Each retry resolves
+  a fresh signed master and replaces the failed engine instead of reusing it.
+  Verified unsupported formats skip those futile attempts; repeated failure
+  still permits a visible legacy fallback. Deliberate pauses and rewinds disable
   automatic offset preservation.
 - When native activation fails, its row disappears for that channel and the
   checkmark moves to the actual fallback mode. The old **Auto · Low Latency**
@@ -54,6 +57,25 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   instead of downloading all historical media. Only the newest segment and
   live edge are indexed. Idle renditions resume their retained timeline, and
   active media requests keep their indexer alive during adaptive switches.
+
+### Native-first recovery
+
+The native profile remains the default. Previously, the TV watchdog had a
+two-attempt recovery budget, but direct origin failures and failed-to-end events
+could bypass it and downgrade immediately. These paths now use
+`NativePlaybackRecovery`, also shared by the mobile player. Brief unavailability,
+timeouts, discontinuity/timeline failures, incomplete keyframes and indexer
+overruns get bounded fresh-native attempts. Unsupported codecs/program tables
+and unsupported part durations can still fall back immediately.
+
+Duplicate callbacks coalesce during a TV source refresh. Startup waits follow a
+retry-owned replacement rather than launching a competing load. Pause/rewind
+intent is retained, a newer pause remains paused, and discarded-source or
+dismissed-player completions cannot resurrect playback. A failed fresh source
+resolution reports an error rather than pretending standard playback was
+necessary. The default does not force unsupported media to play or promise
+unlimited retries; legacy playback is the last-resort stability path, not the
+first response to a transient engine error.
 
 **Physical-device finding:** the first installed integration was blocked by a
 persisted legacy proxy-off setting. Device telemetry on Caedrel showed

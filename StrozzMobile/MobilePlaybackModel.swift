@@ -49,6 +49,7 @@ final class MobilePlaybackModel {
   @ObservationIgnored private var loadingPosition: Position?
   @ObservationIgnored private var audioSessionActive = false
   @ObservationIgnored private var triedDecodeRecovery = false
+  @ObservationIgnored private var nativeRecovery = NativePlaybackRecovery()
   @ObservationIgnored private let muteForTesting: Bool
   @ObservationIgnored private let resolve: (String) async throws -> StreamPlayback
   private static let logger = Logger(subsystem: "com.thatcube.Twozz", category: "mobile-playback")
@@ -231,7 +232,7 @@ final class MobilePlaybackModel {
                                       history: 180) { [weak self] reason in
             Task { @MainActor [weak self] in
               guard let self, self.isCurrent(request) else { return }
-              self.fallback(reason.localizedDescription)
+              self.recoverNative(reason)
             }
           }
         }
@@ -280,12 +281,14 @@ final class MobilePlaybackModel {
         }
         isLoading = false
         loadingPosition = nil
+        if selection == .native { recoveryNotice = nil }
         installIntentObservers(item: item, request: request)
         startMonitor(item: item, request: request)
       } catch {
         guard isCurrent(request) else { return }
         if selection == .native && (error as? MobilePlaybackError) != .positionUnavailable {
-          fallback(error.localizedDescription, position: position)
+          recoverNative(error as? NativeHLSError ?? .unavailable,
+                        detail: error.localizedDescription, position: position)
         } else {
           fail(error.localizedDescription)
         }
@@ -303,6 +306,18 @@ final class MobilePlaybackModel {
     nativeFailure = reason
     selection = .automatic
     Self.logger.warning("Native mobile playback fell back: \(reason, privacy: .public)")
+    load(position: saved)
+  }
+
+  func recoverNative(_ reason: NativeHLSError, detail: String? = nil, position: Position? = nil) {
+    guard isActive, suspendedPosition == nil, selection == .native else { return }
+    guard nativeRecovery.takeRetry(for: reason) else {
+      fallback(detail ?? reason.rawValue, position: position)
+      return
+    }
+    let saved = position ?? self.position()
+    recoveryNotice = "Reconnecting native low-latency playback..."
+    Self.logger.warning("Retrying native mobile playback: \(reason.rawValue, privacy: .public)")
     load(position: saved)
   }
 
@@ -382,7 +397,7 @@ final class MobilePlaybackModel {
         if player.status == .failed || item.status == .failed {
           let reason = item.error?.localizedDescription ?? player.error?.localizedDescription
             ?? MobilePlaybackError.unavailable.localizedDescription
-          if selection == .native { fallback(reason) } else { fail(reason) }
+          if selection == .native { recoverNative(.unavailable, detail: reason) } else { fail(reason) }
           return
         }
         let uptime = ProcessInfo.processInfo.systemUptime
@@ -403,7 +418,7 @@ final class MobilePlaybackModel {
           return
         }
         if uptime - lastProgress > 20 {
-          if selection == .native { fallback(MobilePlaybackError.timeout.localizedDescription) }
+          if selection == .native { recoverNative(.timeout) }
           else { fail(MobilePlaybackError.timeout.localizedDescription) }
           return
         }

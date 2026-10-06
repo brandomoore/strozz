@@ -62,7 +62,8 @@ final class PlayerModel {
   @ObservationIgnored var nativeCatchUp = NativeLiveCatchUp()
   @ObservationIgnored var nativeCatchUpTask: Task<Void, Never>?
   @ObservationIgnored var nativeCatchUpItem: AVPlayerItem?
-  @ObservationIgnored var nativeRecoveryTimes: [Date] = []
+  @ObservationIgnored var nativeRecovery = NativePlaybackRecovery()
+  @ObservationIgnored var nativeRestartSerial = 0
   @ObservationIgnored var fallbackRestoreTask: Task<Void, Never>?
   @ObservationIgnored var nativeNeedsRefresh = false
   @ObservationIgnored var nativeResumePosition: Date?
