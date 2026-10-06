@@ -8,7 +8,7 @@ final class LivePlaybackPolicyTests: XCTestCase {
     XCTAssertEqual(LivePlaybackProfile.nativeLowLatency.pickerLabel, "Auto · Native Low Latency")
     XCTAssertEqual(LivePlaybackProfile.allCases.count, 3)
     let policy = LivePlaybackPolicy.live(profile: .nativeLowLatency, isPinned: false)
-    XCTAssertEqual(policy.preferredForwardBufferDuration, 1)
+    XCTAssertEqual(policy.preferredForwardBufferDuration, 3)
     XCTAssertEqual(policy.minPlaybackRate, 1)
     XCTAssertEqual(policy.maxCatchUpRate, 1)
   }
@@ -94,13 +94,19 @@ final class LivePlaybackPolicyTests: XCTestCase {
     XCTAssertEqual(policy.maxCatchUpRate, 1.0, accuracy: 0.0001)
   }
 
-  func testPinnedRenditionIgnoresProfileAndNeverCatchesUp() {
-    for profile in LivePlaybackProfile.allCases {
+  func testLegacyPinnedRenditionKeepsItsDeeperBuffer() {
+    for profile in [LivePlaybackProfile.lowerLatency, .higherQuality] {
       let policy = LivePlaybackPolicy.live(profile: profile, isPinned: true)
       XCTAssertEqual(policy.preferredForwardBufferDuration, 8)
       XCTAssertFalse(policy.enablesGentleCatchUp)
       XCTAssertEqual(policy.catchUpThresholdSeconds, .greatestFiniteMagnitude)
     }
+  }
+
+  func testNativePinnedVideoKeepsNativeBufferAndRateOwnership() {
+    XCTAssertEqual(
+      LivePlaybackPolicy.live(profile: .nativeLowLatency, isPinned: true),
+      LivePlaybackPolicy.live(profile: .nativeLowLatency, isPinned: false))
   }
 
   func testStabilityFallbackIsDeepBufferedAndDoesNotChaseEdge() {

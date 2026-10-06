@@ -167,4 +167,110 @@ final class NativeCMAFTests: XCTestCase {
       XCTAssertTrue(error is CancellationError)
     }
   }
+
+  func testWholeSegmentHoldBackUsesPublicationCadenceNotAdvertisedMaximum() async throws {
+    let url = URL(string: "https://example.test/live.m3u8")!
+    let date = Date(timeIntervalSince1970: 100)
+    var segments = (0..<12).map { index in
+      NativeHLSOrigin.Segment(
+        sequence: index, url: url, date: date.addingTimeInterval(Double(index * 2)),
+        discontinuity: 0, tags: [], complete: true, declaredDuration: 2)
+    }
+    segments[11].parts = (0..<5).map { number in
+      NativeHLSOrigin.Part(offset: number * 188, length: 188, duration: 0.4,
+        independent: number == 0, media: Data(repeating: 0, count: 188))
+    }
+    let origin = NativeHLSOrigin(root: url, headers: [:], history: 30) { _ in }
+    defer { Task { await origin.stop() } }
+    let rendered = try await origin.renderForTesting(segments, hasPrefetch: false, target: 6)
+    XCTAssertTrue(rendered.contains("PART-HOLD-BACK=3.5"))
+    XCTAssertTrue(rendered.contains("#EXT-X-PART-INF:PART-TARGET=0.45"))
+    XCTAssertTrue(rendered.contains("#EXT-X-TARGETDURATION:6"))
+    XCTAssertTrue(rendered.contains("#EXT-X-PART:DURATION=0.400000"))
+    let source = NativeHLSOrigin.Rendition(
+      url: url, segments: segments, target: 6,
+      reachedLiveEdge: true, hasPrefetch: false, publicationDuration: 2)
+    XCTAssertEqual(
+      NativeHLSOrigin.liveTargetDate(in: [0: source], active: 0),
+      date.addingTimeInterval(24 - 0.4 - 3.5))
+  }
+
+  func testWholeSegmentCushionRetainsRoomForLongerPublications() {
+    let url = URL(string: "https://example.test/live.m3u8")!
+    var source = NativeHLSOrigin.Rendition(url: url, target: 6, hasPrefetch: false)
+    XCTAssertEqual(source.liveHoldBack, 7.5)
+    source.publicationDuration = 2
+    XCTAssertEqual(source.liveHoldBack, 3.5)
+    XCTAssertEqual(source.forwardBuffer, 3.5)
+    source.publicationDuration = 6
+    XCTAssertEqual(source.liveHoldBack, 7.5)
+    source.hasPrefetch = true
+    XCTAssertEqual(source.liveHoldBack, 1.5)
+    XCTAssertEqual(source.forwardBuffer, 3)
+  }
+
+  func testWholeSegmentPublicationKeepsTheHintCachedAndNeverWithdrawsReleasedParts() {
+    let url = URL(string: "https://example.test/segment.ts")!
+    let part = NativeHLSOrigin.Part(offset: 0, length: 188, duration: 0.4,
+      independent: true, media: Data(repeating: 0x47, count: 188))
+    let first = NativeHLSOrigin.Segment(sequence: 10, url: url, date: Date(timeIntervalSince1970: 100),
+      discontinuity: 0, tags: [], parts: [part, part], complete: true)
+    var source = NativeHLSOrigin.Rendition(url: url, segments: [first], hasPrefetch: false)
+    XCTAssertEqual(source.publishedSegments[0].parts.count, 1)
+    XCTAssertFalse(source.publishedSegments[0].complete)
+    XCTAssertNotNil(source.segments[0].parts[1].media)
+    source.hasPrefetch = true
+    XCTAssertEqual(source.publishedSegments[0].parts.count, 1, "Capability refresh cannot republish a segment differently")
+    let next = NativeHLSOrigin.Segment(sequence: 11, url: url, date: Date(timeIntervalSince1970: 100.8),
+      discontinuity: 0, tags: [], parts: [part], complete: true)
+    source.segments.append(next)
+    XCTAssertEqual(source.publishedSegments[0].parts.count, 2)
+    XCTAssertTrue(source.publishedSegments[0].complete)
+    XCTAssertEqual(source.publishedSegments[1].parts.count, 0)
+    source.ended = true
+    XCTAssertEqual(source.publishedSegments[1].parts.count, 1, "End-of-stream releases the held tail")
+    XCTAssertTrue(source.publishedSegments[1].complete)
+  }
+
+  func testRenditionReportsUseVerifiedSequencesAndRelativeURIs() async throws {
+    let url = URL(string: "https://example.test/live.m3u8")!
+    let segment = NativeHLSOrigin.Segment(sequence: 90, url: url, date: Date(),
+      discontinuity: 0, tags: [], complete: true, declaredDuration: 2)
+    let origin = NativeHLSOrigin(root: url, headers: [:], history: 30) { _ in }
+    defer { Task { await origin.stop() } }
+    let text = try await origin.renderForTesting([segment], otherRenditions: [
+      1: .init(url: url, reportedCompleteSequence: 87),
+      2: .init(url: url)
+    ])
+    XCTAssertTrue(text.contains("#EXT-X-RENDITION-REPORT:URI=\"1.m3u8\",LAST-MSN=87,LAST-PART=0"))
+    XCTAssertFalse(text.contains("URI=\"2.m3u8\""), "An unknown rendition must not invent a sequence")
+  }
+
+  func testColdRenditionIndexesTheRequestedSequenceInsteadOfSkippingItsParts() throws {
+    let text = playlist.replacingOccurrences(of: "#EXT-X-TWITCH-PREFETCH:43.mp4",
+      with: "#EXTINF:2.0,\n43.mp4\n#EXTINF:2.0,\n44.mp4\n#EXT-X-TWITCH-PREFETCH:45.mp4")
+    let entries = try NativeCMAF.manifest(text, url: URL(string: "https://example.test/live.m3u8")!).entries
+    XCTAssertEqual(NativeHLSOrigin.initialEntry(in: entries, requestedSequence: 43)?.sequence, 43)
+    XCTAssertEqual(NativeHLSOrigin.initialEntry(in: entries, requestedSequence: nil)?.sequence, 44)
+    XCTAssertEqual(NativeHLSOrigin.initialEntry(in: entries, requestedSequence: 45)?.sequence, 44)
+  }
+
+  func testStoppingConcurrentManifestRequestsDoesNotRaceSessionInvalidation() async {
+    for _ in 0..<32 {
+      let origin = NativeHLSOrigin(root: URL(string: "https://127.0.0.1:1/master.m3u8")!,
+        headers: [:], history: 30) { _ in }
+      let request = Task {
+        try await origin.response(URL(string: "strozz-native-ll://test/root.m3u8")!)
+      }
+      await Task.yield()
+      request.cancel()
+      await origin.stop()
+      do {
+        _ = try await request.value
+        XCTFail("A stopped loopback request must not produce a playlist")
+      } catch {
+        XCTAssertTrue(error is CancellationError || error is URLError)
+      }
+    }
+  }
 }

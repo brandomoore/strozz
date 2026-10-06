@@ -3,7 +3,11 @@ import Foundation
 /// Recover small live drift by consuming buffered video slightly faster, never
 /// by seeking or replacing the item. Rebuffering and manual intent take priority.
 struct NativeLiveCatchUp {
+  enum Interruption: String {
+    case cancelled, unavailableSample, renditionChanged, samplingGap, clockChanged, dateChanged, rateReset, reachedLive
+  }
   static let minimumExcessSeconds: TimeInterval = 3
+  static let startupToleranceSeconds: TimeInterval = 1.5
   static let settlingSeconds: TimeInterval = 4
   static let minimumBufferSeconds: TimeInterval = 0.75
   static let startBufferSeconds: TimeInterval = 2
@@ -27,7 +31,10 @@ struct NativeLiveCatchUp {
 
   private(set) var rate: Float = 1
   private(set) var extraDelay: TimeInterval?
+  private(set) var lastInterruption: Interruption?
+  private(set) var dateClockDifference: Double?
   var isActive: Bool { rate > 1 }
+
   private var previous: Sample?
   private var settledSince: TimeInterval?
   private var behindSince: TimeInterval?
@@ -42,7 +49,7 @@ struct NativeLiveCatchUp {
       let playback = sample.playbackDate, let target = sample.targetDate,
       playback.timeIntervalSinceReferenceDate.isFinite, target.timeIntervalSinceReferenceDate.isFinite
     else {
-      interrupt(at: sample.uptime)
+      interrupt(at: sample.uptime, reason: .unavailableSample)
       return rate
     }
     defer { previous = sample }
@@ -52,10 +59,14 @@ struct NativeLiveCatchUp {
       let advance = sample.clock - previous.clock
       let dateAdvance = playback.timeIntervalSince(previousDate)
       let expectedAdvance = elapsed * Double(previous.playbackRate)
+      dateClockDifference = dateAdvance - advance
       if previous.rendition != sample.rendition || !(0.5...2.5).contains(elapsed)
         || advance < expectedAdvance * 0.8 || advance > expectedAdvance * 1.2
         || abs(advance - dateAdvance) > 0.5 {
-        interrupt(at: sample.uptime)
+        let reason: Interruption = previous.rendition != sample.rendition ? .renditionChanged
+          : !(0.5...2.5).contains(elapsed) ? .samplingGap
+          : abs(advance - dateAdvance) > 0.5 ? .dateChanged : .clockChanged
+        interrupt(at: sample.uptime, reason: reason)
         settledSince = sample.uptime
       }
     }
@@ -65,7 +76,7 @@ struct NativeLiveCatchUp {
       // A fixed correction has only two commands: enter, then exit. Segment
       // buffer oscillation must not retime AVPlayer every second.
       if gap <= Self.settledExcessSeconds || abs(sample.playbackRate - rate) > 0.01 {
-        interrupt(at: sample.uptime)
+        interrupt(at: sample.uptime, reason: gap <= Self.settledExcessSeconds ? .reachedLive : .rateReset)
       }
       return rate
     }
@@ -81,12 +92,14 @@ struct NativeLiveCatchUp {
       sample.uptime >= cooldownUntil,
       sample.buffer >= Self.startBufferSeconds else { return rate }
     rate = Self.maximumRate
+    lastInterruption = nil
     return rate
   }
 
-  mutating func interrupt(at uptime: TimeInterval) {
+  mutating func interrupt(at uptime: TimeInterval, reason: Interruption = .cancelled) {
     if isActive, uptime.isFinite { cooldownUntil = uptime + Self.cooldownSeconds }
     rate = 1
+    lastInterruption = reason
     extraDelay = nil
     previous = nil
     settledSince = nil

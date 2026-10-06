@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import OSLog
 
 /// Delegate state is lock-protected; all playlist/index state lives on the origin actor.
 final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unchecked Sendable {
@@ -130,7 +131,28 @@ actor NativeHLSOrigin {
     var nextURL: URL?
     var ended = false
     var hasPrefetch = true
+    var publicationDuration: Double?
+    var reportedCompleteSequence: Int?
     var inferredDiscontinuities = 0
+
+    var liveHoldBack: Double {
+      // Cover the upstream publication interval plus the native part cushion.
+      hasPrefetch ? 1.5 : (publicationDuration ?? Double(target)) + 1.5
+    }
+
+    var forwardBuffer: Double { hasPrefetch ? 3 : max(3, liveHoldBack) }
+
+    var publishedSegments: [Segment] {
+      guard !ended, let last = segments.lastIndex(where: { !$0.parts.isEmpty }) else { return segments }
+      var published = Array(segments[...last])
+      // Put the publication wait on the blocking playlist, not a media download.
+      // The preload hint then names cached bytes, so a two-second upstream burst
+      // cannot masquerade as a slow transfer of a 0.4-second part to AVPlayer ABR.
+      published[last].parts.removeLast()
+      published[last].complete = false
+      published[last].declaredDuration = nil
+      return published
+    }
   }
   let root: URL
   let headers: [String: String]
@@ -146,6 +168,11 @@ actor NativeHLSOrigin {
   private var mediaServer: NativeHLSMediaServer?
   private var mediaBase: URL?
   private var cachedMediaBytes = 0
+  private var reportsUpdatedAt = Date.distantPast
+  private var reportTask: Task<[Int: Int], Never>?
+  private var inFlightRequests = 0
+  private var requestDrainWaiters: [CheckedContinuation<Void, Never>] = []
+  private static let logger = Logger(subsystem: "com.thatcube.Twozz", category: "native-hls")
 
   init(root: URL, headers: [String: String], history: Double,
        failure: @escaping @Sendable (NativeHLSError) -> Void) {
@@ -159,18 +186,26 @@ actor NativeHLSOrigin {
     session = URLSession(configuration: config)
   }
 
-  func stop() {
+  func stop() async {
+    guard !stopped else { return }
     stopped = true
     for source in sources.values { source.task?.cancel() }
+    reportTask?.cancel()
     sources.removeAll()
     cachedMediaBytes = 0
-    session.invalidateAndCancel()
     mediaServer?.stop()
+    if inFlightRequests > 0 {
+      await withCheckedContinuation { requestDrainWaiters.append($0) }
+    }
+    session.invalidateAndCancel()
   }
 
-  func snapshot() -> (parts: Int, renditions: Int, edgeAge: Double?) {
-    let tail = sources[lastActive]?.segments.last
-    return (publishedParts, sources.count, tail.map { Date().timeIntervalSince($0.date.addingTimeInterval($0.duration)) })
+  func snapshot() -> (parts: Int, renditions: Int, edgeAge: Double?, holdBack: Double?, hasPrefetch: Bool?, forwardBuffer: Double?) {
+    let source = sources[lastActive]
+    let tail = source?.segments.last
+    return (publishedParts, sources.count,
+      tail.map { Date().timeIntervalSince($0.date.addingTimeInterval($0.duration)) },
+      source?.liveHoldBack, source?.hasPrefetch, source?.forwardBuffer)
   }
 
   func liveTargetDate() -> Date? {
@@ -181,14 +216,19 @@ actor NativeHLSOrigin {
     // A faster inactive rendition is not evidence that the displayed rendition
     // is behind. Use the source whose media AVPlayer is actually requesting.
     guard let source = sources[active], source.reachedLiveEdge,
-      let last = source.segments.last else { return nil }
-    let holdBack = source.hasPrefetch ? 1.5 : Double(source.target * 3)
-    return last.date.addingTimeInterval(last.duration - holdBack)
+      let last = source.publishedSegments.last(where: { $0.duration > 0 }) else { return nil }
+    return last.date.addingTimeInterval(last.duration - source.liveHoldBack)
   }
 
-  func renderForTesting(_ segments: [Segment], ended: Bool = false) throws -> String {
+  func renderForTesting(_ segments: [Segment], ended: Bool = false,
+                        hasPrefetch: Bool = true, target: Int = 2,
+                        otherRenditions: [Int: Rendition] = [:]) throws -> String {
+    sources = otherRenditions
     sources[0] = Rendition(url: root, segments: segments)
     sources[0]?.ended = ended
+    sources[0]?.hasPrefetch = hasPrefetch
+    sources[0]?.target = target
+    sources[0]?.publicationDuration = segments.filter(\.complete).map(\.duration).max()
     return String(decoding: try playlist(0, base: URL(string: "\(NativeLowLatencyHLS.scheme)://test/root.m3u8")!), as: UTF8.self)
   }
 
@@ -197,7 +237,7 @@ actor NativeHLSOrigin {
     guard fields.count == 4, fields[0] == "part", let index = Int(fields[1]),
       let sequence = Int(fields[2]), let name = fields[3].split(separator: ".").first,
       let number = Int(name),
-      number >= 0 else { return nil }
+      number >= 0, sources[index] != nil else { return nil }
     lastActive = index
     sources[index]?.lastRequest = Date()
     let deadline = Date().addingTimeInterval(4)
@@ -219,7 +259,20 @@ actor NativeHLSOrigin {
   }
 
   private func data(_ url: URL) async throws -> Data {
+    try Task.checkCancellation()
+    guard !stopped else { throw CancellationError() }
+    inFlightRequests += 1
+    defer {
+      inFlightRequests -= 1
+      if inFlightRequests == 0 {
+        let waiters = requestDrainWaiters
+        requestDrainWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+      }
+    }
     let (data, response) = try await session.data(for: request(url))
+    try Task.checkCancellation()
+    guard !stopped else { throw CancellationError() }
     guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 4 * 1024 * 1024 else {
       throw NativeHLSError.unavailable
     }
@@ -268,6 +321,39 @@ actor NativeHLSOrigin {
     master = output.joined(separator: "\n")
   }
 
+  private func updateRenditionReports() async {
+    guard sources.count > 1, Date().timeIntervalSince(reportsUpdatedAt) >= 1 else { return }
+    if reportTask == nil {
+      let urls = sources.mapValues(\.url)
+      reportTask = Task {
+        await withTaskGroup(of: (Int, Int?).self) { group in
+          for (index, url) in urls {
+            group.addTask {
+              do {
+                let manifest = try NativeCMAF.manifest(
+                  String(decoding: await self.data(url), as: UTF8.self), url: url)
+                return (index, manifest.entries.last(where: { $0.duration != nil })?.sequence)
+              } catch {
+                if !Task.isCancelled {
+                  Self.logger.warning("Rendition report refresh failed for variant \(index): \((error as NSError).code)")
+                }
+                return (index, nil)
+              }
+            }
+          }
+          var reports: [Int: Int] = [:]
+          for await (index, sequence) in group { reports[index] = sequence }
+          return reports
+        }
+      }
+    }
+    let reports = await reportTask?.value ?? [:]
+    guard !stopped else { return }
+    for index in sources.keys { sources[index]?.reportedCompleteSequence = reports[index] }
+    reportsUpdatedAt = Date()
+    reportTask = nil
+  }
+
   func response(_ url: URL) async throws -> Response {
     do {
       try Task.checkCancellation()
@@ -279,22 +365,24 @@ actor NativeHLSOrigin {
       let components = url.path.split(separator: "/").map(String.init)
       let index = url.path == "/root.m3u8" ? 0 : Int(components.dropFirst().first?.split(separator: ".").first ?? "")
       guard let index, sources[index] != nil else { throw NativeHLSError.invalidMedia }
-      if components.first != "part" {
-        sources[index]?.lastRequest = Date()
-        if sources[index]?.task == nil {
-          sources[index]?.task = Task { [weak self] in await self?.run(index) }
-        }
-      }
       let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
       let msn = query.first { $0.name == "_HLS_msn" }?.value.flatMap(Int.init)
       let part = query.first { $0.name == "_HLS_part" }?.value.flatMap(Int.init)
       guard (msn == nil || msn! >= 0), (part == nil || (msn != nil && part! >= 0 && part! < 128))
       else { throw NativeHLSError.invalidMedia }
+      if components.first != "part" {
+        sources[index]?.lastRequest = Date()
+        if sources[index]?.task == nil {
+          sources[index]?.task = Task { [weak self] in await self?.run(index, startingAt: msn) }
+        }
+        await updateRenditionReports()
+      }
       let deadline = Date().addingTimeInterval(components.first == "part" ? 4 : 12)
       while !stopped {
         try Task.checkCancellation()
         if let error { throw error }
         guard let source = sources[index] else { throw CancellationError() }
+        let published = source.publishedSegments
         if components.first == "part", components.count == 4,
           let sequence = Int(components[2]), let name = components[3].split(separator: ".").first,
           let number = Int(name),
@@ -305,8 +393,9 @@ actor NativeHLSOrigin {
         }
         if components.first != "part",
           source.reachedLiveEdge,
-          source.segments.filter(\.complete).reduce(0, { $0 + $1.duration }) >= Double(source.target * 3),
-          let tail = source.segments.last {
+          published.contains(where: { !$0.parts.isEmpty }),
+          published.filter(\.complete).reduce(0, { $0 + $1.duration }) >= Double(source.target * 3),
+          let tail = published.last {
           let ready = source.ended || msn == nil || tail.sequence > msn! ||
             (tail.sequence == msn! && (part.map { tail.parts.count > $0 } ?? tail.complete))
           if ready || Date() >= deadline { return .playlist(try playlist(index, base: url)) }
@@ -327,9 +416,10 @@ actor NativeHLSOrigin {
   }
 
   private func playlist(_ index: Int, base: URL) throws -> Data {
-    guard let source = sources[index],
-      let first = source.segments.first, let last = source.segments.last else { throw NativeHLSError.unavailable }
-    let holdBack = source.hasPrefetch ? 1.5 : Double(source.target * 3)
+    guard let source = sources[index] else { throw NativeHLSError.unavailable }
+    let published = source.publishedSegments
+    guard let first = published.first, let last = published.last else { throw NativeHLSError.unavailable }
+    let holdBack = source.liveHoldBack
     var lines = ["#EXTM3U", "#EXT-X-VERSION:9", "#EXT-X-INDEPENDENT-SEGMENTS",
       "#EXT-X-TARGETDURATION:\(source.target)", "#EXT-X-MEDIA-SEQUENCE:\(first.sequence)",
       "#EXT-X-DISCONTINUITY-SEQUENCE:\(first.discontinuity)",
@@ -337,10 +427,10 @@ actor NativeHLSOrigin {
       "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=\(holdBack)"]
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    var remaining = source.segments.reduce(0) { $0 + $1.duration }
+    var remaining = published.reduce(0) { $0 + $1.duration }
     var lastPeriod = first.discontinuity
     var lastInitialization: URL?
-    for segment in source.segments {
+    for segment in published {
       if segment.discontinuity != lastPeriod {
         guard segment.discontinuity >= lastPeriod, segment.discontinuity - lastPeriod <= 16 else {
           throw NativeHLSError.invalidMedia
@@ -363,7 +453,7 @@ actor NativeHLSOrigin {
             lines.append("#EXT-X-PART:DURATION=\(String(format: "%.6f", part.duration)),URI=\"\(mediaBase.absoluteString)/part/\(index)/\(segment.sequence)/\(number).\(suffix)\"\(independent)")
           } else {
             lines.append("#EXT-X-PART:DURATION=\(String(format: "%.6f", part.duration)),URI=\"\(segment.url.absoluteString)\",BYTERANGE=\"\(part.length)@\(part.offset)\"\(independent)")
-          }
+            }
         }
       }
       if segment.complete { lines += ["#EXTINF:\(String(format: "%.6f", segment.duration)),", segment.url.absoluteString] }
@@ -385,16 +475,21 @@ actor NativeHLSOrigin {
       lines.append("#EXT-X-PRELOAD-HINT:TYPE=PART,URI=\"\(prefix)/part/\(index)/\(sequence)/\(number).mp4\"")
     }
     for (otherID, other) in sources where otherID != index {
-      // A cold rendition can satisfy this complete source sequence on its first request.
-      let tail = other.segments.last
-      let msn = tail?.sequence ?? max(first.sequence, last.sequence - 1)
-      let part = tail.map { max(0, $0.parts.count - 1) } ?? 0
-      lines.append("#EXT-X-RENDITION-REPORT:URI=\"\(prefix)/media/\(otherID).m3u8\",LAST-MSN=\(msn),LAST-PART=\(part)")
+      if let tail = other.publishedSegments.last(where: { !$0.parts.isEmpty }), other.task != nil {
+        lines.append("#EXT-X-RENDITION-REPORT:URI=\"\(otherID).m3u8\",LAST-MSN=\(tail.sequence),LAST-PART=\(tail.parts.count - 1)")
+      } else if let sequence = other.reportedCompleteSequence {
+        lines.append("#EXT-X-RENDITION-REPORT:URI=\"\(otherID).m3u8\",LAST-MSN=\(sequence),LAST-PART=0")
+      }
     }
     return Data((lines.joined(separator: "\n") + "\n").utf8)
   }
 
-  private func run(_ index: Int) async {
+  static func initialEntry(in entries: [NativeCMAF.Entry], requestedSequence: Int?) -> NativeCMAF.Entry? {
+    let completed = entries.filter { $0.duration != nil && $0.date != nil }
+    return completed.first(where: { $0.sequence == requestedSequence }) ?? completed.last
+  }
+
+  private func run(_ index: Int, startingAt requestedSequence: Int? = nil) async {
     do {
       guard let url = sources[index]?.url else { return }
       var next: Int? = sources[index]?.segments.last.map { $0.sequence + 1 }
@@ -407,13 +502,15 @@ actor NativeHLSOrigin {
         if index != lastActive, let last = sources[index]?.lastRequest, Date().timeIntervalSince(last) > 8 { break }
         let manifest = try NativeCMAF.manifest(String(decoding: try await data(url), as: UTF8.self), url: url)
         sources[index]?.hasPrefetch = manifest.hasPrefetch
+        sources[index]?.publicationDuration = manifest.entries.compactMap(\.duration).max()
         if next == nil {
           let completed = manifest.entries.filter { $0.duration != nil && $0.date != nil }
-          guard let first = completed.last else { throw NativeHLSError.unsupported }
+          guard let first = Self.initialEntry(in: completed, requestedSequence: requestedSequence)
+          else { throw NativeHLSError.unsupported }
           // Older complete segments already have trustworthy durations and URLs.
           // Keep them for tune-in/DVR without downloading their entire media just
           // to discover parts that the live player will never request.
-          sources[index]?.segments = completed.dropLast().compactMap { entry in
+          sources[index]?.segments = completed.prefix(while: { $0.sequence < first.sequence }).compactMap { entry in
             guard let date = entry.date else { return nil }
             return Segment(sequence: entry.sequence, url: entry.url, date: date,
               initialization: entry.initialization, discontinuity: entry.discontinuity, tags: entry.tags,

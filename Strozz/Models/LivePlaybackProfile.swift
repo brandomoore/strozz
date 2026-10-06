@@ -2,7 +2,8 @@ import Foundation
 
 /// User-selectable live playback profile, surfaced in the quality picker as the
 /// Auto options. Native LL-HLS uses source-CMAF parts; the two legacy profiles
-/// retain whole-segment prefetch promotion. A fixed rendition ignores the profile.
+/// retain whole-segment prefetch promotion. Fixed video renditions retain the
+/// selected engine; legacy fixed renditions use a deeper buffer.
 enum LivePlaybackProfile: String, CaseIterable, Identifiable {
   case nativeLowLatency
   /// Latency priority: keep a shallow buffer near the live edge and let adaptive
@@ -89,7 +90,7 @@ struct LivePlaybackPolicy: Equatable {
   static func live(profile: LivePlaybackProfile, isPinned: Bool) -> LivePlaybackPolicy {
     // A pinned rendition is inherently "hold this exact quality"; it has no ABR
     // fallback, so give it a stable buffer and never fight it with catch-up.
-    if isPinned {
+    if isPinned && profile != .nativeLowLatency {
       return LivePlaybackPolicy(
         preferredForwardBufferDuration: 8,
         enablesGentleCatchUp: false,
@@ -105,7 +106,7 @@ struct LivePlaybackPolicy: Equatable {
     switch profile {
     case .nativeLowLatency:
       return LivePlaybackPolicy(
-        preferredForwardBufferDuration: 1, enablesGentleCatchUp: false,
+        preferredForwardBufferDuration: 3, enablesGentleCatchUp: false,
         catchUpThresholdSeconds: .greatestFiniteMagnitude, maxCatchUpRate: 1,
         catchUpRampPerSecond: 0, minPlaybackRate: 1, slowdownBufferFloorSeconds: 0,
         catchUpHealthyBufferSeconds: .greatestFiniteMagnitude)

@@ -45,9 +45,13 @@ extension PlayerView {
       }
       guard nativeStartupIsCurrent(item, generation: generation, intent: intent) else { return }
       let target = await model.nativeHLS?.origin.liveTargetDate()
+      let sourceBuffer = await model.nativeHLS?.origin.snapshot().forwardBuffer
       guard nativeStartupIsCurrent(item, generation: generation, intent: intent) else { return }
+      if let sourceBuffer {
+        item.preferredForwardBufferDuration = max(activeLivePlaybackPolicy.preferredForwardBufferDuration, sourceBuffer)
+      }
       if let target, let displayed = item.currentDate(),
-        target.timeIntervalSince(displayed) <= NativeLiveCatchUp.minimumExcessSeconds {
+        target.timeIntervalSince(displayed) <= NativeLiveCatchUp.startupToleranceSeconds {
         item.automaticallyPreservesTimeOffsetFromLive = false
         model.nativeStartupComplete = true
         recordPlaybackEvent("native_startup_already_live")

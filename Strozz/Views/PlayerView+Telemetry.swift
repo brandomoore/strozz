@@ -130,12 +130,18 @@ extension PlayerView {
     snapshot.metrics["native_catch_up_rate"] = Double(model.nativeCatchUp.rate)
     snapshot.metrics["native_catch_up_excess_seconds"] = model.nativeCatchUp.extraDelay
     snapshot.counters["native_parts_indexed"] = model.nativeParts
+    snapshot.metrics["native_live_hold_back_seconds"] = model.nativeLiveHoldBack
+    snapshot.metrics["native_source_edge_age_seconds"] = model.nativeSourceEdgeAge
+    snapshot.flags["native_source_has_prefetch"] = model.nativeSourceHasPrefetch
     snapshot.attributes["native_fallback"] = model.nativeFallbackReason
     if let native = model.nativeHLS {
       Task { @MainActor in
         let stats = await native.origin.snapshot()
         guard model.nativeHLS === native else { return }
         model.nativeParts = stats.parts
+        model.nativeLiveHoldBack = stats.holdBack
+        model.nativeSourceHasPrefetch = stats.hasPrefetch
+        model.nativeSourceEdgeAge = stats.edgeAge
       }
     }
     snapshot.attributes["watch_rewards_state"] = model.watchTracker.state.rawValue
@@ -296,6 +302,7 @@ extension PlayerView {
       model.nativeStartupComplete = (item?.asset as? AVURLAsset)?.url.scheme != NativeLowLatencyHLS.scheme
       lastPlaybackDateSample = nil
       lastPlaybackTimeSampleSeconds = nil
+      mon.playbackDateContinuity = PlaybackDateContinuity()
       wallClockLowConfidenceStreak = 0
       wallClockLatencySeconds = nil
       smoothedLatencySeconds = nil

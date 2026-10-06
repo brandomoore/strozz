@@ -40,6 +40,7 @@ final class PlaybackMonitorBox {
   var wallClockLowConfidenceStreak = 0
   var lastPlaybackDateSample: Date?
   var lastPlaybackTimeSampleSeconds: Double?
+  var playbackDateContinuity = PlaybackDateContinuity()
   var lastObservedPlaybackTimeSeconds: Double?
   var stalledPlaybackSamples = 0
   var isRecoveringPlayback = false

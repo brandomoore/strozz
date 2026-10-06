@@ -312,15 +312,28 @@ extension PlayerView {
   /// comparing against the real (pre-proxy) source URL.
   func switchToSourceIfNeeded(_ url: URL) {
     guard currentSourceURL != url else { return }
-    replacePlaybackItem(with: makeItem(url: url))
-    startPlayback()
+    let position = model.isUsingNativeHLS && (!pinnedToLive || isUserPaused)
+      ? player.currentItem?.currentDate() : nil
+    model.fallbackRestoreTask?.cancel()
+    let item = makeItem(url: url)
+    replacePlaybackItem(with: item)
+    if let position {
+      let generation = model.nativeGeneration
+      let intent = model.nativePositionIntent
+      model.fallbackRestoreTask = Task { @MainActor in
+        await restoreNativePosition(position, item: item, generation: generation, intent: intent)
+      }
+    } else if shouldPlayAltSource {
+      startPlayback()
+    }
   }
 
   func makeItem(url: URL) -> AVPlayerItem {
     cancelNativeCatchUp(reason: "source_change")
     model.nativeNeedsRefresh = false
     currentSourceURL = url
-    let reuseNative = model.nativeHLS?.sourceURL == url && preferredQuality == "Auto"
+    let nativeVideo = playback?.qualities.first(where: { $0.url == url })?.isAudioOnly != true
+    let reuseNative = model.nativeHLS?.sourceURL == url && nativeVideo
       && livePlaybackProfile == .nativeLowLatency && model.nativeFallbackReason == nil
       && !isVOD && !isUsingAltSource && !isStreamUnstable
       ? model.nativeHLS : nil
@@ -328,6 +341,9 @@ extension PlayerView {
     model.nativeHLS = nil
     model.isUsingNativeHLS = false
     model.nativeParts = 0
+    model.nativeLiveHoldBack = nil
+    model.nativeSourceHasPrefetch = nil
+    model.nativeSourceEdgeAge = nil
     if reuseNative == nil { model.nativeGeneration = UUID() }
     // Detach the outgoing item's resources before building its replacement so
     // nothing accumulates across quality/channel switches:
@@ -363,7 +379,7 @@ extension PlayerView {
       retainHistory: streamRewindEnabled,
       windowSeconds: rewindWindowSeconds
     )
-    let useNative = preferredQuality == "Auto" && livePlaybackProfile == .nativeLowLatency
+    let useNative = nativeVideo && livePlaybackProfile == .nativeLowLatency
       && !isVOD && !isUsingAltSource && !isStreamUnstable
       && model.nativeFallbackReason == nil
     if useNative {
@@ -702,6 +718,7 @@ extension PlayerView {
     lastPlaybackDateSample = nil
     lastPlaybackTimeSampleSeconds = nil
     diagIsFrozen = false
+    mon.playbackDateContinuity = PlaybackDateContinuity()
     diagFrozenSince = nil
   }
 
@@ -1352,6 +1369,7 @@ extension PlayerView {
       wallClockLowConfidenceStreak = 0
       lastPlaybackDateSample = nil
       lastPlaybackTimeSampleSeconds = nil
+      mon.playbackDateContinuity = PlaybackDateContinuity()
       return
     }
 
@@ -1393,7 +1411,7 @@ extension PlayerView {
         let playbackAdvance = playbackSeconds - lastPlaybackSeconds
         let dateAdvance = playbackDate.timeIntervalSince(lastDate)
 
-        mappingConsistent = PlaybackDateContinuity.isConsistent(
+        mappingConsistent = mon.playbackDateContinuity.accepts(
           previousDate: lastDate, previousClock: lastPlaybackSeconds,
           date: playbackDate, clock: playbackSeconds)
         if !mappingConsistent {
@@ -1430,6 +1448,7 @@ extension PlayerView {
       wallClockLowConfidenceStreak = 0
       lastPlaybackDateSample = nil
       lastPlaybackTimeSampleSeconds = nil
+      mon.playbackDateContinuity = PlaybackDateContinuity()
     }
 
     if let range = item.seekableTimeRanges.last?.timeRangeValue {

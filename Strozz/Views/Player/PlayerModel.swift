@@ -58,6 +58,9 @@ final class PlayerModel {
   @ObservationIgnored var nativeGeneration = UUID()
   var nativeFallbackReason: String?
   var nativeParts = 0
+  @ObservationIgnored var nativeLiveHoldBack: Double?
+  @ObservationIgnored var nativeSourceHasPrefetch: Bool?
+  @ObservationIgnored var nativeSourceEdgeAge: Double?
   var isUsingNativeHLS = false
   @ObservationIgnored var nativeCatchUp = NativeLiveCatchUp()
   @ObservationIgnored var nativeCatchUpItem: AVPlayerItem?

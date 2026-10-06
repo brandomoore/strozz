@@ -77,6 +77,59 @@ final class NativeRecoveryIntegrationTests: XCTestCase {
     }
   }
 
+  func testPinnedVideoKeepsNativeEngineAcrossCreationAndFreshSourceRetry() async throws {
+    try await withModel { model, view in
+      let master = URL(string: "https://example.invalid/master.m3u8")!
+      let video = StreamQuality(
+        id: "720p60", name: "720p60",
+        url: URL(string: "https://example.invalid/720.m3u8")!, isAudioOnly: false,
+        bitrate: 3_400_000)
+      view.playback = StreamPlayback(master: master, qualities: [video])
+      view.preferredQuality = video.name
+      view.replacePlaybackItem(with: view.makeItem(url: video.url))
+      XCTAssertTrue(model.isUsingNativeHLS)
+      XCTAssertEqual(model.nativeHLS?.sourceURL, video.url)
+      XCTAssertEqual(model.player.currentItem?.preferredForwardBufferDuration, 3)
+      XCTAssertEqual(view.qualityEngineStatus, "Preparing Native LL-HLS")
+      let fresh = StreamQuality(
+        id: video.id, name: video.name,
+        url: URL(string: "https://example.invalid/fresh-720.m3u8")!, isAudioOnly: false,
+        bitrate: video.bitrate)
+      view.recoverNativeHLS(.timeout) { StreamPlayback(master: master, qualities: [fresh]) }
+      await model.nativeRefreshTask?.value
+      XCTAssertTrue(model.isUsingNativeHLS)
+      XCTAssertNil(model.nativeFallbackReason)
+      XCTAssertEqual(model.nativeHLS?.sourceURL, fresh.url)
+      XCTAssertEqual(view.preferredQuality, video.name)
+      XCTAssertEqual(model.player.rate, 0)
+    }
+  }
+
+  func testAudioOnlyDoesNotEnterVideoPartIndexer() async {
+    await withModel { model, view in
+      let url = URL(string: "https://example.invalid/audio.m3u8")!
+      let audio = StreamQuality(
+        id: "audio_only", name: "Audio Only", url: url,
+        isAudioOnly: true, bitrate: 160_000)
+      view.playback = StreamPlayback(master: url, qualities: [audio])
+      view.preferredQuality = audio.name
+      view.replacePlaybackItem(with: view.makeItem(url: url))
+      XCTAssertFalse(model.isUsingNativeHLS)
+      XCTAssertNil(model.nativeHLS)
+    }
+  }
+
+  func testMasterFallbackForAnUnavailableSavedQualityStillUsesNative() async {
+    await withModel { model, view in
+      let master = URL(string: "https://example.invalid/master.m3u8")!
+      view.playback = StreamPlayback(master: master, qualities: [])
+      view.preferredQuality = "Unavailable previous quality"
+      view.replacePlaybackItem(with: view.makeItem(url: master))
+      XCTAssertTrue(model.isUsingNativeHLS)
+      XCTAssertEqual(model.nativeHLS?.sourceURL, master)
+    }
+  }
+
   func testDuplicateFailuresCoalesceAndLatestPauseIsPreserved() async throws {
     try await withModel { model, view in
       model.isUserPaused = false

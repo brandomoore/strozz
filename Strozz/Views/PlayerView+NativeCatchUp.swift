@@ -40,17 +40,22 @@ extension PlayerView {
     let generation = model.nativeGeneration
     let intent = model.nativePositionIntent
     let target = await native.origin.liveTargetDate()
+    let sourceBuffer = await native.origin.snapshot().forwardBuffer
     guard !Task.isCancelled, allowsNativeCatchUp, native === model.nativeHLS,
       generation == model.nativeGeneration, intent == model.nativePositionIntent,
       item === player.currentItem else { return }
     let rate = model.nativeCatchUp.observe(.init(
       uptime: ProcessInfo.processInfo.systemUptime, clock: item.currentTime().seconds,
       playbackDate: item.currentDate(), targetDate: target,
-      rendition: computeResolvedQualityName(),
+      rendition: preferredQuality == "Auto" ? computeResolvedQualityName() : preferredQuality,
       isPlaying: player.timeControlStatus == .playing,
       buffer: bufferAheadSeconds(item) ?? 0, allowed: allowsNativeCatchUp,
       hasFreshVideo: model.playbackTelemetry.videoFrameAge.map { $0 < 4 } ?? false,
       playbackRate: player.rate, normalOffset: model.chatSyncBaseline.nativeCushion ?? 0))
+    if let sourceBuffer {
+      let buffer = max(activeLivePlaybackPolicy.preferredForwardBufferDuration, sourceBuffer)
+      if item.preferredForwardBufferDuration != buffer { item.preferredForwardBufferDuration = buffer }
+    }
     applyNativeCatchUpRate(rate, item: item)
   }
 
@@ -71,9 +76,11 @@ extension PlayerView {
     model.nativeCatchUpItem = rate > 1 ? item : nil
     model.nativeCatchUpAppliedRate = rate
     player.rate = rate
-    recordPlaybackEvent("native_catch_up_rate_changed", metrics: [
+    recordPlaybackEvent("native_catch_up_rate_changed",
+      attributes: ["reason": model.nativeCatchUp.lastInterruption?.rawValue ?? "catch_up"], metrics: [
       "rate": Double(rate),
       "excess_seconds": model.nativeCatchUp.extraDelay ?? 0,
+      "date_clock_difference_seconds": model.nativeCatchUp.dateClockDifference ?? 0,
       "buffer_ahead_seconds": bufferAheadSeconds(item) ?? 0
     ])
   }

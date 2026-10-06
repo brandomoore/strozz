@@ -127,6 +127,11 @@ emotes. Sign in through **Account > Sign in to Twitch**, open the Twitch link,
 approve the displayed code, then return to Strozz. Browsing, playback, and
 reading chat also work anonymously.
 
+Selecting a fixed video quality retains the native engine when native playback
+is selected, on both TV and mobile. Explicit standard playback, Audio Only, and
+AirPlay retain their standard paths; a genuine unsupported-format fallback is
+still reported rather than disguised as native playback.
+
 Home automatically previews one mostly visible stream at a time, nearest the
 middle of the screen. A small, leading-aligned heading scrolls with the feed
 instead of occupying a fixed navigation bar. Previews are always muted and stop when you scroll away,

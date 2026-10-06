@@ -19,7 +19,8 @@ on-device observation). Hypotheses go under "Open questions" until proven.
 - Choose the old **Auto · Low Latency** row for an immediate comparison. Native
   mode uses AVPlayer's LL-HLS timing, not the legacy variable-rate controller.
   Choosing native mode explicitly selects Twitch rather than a YouTube simulcast.
-  Fixed-quality selections keep their existing stable-buffer policy.
+  Fixed video qualities retain the selected native engine and its buffer policy.
+  Explicit legacy profiles and Audio Only keep their existing standard paths.
 - Native mode is independent of the legacy Diagnostics **Prefetch Proxy**
   kill-switch. Its fallback honors that legacy kill-switch, just like the legacy
   profiles themselves. The selected native row and latency badge explicitly
@@ -48,7 +49,7 @@ on-device observation). Hypotheses go under "Open questions" until proven.
 - Normal HLS discontinuities, initialization-map changes, and ad date ranges are
   now retained per segment rather than treated as fatal. The native decoder
   timeline resets at a period boundary; completed ad playlists without prefetch
-  use a conservative hold-back until live parts resume. Encryption, missing
+  use a cadence-aware hold-back until live parts resume. Encryption, missing
   packets, and malformed media still fail explicitly.
 - Native Auto excludes audio-only variants from its adaptive **video** master.
   The existing explicit Audio Only quality remains available on the normal path.
@@ -77,6 +78,58 @@ resolution reports an error rather than pretending standard playback was
 necessary. The default does not force unsupported media to play or promise
 unlimited retries; legacy playback is the last-resort stability path, not the
 first response to a transient engine error.
+
+### Whole-segment sources and native quality selection
+
+The physical AustinShow capture on build 1920 started about 20 seconds behind
+and later dropped from 720p60 to 360p in Auto without a recorded stall. Its
+upstream playlists advertised `TARGETDURATION=6` but published two-second
+segments without Twitch prefetch tags. The native origin requested an 18-second
+hold-back, then treated that position as normal. Manually selecting 720p60 also
+hit an Auto-only engine gate and switched to the legacy path.
+
+The native origin now derives the non-prefetch cushion from the largest recent
+completed-segment duration plus 1.5 seconds (3.5 seconds for this source), not
+three times the advertised maximum. True prefetch retains its 1.5-second
+hold-back. The forward-buffer request is at least three seconds and is not
+reduced after catch-up; shrinking it to one second reproduced a stall and
+adaptive-quality collapse after an otherwise successful correction.
+
+Publication timing is separate from transfer speed. The origin retains one
+already-cached part as its preload hint and makes the blocking playlist wait
+for subsequent publication. A production pause therefore does not look to
+AVPlayer's bandwidth estimator like a slow download of a tiny part. No video is
+discarded: subsequent parts release the previous tail, and end-of-stream releases
+the final tail. This applies to prefetch and whole-segment input without changing
+the media bytes or forcing an Auto resolution.
+
+Rendition reports use relative URIs and verified upstream sequences. A cold
+rendition indexes the requested complete sequence rather than skipping directly
+to a newer segment whose parts cannot satisfy that request. Metadata refreshes
+are coalesced; an unavailable report is logged rather than inventing its sequence.
+Shutdown rejects new requests and drains in-flight manifest fetches before
+invalidating their shared URLSession, including when a quality change cancels
+concurrent report refreshes.
+Diagnostics include the source's prefetch capability, live hold-back and edge age,
+plus reasons for stopping rate correction.
+
+TV and mobile fixed-video selections now retain native playback, fresh-native
+recovery and pause/rewind intent. Audio Only, explicitly selected legacy modes,
+AirPlay receivers and genuine unsupported-format fallback remain separate.
+Whole-segment input cannot provide bytes before Twitch publishes them, so it
+does not promise the same end-to-end latency as a true prefetch stream.
+
+The final four-minute ESLCS simulator check retained 1080p60 through native
+Auto, fixed video, and Auto again, with approximately 5.77 seconds median
+source-date age and no native retries. A four-minute prefetch Shroud check
+recovered an injected five-second pause with one held 1.05x entry and one
+return to 1x, the same item, and no native retries or AVPlayer stalls; its
+final source-date age was about 4.06 seconds. Both enforce decoded-frame and
+clock-progress thresholds, not just an advancing timer. The TV suite executed
+409 tests with seven explicit opt-in skips and zero failures. The mobile
+live/quality/paused-restoration probe and seven lifecycle tests also passed.
+These are bounded observations, not a guarantee for every network or broadcaster;
+the physical TV outcome of this correction still needs watching.
 
 **Physical-device finding:** the first installed integration was blocked by a
 persisted legacy proxy-off setting. Device telemetry on Caedrel showed
@@ -514,12 +567,17 @@ or if AVPlayer does not retain the requested rate. A fifteen-second cooldown
 prevents re-entry chatter. Pause/scrub, source changes and leaving live playback
 stop correction. The healthy native cushion is subtracted, and neither it nor
 chat's normal-delay baseline is recalibrated while speeding up.
+The three-second native forward-buffer request also lets a delayed player meet
+the two-second correction entry threshold without changing rate repeatedly or
+starving playback again when correction finishes.
 
 The reference is the rendition whose media is being requested, not the furthest
 ahead inactive rendition. Startup is separate: prepare the native timeline behind
 the loading surface and verify that its initial position is near live. If not,
 perform one bounded initial live-edge alignment using AVPlayer's recommended
 offset before revealing playback. An already-live start is left untouched.
+The startup tolerance is 1.5 seconds of excess rather than the three-second
+threshold used to trigger drift correction.
 `automaticallyPreservesTimeOffsetFromLive` is then off for ongoing playback so
 Apple cannot perform independent rebuffer seeks. Explicit
 viewer-requested seeks/Back to live still work, and genuinely failed/stalled
@@ -613,6 +671,12 @@ while stalled, and rejected samples cannot replace the last trustworthy anchor.
 Invalid mappings are excluded from chat holds and rewind destinations; the
 latency display waits for trustworthy timing instead of substituting the
 inconsistent seekable window. Item replacement resets the mapping explicitly.
+Small forward refinements after resume or an adaptive switch are not permanently
+blacklisted: a correction of at most six seconds needs two seconds of consistent
+advancing playhead samples before re-anchoring. Frozen-clock, backward and larger
+date-only jumps remain rejected. Live probes exposed both approximately 2.15-
+and 4.24-second forward refinements; previously either could disable catch-up for
+the rest of the item.
 
 ## Chat synchronization: extra delay, not total video latency
 

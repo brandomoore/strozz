@@ -70,6 +70,23 @@ final class MobileLivePlaybackTests: XCTestCase {
     XCTAssertNil(model.nativeFailure)
     XCTAssertGreaterThanOrEqual(advancing, 55)
     XCTAssertGreaterThanOrEqual(frames, 55, "Clock movement is not proof of decoded video")
+    let fixed = try XCTUnwrap(model.qualities.filter { !$0.isAudioOnly }.max { $0.bitrate < $1.bitrate })
+    model.select(.fixed(fixed.id))
+    try await waitForPlayback(model)
+    XCTAssertTrue(model.requestsNativePlayback)
+    XCTAssertEqual((model.player.currentItem?.asset as? AVURLAsset)?.url.scheme, NativeLowLatencyHLS.scheme)
+    let fixedItem = try XCTUnwrap(model.player.currentItem)
+    let fixedOutput = AVPlayerItemVideoOutput(pixelBufferAttributes: [:])
+    fixedItem.add(fixedOutput)
+    var fixedFrames = 0
+    for _ in 0..<20 {
+      try await Task.sleep(for: .seconds(1))
+      if fixedOutput.copyPixelBuffer(forItemTime: fixedItem.currentTime(), itemTimeForDisplay: nil) != nil {
+        fixedFrames += 1
+      }
+    }
+    XCTAssertGreaterThanOrEqual(fixedFrames, 18)
+    XCTAssertNil(model.nativeFailure)
     model.player.pause()
     try await Task.sleep(for: .seconds(1))
     model.suspend()
@@ -77,6 +94,8 @@ final class MobileLivePlaybackTests: XCTestCase {
     model.resume()
     try await waitForPlayback(model, shouldPlay: false)
     XCTAssertEqual(model.player.timeControlStatus, .paused)
+    XCTAssertEqual(model.selection, .fixed(fixed.id))
+    XCTAssertEqual((model.player.currentItem?.asset as? AVURLAsset)?.url.scheme, NativeLowLatencyHLS.scheme)
     model.goLive()
     try await waitForPlayback(model)
     model.select(.automatic)
