@@ -40,30 +40,39 @@ struct MobileHomeView: View {
     GeometryReader { viewport in
       ScrollViewReader { proxy in
         ScrollView {
-          VStack(alignment: .leading, spacing: 16) {
-            MobileHomeHeading(feed: $feed)
+          LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
+            Text("Strozz")
+              .font(.title2.bold())
+              .accessibilityAddTraits(.isHeader)
+              .accessibilityIdentifier("mobile-home-heading")
               .padding(.horizontal)
               .id("mobile-home-top")
-            MobileHomeFilters(categories: recommendations.categories, selection: $category)
-            if feed == .following {
-              MobileFollowingContent(
-                authenticated: auth.isAuthenticated, channels: visibleFollows,
-                isLoading: follows.isLoading, errorMessage: follows.errorMessage,
-                filtered: category != nil, onAccount: onAccount,
-                onRetry: { Task { await follows.refresh(using: auth) } }, onSelect: onSelect)
-                .padding(.horizontal)
-            } else {
-              if !visibleFollows.isEmpty {
-                MobileFollowedShortcuts(channels: visibleFollows, onSelect: onSelect,
-                                       onSeeAll: { feed = .following })
+            Section {
+              MobileHomeFilters(categories: recommendations.categories, selection: $category)
+              if feed == .following {
+                MobileFollowingContent(
+                  authenticated: auth.isAuthenticated, channels: visibleFollows,
+                  isLoading: follows.isLoading, errorMessage: follows.errorMessage,
+                  filtered: category != nil, onAccount: onAccount,
+                  onRetry: { Task { await follows.refresh(using: auth) } }, onSelect: onSelect)
+                  .padding(.horizontal)
+              } else {
+                if !visibleFollows.isEmpty {
+                  MobileFollowedShortcuts(channels: visibleFollows, onSelect: onSelect,
+                                         onSeeAll: { feed = .following })
+                    .padding(.horizontal)
+                }
+                MobileLiveFeedContent(
+                  channels: category == nil ? recommendations.channels : categoryStreams.categoryStreams,
+                  isLoading: category == nil ? recommendations.isLoading : categoryStreams.isLoadingStreams,
+                  errorMessage: category == nil ? recommendations.errorMessage : categoryStreams.streamsErrorMessage,
+                  preview: preview, onSelect: onSelect, onRetry: { Task { await refreshLive() } })
                   .padding(.horizontal)
               }
-              MobileLiveFeedContent(
-                channels: category == nil ? recommendations.channels : categoryStreams.categoryStreams,
-                isLoading: category == nil ? recommendations.isLoading : categoryStreams.isLoadingStreams,
-                errorMessage: category == nil ? recommendations.errorMessage : categoryStreams.streamsErrorMessage,
-                preview: preview, onSelect: onSelect, onRetry: { Task { await refreshLive() } })
+            } header: {
+              MobileHomeFeedTabs(feed: $feed)
                 .padding(.horizontal)
+                .background(palette.backgroundColors.last ?? palette.cardOpaqueSurface)
             }
           }
           .padding(.top, 8)
@@ -118,26 +127,21 @@ struct MobileHomeView: View {
   }
 }
 
-struct MobileHomeHeading: View {
+struct MobileHomeFeedTabs: View {
   @Binding var feed: MobileHomeFeed
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text("Strozz")
-        .font(.title2.bold())
-        .accessibilityAddTraits(.isHeader)
-        .accessibilityIdentifier("mobile-home-heading")
-      HStack(spacing: 24) {
-        MobileHomeFeedTab(title: "Following", selected: feed == .following) { feed = .following }
-          .accessibilityIdentifier("home-feed-following")
-        MobileHomeFeedTab(title: "Live", selected: feed == .live) { feed = .live }
-          .accessibilityIdentifier("home-feed-live")
-        Spacer(minLength: 0)
-      }
-      .accessibilityElement(children: .contain)
-      .accessibilityLabel("Home feed")
+    HStack(spacing: 24) {
+      MobileHomeFeedTab(title: "Following", selected: feed == .following) { feed = .following }
+        .accessibilityIdentifier("home-feed-following")
+      MobileHomeFeedTab(title: "Live", selected: feed == .live) { feed = .live }
+        .accessibilityIdentifier("home-feed-live")
+      Spacer(minLength: 0)
     }
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("Home feed")
+    .accessibilityIdentifier("mobile-home-feed-tabs")
     .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: feed)
   }
 }

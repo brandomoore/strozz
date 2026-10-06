@@ -139,6 +139,8 @@ Anonymous/demo recommendations are
 never presented as personal follows.
 The category rail scrolls to the screen edges, and the feed draws behind the
 floating tab bar while leaving enough end-of-feed clearance to reach the last card.
+Following / Live pins below the status bar as you scroll; the Strozz heading and
+category filters scroll away.
 
 Video sits above chat on a portrait iPhone; landscape iPhone shows video alone.
 A wide iPad window places chat beside video, while narrow multitasking windows

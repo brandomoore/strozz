@@ -171,6 +171,14 @@ final class MobileNavigationTests: XCTestCase {
     capture(app, name: "home-muted-preview")
     app.scrollViews["mobile-home-scroll"].swipeUp()
     XCTAssertFalse(heading.exists && heading.isHittable, "The Home heading must scroll away with the feed")
+    let liveTab = app.buttons["home-feed-live"]
+    XCTAssertTrue(liveTab.isHittable, "Feed switching must remain available while scrolling")
+    let pinnedY = liveTab.frame.minY
+    app.scrollViews["mobile-home-scroll"].swipeUp()
+    XCTAssertTrue(liveTab.isHittable)
+    XCTAssertEqual(liveTab.frame.minY, pinnedY, accuracy: 2, "The feed tabs should stay pinned")
+    XCTAssertTrue(app.buttons["home-feed-following"].isHittable)
+    XCTAssertFalse(filters.isHittable, "Category filters should scroll away rather than pinning too")
     let next = previews.matching(NSPredicate(format: "identifier != %@", first)).firstMatch
     XCTAssertTrue(next.waitForExistence(timeout: 35))
     XCTAssertEqual(previews.count, 1)
@@ -228,7 +236,9 @@ final class MobileNavigationTests: XCTestCase {
     XCTAssertTrue(cards.firstMatch.waitForExistence(timeout: 30))
     let scroll = app.scrollViews["mobile-home-scroll"]
     var reachedEnd = false
-    for _ in 0..<12 {
+    // Live titles change row heights, so test the actual scroll limit rather
+    // than assuming twelve flicks always cover the thirty-stream directory.
+    for _ in 0..<30 {
       let last = cards.element(boundBy: cards.count - 1)
       let identifier = last.identifier
       let position = last.frame.minY
@@ -247,6 +257,9 @@ final class MobileNavigationTests: XCTestCase {
                                "The final card must remain readable above the floating bar")
     }
     capture(app, name: "home-end-clearance")
+    XCTAssertTrue(app.buttons["home-feed-following"].isHittable)
+    app.buttons["home-feed-following"].tap()
+    XCTAssertTrue(app.buttons["Sign in to Twitch"].waitForExistence(timeout: 5))
   }
 
   private func showControls(_ app: XCUIApplication) {
