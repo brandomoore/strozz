@@ -58,10 +58,13 @@ final class PlayerModel {
   @ObservationIgnored var nativeGeneration = UUID()
   var nativeFallbackReason: String?
   var nativeParts = 0
+  @ObservationIgnored var nativeLiveHoldBack: Double?
+  @ObservationIgnored var nativeSourceHasPrefetch: Bool?
+  @ObservationIgnored var nativeSourceEdgeAge: Double?
   var isUsingNativeHLS = false
   @ObservationIgnored var nativeCatchUp = NativeLiveCatchUp()
-  @ObservationIgnored var nativeCatchUpTask: Task<Void, Never>?
   @ObservationIgnored var nativeCatchUpItem: AVPlayerItem?
+  @ObservationIgnored var nativeCatchUpAppliedRate: Float = 1
   @ObservationIgnored var nativeRecovery = NativePlaybackRecovery()
   @ObservationIgnored var nativeRestartSerial = 0
   @ObservationIgnored var fallbackRestoreTask: Task<Void, Never>?
@@ -69,6 +72,9 @@ final class PlayerModel {
   @ObservationIgnored var nativeResumePosition: Date?
   @ObservationIgnored var nativeRefreshTask: Task<Void, Never>?
   @ObservationIgnored var nativePositionIntent = UUID()
+  var nativeStartupComplete = false
+  @ObservationIgnored var nativeStartupTask: Task<Void, Never>?
+  @ObservationIgnored var nativeStartupItem: AVPlayerItem?
 
   /// Always-on structured playback recorder. It mirrors key events to OSLog and
   /// persists a bounded JSONL session for agent-driven postmortem analysis.
@@ -123,6 +129,7 @@ final class PlayerModel {
   @discardableResult
   func revealPlaybackIfStarted() -> Bool {
     guard isLoading, !isOffline, errorMessage == nil,
+      !isUsingNativeHLS || nativeStartupComplete,
       player.currentItem?.status == .readyToPlay,
       player.timeControlStatus == .playing else { return false }
     isLoading = false

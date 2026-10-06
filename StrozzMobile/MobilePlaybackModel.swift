@@ -22,6 +22,7 @@ final class MobilePlaybackModel {
   let chat = ChatService()
   private(set) var qualities: [StreamQuality] = []
   private(set) var selection: MobileQuality = .native
+  private(set) var prefersNativePlayback = true
   private(set) var nativeFailure: String?
   private(set) var recoveryNotice: String?
   private(set) var errorMessage: String?
@@ -44,6 +45,7 @@ final class MobilePlaybackModel {
   @ObservationIgnored private var routeObserver: NSKeyValueObservation?
   @ObservationIgnored private var baseline = LiveChatSyncBaseline()
   @ObservationIgnored private var catchUp = NativeLiveCatchUp()
+  @ObservationIgnored private var catchUpRateChange: (uptime: TimeInterval, clock: Double, rate: Float)?
   @ObservationIgnored private var followsLive = true
   @ObservationIgnored private var suspendedPosition: Position?
   @ObservationIgnored private var loadingPosition: Position?
@@ -84,9 +86,14 @@ final class MobilePlaybackModel {
     return qualities.first { $0.id == id }?.isAudioOnly == true
   }
 
+  var requestsNativePlayback: Bool {
+    prefersNativePlayback && nativeFailure == nil && !isAudioOnly && !isExternalPlayback
+  }
+
   func displayReady(_ ready: Bool, for source: AVPlayer) {
     guard player === source else { return }
     isReadyForDisplay = ready
+    if ready, engine != nil { player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false }
   }
 
   func start(channel: String) {
@@ -102,6 +109,8 @@ final class MobilePlaybackModel {
           quality != .native || (nativeFailure == nil && !isExternalPlayback) else { return }
     let position = position()
     selection = quality
+    if quality == .native { prefersNativePlayback = true }
+    if quality == .automatic { prefersNativePlayback = false }
     triedDecodeRecovery = false
     recoveryNotice = nil
     load(position: position)
@@ -131,7 +140,7 @@ final class MobilePlaybackModel {
 
   func prepareForAirPlay() {
     // A remote AirPlay receiver cannot fetch the native engine's loopback URLs.
-    if selection == .native {
+    if requestsNativePlayback {
       select(.automatic)
       recoveryNotice = "AirPlay uses standard playback."
     }
@@ -197,6 +206,7 @@ final class MobilePlaybackModel {
     engine?.stop()
     engine = nil
     catchUp = NativeLiveCatchUp()
+    catchUpRateChange = nil
     baseline.itemChanged()
     extraChatDelay = nil
     chat.configureChatSync(enabled: false, delaySeconds: 0)
@@ -227,7 +237,8 @@ final class MobilePlaybackModel {
         guard let url = selection.source(in: playback) else {
           throw MobilePlaybackError.qualityUnavailable
         }
-        if selection == .native {
+        let useNative = requestsNativePlayback
+        if useNative {
           engine = NativeLowLatencyHLS(sourceURL: url, headers: PlaybackService.streamHeaders,
                                       history: 180) { [weak self] reason in
             Task { @MainActor [weak self] in
@@ -240,9 +251,10 @@ final class MobilePlaybackModel {
                                options: ["AVURLAssetHTTPHeaderFieldsKey": PlaybackService.streamHeaders])
         if let engine { asset.resourceLoader.setDelegate(engine, queue: engine.queue) }
         let item = AVPlayerItem(asset: asset)
-        item.preferredForwardBufferDuration = selection == .native ? 1 : 8
+        item.preferredForwardBufferDuration = useNative ? 3 : 8
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-        item.automaticallyPreservesTimeOffsetFromLive = selection == .native && position.date == nil
+        item.automaticallyPreservesTimeOffsetFromLive = useNative && position.shouldPlay && position.date == nil
+        item.audioTimePitchAlgorithm = .timeDomain
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [:])
         item.add(output)
         videoOutput = output
@@ -255,38 +267,58 @@ final class MobilePlaybackModel {
         }
         guard player.currentItem === item else { throw MobilePlaybackError.unavailable }
         player.isMuted = isMuted || muteForTesting
-        player.allowsExternalPlayback = selection != .native
+        player.allowsExternalPlayback = !useNative
         if position.shouldPlay && position.date == nil { player.play() }
         let deadline = ContinuousClock.now.advanced(by: .seconds(30))
-        while item.status != .readyToPlay {
+        while item.status != .readyToPlay ||
+          (useNative && position.shouldPlay && item.seekableTimeRanges.isEmpty) {
           guard isCurrent(request) else { return }
           if item.status == .failed { throw item.error ?? MobilePlaybackError.unavailable }
           if ContinuousClock.now >= deadline { throw MobilePlaybackError.timeout }
           try await Task.sleep(for: .milliseconds(100))
         }
         guard isCurrent(request) else { return }
-        if let date = position.date {
+        var needsLiveAlignment = useNative && position.shouldPlay && position.date == nil
+        if needsLiveAlignment, let native = engine {
+          let target = await native.origin.liveTargetDate()
+          let sourceBuffer = await native.origin.snapshot().forwardBuffer
+          guard isCurrent(request) else { return }
+          if let sourceBuffer { item.preferredForwardBufferDuration = sourceBuffer }
+          if let target, let displayed = item.currentDate(), player.timeControlStatus == .playing,
+             target.timeIntervalSince(displayed) <= NativeLiveCatchUp.startupToleranceSeconds {
+            needsLiveAlignment = false
+          }
+        }
+        if position.date != nil || needsLiveAlignment {
+          if useNative {
+            let offset = item.recommendedTimeOffsetFromLive
+            if offset.seconds.isFinite, offset.seconds >= 0 { item.configuredTimeOffsetFromLive = offset }
+            item.automaticallyPreservesTimeOffsetFromLive = false
+          }
           let timeout = Task { [weak self, weak item] in
             do { try await Task.sleep(for: .seconds(5)) } catch { return }
             guard self?.isCurrent(request) == true else { return }
             item?.cancelPendingSeeks()
           }
-          let restored = await player.seek(to: date)
+          let restored: Bool
+          if let date = position.date { restored = await player.seek(to: date) }
+          else { restored = await player.seek(to: .positiveInfinity) }
           timeout.cancel()
           guard isCurrent(request) else { return }
           if !restored {
-            throw MobilePlaybackError.positionUnavailable
+            throw position.date == nil ? MobilePlaybackError.timeout : MobilePlaybackError.positionUnavailable
           }
           if position.shouldPlay { player.play() }
         }
         isLoading = false
         loadingPosition = nil
-        if selection == .native { recoveryNotice = nil }
+        if useNative { recoveryNotice = nil }
         installIntentObservers(item: item, request: request)
         startMonitor(item: item, request: request)
       } catch {
         guard isCurrent(request) else { return }
-        if selection == .native && (error as? MobilePlaybackError) != .positionUnavailable {
+        if requestsNativePlayback && (error as? MobilePlaybackError) != .positionUnavailable
+          && (error as? MobilePlaybackError) != .qualityUnavailable {
           recoverNative(error as? NativeHLSError ?? .unavailable,
                         detail: error.localizedDescription, position: position)
         } else {
@@ -301,16 +333,16 @@ final class MobilePlaybackModel {
   }
 
   private func fallback(_ reason: String, position: Position? = nil) {
-    guard selection == .native else { return }
+    guard requestsNativePlayback else { return }
     let saved = position ?? self.position()
     nativeFailure = reason
-    selection = .automatic
+    if selection == .native { selection = .automatic }
     Self.logger.warning("Native mobile playback fell back: \(reason, privacy: .public)")
     load(position: saved)
   }
 
   func recoverNative(_ reason: NativeHLSError, detail: String? = nil, position: Position? = nil) {
-    guard isActive, suspendedPosition == nil, selection == .native else { return }
+    guard isActive, suspendedPosition == nil, requestsNativePlayback else { return }
     guard nativeRecovery.takeRetry(for: reason) else {
       fallback(detail ?? reason.rawValue, position: position)
       return
@@ -342,7 +374,6 @@ final class MobilePlaybackModel {
     }
     triedDecodeRecovery = true
     let position = position()
-    if selection == .native { nativeFailure = "A video rendition could not be decoded on this device." }
     recoveryNotice = "A video rendition could not be decoded. Using \(source.name) instead."
     Self.logger.warning("Recovering undecodable video using the primary video rendition")
     selection = .fixed(source.id)
@@ -368,7 +399,14 @@ final class MobilePlaybackModel {
       forName: AVPlayerItem.timeJumpedNotification, object: item, queue: .main
     ) { [weak self] _ in
       MainActor.assumeIsolated {
-        guard let self, self.isCurrent(request), self.catchUp.inFlight == nil else { return }
+        guard let self, self.isCurrent(request) else { return }
+        if let change = self.catchUpRateChange {
+          let elapsed = ProcessInfo.processInfo.systemUptime - change.uptime
+          let advance = item.currentTime().seconds - change.clock
+          if (0...1).contains(elapsed), abs(advance - elapsed * Double(change.rate)) < 0.5 {
+            return
+          }
+        }
         self.stopFollowingLive()
       }
     }
@@ -376,9 +414,11 @@ final class MobilePlaybackModel {
 
   private func stopFollowingLive() {
     followsLive = false
-    if catchUp.inFlight != nil { player.currentItem?.cancelPendingSeeks() }
+    if catchUp.isActive, player.timeControlStatus == .playing, player.rate > 1 {
+      player.rate = 1
+    }
     catchUp.interrupt(at: ProcessInfo.processInfo.systemUptime)
-    player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false
+    catchUpRateChange = nil
   }
 
   private func startMonitor(item: AVPlayerItem, request: UUID) {
@@ -397,7 +437,7 @@ final class MobilePlaybackModel {
         if player.status == .failed || item.status == .failed {
           let reason = item.error?.localizedDescription ?? player.error?.localizedDescription
             ?? MobilePlaybackError.unavailable.localizedDescription
-          if selection == .native { recoverNative(.unavailable, detail: reason) } else { fail(reason) }
+          if engine != nil { recoverNative(.unavailable, detail: reason) } else { fail(reason) }
           return
         }
         let uptime = ProcessInfo.processInfo.systemUptime
@@ -410,6 +450,7 @@ final class MobilePlaybackModel {
            videoOutput.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) != nil {
           lastVideoFrame = uptime
           receivedVideoFrame = true
+          if engine != nil { item.automaticallyPreservesTimeOffsetFromLive = false }
         }
         if paused || isAudioOnly || isExternalPlayback { lastVideoFrame = uptime }
         if uptime - lastVideoFrame > (receivedVideoFrame ? 20 : 8),
@@ -418,38 +459,37 @@ final class MobilePlaybackModel {
           return
         }
         if uptime - lastProgress > 20 {
-          if selection == .native { recoverNative(.timeout) }
+          if engine != nil { recoverNative(.timeout) }
           else { fail(MobilePlaybackError.timeout.localizedDescription) }
           return
         }
         let target = await engine?.origin.liveTargetDate()
+        let sourceBuffer = await engine?.origin.snapshot().forwardBuffer
         guard isCurrent(request), player.currentItem === item else { return }
         let buffer = item.loadedTimeRanges.map(\.timeRangeValue)
           .filter { $0.start.seconds <= clock && $0.end.seconds >= clock }
           .map { $0.end.seconds - clock }.max() ?? 0
         baseline.observe(context: "\(channel)|\(selection)", itemID: request, playbackDate: item.currentDate(),
                          playbackTime: clock, liveTarget: target,
-                         canCalibrate: followsLive && playing && buffer >= 1 && catchUp.inFlight == nil,
+                         canCalibrate: followsLive && playing && buffer >= 1 && !catchUp.isActive,
                          now: Date(), uptime: uptime)
         extraChatDelay = baseline.extraDelay
         chat.configureChatSync(
           enabled: UserDefaults.standard.bool(forKey: PersistenceKey.chatSyncToStream),
           delaySeconds: extraChatDelay ?? 0)
-        if catchUp.timedOut(at: uptime) {
-          item.cancelPendingSeeks()
-          catchUp.interrupt(at: uptime)
-        }
-        if let correction = catchUp.observe(.init(
+        let rate = catchUp.observe(.init(
           uptime: uptime, clock: clock, playbackDate: item.currentDate(), targetDate: target,
           rendition: "\(item.presentationSize)", isPlaying: playing, buffer: buffer,
-          allowed: followsLive && engine != nil
-        )) {
-          player.seek(to: correction.target) { [weak self] _ in
-            Task { @MainActor [weak self] in
-              guard let self, self.isCurrent(request) else { return }
-              self.catchUp.finish(correction.id, at: ProcessInfo.processInfo.systemUptime)
-            }
-          }
+          allowed: followsLive && engine != nil && !isExternalPlayback && baseline.reference != .unavailable,
+          hasFreshVideo: receivedVideoFrame && uptime - lastVideoFrame < 4,
+          playbackRate: player.rate, normalOffset: baseline.nativeCushion ?? 0
+        ))
+        if let sourceBuffer {
+          if item.preferredForwardBufferDuration != sourceBuffer { item.preferredForwardBufferDuration = sourceBuffer }
+        }
+        if player.timeControlStatus == .playing, abs(player.rate - rate) >= 0.005 {
+          catchUpRateChange = (ProcessInfo.processInfo.systemUptime, item.currentTime().seconds, rate)
+          player.rate = rate
         }
       }
     }

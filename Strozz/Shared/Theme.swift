@@ -206,6 +206,8 @@ struct ThemePalette: Equatable {
   /// chrome adapts to the app theme rather than always rendering dark.
   var chromeColorScheme: ColorScheme { isLight ? .light : .dark }
 
+  var liveIndicator: Color { .red }
+
   /// Tint painted *under* translucent chrome glass (and as the fill of
   /// translucent non-glass chrome boxes). Dark themes darken; Light lightens,
   /// so chrome reads light-but-translucent in Light mode. A no-op vs. the prior

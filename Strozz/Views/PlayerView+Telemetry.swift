@@ -91,6 +91,21 @@ extension PlayerView {
     snapshot.attributes["thermal_state"] = telemetryThermalState()
 
     snapshot.metrics["player_rate"] = Double(player.rate)
+    snapshot.metrics["player_volume"] = Double(player.volume)
+    snapshot.flags["player_muted"] = player.isMuted
+    snapshot.flags["external_playback_active"] = player.isExternalPlaybackActive
+    let audioSession = AVAudioSession.sharedInstance()
+    snapshot.attributes["audio_session_category"] = audioSession.category.rawValue
+    snapshot.attributes["audio_session_mode"] = audioSession.mode.rawValue
+    snapshot.attributes["audio_output_ports"] = audioSession.currentRoute.outputs.map(\.portType.rawValue).joined(separator: ",")
+    snapshot.flags["other_audio_playing"] = audioSession.isOtherAudioPlaying
+    let outputVolume = Double(audioSession.outputVolume)
+    if outputVolume.isFinite { snapshot.metrics["audio_output_volume"] = outputVolume }
+    if let item = player.currentItem, item.status == .readyToPlay {
+      let audioTracks = item.tracks.filter { $0.assetTrack?.mediaType == .audio }
+      snapshot.counters["audio_track_count"] = audioTracks.count
+      snapshot.counters["enabled_audio_track_count"] = audioTracks.filter(\.isEnabled).count
+    }
     snapshot.metrics["preferred_forward_buffer_seconds"] =
       player.currentItem?.preferredForwardBufferDuration ?? 0
     if let item = player.currentItem {
@@ -103,7 +118,8 @@ extension PlayerView {
     if isVOD {
       snapshot.metrics["desired_vod_rate"] = Double(vodPlaybackRate)
     } else if !isUsingAltSource {
-      snapshot.metrics["desired_live_rate"] = Double(desiredLivePlaybackRate(policy: activeLivePlaybackPolicy))
+      snapshot.metrics["desired_live_rate"] = Double(model.isUsingNativeHLS
+        ? model.nativeCatchUp.rate : desiredLivePlaybackRate(policy: activeLivePlaybackPolicy))
     }
 
     snapshot.flags["loading"] = isLoading
@@ -123,14 +139,24 @@ extension PlayerView {
     snapshot.metrics["video_frame_age_seconds"] = model.playbackTelemetry.videoFrameAge
     snapshot.flags["using_alt_source"] = isUsingAltSource
     snapshot.flags["native_ll_hls"] = model.isUsingNativeHLS
-    snapshot.flags["native_catch_up_pending"] = model.nativeCatchUp.inFlight != nil
+    snapshot.flags["native_startup_complete"] = model.nativeStartupComplete
+    snapshot.flags["playback_date_mapping_valid"] = wallClockLowConfidenceStreak < wallClockUnavailableSamples
+    snapshot.flags["native_catch_up_active"] = model.nativeCatchUp.isActive
+    snapshot.metrics["native_catch_up_rate"] = Double(model.nativeCatchUp.rate)
+    snapshot.metrics["native_catch_up_excess_seconds"] = model.nativeCatchUp.extraDelay
     snapshot.counters["native_parts_indexed"] = model.nativeParts
+    snapshot.metrics["native_live_hold_back_seconds"] = model.nativeLiveHoldBack
+    snapshot.metrics["native_source_edge_age_seconds"] = model.nativeSourceEdgeAge
+    snapshot.flags["native_source_has_prefetch"] = model.nativeSourceHasPrefetch
     snapshot.attributes["native_fallback"] = model.nativeFallbackReason
     if let native = model.nativeHLS {
       Task { @MainActor in
         let stats = await native.origin.snapshot()
         guard model.nativeHLS === native else { return }
         model.nativeParts = stats.parts
+        model.nativeLiveHoldBack = stats.holdBack
+        model.nativeSourceHasPrefetch = stats.hasPrefetch
+        model.nativeSourceEdgeAge = stats.edgeAge
       }
     }
     snapshot.attributes["watch_rewards_state"] = model.watchTracker.state.rawValue
@@ -141,6 +167,19 @@ extension PlayerView {
     snapshot.flags["stream_rewind_enabled"] = streamRewindEnabled
     snapshot.flags["chat_visible"] = showChat
     snapshot.flags["chat_connected"] = chat.isConnected
+    snapshot.attributes["chat_mode"] = isVOD ? "replay" : "live"
+    if isVOD {
+      let state = replay.diagnostics
+      snapshot.flags["chat_replay_ready"] = replay.isReady
+      snapshot.flags["chat_replay_growing"] = state.growing
+      snapshot.flags["chat_replay_fetching"] = state.fetching
+      snapshot.flags["chat_replay_has_more"] = state.hasMore
+      snapshot.counters["chat_replay_messages"] = replay.messages.count
+      snapshot.metrics["chat_replay_offset_seconds"] = state.offset
+      snapshot.metrics["chat_replay_frontier_seconds"] = state.frontier
+      snapshot.metrics["chat_replay_refresh_age_seconds"] = replay.lastUpdatedAt.map { max(0, -$0.timeIntervalSinceNow) }
+      snapshot.attributes["chat_replay_error"] = replay.errorMessage
+    }
     snapshot.flags["chat_reading"] = chatIsFrozen
     snapshot.flags["chat_frozen_snapshot"] = chatFrozenMessages != nil
     snapshot.counters["chat_messages"] = chat.messages.count
@@ -274,6 +313,14 @@ extension PlayerView {
 
   func replacePlaybackItem(with item: AVPlayerItem?) {
     if item !== player.currentItem {
+      cancelNativeStartup()
+      model.nativeStartupComplete = (item?.asset as? AVURLAsset)?.url.scheme != NativeLowLatencyHLS.scheme
+      lastPlaybackDateSample = nil
+      lastPlaybackTimeSampleSeconds = nil
+      mon.playbackDateContinuity = PlaybackDateContinuity()
+      wallClockLowConfidenceStreak = 0
+      wallClockLatencySeconds = nil
+      smoothedLatencySeconds = nil
       cancelNativeCatchUp(reason: "item_replaced")
       model.nativeCatchUp = NativeLiveCatchUp()
     }
@@ -331,19 +378,22 @@ extension PlayerView {
     }
   }
 
-  private func rebuildPlaybackPlayer(reason: String) {
-    recordPlaybackEvent("failed_player_replaced", level: .error,
+  func rebuildPlaybackPlayer(reason: String, isFailure: Bool = true) {
+    recordPlaybackEvent(isFailure ? "failed_player_replaced" : "playback_player_recreated",
+      level: isFailure ? .error : .info,
       attributes: PlaybackTelemetryRecorder.errorAttributes(player.error)
         .merging(["reason": reason]) { _, new in new })
     removeVODTimeObserver()
     let previous = player
     previous.pause()
+    previous.replaceCurrentItem(with: nil)
     let replacement = AVPlayer()
     replacement.volume = previous.volume
     replacement.isMuted = previous.isMuted
     replacement.automaticallyWaitsToMinimizeStalling = previous.automaticallyWaitsToMinimizeStalling
     replacement.appliesMediaSelectionCriteriaAutomatically = previous.appliesMediaSelectionCriteriaAutomatically
     replacement.actionAtItemEnd = previous.actionAtItemEnd
+    replacement.allowsExternalPlayback = previous.allowsExternalPlayback
     model.player = replacement
   }
 

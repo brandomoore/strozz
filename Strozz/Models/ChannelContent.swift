@@ -16,7 +16,7 @@ struct ChannelClip: Identifiable, Hashable {
 
 /// A past broadcast (VOD) from a channel, shown in the "Past Broadcasts" row.
 /// VODs resolve to a seekable HLS playlist and play in the on-demand player.
-struct ChannelVOD: Identifiable, Hashable {
+struct ChannelVOD: Identifiable, Hashable, Codable {
   let id: String
   let title: String
   let lengthSeconds: Int

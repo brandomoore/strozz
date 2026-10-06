@@ -36,6 +36,7 @@ struct ChatView: View {
   var highlightKeywords: [String] = []
   var isConnected: Bool = false
   var isReconnecting: Bool = false
+  var connectionError: String? = nil
   var emoteURLs: [String: URL] = [:]
   var badgeURLs: [String: URL] = [:]
   /// Channel + global cheermotes, used to render bits cheers (e.g. `Cheer100`).
@@ -210,7 +211,7 @@ struct ChatView: View {
       }
       .overlay {
         if messages.isEmpty {
-          Text(isConnected ? "Waiting for messages…" : "Connecting to chat…")
+          Text(connectionError ?? (isConnected ? "Waiting for messages…" : "Connecting to chat…"))
             .font(.callout)
             .foregroundStyle(.secondary)
         }
@@ -219,7 +220,14 @@ struct ChatView: View {
       // Reset only on a reading-mode change, never on incoming messages.
       .id(autoScroll)
       .overlay(alignment: .top) {
-        if isReconnecting, !messages.isEmpty {
+        if let connectionError, !messages.isEmpty {
+          Text(connectionError)
+            .font(.caption)
+            .foregroundStyle(palette.chromeOnOpaque)
+            .padding(8)
+            .background(palette.chromeOpaqueSurface, in: Capsule())
+            .padding(8)
+        } else if isReconnecting, !messages.isEmpty {
           Text("Reconnecting Twitch chat…")
             .font(.caption)
             .foregroundStyle(.secondary)

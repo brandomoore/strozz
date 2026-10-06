@@ -242,6 +242,8 @@ final class ProbePlayer {
       "state": player.timeControlStatus == .playing ? "playing"
         : (player.timeControlStatus == .paused ? "paused" : "waiting"),
       "rate": player.rate,
+      "presentation_width": item.presentationSize.width,
+      "presentation_height": item.presentationSize.height,
       "metric_part_requests": metricPartRequests,
       "metric_part_windows": metricPartWindows,
       "metric_http2_requests": metricHTTP2Requests,

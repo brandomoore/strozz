@@ -72,6 +72,73 @@ final class LiveChatSyncBaselineTests: XCTestCase {
     for t in 0...6 { observe(&state, time: Double(t), delay: delay, nativeAge: nativeAge) }
   }
 
+  func testTimestampJumpDuringAStallCannotHoldChatForTwentyNineMinutes() {
+    var state = LiveChatSyncBaseline()
+    calibrate(&state)
+    for second in 7...15 {
+      state.observe(context: "channel/twitch", itemID: item,
+        playbackDate: epoch.addingTimeInterval(3 - 1744), playbackTime: 3,
+        liveTarget: nil, canCalibrate: false,
+        now: epoch.addingTimeInterval(Double(second)), uptime: Double(second))
+      XCTAssertNil(state.extraDelay)
+      XCTAssertEqual(state.reference, .unavailable)
+      XCTAssertEqual(state.normalDelay, 3)
+    }
+    state.observe(context: "channel/twitch", itemID: item,
+      playbackDate: epoch.addingTimeInterval(4), playbackTime: 4,
+      liveTarget: epoch.addingTimeInterval(4), canCalibrate: false,
+      now: epoch.addingTimeInterval(16), uptime: 16)
+    XCTAssertEqual(state.extraDelay, 0)
+    XCTAssertEqual(state.reference, .nativeLiveTarget)
+  }
+
+  func testSmallForwardDateRefinementRequiresConsistentAdvancingVideo() {
+    var continuity = PlaybackDateContinuity()
+    for clock in 1...3 {
+      XCTAssertEqual(continuity.accepts(previousDate: epoch, previousClock: 0,
+        date: epoch.addingTimeInterval(Double(clock) + 2.15), clock: Double(clock)), clock == 3)
+    }
+    var switched = PlaybackDateContinuity()
+    for clock in 1...3 {
+      XCTAssertEqual(switched.accepts(previousDate: epoch, previousClock: 0,
+        date: epoch.addingTimeInterval(Double(clock) + 4.24), clock: Double(clock)), clock == 3)
+    }
+    for correction in [-1744.0, 1744, -2.15, 7] {
+      var invalid = PlaybackDateContinuity()
+      for clock in 1...6 {
+        XCTAssertFalse(invalid.accepts(previousDate: epoch, previousClock: 0,
+          date: epoch.addingTimeInterval(Double(clock) + correction), clock: Double(clock)))
+      }
+    }
+    var frozen = PlaybackDateContinuity()
+    for _ in 0..<6 {
+      XCTAssertFalse(frozen.accepts(previousDate: epoch, previousClock: 0,
+        date: epoch.addingTimeInterval(2.15), clock: 0))
+    }
+  }
+
+  func testDateRefinementDoesNotPermanentlyDisableNativeChatTiming() {
+    var state = LiveChatSyncBaseline()
+    calibrate(&state)
+    for clock in 4...6 {
+      state.observe(context: "channel/twitch", itemID: item,
+        playbackDate: epoch.addingTimeInterval(Double(clock) + 2.15), playbackTime: Double(clock),
+        liveTarget: epoch.addingTimeInterval(Double(clock) + 7), canCalibrate: false,
+        now: epoch.addingTimeInterval(Double(clock) + 10), uptime: Double(clock) + 3)
+      if clock < 6 { XCTAssertEqual(state.reference, .unavailable) }
+    }
+    XCTAssertEqual(state.reference, .nativeLiveTarget)
+    XCTAssertEqual(state.extraDelay ?? -1, 4.85, accuracy: 0.001)
+    XCTAssertEqual(state.normalDelay, 3)
+  }
+
+  func testConsistentManualRewindKeepsItsRealChatDelay() {
+    XCTAssertTrue(PlaybackDateContinuity.isConsistent(
+      previousDate: epoch, previousClock: 100, date: epoch.addingTimeInterval(-60), clock: 40))
+    XCTAssertFalse(PlaybackDateContinuity.isConsistent(
+      previousDate: epoch, previousClock: 100, date: epoch.addingTimeInterval(-1744), clock: 100))
+  }
+
   func testNormalThreeSecondPlaybackDoesNotDelayChat() {
     var state = LiveChatSyncBaseline()
     calibrate(&state)

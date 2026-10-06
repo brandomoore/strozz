@@ -90,7 +90,8 @@ extension PlayerView {
         currentWallClock = now
       } else {
         let position = scrubTargetSeconds.map { min(max($0, window.start), window.end) } ?? window.now
-        currentWallClock = wallClock(atPlayerTime: position) ?? now
+        guard let verifiedDate = wallClock(atPlayerTime: position) else { return }
+        currentWallClock = verifiedDate
       }
       let elapsed = min(max(currentWallClock.timeIntervalSince(broadcastStart), 0), total)
       let behind = max(total - elapsed, 0)
@@ -163,6 +164,7 @@ extension PlayerView {
   /// coalesced, tolerant seek so the viewer can spam left/right fluidly without
   /// each press triggering a full rebuffer hiccup.
   func rewindStep(_ delta: Double) {
+    cancelNativeStartup()
     cancelNativeCatchUp(reason: "manual_seek")
     model.nativePositionIntent = UUID()
     model.fallbackRestoreTask?.cancel()
@@ -193,6 +195,11 @@ extension PlayerView {
   /// Resumes playback at the correct rate: the selected speed for VODs, normal
   /// 1.0 for live. Centralizes resume so pause/seek/scrub all honor VOD speed.
   func resumePlayback() {
+    if model.isUsingNativeHLS, !model.nativeStartupComplete, pinnedToLive {
+      startPlayback()
+      return
+    }
+    if model.isUsingNativeHLS { model.nativeStartupComplete = true }
     recordPlaybackEvent(
       "playback_resumed",
       metrics: ["rate": isVOD ? Double(vodPlaybackRate) : 1.0]
@@ -206,6 +213,7 @@ extension PlayerView {
 
   /// Toggles between pausing in place (DVR window keeps growing) and resuming.
   func toggleRewindPlayPause() {
+    cancelNativeStartup()
     cancelNativeCatchUp(reason: "manual_pause")
     if model.isUsingNativeHLS { player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false }
     if isUserPaused {
@@ -261,6 +269,7 @@ extension PlayerView {
   /// A real swipe has started (finger moved past the tap threshold). Pause the
   /// live video entirely so scrubbing never fights playback, and anchor the orb.
   func beginScrub() {
+    cancelNativeStartup()
     cancelNativeCatchUp(reason: "manual_scrub")
     model.nativePositionIntent = UUID()
     model.fallbackRestoreTask?.cancel()

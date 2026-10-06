@@ -31,7 +31,7 @@ struct WatchHistoryEntry: Codable, Identifiable, Sendable {
 @MainActor
 @Observable
 final class WatchHistoryService {
-  private static let storageKey = PersistenceKey.watchHistoryEntries
+  private let storageKey: String
   private static let maxEntries = 120
   /// Watches this old contribute half the weight of a fresh watch.
   private static let recencyHalfLife: TimeInterval = 14 * 24 * 3600
@@ -44,7 +44,8 @@ final class WatchHistoryService {
     UserDefaults.standard.object(forKey: RecommendationPreferences.enabledDefaultsKey) as? Bool ?? true
   }
 
-  init() {
+  init(storageKey: String = PersistenceKey.watchHistoryEntries) {
+    self.storageKey = storageKey
     load()
   }
 
@@ -123,7 +124,7 @@ final class WatchHistoryService {
   // MARK: - Persistence (local UserDefaults only)
 
   private func load() {
-    if let decoded: [WatchHistoryEntry] = Defaults.load(forKey: Self.storageKey) {
+    if let decoded: [WatchHistoryEntry] = Defaults.load(forKey: storageKey) {
       entries = decoded
     }
   }
@@ -135,8 +136,9 @@ final class WatchHistoryService {
 
   private func persist() {
     let snapshot = entries
+    let key = storageKey
     Self.persistQueue.async {
-      Defaults.save(snapshot, forKey: Self.storageKey)
+      Defaults.save(snapshot, forKey: key)
     }
   }
 }

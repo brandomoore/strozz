@@ -19,7 +19,8 @@ on-device observation). Hypotheses go under "Open questions" until proven.
 - Choose the old **Auto · Low Latency** row for an immediate comparison. Native
   mode uses AVPlayer's LL-HLS timing, not the legacy variable-rate controller.
   Choosing native mode explicitly selects Twitch rather than a YouTube simulcast.
-  Fixed-quality selections keep their existing stable-buffer policy.
+  Fixed video qualities retain the selected native engine and its buffer policy.
+  Explicit legacy profiles and Audio Only keep their existing standard paths.
 - Native mode is independent of the legacy Diagnostics **Prefetch Proxy**
   kill-switch. Its fallback honors that legacy kill-switch, just like the legacy
   profiles themselves. The selected native row and latency badge explicitly
@@ -39,15 +40,16 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   temporary origin, timeline, startup, or watchdog failures. Each retry resolves
   a fresh signed master and replaces the failed engine instead of reusing it.
   Verified unsupported formats skip those futile attempts; repeated failure
-  still permits a visible legacy fallback. Deliberate pauses and rewinds disable
-  automatic offset preservation.
+  still permits a visible legacy fallback. Native drift is corrected by gentle
+  rate adjustment rather than seeks; automatic seek-on-rebuffer is disabled
+  once the initial native live start is established.
 - When native activation fails, its row disappears for that channel and the
   checkmark moves to the actual fallback mode. The old **Auto · Low Latency**
   label refers to the original prefetch engine, not native partial playback.
 - Normal HLS discontinuities, initialization-map changes, and ad date ranges are
   now retained per segment rather than treated as fatal. The native decoder
   timeline resets at a period boundary; completed ad playlists without prefetch
-  use a conservative hold-back until live parts resume. Encryption, missing
+  use a cadence-aware hold-back until live parts resume. Encryption, missing
   packets, and malformed media still fail explicitly.
 - Native Auto excludes audio-only variants from its adaptive **video** master.
   The existing explicit Audio Only quality remains available on the normal path.
@@ -76,6 +78,83 @@ resolution reports an error rather than pretending standard playback was
 necessary. The default does not force unsupported media to play or promise
 unlimited retries; legacy playback is the last-resort stability path, not the
 first response to a transient engine error.
+
+### Silent audio after returning to the TV app
+
+A physical build 1921 report followed a thirteen-minute background interval:
+native xQc video resumed at 1080p60, normal rate and about 2.12 seconds of
+source-date latency, but stream audio was silent while interface sounds worked.
+Pause/resume did not help; closing and reopening the stream restored audio.
+Inspection of a source segment and its generated native parts produced identical
+AAC bytes with normal decoded levels. This points to retained playback/render
+state rather than audio removed by the native indexer; the exact private
+AVFoundation failure was not observable in that build.
+
+The native foreground refresh now recreates the AVPlayer and its AVKit rendering
+surface as well as the signed source, engine and item. It preserves mute, volume,
+external-playback policy and paused/rewound intent. Ordinary live playback,
+catch-up and source retries do not gain another reset. A fresh paused owner may
+expose its date/seekable timeline before `readyToPlay`; restoration uses that
+timeline with a bounded date seek instead of briefly playing to prepare it.
+
+Snapshots now include player mute/volume, audio-session category/mode, output-port
+types, system output volume, external playback, and loaded/enabled audio-track
+counts. These describe configuration, not proof that sound reached the speakers.
+Device/port names and identifiers are not recorded. The foreground regression
+probe remains muted and verifies new player/controller ownership, enabled audio
+tracks, decoded video, and preservation of a paused position.
+
+### Whole-segment sources and native quality selection
+
+The physical AustinShow capture on build 1920 started about 20 seconds behind
+and later dropped from 720p60 to 360p in Auto without a recorded stall. Its
+upstream playlists advertised `TARGETDURATION=6` but published two-second
+segments without Twitch prefetch tags. The native origin requested an 18-second
+hold-back, then treated that position as normal. Manually selecting 720p60 also
+hit an Auto-only engine gate and switched to the legacy path.
+
+The native origin now derives the non-prefetch cushion from the largest recent
+completed-segment duration plus 1.5 seconds (3.5 seconds for this source), not
+three times the advertised maximum. True prefetch retains its 1.5-second
+hold-back. The forward-buffer request is at least three seconds and is not
+reduced after catch-up; shrinking it to one second reproduced a stall and
+adaptive-quality collapse after an otherwise successful correction.
+
+Publication timing is separate from transfer speed. The origin retains one
+already-cached part as its preload hint and makes the blocking playlist wait
+for subsequent publication. A production pause therefore does not look to
+AVPlayer's bandwidth estimator like a slow download of a tiny part. No video is
+discarded: subsequent parts release the previous tail, and end-of-stream releases
+the final tail. This applies to prefetch and whole-segment input without changing
+the media bytes or forcing an Auto resolution.
+
+Rendition reports use relative URIs and verified upstream sequences. A cold
+rendition indexes the requested complete sequence rather than skipping directly
+to a newer segment whose parts cannot satisfy that request. Metadata refreshes
+are coalesced; an unavailable report is logged rather than inventing its sequence.
+Shutdown rejects new requests and drains in-flight manifest fetches before
+invalidating their shared URLSession, including when a quality change cancels
+concurrent report refreshes.
+Diagnostics include the source's prefetch capability, live hold-back and edge age,
+plus reasons for stopping rate correction.
+
+TV and mobile fixed-video selections now retain native playback, fresh-native
+recovery and pause/rewind intent. Audio Only, explicitly selected legacy modes,
+AirPlay receivers and genuine unsupported-format fallback remain separate.
+Whole-segment input cannot provide bytes before Twitch publishes them, so it
+does not promise the same end-to-end latency as a true prefetch stream.
+
+The final four-minute ESLCS simulator check retained 1080p60 through native
+Auto, fixed video, and Auto again, with approximately 5.77 seconds median
+source-date age and no native retries. A four-minute prefetch Shroud check
+recovered an injected five-second pause with one held 1.05x entry and one
+return to 1x, the same item, and no native retries or AVPlayer stalls; its
+final source-date age was about 4.06 seconds. Both enforce decoded-frame and
+clock-progress thresholds, not just an advancing timer. The TV suite executed
+409 tests with seven explicit opt-in skips and zero failures. The mobile
+live/quality/paused-restoration probe and seven lifecycle tests also passed.
+These are bounded observations, not a guarantee for every network or broadcaster;
+the physical TV outcome of this correction still needs watching.
 
 **Physical-device finding:** the first installed integration was blocked by a
 persisted legacy proxy-off setting. Device telemetry on Caedrel showed
@@ -503,19 +582,54 @@ of stalling, and the slow-down rides out short buffer dips.
 
 ### Coordinated native catch-up
 
-Native playback no longer seeks automatically on every resolution change.
-`NativeLiveCatchUp` requires four seconds of steady quality and advancing
-playback, at least one second of buffered media, and a sustained forward gap
-of at least three seconds beyond the native live target. A stream already
-near live gets no automatic seek. The normal LL-HLS hold-back remains unchanged.
+Native drift correction never seeks or replaces the player item.
+`NativeLiveCatchUp` requires four seconds of steady quality, advancing timestamps
+and fresh video before correcting sustained excess delay of at least three
+seconds. It enters at two seconds of forward buffer and **holds 1.05x**, rather
+than retargeting rate on each sample. It returns to 1x near the calibrated live
+position (0.75s excess), below 0.75s of buffer, on missing/stale timing or video,
+or if AVPlayer does not retain the requested rate. A fifteen-second cooldown
+prevents re-entry chatter. Pause/scrub, source changes and leaving live playback
+stop correction. The healthy native cushion is subtracted, and neither it nor
+chat's normal-delay baseline is recalibrated while speeding up.
+The three-second native forward-buffer request also lets a delayed player meet
+the two-second correction entry threshold without changing rate repeatedly or
+starving playback again when correction finishes.
 
-Only one catch-up seek may own the current item. It expires after five seconds
-and cannot immediately restart (15-second completion/cancellation cooldown).
-Manual pause, scrub, source/item changes, backgrounding, and recovery invalidate
-the request before cancelling its AVPlayer seek. A late completion cannot
-resume playback or overwrite another request. The legacy numeric live-edge
-resync does not run on the native path, and the watchdog waits for a bounded
-catch-up to finish before issuing its own recovery.
+The reference is the rendition whose media is being requested, not the furthest
+ahead inactive rendition. Startup is separate: prepare the native timeline behind
+the loading surface and verify that its initial position is near live. If not,
+perform one bounded initial live-edge alignment using AVPlayer's recommended
+offset before revealing playback. An already-live start is left untouched.
+The startup tolerance is 1.5 seconds of excess rather than the three-second
+threshold used to trigger drift correction.
+`automaticallyPreservesTimeOffsetFromLive` is then off for ongoing playback so
+Apple cannot perform independent rebuffer seeks. Explicit
+viewer-requested seeks/Back to live still work, and genuinely failed/stalled
+playback retains bounded native recovery. Ordinary drift does not invoke it.
+
+An October 6 physical xQc capture on build 1912 showed the earlier catch-up seek
+starting for 3.110 seconds of excess while 1080p60 video was advancing with about
+2.64 seconds buffered. It was followed by a 160p stall, a five-second seek
+timeout, and a native hard-stall reload. There was no origin failure before the
+seek. This motivated replacing the automatic seek rather than shortening its
+timeout; it does not prove all Twitch interruptions are avoidable.
+
+Build 1919's simulator check only established a reduction in delay, not full
+convergence. Physical TV telemetry then showed **129 rate commands in under three
+minutes, 128 followed by a time-jump notification within 300ms**, as latency grew
+from about three seconds to over nine. Rate was following the normal segment
+buffer sawtooth. The held-rate policy replaces that design; it does not restore
+the app-issued drift seek. The live convergence check now requires near-live
+startup, one catch-up entry and exit, return to normal rate, actual convergence
+to the calibrated edge, and no item replacement/native retries.
+
+A four-minute muted xQc simulator probe passed those stricter requirements after
+an induced five-second pause, including the existing advancing-clock/fresh-frame
+thresholds. The TV suite executed 396 tests with six opt-in skips and no failures;
+the mobile live-start/quality/foreground probe and six lifecycle tests also
+passed. These checks do not establish the corrected build's physical-TV outcome
+or eliminate every possible adaptive-rendition stall.
 
 Buddha's captured black-screen sequence also showed replacement attempts
 followed by `currentItem == nil` and an indefinite `noItemToPlay` wait.
@@ -525,8 +639,9 @@ separately from item failures. A missing requested item triggers bounded recover
 instead of leaving a blank player indefinitely. Caption/visualizer clocks follow
 the replacement player.
 
-Deterministic tests cover the observed startup quality churn, cooldowns, timeout,
-stale completions, manual interruption, native-vs-legacy recovery exclusion, and
+Deterministic tests cover the captured gap/buffer values, rate bounds/convergence,
+quality churn, buffer/frame gates, pause/stale-item protection, zero automatic
+seeks, active-rendition targeting, native-vs-legacy recovery exclusion, and
 failed/rejected-player replacement. A bounded three-minute full-app simulator
 run on Buddha included forced quality changes, advancing video and fresh decoded
 frame observations, with no native fallback. Simulator results do not establish
@@ -555,6 +670,38 @@ The final simulator run passed 344 tests, with three physical-device-only tests
 skipped. The standalone probe suite passed 31 tests. Background recovery was
 covered deterministically without waking the physical TV; these checks do not
 replace future observation of long background/foreground trips on hardware.
+
+### Chat replay while rewinding a live broadcast
+
+Rewinding into the in-progress VOD intentionally disconnects live IRC and uses
+timestamped replay comments. The October 6 chat report occurred in that mode;
+there was no frozen UI snapshot or delayed live-chat queue, but the older
+telemetry did not include replay state, so it cannot identify the precise pause.
+
+A current replay page with `hasNextPage=false` is now treated as temporary for
+an in-progress recording: the comment frontier is polled every five seconds,
+with deduplication, without reloading video. Completed VODs do not poll their
+final page. A gap before the first comment no longer causes repeated backward
+window resets. Network/parse failures show a replay error and retry with the
+same throttle instead of advertising successful readiness. Telemetry records
+live/replay mode, replay message count, frontier, requests, last refresh and errors.
+
+### Inconsistent timestamps during adaptive switches
+
+A later physical xQc switch from Source to 480p stalled at an unchanged player
+clock while `currentDate()` jumped backward by about 1744 seconds. The latency
+badge and chat sync inherited that false 29-minute delay; no matching backward
+seek occurred. Date continuity is now checked against playhead movement even
+while stalled, and rejected samples cannot replace the last trustworthy anchor.
+Invalid mappings are excluded from chat holds and rewind destinations; the
+latency display waits for trustworthy timing instead of substituting the
+inconsistent seekable window. Item replacement resets the mapping explicitly.
+Small forward refinements after resume or an adaptive switch are not permanently
+blacklisted: a correction of at most six seconds needs two seconds of consistent
+advancing playhead samples before re-anchoring. Frozen-clock, backward and larger
+date-only jumps remain rejected. Live probes exposed both approximately 2.15-
+and 4.24-second forward refinements; previously either could disable catch-up for
+the rest of the item.
 
 ## Chat synchronization: extra delay, not total video latency
 

@@ -45,12 +45,7 @@ struct MobilePlayerControls: View {
             .disabled(model.isLoading)
             .modifier(MobileControlSurface())
             if let viewerCount {
-              Label {
-                Text(viewerCount, format: .number.notation(.compactName)).font(.caption.monospacedDigit())
-              } icon: { Icon(glyph: .user, size: 14) }
-              .padding(.horizontal, 8).padding(.vertical, 4)
-              .modifier(MobileControlSurface())
-              .accessibilityLabel("\(viewerCount) viewers")
+              MobileViewerBadge(count: viewerCount)
             }
           }
           Spacer(minLength: 0)

@@ -248,6 +248,7 @@ extension PlayerView {
       probeOfflineIfStreamEnded()
     }
     .onDisappear {
+      cancelNativeStartup()
       model.watchTracker.stop()
       model.nativeRefreshTask?.cancel()
       model.nativeNeedsRefresh = false

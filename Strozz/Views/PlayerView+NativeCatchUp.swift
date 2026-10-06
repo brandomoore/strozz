@@ -6,79 +6,82 @@ extension PlayerView {
     model.isUsingNativeHLS && !model.nativeNeedsRefresh && !isVOD && !isUsingAltSource
       && !isLoading && !isOffline && errorMessage == nil && !isRecoveringPlayback
       && didRequestPlayback && model.startupProgress.hasStarted
+      && model.nativeStartupComplete
+      && wallClockLowConfidenceStreak < wallClockUnavailableSamples
       && pinnedToLive && shouldPlayAltSource && scrubTargetSeconds == nil
       && !vodHandoffTransitionInFlight && !model.livePlaybackReturn.isAway
   }
 
-  /// Invalidates the owner before cancelling AVPlayer, whose completion may run
-  /// afterward. Only our own pending item's seek is cancelled.
-  func cancelNativeCatchUp(reason: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
-    let request = model.nativeCatchUp.inFlight
-    model.nativeCatchUp.interrupt(at: now)
-    model.nativeCatchUpTask?.cancel()
-    model.nativeCatchUpTask = nil
-    model.nativeCatchUpItem?.cancelPendingSeeks()
+  /// Restore only our own rate on the same, still-playing item. A pause, buffering
+  /// wait or a newer playback owner must never be resumed by cleanup.
+  func cancelNativeCatchUp(reason: String) {
+    let previousRate = model.nativeCatchUpAppliedRate
+    if let owner = model.nativeCatchUpItem, owner === player.currentItem,
+      player.timeControlStatus == .playing, previousRate > 1,
+      abs(player.rate - previousRate) < 0.001 {
+      player.rate = 1
+    }
+    model.nativeCatchUp.interrupt(at: ProcessInfo.processInfo.systemUptime)
+    model.nativeCatchUpAppliedRate = 1
     model.nativeCatchUpItem = nil
-    if request != nil {
-      recordPlaybackEvent("native_catch_up_cancelled", attributes: ["reason": reason])
+    if previousRate > 1 {
+      recordPlaybackEvent("native_catch_up_rate_stopped", attributes: ["reason": reason])
     }
   }
 
   func updateNativeCatchUp() async {
-    let now = ProcessInfo.processInfo.systemUptime
-    guard allowsNativeCatchUp, let item = player.currentItem, let native = model.nativeHLS else {
-      cancelNativeCatchUp(reason: "playback_intent", now: now)
-      return
+    if model.isUsingNativeHLS, model.startupProgress.hasStarted {
+      player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false
     }
-    if model.nativeCatchUp.inFlight != nil {
-      if model.nativeCatchUp.timedOut(at: now) {
-        cancelNativeCatchUp(reason: "timeout", now: now)
-        resetPlaybackHealth()
-      }
+    guard allowsNativeCatchUp, let item = player.currentItem, let native = model.nativeHLS else {
+      cancelNativeCatchUp(reason: "playback_intent")
       return
     }
     let generation = model.nativeGeneration
     let intent = model.nativePositionIntent
     let target = await native.origin.liveTargetDate()
+    let sourceBuffer = await native.origin.snapshot().forwardBuffer
     guard !Task.isCancelled, allowsNativeCatchUp, native === model.nativeHLS,
       generation == model.nativeGeneration, intent == model.nativePositionIntent,
       item === player.currentItem else { return }
-    let request = model.nativeCatchUp.observe(.init(
+    let rate = model.nativeCatchUp.observe(.init(
       uptime: ProcessInfo.processInfo.systemUptime, clock: item.currentTime().seconds,
       playbackDate: item.currentDate(), targetDate: target,
-      rendition: computeResolvedQualityName(),
+      rendition: preferredQuality == "Auto" ? computeResolvedQualityName() : preferredQuality,
       isPlaying: player.timeControlStatus == .playing,
-      buffer: bufferAheadSeconds(item) ?? 0, allowed: allowsNativeCatchUp))
-    guard let request else { return }
-    model.nativeCatchUpItem = item
-    model.nativeCatchUpTask = Task { @MainActor in
-      guard !Task.isCancelled, model.nativeCatchUp.inFlight?.id == request.id,
-        allowsNativeCatchUp, native === model.nativeHLS, item === player.currentItem,
-        generation == model.nativeGeneration, intent == model.nativePositionIntent,
-        player.timeControlStatus == .playing, (bufferAheadSeconds(item) ?? 0) >= 1,
-        let before = item.currentDate(),
-        request.target.timeIntervalSince(before) >= NativeLiveCatchUp.minimumExcessSeconds else {
-        if model.nativeCatchUp.inFlight?.id == request.id {
-          cancelNativeCatchUp(reason: "no_longer_needed")
-        }
-        return
-      }
-      resetPlaybackHealth()
-      item.automaticallyPreservesTimeOffsetFromLive = true
-      recordPlaybackEvent("native_catch_up_started",
-        metrics: ["excess_seconds": request.target.timeIntervalSince(before)])
-      let finished = await item.seek(to: request.target)
-      guard !Task.isCancelled, item === player.currentItem, native === model.nativeHLS,
-        generation == model.nativeGeneration, intent == model.nativePositionIntent,
-        model.nativeCatchUp.finish(request.id, at: ProcessInfo.processInfo.systemUptime) else { return }
-      model.nativeCatchUpTask = nil
-      model.nativeCatchUpItem = nil
-      resetPlaybackHealth()
-      recordPlaybackEvent("native_catch_up_completed",
-        metrics: ["duration_seconds": ProcessInfo.processInfo.systemUptime - request.startedAt],
-        flags: ["finished": finished])
-      // Seeking preserves AVPlayer's requested rate. Do not issue a play command
-      // here: a pause or source change that happened meanwhile owns playback.
+      buffer: bufferAheadSeconds(item) ?? 0, allowed: allowsNativeCatchUp,
+      hasFreshVideo: model.playbackTelemetry.videoFrameAge.map { $0 < 4 } ?? false,
+      playbackRate: player.rate, normalOffset: model.chatSyncBaseline.nativeCushion ?? 0))
+    if let sourceBuffer {
+      let buffer = max(activeLivePlaybackPolicy.preferredForwardBufferDuration, sourceBuffer)
+      if item.preferredForwardBufferDuration != buffer { item.preferredForwardBufferDuration = buffer }
     }
+    applyNativeCatchUpRate(rate, item: item)
+  }
+
+  func applyNativeCatchUpRate(_ rate: Float, item: AVPlayerItem) {
+    guard allowsNativeCatchUp, item === player.currentItem,
+      player.timeControlStatus == .playing, player.rate > 0,
+      rate.isFinite, (1...NativeLiveCatchUp.maximumRate).contains(rate) else { return }
+    if rate > 1, model.nativeCatchUpItem === item, model.nativeCatchUpAppliedRate == rate {
+      return
+    }
+    guard abs(player.rate - rate) >= 0.005 else {
+      if rate == 1 {
+        model.nativeCatchUpItem = nil
+        model.nativeCatchUpAppliedRate = 1
+      }
+      return
+    }
+    model.nativeCatchUpItem = rate > 1 ? item : nil
+    model.nativeCatchUpAppliedRate = rate
+    player.rate = rate
+    recordPlaybackEvent("native_catch_up_rate_changed",
+      attributes: ["reason": model.nativeCatchUp.lastInterruption?.rawValue ?? "catch_up"], metrics: [
+      "rate": Double(rate),
+      "excess_seconds": model.nativeCatchUp.extraDelay ?? 0,
+      "date_clock_difference_seconds": model.nativeCatchUp.dateClockDifference ?? 0,
+      "buffer_ahead_seconds": bufferAheadSeconds(item) ?? 0
+    ])
   }
 }

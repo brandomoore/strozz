@@ -16,7 +16,22 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
     try await runLiveScenario(probeRecovery: true)
   }
 
-  private func runLiveScenario(probeRecovery: Bool) async throws {
+  func testOptInSimulatorBufferedDriftUsesRateWithoutReload() async throws {
+    guard ProcessInfo.processInfo.environment["STROZZ_NATIVE_RATE_PROBE"] == "1" else {
+      throw XCTSkip("Set STROZZ_NATIVE_RATE_PROBE=1 to create a bounded live drift.")
+    }
+    try await runLiveScenario(probeRecovery: false, probeDrift: true)
+  }
+
+  func testOptInSimulatorWholeSegmentsAndPinnedNativeQuality() async throws {
+    guard ProcessInfo.processInfo.environment["STROZZ_NATIVE_QUALITY_PROBE"] == "1" else {
+      throw XCTSkip("Set STROZZ_NATIVE_QUALITY_PROBE=1 with a whole-segment live channel.")
+    }
+    try await runLiveScenario(probeRecovery: false, probeQuality: true)
+  }
+
+  private func runLiveScenario(probeRecovery: Bool, probeDrift: Bool = false,
+                               probeQuality: Bool = false) async throws {
     #if targetEnvironment(simulator)
     guard let channel = ProcessInfo.processInfo.environment["STROZZ_CATCH_UP_LIVE_CHANNEL"],
       !channel.isEmpty, channel.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") })
@@ -47,33 +62,105 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
     var previousClock = 0.0
     var advancing = 0
     var freshFrames = 0
-    var distinctRequests = Set<UUID>()
-    var pendingSamples = 0
-    var maximumPendingSamples = 0
+    var maximumRate: Float = 1
+    var itemBeforeDrift: AVPlayerItem?
+    var initialDrift: Double?
+    var remainingDrift: Double?
+    var previousCorrectionRate: Float = 1
+    var correctionTransitions = 0
     var ages: [Double] = []
     var observations: [String] = []
     var recoveryStartedAt: TimeInterval?
     var recoveryFinishedAt: TimeInterval?
     var steadySamples = 0
     var steadyFreshFrames = 0
-    for second in 0..<180 {
+    var qualitySamples: [[Bool]] = [[], [], []]
+    var qualityFrameItem: AVPlayerItem?
+    var qualityFrameOutput: AVPlayerItemVideoOutput?
+    let durationSeconds = probeDrift || probeQuality ? 240 : 180
+    for second in 0..<durationSeconds {
       try await Task.sleep(for: .seconds(1))
-      if !probeRecovery && second == 45 { model.player.currentItem?.preferredPeakBitRate = 1_500_000 }
-      if !probeRecovery && second == 90 { model.player.currentItem?.preferredPeakBitRate = 0 }
+      if !probeRecovery && !probeDrift && !probeQuality && second == 45 { model.player.currentItem?.preferredPeakBitRate = 1_500_000 }
+      if !probeRecovery && !probeDrift && !probeQuality && second == 90 { model.player.currentItem?.preferredPeakBitRate = 0 }
+      if probeQuality && second >= 20 {
+        let best = try XCTUnwrap(model.playback?.qualities.filter { !$0.isAudioOnly }.max { $0.bitrate < $1.bitrate })
+        if second == 60 {
+          let index = try XCTUnwrap(view.qualityOptions.firstIndex(of: best.name))
+          view.selectQuality(at: index)
+          XCTAssertTrue(model.isUsingNativeHLS, "Pinning a video must not switch engines")
+          XCTAssertEqual(model.nativeHLS?.sourceURL, best.url)
+        }
+        if second == 120 {
+          let index = try XCTUnwrap(view.qualityOptions.firstIndex(of: LivePlaybackProfile.nativeLowLatency.pickerLabel))
+          view.selectQuality(at: index)
+          XCTAssertTrue(model.isUsingNativeHLS)
+        }
+        if second == 20 {
+          let stats = await model.nativeHLS?.origin.snapshot()
+          XCTAssertEqual(stats?.hasPrefetch, false, "This probe must exercise whole-segment delivery")
+          XCTAssertLessThan(try XCTUnwrap(stats?.holdBack), 10)
+          func surfaces(_ controller: UIViewController) -> String {
+            "\(type(of: controller)) bounds=\(controller.view.bounds) window=\(controller.view.window != nil)\n"
+              + controller.children.map(surfaces).joined()
+          }
+          if let controller = window.rootViewController {
+            observations.append("Surface: window=\(window.bounds)\n\(surfaces(controller))")
+          }
+        }
+        if (20..<60).contains(second) || (75..<120).contains(second) || second >= 135 {
+          let height = try XCTUnwrap(PlayerView.verticalResolution(from: best.name))
+          let window = second < 60 ? 0 : (second < 120 ? 1 : 2)
+          qualitySamples[window].append((model.player.currentItem?.presentationSize.height ?? 0) >= CGFloat(height))
+          XCTAssertTrue(model.isUsingNativeHLS)
+        }
+      }
+      if probeDrift && second == 40 {
+        itemBeforeDrift = model.player.currentItem
+        model.player.pause()
+      }
+      if probeDrift && second == 45 {
+        if let target = await model.nativeHLS?.origin.liveTargetDate(),
+           let date = model.player.currentItem?.currentDate() {
+          initialDrift = target.timeIntervalSince(date) - (model.chatSyncBaseline.nativeCushion ?? 0)
+        }
+        model.player.play()
+      }
+      if probeDrift && second > 45,
+         let target = await model.nativeHLS?.origin.liveTargetDate(),
+         let date = model.player.currentItem?.currentDate() {
+        remainingDrift = target.timeIntervalSince(date) - (model.chatSyncBaseline.nativeCushion ?? 0)
+        let correctionRate = model.nativeCatchUpAppliedRate
+        if abs(correctionRate - previousCorrectionRate) > 0.001 { correctionTransitions += 1 }
+        previousCorrectionRate = correctionRate
+      }
       if probeRecovery && second == 60 {
         engineBeforeRetry = model.nativeHLS
         recoveryStartedAt = ProcessInfo.processInfo.systemUptime
         view.recoverNativeHLS(.unavailable)
       }
-      if let request = model.nativeCatchUp.inFlight {
-        distinctRequests.insert(request.id)
-        pendingSamples += 1
-        maximumPendingSamples = max(maximumPendingSamples, pendingSamples)
-      } else {
-        pendingSamples = 0
-      }
+      maximumRate = max(maximumRate, model.player.rate)
       let clock = model.player.currentTime().seconds
-      let freshFrame = model.playbackTelemetry.videoFrameAge.map { $0 < 4 } ?? false
+      let freshFrame: Bool
+      if probeQuality, let item = model.player.currentItem {
+        if item !== qualityFrameItem {
+          if let qualityFrameItem, let qualityFrameOutput { qualityFrameItem.remove(qualityFrameOutput) }
+          let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [:])
+          item.add(output)
+          qualityFrameItem = item
+          qualityFrameOutput = output
+        }
+        freshFrame = qualityFrameOutput?.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) != nil
+      } else {
+        freshFrame = model.playbackTelemetry.videoFrameAge.map { $0 < 4 } ?? false
+      }
+      if probeDrift && second == 15 {
+        XCTAssertTrue(model.nativeStartupComplete)
+        let targetDate = await model.nativeHLS?.origin.liveTargetDate()
+        let target = try XCTUnwrap(targetDate)
+        let displayed = try XCTUnwrap(model.player.currentItem?.currentDate())
+        XCTAssertLessThanOrEqual(target.timeIntervalSince(displayed), NativeLiveCatchUp.startupToleranceSeconds,
+                                 "Initial playback must start near live without manual correction")
+      }
       if probeRecovery, recoveryStartedAt != nil, recoveryFinishedAt == nil,
          model.nativeHLS !== engineBeforeRetry, model.isUsingNativeHLS, freshFrame,
          clock > previousClock + 0.05,
@@ -93,7 +180,7 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
       }
       previousClock = clock
       if second.isMultiple(of: 5) {
-        observations.append("\(second) native=\(model.isUsingNativeHLS) clock=\(clock) frameAge=\(model.playbackTelemetry.videoFrameAge ?? -1) age=\(ages.last ?? -1) catchUp=\(model.nativeCatchUp.inFlight != nil) quality=\(model.resolvedQualityName ?? "-")")
+        observations.append("\(second) native=\(model.isUsingNativeHLS) clock=\(clock) frameAge=\(model.playbackTelemetry.videoFrameAge ?? -1) age=\(ages.last ?? -1) rate=\(model.player.rate) extra=\(model.nativeCatchUp.extraDelay ?? -1) quality=\(model.resolvedQualityName ?? "-")")
       }
       if model.errorMessage != nil || model.isOffline || model.nativeFallbackReason != nil { break }
     }
@@ -105,6 +192,14 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
     XCTAssertNil(model.nativeFallbackReason)
     XCTAssertFalse(model.isOffline)
     XCTAssertTrue(model.isUsingNativeHLS)
+    if probeQuality {
+      for (index, samples) in qualitySamples.enumerated() {
+        XCTAssertFalse(samples.isEmpty)
+        XCTAssertGreaterThanOrEqual(samples.filter { $0 }.count, Int(ceil(Double(samples.count) * 0.95)),
+          "Auto / pinned / Auto window \(index) must sustain the best available video, not stay at 360p")
+      }
+      XCTAssertTrue(model.nativeRecovery.attempts.isEmpty)
+    }
     if probeRecovery {
       XCTAssertNotNil(engineBeforeRetry)
       XCTAssertFalse(model.nativeHLS === engineBeforeRetry)
@@ -119,11 +214,21 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
       recoveryEvidence.lifetime = .keepAlways
       add(recoveryEvidence)
     } else {
-      XCTAssertGreaterThanOrEqual(freshFrames, 157, "An advancing clock alone is not proof of decoded video")
+      XCTAssertGreaterThanOrEqual(freshFrames, durationSeconds - 23, "An advancing clock alone is not proof of decoded video")
     }
-    XCTAssertGreaterThanOrEqual(advancing, 157)
-    XCTAssertLessThanOrEqual(maximumPendingSamples, 6, "Automatic seeks must have a bounded lifetime")
-    XCTAssertLessThanOrEqual(distinctRequests.count, 6, "Catch-up must not follow every rendition change")
+    XCTAssertGreaterThanOrEqual(advancing, durationSeconds - 23)
+    XCTAssertLessThanOrEqual(maximumRate, NativeLiveCatchUp.maximumRate)
+    if probeDrift {
+      XCTAssertNotNil(itemBeforeDrift)
+      XCTAssertTrue(model.player.currentItem === itemBeforeDrift, "Drift must not replace the player item")
+      XCTAssertTrue(model.nativeRecovery.attempts.isEmpty, "Drift must not require native reloads")
+      XCTAssertGreaterThanOrEqual(try XCTUnwrap(initialDrift), NativeLiveCatchUp.minimumExcessSeconds)
+      XCTAssertLessThanOrEqual(try XCTUnwrap(remainingDrift), NativeLiveCatchUp.settledExcessSeconds + 0.5,
+                              "Catch-up must reach live, not merely reduce the delay")
+      XCTAssertGreaterThan(maximumRate, 1, "Buffered drift should be corrected by rate")
+      XCTAssertEqual(model.player.rate, 1, "Rate should return to normal after reaching live")
+      XCTAssertEqual(correctionTransitions, 2, "One entry and one exit, not repeated speed changes")
+    }
     let sortedAges = ages.sorted()
     XCTAssertFalse(sortedAges.isEmpty)
     if !sortedAges.isEmpty { XCTAssertLessThan(sortedAges[sortedAges.count / 2], 10) }

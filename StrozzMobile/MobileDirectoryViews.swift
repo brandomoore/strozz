@@ -1,78 +1,5 @@
 import SwiftUI
 
-struct MobileHomeView: View {
-  let preview: MobileHomePreview
-  let previewsEnabled: Bool
-  let onSelect: (FollowedChannel) -> Void
-  @State private var service = RecommendationsService()
-  @Environment(\.themePalette) private var palette
-
-  var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 20) {
-        HStack(spacing: 10) {
-          Image("StrozzPixelLogo").resizable().interpolation(.none).frame(width: 36, height: 36)
-          Text("Live now").font(.title2.bold())
-        }
-        if let error = service.errorMessage {
-          MobileStatusView(message: error) { Task { await service.refresh() } }
-        }
-        MobileChannelGrid(channels: service.channels, onSelect: onSelect, preview: preview)
-        if service.isLoading { ProgressView("Loading streams").frame(maxWidth: .infinity) }
-      }
-      .padding()
-      .coordinateSpace(name: "mobile-home-content")
-    }
-    .onScrollGeometryChange(for: CGRect.self) { $0.visibleRect } action: { _, viewport in
-      preview.updateViewport(viewport)
-    }
-    .onAppear { preview.setEnabled(previewsEnabled) }
-    .onDisappear { preview.stop() }
-    .background(palette.backgroundColors.last ?? palette.cardOpaqueSurface)
-    .navigationTitle("Strozz")
-    .refreshable { await service.refresh() }
-    .task { if service.lastUpdatedAt == nil { await service.refresh() } }
-  }
-}
-
-struct MobileFollowingView: View {
-  let onSelect: (FollowedChannel) -> Void
-  @Environment(TwitchAuthSession.self) private var auth
-  @State private var service = FollowedChannelsService()
-
-  var body: some View {
-    ScrollView {
-      VStack(spacing: 20) {
-        if !auth.isAuthenticated {
-          Text("Sign in to see your live followed channels.").foregroundStyle(.secondary)
-          NavigationLink("Sign in to Twitch") { MobileAccountView() }
-            .buttonStyle(.borderedProminent)
-        } else {
-          if let error = service.errorMessage {
-            MobileStatusView(message: error) { Task { await service.refresh(using: auth) } }
-          }
-          // The shared TV service can return trending/demo channels on failure.
-          // Never mislabel those as the viewer's follows.
-          if !service.isUsingDemoData {
-            MobileChannelGrid(channels: service.channels, onSelect: onSelect)
-            if service.channels.isEmpty && !service.isLoading && service.errorMessage == nil {
-              Text("None of your followed channels are live right now.").foregroundStyle(.secondary)
-            }
-          }
-          if service.isLoading { ProgressView("Loading follows") }
-        }
-      }
-      .padding()
-      .frame(maxWidth: .infinity)
-    }
-    .navigationTitle("Following")
-    .task(id: auth.isAuthenticated) {
-      if auth.isAuthenticated { await service.refresh(using: auth) }
-    }
-    .refreshable { if auth.isAuthenticated { await service.refresh(using: auth) } }
-  }
-}
-
 struct MobileBrowseView: View {
   let onSelect: (FollowedChannel) -> Void
   @State private var service = BrowseService()
@@ -278,7 +205,7 @@ struct MobileChannelGrid: View {
   var preview: MobileHomePreview? = nil
 
   var body: some View {
-    LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 20)], spacing: 24) {
+    LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 20, alignment: .top)], spacing: 24) {
       ForEach(channels, id: \.channelKey) { channel in
         Button { onSelect(channel) } label: {
           MobileChannelCard(channel: channel, preview: preview)
@@ -295,40 +222,11 @@ struct MobileChannelGrid: View {
 struct MobileChannelCard: View {
   let channel: FollowedChannel
   var preview: MobileHomePreview? = nil
-  @Environment(\.themePalette) private var palette
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
-      LiveThumbnail(url: channel.thumbnailURL) { image in
-        image.resizable().scaledToFill()
-      } placeholder: {
-        Rectangle().fill(palette.cardOpaqueSurface)
-          .overlay { Icon(glyph: .broadcast, size: 32).foregroundStyle(.secondary) }
-      }
-      .aspectRatio(16 / 9, contentMode: .fit)
-      .clipShape(RoundedRectangle(cornerRadius: 12))
-      .overlay {
-        if let preview, preview.channel == channel.channelKey, preview.player.currentItem != nil {
-          MobilePreviewSurface(player: preview.player)
-            .opacity(preview.isReady ? 1 : 0)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-        }
-      }
-      .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("mobile-home-content")) } action: {
-        if channel.isLive { preview?.updateFrame($0, for: channel.channelKey) }
-      }
-      .onDisappear { preview?.updateFrame(nil, for: channel.channelKey) }
-      .overlay(alignment: .bottomTrailing) {
-        if let preview, preview.channel == channel.channelKey, preview.isReady {
-          Icon(glyph: .volumeOff, size: 16)
-            .padding(6)
-            .background(palette.chromeOpaqueSurface, in: Capsule())
-            .foregroundStyle(palette.chromeOnOpaque)
-            .padding(8)
-            .accessibilityLabel("Muted live preview")
-        }
-      }
+      MobileStreamArtwork(channelKey: channel.channelKey, thumbnailURL: channel.thumbnailURL,
+                          isLive: channel.isLive, viewerCount: channel.viewerCount, preview: preview)
       HStack(alignment: .top, spacing: 10) {
         CachedAsyncImage(url: channel.profileImageURL) { image in
           image.resizable().scaledToFill()
@@ -340,17 +238,110 @@ struct MobileChannelCard: View {
           Text(channel.gameName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
         Spacer(minLength: 0)
-        VStack(alignment: .trailing, spacing: 3) {
-          Text(channel.isLive ? "LIVE" : "Offline").font(.caption.bold())
-          if let count = channel.viewerCount {
-            Text(count, format: .number.notation(.compactName)).font(.caption.monospacedDigit())
-          }
-        }
       }
+
     }
     .contentShape(Rectangle())
     .accessibilityElement(children: .combine)
     .accessibilityValue(preview?.channel == channel.channelKey && preview?.isReady == true ? "Muted live preview" : "")
+  }
+}
+
+struct MobileStreamArtwork: View {
+  let channelKey: String
+  let thumbnailURL: URL?
+  let isLive: Bool
+  let viewerCount: Int?
+  var preview: MobileHomePreview? = nil
+  var isCompact = false
+  @Environment(\.themePalette) private var palette
+
+  var body: some View {
+    LiveThumbnail(url: thumbnailURL) { image in
+      image.resizable().scaledToFill()
+    } placeholder: {
+      Rectangle().fill(palette.cardOpaqueSurface)
+        .overlay { Icon(glyph: .broadcast, size: 28).foregroundStyle(.secondary) }
+    }
+    .aspectRatio(16 / 9, contentMode: .fit)
+    .clipShape(RoundedRectangle(cornerRadius: 12))
+    .accessibilityIdentifier("artwork-\(channelKey)")
+    .overlay {
+      if let preview, preview.channel == channelKey, preview.player.currentItem != nil {
+        MobilePreviewSurface(player: preview.player)
+          .opacity(preview.isReady ? 1 : 0)
+          .allowsHitTesting(false)
+          .accessibilityHidden(true)
+      }
+    }
+    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("mobile-home-content")) } action: {
+      if isLive { preview?.updateFrame($0, for: channelKey) }
+    }
+    .onDisappear { preview?.updateFrame(nil, for: channelKey) }
+    .overlay(alignment: .topTrailing) {
+      if !isCompact {
+        HStack(spacing: 4) {
+          if isLive {
+            Circle().fill(palette.liveIndicator).frame(width: 6, height: 6)
+              .accessibilityHidden(true)
+          }
+          Text(isLive ? "Live" : "Offline")
+        }
+        .font(.caption2.bold())
+        .padding(.horizontal, 6).padding(.vertical, 3)
+        .modifier(MobileControlSurface())
+        .padding(6)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("live-label-\(channelKey)")
+      }
+    }
+    .overlay(alignment: .bottomLeading) {
+      if isLive && isCompact {
+        MobileViewerBadge(count: viewerCount, isCompact: true)
+          .padding(4)
+          .accessibilityIdentifier("viewers-\(channelKey)")
+      } else if isLive, let viewerCount {
+        MobileViewerBadge(count: viewerCount)
+          .padding(6)
+          .accessibilityIdentifier("viewers-\(channelKey)")
+      }
+    }
+    .overlay(alignment: .bottomTrailing) {
+      if let preview, preview.channel == channelKey, preview.isReady {
+        Icon(glyph: .volumeOff, size: 16)
+          .padding(6)
+          .modifier(MobileControlSurface())
+          .padding(6)
+          .accessibilityLabel("Muted live preview")
+      }
+    }
+  }
+}
+
+struct MobileViewerBadge: View {
+  let count: Int?
+  var isCompact = false
+  @Environment(\.themePalette) private var palette
+
+  var body: some View {
+    HStack(spacing: 4) {
+      if isCompact {
+        Circle().fill(palette.liveIndicator).frame(width: 6, height: 6)
+      } else {
+        Icon(glyph: .user, size: 12)
+      }
+      if let count {
+        Text(count, format: .number.notation(.compactName)).monospacedDigit()
+      }
+    }
+    .font(isCompact ? .caption2.weight(.semibold) : .caption.weight(.semibold))
+    .lineLimit(1)
+    .padding(.horizontal, isCompact ? 4 : 6).padding(.vertical, isCompact ? 2 : 4)
+    .modifier(MobileControlSurface())
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(count.map {
+      isCompact ? String(localized: "Live, \($0) viewers") : String(localized: "\($0) viewers")
+    } ?? String(localized: "Live"))
   }
 }
 

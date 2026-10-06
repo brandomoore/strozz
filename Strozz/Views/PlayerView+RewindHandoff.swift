@@ -19,6 +19,11 @@ extension PlayerView {
     guard let item = player.currentItem, let anchorDate = item.currentDate() else { return nil }
     let anchor = CMTimeGetSeconds(item.currentTime())
     guard anchor.isFinite, seconds.isFinite else { return nil }
+    if let previousDate = lastPlaybackDateSample, let previousClock = lastPlaybackTimeSampleSeconds,
+      !PlaybackDateContinuity.isConsistent(previousDate: previousDate, previousClock: previousClock,
+                                           date: anchorDate, clock: anchor) {
+      return nil
+    }
     return RewindVODMapping.wallClock(
       playerTime: seconds, anchorTime: anchor, anchorDate: anchorDate)
   }
@@ -124,7 +129,7 @@ extension PlayerView {
     replacePlaybackItem(with: item)
     await seekReadyItem(item, to: offset)
     installVODTimeObserver()
-    replay.start(vodID: broadcast.id, channelLogin: channel.isEmpty ? nil : channel)
+    replay.start(vodID: broadcast.id, channelLogin: channel.isEmpty ? nil : channel, isGrowing: true)
     replay.update(toOffset: offset)
     scrubTargetSeconds = nil
     isUserPaused = false

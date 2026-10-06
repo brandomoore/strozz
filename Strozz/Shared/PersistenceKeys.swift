@@ -41,6 +41,8 @@ enum PersistenceKey {
   static let watchHistoryEntries = "watchHistoryEntriesV1"
   static let recommendationFeedback = "recommendationFeedbackV1"
   static let personalizedRecommendationsEnabled = "personalizedRecommendationsEnabled"
+  static func mobileWatchHistory(accountID: String) -> String { "mobile.watchHistory.\(accountID)" }
+  static func mobileVODProgress(accountID: String) -> String { "mobile.vodProgress.\(accountID)" }
 
   // MARK: Go-live toasts (standard suite)
 

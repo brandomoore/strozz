@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OSLog
 
 /// Drives a Twitch-style **VOD chat replay**: as a past broadcast plays back,
 /// it surfaces the chat messages that were posted at (or before) the current
@@ -21,9 +22,12 @@ final class VODChatReplayService {
   private(set) var badgeURLs: [String: URL] = [:]
   /// Channel + global cheermotes, so cheers in VOD comments render like Twitch.
   private(set) var cheermotes: [Cheermote] = []
-  /// True once the first page of comments has resolved (success or empty), so
+  /// True once the first page of comments has resolved successfully (including empty), so
   /// the UI can drop its "loading replay" state.
   private(set) var isReady = false
+  private(set) var errorMessage: String?
+  private(set) var isGrowing = false
+  private(set) var lastUpdatedAt: Date?
 
   private struct Entry {
     let offset: Double
@@ -37,6 +41,21 @@ final class VODChatReplayService {
   private var vodID = ""
   private var fetchTask: Task<Void, Never>?
   private var catalogTask: Task<Void, Never>?
+  private var requestID = UUID()
+  private var nextFetchAt = Date.distantPast
+  private let loadData: NetworkClient.DataLoader
+  private let now: () -> Date
+  private static let logger = Logger(subsystem: "com.thatcube.Twozz", category: "chat-replay")
+
+  init(loadData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) },
+       now: @escaping () -> Date = Date.init) {
+    self.loadData = loadData
+    self.now = now
+  }
+
+  var diagnostics: (growing: Bool, fetching: Bool, hasMore: Bool, offset: Double, frontier: Double) {
+    (isGrowing, fetchTask != nil, hasMore, currentOffset, coverageEnd)
+  }
 
   /// Lowest / highest comment offset (seconds) currently held — the contiguous
   /// region we've fetched. Used to detect seeks that land outside it.
@@ -62,11 +81,12 @@ final class VODChatReplayService {
 
   /// Begin a replay session for a VOD. Loads the emote/badge catalogs for the
   /// owning channel and fetches the first page of comments from offset 0.
-  func start(vodID: String, channelLogin: String?) {
+  func start(vodID: String, channelLogin: String?, isGrowing: Bool = false) {
     guard self.vodID != vodID else { return }
     stop()
 
     self.vodID = vodID
+    self.isGrowing = isGrowing
     isReady = false
     buffer = []
     seenKeys = []
@@ -105,21 +125,33 @@ final class VODChatReplayService {
   }
 
   func stop() {
+    requestID = UUID()
     fetchTask?.cancel()
     catalogTask?.cancel()
     fetchTask = nil
     catalogTask = nil
     vodID = ""
+    nextFetchAt = .distantPast
+    isReady = false
+    errorMessage = nil
+    lastUpdatedAt = nil
+    isGrowing = false
   }
 
   /// Advance the replay to the player's current playback offset (seconds).
   func update(toOffset offset: Double) {
     guard !vodID.isEmpty else { return }
+    guard offset.isFinite else {
+      Self.logger.error("Ignoring non-finite replay playback offset")
+      return
+    }
     currentOffset = max(0, offset)
 
-    if currentOffset < coverageStart - 1 || currentOffset > coverageEnd + forwardSeekResetGap {
+    if currentOffset < coverageStart - 1 ||
+      (currentOffset > coverageEnd + forwardSeekResetGap && now() >= nextFetchAt) {
       resetWindow(at: currentOffset)
-    } else if hasMore, fetchTask == nil, currentOffset > coverageEnd - prefetchAheadSeconds {
+    } else if hasMore || isGrowing, fetchTask == nil, now() >= nextFetchAt,
+      currentOffset > coverageEnd - prefetchAheadSeconds {
       fetchMore(from: nextFetchOffset)
     }
 
@@ -127,6 +159,7 @@ final class VODChatReplayService {
   }
 
   private func resetWindow(at offset: Double) {
+    requestID = UUID()
     fetchTask?.cancel()
     fetchTask = nil
     buffer = []
@@ -136,6 +169,7 @@ final class VODChatReplayService {
     coverageEnd = Double(start)
     nextFetchOffset = start
     hasMore = true
+    nextFetchAt = .distantPast
     fetchMore(from: start)
   }
 
@@ -153,23 +187,29 @@ final class VODChatReplayService {
     let id = vodID
     let client = clientID
     let agent = userAgent
+    let request = requestID
+    let loadData = loadData
     fetchTask = Task { [weak self] in
-      let page = await Self.fetchComments(
-        vodID: id, offset: offset, clientID: client, userAgent: agent)
-      guard let self, !Task.isCancelled, self.vodID == id else { return }
-      self.fetchTask = nil
-      self.ingest(page, requestedOffset: offset)
+      do {
+        let page = try await Self.fetchComments(
+          vodID: id, offset: offset, clientID: client, userAgent: agent, loadData: loadData)
+        guard let self, !Task.isCancelled, self.vodID == id, self.requestID == request else { return }
+        self.fetchTask = nil
+        self.errorMessage = nil
+        self.lastUpdatedAt = self.now()
+        self.ingest(page, requestedOffset: offset)
+      } catch {
+        guard let self, !Task.isCancelled, self.vodID == id, self.requestID == request else { return }
+        self.fetchTask = nil
+        self.nextFetchAt = self.now().addingTimeInterval(5)
+        self.errorMessage = String(localized: "Chat replay could not refresh. Retrying...")
+        Self.logger.warning("Replay request failed: \(error.localizedDescription, privacy: .public)")
+      }
     }
   }
 
-  private func ingest(_ page: CommentPage?, requestedOffset: Int) {
+  private func ingest(_ page: CommentPage, requestedOffset: Int) {
     isReady = true
-
-    guard let page else {
-      // Network/parse failure: leave the frontier where it is. A later
-      // `update` near the edge will retry the same offset.
-      return
-    }
 
     var newCount = 0
     for comment in page.comments {
@@ -182,7 +222,8 @@ final class VODChatReplayService {
 
     if newCount > 0 {
       buffer.sort { $0.offset < $1.offset }
-      coverageStart = buffer.first?.offset ?? coverageStart
+      // Silence before the first returned comment is still covered. Advancing
+      // this to that comment would make every tick look like a backward seek.
       coverageEnd = buffer.last?.offset ?? coverageEnd
       nextFetchOffset = Int(coverageEnd)
     } else if page.hasNextPage {
@@ -192,6 +233,9 @@ final class VODChatReplayService {
     }
 
     hasMore = page.hasNextPage
+    // An in-progress recording's current last page is not a permanent end.
+    // Poll inclusively from its frontier so newly archived comments can arrive.
+    nextFetchAt = hasMore ? .distantPast : now().addingTimeInterval(5)
 
     if buffer.count > maxBuffer {
       buffer.removeFirst(buffer.count - maxBuffer)
@@ -210,21 +254,22 @@ final class VODChatReplayService {
 
   // MARK: - Networking
 
-  private struct ParsedComment {
+  private struct ParsedComment: Sendable {
     let offset: Double
     let login: String
     let text: String
     let message: ChatMessage
   }
 
-  private struct CommentPage {
+  private struct CommentPage: Sendable {
     let comments: [ParsedComment]
     let hasNextPage: Bool
   }
 
   private nonisolated static func fetchComments(
-    vodID: String, offset: Int, clientID: String, userAgent: String
-  ) async -> CommentPage? {
+    vodID: String, offset: Int, clientID: String, userAgent: String,
+    loadData: NetworkClient.DataLoader
+  ) async throws -> CommentPage {
     var request = TwitchAPIClient.graphQLRequest(
       clientID: clientID, clientIDField: "Client-ID", userAgent: userAgent)
 
@@ -234,21 +279,21 @@ final class VODChatReplayService {
       message { userColor userBadges { setID version } fragments { text emote { emoteID } } } } } \
       pageInfo { hasNextPage } } } }
       """
-    request.httpBody = try? JSONSerialization.data(
+    request.httpBody = try JSONSerialization.data(
       withJSONObject: TwitchAPIClient.graphQLBody(
         query: query, variables: ["id": vodID, "o": offset]))
 
-    guard let (data, response) = try? await NetworkClient.api.data(for: request) else { return nil }
-    guard TwitchAPIClient.isSuccess(response) else { return nil }
-    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+    let (data, response) = try await loadData(request)
+    _ = try TwitchAPIClient.validatedData(data, response)
+    guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+      json["errors"] == nil,
       let dataObj = json["data"] as? [String: Any],
       let video = dataObj["video"] as? [String: Any],
-      let comments = video["comments"] as? [String: Any]
-    else { return nil }
-
-    let edges = comments["edges"] as? [[String: Any]] ?? []
-    let pageInfo = comments["pageInfo"] as? [String: Any]
-    let hasNextPage = pageInfo?["hasNextPage"] as? Bool ?? false
+      let comments = video["comments"] as? [String: Any],
+      let edges = comments["edges"] as? [[String: Any]],
+      let pageInfo = comments["pageInfo"] as? [String: Any],
+      let hasNextPage = pageInfo["hasNextPage"] as? Bool
+    else { throw URLError(.cannotParseResponse) }
 
     var parsed: [ParsedComment] = []
     parsed.reserveCapacity(edges.count)

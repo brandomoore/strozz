@@ -37,6 +37,20 @@ final class MobilePlaybackTests: XCTestCase {
     XCTAssertNil(MobilePlaybackModel.decodeRecoveryQuality(in: [audio], selection: .native))
   }
 
+  func testPinnedQualityRetainsEnginePreferenceAndAirPlayExplicitlyLeavesNative() {
+    let model = MobilePlaybackModel(muted: true)
+    model.select(.fixed("720p60"))
+    XCTAssertTrue(model.requestsNativePlayback)
+    model.prepareForAirPlay()
+    XCTAssertEqual(model.selection, .automatic)
+    XCTAssertFalse(model.requestsNativePlayback)
+    model.select(.fixed("720p60"))
+    XCTAssertFalse(model.requestsNativePlayback, "An explicit standard selection remains standard")
+    model.select(.native)
+    model.select(.fixed("720p60"))
+    XCTAssertTrue(model.requestsNativePlayback)
+  }
+
   func testStoppedLoadCannotResurrectPlayer() async {
     let gate = ResolutionGate()
     let model = MobilePlaybackModel { _ in await gate.wait() }

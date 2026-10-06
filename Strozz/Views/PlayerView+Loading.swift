@@ -273,6 +273,10 @@ extension PlayerView {
         if item.status == .readyToPlay, isUserPaused || isScrubbing {
           return true
         }
+        if model.isUsingNativeHLS, !model.nativeStartupComplete {
+          try? await Task.sleep(for: .milliseconds(50))
+          continue
+        }
 
         if model.startupProgress.observe(
           clock: CMTimeGetSeconds(item.currentTime()),
@@ -308,15 +312,28 @@ extension PlayerView {
   /// comparing against the real (pre-proxy) source URL.
   func switchToSourceIfNeeded(_ url: URL) {
     guard currentSourceURL != url else { return }
-    replacePlaybackItem(with: makeItem(url: url))
-    startPlayback()
+    let position = model.isUsingNativeHLS && (!pinnedToLive || isUserPaused)
+      ? player.currentItem?.currentDate() : nil
+    model.fallbackRestoreTask?.cancel()
+    let item = makeItem(url: url)
+    replacePlaybackItem(with: item)
+    if let position {
+      let generation = model.nativeGeneration
+      let intent = model.nativePositionIntent
+      model.fallbackRestoreTask = Task { @MainActor in
+        await restoreNativePosition(position, item: item, generation: generation, intent: intent)
+      }
+    } else if shouldPlayAltSource {
+      startPlayback()
+    }
   }
 
   func makeItem(url: URL) -> AVPlayerItem {
     cancelNativeCatchUp(reason: "source_change")
     model.nativeNeedsRefresh = false
     currentSourceURL = url
-    let reuseNative = model.nativeHLS?.sourceURL == url && preferredQuality == "Auto"
+    let nativeVideo = playback?.qualities.first(where: { $0.url == url })?.isAudioOnly != true
+    let reuseNative = model.nativeHLS?.sourceURL == url && nativeVideo
       && livePlaybackProfile == .nativeLowLatency && model.nativeFallbackReason == nil
       && !isVOD && !isUsingAltSource && !isStreamUnstable
       ? model.nativeHLS : nil
@@ -324,6 +341,9 @@ extension PlayerView {
     model.nativeHLS = nil
     model.isUsingNativeHLS = false
     model.nativeParts = 0
+    model.nativeLiveHoldBack = nil
+    model.nativeSourceHasPrefetch = nil
+    model.nativeSourceEdgeAge = nil
     if reuseNative == nil { model.nativeGeneration = UUID() }
     // Detach the outgoing item's resources before building its replacement so
     // nothing accumulates across quality/channel switches:
@@ -359,7 +379,7 @@ extension PlayerView {
       retainHistory: streamRewindEnabled,
       windowSeconds: rewindWindowSeconds
     )
-    let useNative = preferredQuality == "Auto" && livePlaybackProfile == .nativeLowLatency
+    let useNative = nativeVideo && livePlaybackProfile == .nativeLowLatency
       && !isVOD && !isUsingAltSource && !isStreamUnstable
       && model.nativeFallbackReason == nil
     if useNative {
@@ -390,6 +410,8 @@ extension PlayerView {
     // Buffer depth comes from the active profile: shallower for lower latency,
     // deeper to let ABR hold higher quality. (See LivePlaybackPolicy.)
     item.preferredForwardBufferDuration = activeLivePlaybackPolicy.preferredForwardBufferDuration
+    // Let AVPlayer establish the initial LL-HLS start, then disable its
+    // seek-on-rebuffer behavior as soon as startup progress is established.
     item.automaticallyPreservesTimeOffsetFromLive = model.isUsingNativeHLS && pinnedToLive && !isUserPaused
     // The adaptive-rate controller nudges the live rate a few percent either side
     // of 1.0 (anti-stall slow-down / gentle catch-up); time-domain pitch correction
@@ -450,15 +472,34 @@ extension PlayerView {
   }
 
   func restoreNativePosition(_ position: Date, item: AVPlayerItem, generation: UUID, intent: UUID) async {
+    var canSeek = false
     for _ in 0..<100 {
       guard !Task.isCancelled, item === player.currentItem, generation == model.nativeGeneration,
         intent == model.nativePositionIntent else { return }
-      if item.status == .readyToPlay || item.status == .failed { break }
+      if item.status == .failed { break }
+      // A fresh paused HLS owner can expose its date timeline before readyToPlay.
+      // The seek prepares it without briefly resuming a paused viewer.
+      if item.status == .readyToPlay || (!item.seekableTimeRanges.isEmpty && item.currentDate() != nil) {
+        canSeek = true
+        break
+      }
       do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
     }
     guard !Task.isCancelled, item === player.currentItem, generation == model.nativeGeneration,
       intent == model.nativePositionIntent else { return }
-    let restored = item.status == .readyToPlay ? await item.seek(to: position) : false
+    let restored: Bool
+    if canSeek {
+      let timeout = Task { @MainActor in
+        do { try await Task.sleep(for: .seconds(5)) } catch { return }
+        guard item === player.currentItem, generation == model.nativeGeneration,
+          intent == model.nativePositionIntent else { return }
+        item.cancelPendingSeeks()
+      }
+      restored = await item.seek(to: position)
+      timeout.cancel()
+    } else {
+      restored = false
+    }
     guard !Task.isCancelled, item === player.currentItem, generation == model.nativeGeneration,
       intent == model.nativePositionIntent else { return }
     recordPlaybackEvent("native_hls_position_restore", flags: ["restored": restored])
@@ -468,10 +509,12 @@ extension PlayerView {
       recordPlaybackEvent("native_hls_position_restore_failed", level: .error)
       return
     }
+    model.nativeStartupComplete = true
     if canResumeFallback(item: item, generation: generation) { startPlayback() }
   }
 
   func suspendNativePlayback(reason: String = "background") {
+    cancelNativeStartup()
     cancelNativeCatchUp(reason: reason)
     guard model.isUsingNativeHLS else { return }
     model.nativeNeedsRefresh = true
@@ -511,6 +554,10 @@ extension PlayerView {
         playback = resolved
         model.nativeFallbackReason = nil
         let item = makeItem(url: resolved.url(forQuality: preferredQuality))
+        if reason == "suspension" {
+          // Video progress does not prove the old audio renderer survived suspension.
+          rebuildPlaybackPlayer(reason: "native_foreground_refresh", isFailure: false)
+        }
         replacePlaybackItem(with: item)
         recordPlaybackEvent(reason == "suspension"
           ? "native_hls_fresh_source_after_suspension" : "native_hls_fresh_source_after_failure")
@@ -551,7 +598,8 @@ extension PlayerView {
   /// The edge gap is kept only as a fallback when no PROGRAM-DATE-TIME is present,
   /// and is still surfaced separately in the Diagnostics overlay.
   var rawLatencySeconds: Double? {
-    wallClockLatencySeconds ?? liveEdgeLatencySeconds
+    if model.isUsingNativeHLS, wallClockLowConfidenceStreak >= wallClockUnavailableSamples { return nil }
+    return wallClockLatencySeconds ?? liveEdgeLatencySeconds
   }
 
   /// Smoothed value actually shown in the UI, to stop the number jumping around.
@@ -622,7 +670,11 @@ extension PlayerView {
       attributes: ["start_policy": "native_buffering"],
       metrics: ["rate": 1.0]
     )
-    // Let AVPlayer establish its startup/rebuffer cushion on both live sources.
+    if model.isUsingNativeHLS, !model.nativeStartupComplete, pinnedToLive {
+      startNativePlaybackAtLiveEdge()
+      return
+    }
+    if model.isUsingNativeHLS { model.nativeStartupComplete = true }
     player.play()
   }
 
@@ -689,6 +741,7 @@ extension PlayerView {
     lastPlaybackDateSample = nil
     lastPlaybackTimeSampleSeconds = nil
     diagIsFrozen = false
+    mon.playbackDateContinuity = PlaybackDateContinuity()
     diagFrozenSince = nil
   }
 
@@ -909,14 +962,6 @@ extension PlayerView {
       triggerRecoveryIfAllowed(reason: "item failed")
       return
     }
-    if model.nativeCatchUp.inFlight != nil {
-      if model.nativeCatchUp.timedOut(at: ProcessInfo.processInfo.systemUptime) {
-        cancelNativeCatchUp(reason: "timeout")
-        resetPlaybackHealth()
-      }
-      return
-    }
-
     guard didRequestPlayback else {
       stalledPlaybackSamples = 0
       return
@@ -1347,6 +1392,7 @@ extension PlayerView {
       wallClockLowConfidenceStreak = 0
       lastPlaybackDateSample = nil
       lastPlaybackTimeSampleSeconds = nil
+      mon.playbackDateContinuity = PlaybackDateContinuity()
       return
     }
 
@@ -1356,6 +1402,9 @@ extension PlayerView {
       isPlaying: status == .playing,
       now: ProcessInfo.processInfo.systemUptime
     )
+    if model.isUsingNativeHLS, model.startupProgress.hasStarted {
+      item.automaticallyPreservesTimeOffsetFromLive = false
+    }
     let hasSeekableRange = item.seekableTimeRanges.last?.timeRangeValue != nil
     let currentSeconds = CMTimeGetSeconds(item.currentTime())
     let hasAdvancedTime = currentSeconds.isFinite && currentSeconds > 0
@@ -1375,6 +1424,7 @@ extension PlayerView {
     if let playbackDate = item.currentDate() {
       let wallClock = Date().timeIntervalSince(playbackDate)
       let playbackSeconds = CMTimeGetSeconds(item.currentTime())
+      var mappingConsistent = true
 
       if let lastDate = lastPlaybackDateSample,
         let lastPlaybackSeconds = lastPlaybackTimeSampleSeconds,
@@ -1384,18 +1434,23 @@ extension PlayerView {
         let playbackAdvance = playbackSeconds - lastPlaybackSeconds
         let dateAdvance = playbackDate.timeIntervalSince(lastDate)
 
-        if playbackAdvance >= wallClockStalePlaybackAdvanceThresholdSeconds,
+        mappingConsistent = mon.playbackDateContinuity.accepts(
+          previousDate: lastDate, previousClock: lastPlaybackSeconds,
+          date: playbackDate, clock: playbackSeconds)
+        if !mappingConsistent {
+          wallClockLowConfidenceStreak = wallClockUnavailableSamples
+        } else if playbackAdvance >= wallClockStalePlaybackAdvanceThresholdSeconds,
           abs(dateAdvance) <= wallClockStaleDateDeltaEpsilonSeconds
         {
           wallClockLowConfidenceStreak += 1
-        } else if wallClockLowConfidenceStreak > 0 {
+        } else if wallClockLowConfidenceStreak > 0, playbackAdvance > 0.2 {
           wallClockLowConfidenceStreak -= 1
         }
       }
 
-      lastPlaybackDateSample = playbackDate
-      if playbackSeconds.isFinite {
-        lastPlaybackTimeSampleSeconds = playbackSeconds
+      if mappingConsistent {
+        lastPlaybackDateSample = playbackDate
+        if playbackSeconds.isFinite { lastPlaybackTimeSampleSeconds = playbackSeconds }
       }
 
       let hasValidWallClock = wallClock.isFinite && wallClock >= 0
@@ -1405,7 +1460,7 @@ extension PlayerView {
 
       if hasReliableWallClock {
         wallClockLatencySeconds = wallClock
-      } else if !hasValidWallClock {
+      } else if !hasValidWallClock || !mappingConsistent {
         wallClockLatencySeconds = nil
       } else {
         // Wall-clock telemetry appears stale. Keep the last reliable
@@ -1416,6 +1471,7 @@ extension PlayerView {
       wallClockLowConfidenceStreak = 0
       lastPlaybackDateSample = nil
       lastPlaybackTimeSampleSeconds = nil
+      mon.playbackDateContinuity = PlaybackDateContinuity()
     }
 
     if let range = item.seekableTimeRanges.last?.timeRangeValue {

@@ -1,5 +1,40 @@
 import Foundation
 
+struct PlaybackDateContinuity {
+  private var candidate: (date: Date, clock: Double)?
+  private var candidateProgress = 0.0
+
+  static func isConsistent(previousDate: Date, previousClock: Double, date: Date, clock: Double) -> Bool {
+    let difference = date.timeIntervalSince(previousDate) - (clock - previousClock)
+    return difference.isFinite && abs(difference) <= 0.5
+  }
+
+  mutating func accepts(previousDate: Date, previousClock: Double, date: Date, clock: Double) -> Bool {
+    if Self.isConsistent(previousDate: previousDate, previousClock: previousClock, date: date, clock: clock) {
+      self = Self()
+      return true
+    }
+    let correction = date.timeIntervalSince(previousDate) - (clock - previousClock)
+    guard correction.isFinite, (0.5...6).contains(correction), clock - previousClock > 0.2 else {
+      self = Self()
+      return false
+    }
+    // AVPlayer can refine the date mapping forward after resume. Require a
+    // correction within one Twitch target segment and two seconds of consistent
+    // playhead progress. Large/backward or frozen-clock jumps stay invalid.
+    if let candidate, (0.2...2.5).contains(clock - candidate.clock),
+      Self.isConsistent(previousDate: candidate.date, previousClock: candidate.clock, date: date, clock: clock) {
+      candidateProgress += clock - candidate.clock
+    } else {
+      candidateProgress = 0
+    }
+    candidate = (date, clock)
+    guard candidateProgress >= 2 else { return false }
+    self = Self()
+    return true
+  }
+}
+
 enum ChatSyncDefaultsMigration {
   static func runIfNeeded(_ defaults: UserDefaults = .standard) {
     guard !defaults.bool(forKey: PersistenceKey.extraDelayChatDefaultApplied) else { return }
@@ -25,6 +60,7 @@ struct LiveChatSyncBaseline {
   private var itemID: UUID?
   private var previous: Sample?
   private var calibration: [Sample] = []
+  private var continuity = PlaybackDateContinuity()
 
   private struct Sample {
     let time: TimeInterval
@@ -36,6 +72,7 @@ struct LiveChatSyncBaseline {
 
   mutating func itemChanged() {
     previous = nil
+    continuity = PlaybackDateContinuity()
     calibration.removeAll()
     extraDelay = nil
     reference = .unavailable
@@ -66,15 +103,14 @@ struct LiveChatSyncBaseline {
       return gap.isFinite ? gap : nil
     }
     let sample = Sample(time: uptime, clock: playbackTime, date: playbackDate, age: age, nativeGap: nativeGap)
-    defer { previous = sample }
 
     var progressing = false
     if let previous {
       let elapsed = uptime - previous.time
       let clockAdvance = playbackTime - previous.clock
-      let dateAdvance = playbackDate.timeIntervalSince(previous.date)
       // A stale AVPlayer date must not create an ever-growing chat delay.
-      if clockAdvance > 0.2, abs(dateAdvance - clockAdvance) > 0.5 {
+      if !continuity.accepts(
+        previousDate: previous.date, previousClock: previous.clock, date: playbackDate, clock: playbackTime) {
         calibration.removeAll()
         extraDelay = nil
         reference = .unavailable
@@ -83,6 +119,7 @@ struct LiveChatSyncBaseline {
       progressing = elapsed >= 0.5 && elapsed <= 2.5
         && clockAdvance >= elapsed * 0.8 && clockAdvance <= elapsed * 1.2
     }
+    defer { previous = sample }
 
     if canCalibrate, progressing, nativeGap.map({ (-0.75...2).contains($0) }) ?? true {
       if calibration.last.map({ ($0.nativeGap == nil) != (nativeGap == nil) }) == true {
