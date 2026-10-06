@@ -39,7 +39,7 @@ final class PlayerModel {
 
   // MARK: Playback
 
-  let player = AVPlayer()
+  var player = AVPlayer()
 
   /// Drives the audio-only visualizer orb. Reacts to real audio when the player
   /// item exposes a tappable audio track (best effort on live HLS), otherwise
@@ -54,11 +54,30 @@ final class PlayerModel {
   /// Retained for the player's lifetime: `AVURLAsset` only holds its resource
   /// loader delegate weakly, so the proxy must be owned here to stay alive.
   let lowLatencyProxy = LowLatencyHLSProxy(headers: PlaybackService.streamHeaders)
+  @ObservationIgnored var nativeHLS: NativeLowLatencyHLS?
+  @ObservationIgnored var nativeGeneration = UUID()
+  var nativeFallbackReason: String?
+  var nativeParts = 0
+  var isUsingNativeHLS = false
+  @ObservationIgnored var nativeCatchUp = NativeLiveCatchUp()
+  @ObservationIgnored var nativeCatchUpTask: Task<Void, Never>?
+  @ObservationIgnored var nativeCatchUpItem: AVPlayerItem?
+  @ObservationIgnored var nativeRecovery = NativePlaybackRecovery()
+  @ObservationIgnored var nativeRestartSerial = 0
+  @ObservationIgnored var fallbackRestoreTask: Task<Void, Never>?
+  @ObservationIgnored var nativeNeedsRefresh = false
+  @ObservationIgnored var nativeResumePosition: Date?
+  @ObservationIgnored var nativeRefreshTask: Task<Void, Never>?
+  @ObservationIgnored var nativePositionIntent = UUID()
 
   /// Always-on structured playback recorder. It mirrors key events to OSLog and
   /// persists a bounded JSONL session for agent-driven postmortem analysis.
   let playbackTelemetry = PlaybackTelemetryRecorder()
   @ObservationIgnored var startupProgress = LivePlaybackStartup.Progress()
+  @ObservationIgnored var chatSyncBaseline = LiveChatSyncBaseline()
+  @ObservationIgnored var chatSyncItemID = UUID()
+  @ObservationIgnored var chatSyncSendAnchor: Date?
+  var chatSyncReference: LiveChatSyncBaseline.Reference = .unavailable
 
   // MARK: Monitoring boxes
   // Plain (non-`@Observable`) reference boxes for the once-per-second / per-frame

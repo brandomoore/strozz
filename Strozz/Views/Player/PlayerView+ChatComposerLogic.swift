@@ -29,17 +29,32 @@ extension PlayerView {
   /// reaches the delayed video. Show a short progress countdown so the user
   /// knows it was sent and roughly when it will surface.
   func beginChatSyncSendIndicatorIfNeeded() {
-    guard chatSyncToStream, let delay = chatSyncDelaySeconds, delay >= 0.75 else {
+    model.chatSyncSendAnchor = Date()
+    updateChatSyncSendIndicator()
+  }
+
+  func updateChatSyncSendIndicator() {
+    guard let anchor = model.chatSyncSendAnchor else { return }
+    let delay = chatSyncToStream ? (chatSyncDelaySeconds ?? 0) : 0
+    let deadline = anchor.addingTimeInterval(delay)
+    guard delay >= 0.75, deadline > Date() else {
+      chatSyncSendClearTask?.cancel()
+      chatSyncSendClearTask = nil
+      chatSyncSendDeadline = nil
+      model.chatSyncSendAnchor = nil
       return
     }
+    guard chatSyncSendDeadline.map({ abs($0.timeIntervalSince(deadline)) > 0.1 }) ?? true else { return }
     chatSyncSendClearTask?.cancel()
     chatSyncSendDelay = delay
-    chatSyncSendDeadline = Date().addingTimeInterval(delay)
+    chatSyncSendDeadline = deadline
     chatSyncSendClearTask = Task {
-      try? await Task.sleep(for: .seconds(delay))
+      try? await Task.sleep(for: .seconds(max(0, deadline.timeIntervalSinceNow)))
       guard !Task.isCancelled else { return }
       await MainActor.run {
+        guard chatSyncSendDeadline == deadline else { return }
         chatSyncSendDeadline = nil
+        model.chatSyncSendAnchor = nil
       }
     }
   }
@@ -460,23 +475,57 @@ extension PlayerView {
     return nil
   }
 
-  /// The delay to hold chat by so it lines up with the on-screen video.
-  ///
-  /// This must be the *broadcast* (glass-to-glass) latency, i.e. how far behind
-  /// real time the picture is — which is exactly what the wall-clock estimate
-  /// (`now − EXT-X-PROGRAM-DATE-TIME`) measures. The live-edge value is only the
-  /// small in-buffer gap to the playlist edge (a few seconds) and would leave
-  /// chat running far ahead, so it's not used for syncing.
+  /// Only the extra delay beyond this source's normal live playback.
   var chatSyncDelaySeconds: Double? {
-    wallClockLatencySeconds
+    model.chatSyncBaseline.extraDelay
+  }
+
+  func updateChatSyncBaseline() async {
+    let channel = activeChannel
+    let source = isUsingAltSource ? "youtube" : "twitch"
+    let itemID = model.chatSyncItemID
+    let sessionID = model.playbackTelemetry.sessionID
+    guard !isVOD, let item = player.currentItem else { return }
+    let native = model.nativeHLS
+    let target = await native?.origin.liveTargetDate()
+    guard !Task.isCancelled, item === player.currentItem, itemID == model.chatSyncItemID,
+      channel == activeChannel, source == (isUsingAltSource ? "youtube" : "twitch"),
+      sessionID == model.playbackTelemetry.sessionID, native === model.nativeHLS else { return }
+    let nearEdge = currentSeekWindow().map { $0.end - $0.now <= targetLiveEdgeSeconds + 1 } ?? false
+    let healthy = model.startupProgress.hasStarted && player.timeControlStatus == .playing
+      && !isLoading && !isOffline && !isStreamUnstable && !isRecoveringPlayback
+      && videoDecodeFrozenSince == nil && !diagIsFrozen
+      && pinnedToLive && !isUserPaused && !isScrubbing && scrubTargetSeconds == nil
+      && !vodHandoffTransitionInFlight && !isSleeping && backgroundedAt == nil
+      && channelPageTarget == nil && abs(player.rate - 1) < 0.02
+      && (bufferAheadSeconds(item) ?? 0) >= 0.75
+      && (lastStallAt.map { Date().timeIntervalSince($0) >= 10 } ?? true)
+    // Never calibrate a deliberately deep-buffered profile or an unverified
+    // fallback as the normal low-latency baseline.
+    let fallbackCalibration = nearEdge && diagStallCount == 0
+      && preferredQuality == "Auto" && livePlaybackProfile == .lowerLatency
+    model.chatSyncBaseline.observe(
+      context: "\(channel.lowercased())/\(source)", itemID: itemID,
+      playbackDate: item.currentDate(), playbackTime: item.currentTime().seconds,
+      liveTarget: target,
+      canCalibrate: healthy && (target != nil || fallbackCalibration || (isUsingAltSource && nearEdge)),
+      now: Date(), uptime: ProcessInfo.processInfo.systemUptime
+    )
+    applyChatSyncSettings()
   }
 
   /// Push the current sync preference + measured latency into the chat service.
   /// Called when the toggle changes and on each latency sample.
   func applyChatSyncSettings() {
+    let reference = model.chatSyncBaseline.reference
+    if model.chatSyncReference != reference {
+      model.chatSyncReference = reference
+      recordPlaybackEvent("chat_sync_reference_changed", attributes: ["reference": reference.rawValue])
+    }
     chat.configureChatSync(
       enabled: chatSyncToStream,
       delaySeconds: chatSyncDelaySeconds ?? 0
     )
+    updateChatSyncSendIndicator()
   }
 }

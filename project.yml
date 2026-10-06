@@ -4,6 +4,7 @@ options:
   bundleIdPrefix: com.thatcube.Twozz
   deploymentTarget:
     tvOS: "18.0"
+    iOS: "18.0"
   createIntermediateGroups: true
 settings:
   base:
@@ -27,6 +28,99 @@ packages:
     url: https://github.com/SDWebImage/SDWebImageWebPCoder.git
     from: 0.14.6
 targets:
+  StrozzMobile:
+    type: application
+    platform: iOS
+    sources:
+      - path: StrozzMobile
+      - path: Strozz/Assets.xcassets
+      - path: Strozz/Models
+      - path: Strozz/Resources/Fonts
+      - path: Strozz/Services
+        includes:
+          - "BrowseService.swift"
+          - "SearchService.swift"
+          - "RecommendationsService.swift"
+          - "FollowedChannels*.swift"
+          - "TwitchAuthSession*.swift"
+          - "TwitchYouTubeAliasService.swift"
+          - "YouTubeLiveSnapshotService.swift"
+          - "YouTubeConcurrentViewersService.swift"
+          - "Chat*.swift"
+          - "BadgeCatalogService.swift"
+          - "EmoteCatalogService.swift"
+          - "CheermoteCatalogService.swift"
+          - "WebSocketService.swift"
+          - "PlaybackService.swift"
+          - "Native*.swift"
+          - "LowLatencyHLSProxy.swift"
+          - "LiveChatSyncBaseline.swift"
+      - path: Strozz/Shared
+        includes:
+          - "NetworkClient.swift"
+          - "TwitchAPIClient.swift"
+          - "TwitchConfig.swift"
+          - "YouTubeConfig.swift"
+          - "PersistenceKeys.swift"
+          - "BoundedCache.swift"
+          - "CachedAsyncImage.swift"
+          - "Theme.swift"
+          - "CardMetrics.swift"
+          - "TopShelfStore.swift"
+          - "TopShelfCredentialStore.swift"
+          - "TopShelfSnapshot.swift"
+      - path: Strozz/Views/Icon.swift
+      - path: Strozz/Views/RichChatLineView.swift
+      - path: Strozz/Views/Chat/ChatColor.swift
+    dependencies:
+      - package: SDWebImage
+        product: SDWebImage
+      - package: SDWebImageSwiftUI
+        product: SDWebImageSwiftUI
+      - package: SDWebImageWebPCoder
+        product: SDWebImageWebPCoder
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Twozz
+        PRODUCT_NAME: StrozzMobile
+        DEVELOPMENT_TEAM: N8Z5T4AK3X
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: Strozz/App/Strozz.entitlements
+        INFOPLIST_FILE: StrozzMobile/Info.plist
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: MobileAppIcon
+  StrozzMobileTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: StrozzMobileTests
+    dependencies:
+      - target: StrozzMobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Twozz.MobileTests
+        DEVELOPMENT_TEAM: N8Z5T4AK3X
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: ""
+        TARGETED_DEVICE_FAMILY: "1,2"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/StrozzMobile.app/StrozzMobile"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+  StrozzMobileUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: StrozzMobileUITests
+    dependencies:
+      - target: StrozzMobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Twozz.MobileUITests
+        DEVELOPMENT_TEAM: N8Z5T4AK3X
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: ""
+        TARGETED_DEVICE_FAMILY: "1,2"
+        TEST_TARGET_NAME: StrozzMobile
   Strozz:
     type: application
     platform: tvOS
@@ -92,6 +186,19 @@ targets:
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Strozz.app/Strozz"
         BUNDLE_LOADER: "$(TEST_HOST)"
 schemes:
+  StrozzMobile:
+    build:
+      targets:
+        StrozzMobile: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - StrozzMobileTests
+        - StrozzMobileUITests
+    archive:
+      config: Release
   Strozz:
     build:
       targets:

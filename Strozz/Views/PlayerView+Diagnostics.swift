@@ -85,6 +85,7 @@ extension PlayerView {
   /// Only relevant while the prefetch proxy is the active (destabilizing)
   /// strategy; if it's already off there is nothing to drop.
   func checkPredictedInstability() {
+    guard !model.isUsingNativeHLS else { return }
     guard !isVOD, !isStreamUnstable, lowLatencyProxyEnabled else { return }
     guard !isUserPaused, !isScrubbing else { return }
     guard lowLatencyProxy.predictedUnstable else { return }
@@ -105,6 +106,9 @@ extension PlayerView {
   }
 
   private func recordInstabilityEvent() {
+    // Native LL-HLS owns its live-offset recovery; legacy buffering must not
+    // silently replace the selected engine.
+    guard !model.isUsingNativeHLS else { return }
     guard !isVOD, !isStreamUnstable else { return }
     let now = Date()
     lastStallAt = now
@@ -126,18 +130,12 @@ extension PlayerView {
     }
   }
 
-  /// Switch into deep-buffer stability mode: stop chasing the live edge, drop the
-  /// low-latency prefetch proxy (its promotion is what destabilizes a struggling
-  /// source), and ride a deep buffer of already-produced segments so the source's
-  /// jitter is absorbed instead of causing a stall/rewind loop. The flag latches
-  /// for the rest of this channel session — a stream that has proven it can't hold
-  /// the live edge keeps the safe strategy until the viewer changes channel
-  /// (`resetDiagnostics`); we never flap back and risk re-destabilizing it.
+  /// Stop chasing the edge and let AVPlayer build a deeper buffer at the current
+  /// position. Recovery must never replay watched content to manufacture buffer.
+  /// The policy stays latched until the viewer changes channel.
   func enterStreamStabilityMode() {
-    // Never engage on the alternate source: stability mode is a Twitch-pipeline
-    // strategy (drop the prefetch proxy, ride a deep buffer behind the edge) and
-    // would seek the alt item backward or reload it into Twitch.
-    guard !isUsingAltSource else { return }
+    guard !model.isUsingNativeHLS, !isUsingAltSource, !isVOD, !isStreamUnstable,
+      !isUserPaused, !isScrubbing, backgroundedAt == nil else { return }
     streamUnstableSince = Date()
     recordPlaybackEvent(
       "stability_mode_entered",
@@ -150,39 +148,13 @@ extension PlayerView {
     if showLatencyDiagnostics {
       logDiagnosticsEvent("stream unstable -> stability mode")
     }
-    // `isStreamUnstable` is now set, so the active policy is the deep-buffer
-    // fallback and `makeItem` will build the item without prefetch promotion.
+    lowLatencyProxy.configure(
+      promotePrefetch: false, retainHistory: streamRewindEnabled,
+      windowSeconds: rewindWindowSeconds)
     applyActiveLivePlaybackPolicy()
-
-    // If the prefetch proxy was actually promoting (the real-world destabilizer),
-    // rebuild the pipeline without it. The reload restarts the timeline well
-    // behind the unstable edge and fills the deep buffer — no manual seek needed.
-    if lowLatencyProxyEnabled {
-      if showLatencyDiagnostics { logDiagnosticsEvent("stability: LL prefetch OFF") }
-      Task { await load(reason: "stabilityProxyOff") }
-      return
-    }
-
-    // Proxy already off: just build a cushion by riding back behind the edge.
-    guard !isUserPaused, !isScrubbing, pinnedToLive,
-      let item = player.currentItem, let edge = liveSeekableEdgeSeconds(item)
-    else { return }
-    let start = item.seekableTimeRanges.first?.timeRangeValue.start
-    let startSeconds = start.map { CMTimeGetSeconds($0) } ?? 0
-    let target = max(edge - stabilityTargetBehindEdgeSeconds, startSeconds)
-    let tolerance = CMTime(seconds: 1.0, preferredTimescale: 600)
-    let telemetrySeek = model.playbackTelemetry.beginSeek(target: target, kind: "stability_buffer")
-    item.seek(
-      to: CMTime(seconds: target, preferredTimescale: 600),
-      toleranceBefore: tolerance,
-      toleranceAfter: tolerance
-    ) { [self] finished in
-      Task { @MainActor in
-        guard model.playbackTelemetry.finishSeek(
-          telemetrySeek, finished: finished, actual: CMTimeGetSeconds(item.currentTime())) else { return }
-        player.playImmediately(atRate: 1.0)
-      }
-    }
+    recordPlaybackEvent("stability_position_preserved", metrics: [
+      "playhead_seconds": player.currentItem.map { CMTimeGetSeconds($0.currentTime()) } ?? 0
+    ])
   }
 
   /// Detects forward/backward playhead jumps by comparing actual playhead
@@ -327,6 +299,10 @@ extension PlayerView {
   }
 
   func resetDiagnostics() {
+    model.chatSyncBaseline = LiveChatSyncBaseline()
+    chat.configureChatSync(enabled: false, delaySeconds: 0)
+    model.nativeRecovery = NativePlaybackRecovery()
+    model.nativeFallbackReason = nil
     diagStallCount = 0
     diagJumpCount = 0
     diagReloadCount = 0

@@ -3,14 +3,38 @@ import XCTest
 @testable import Strozz
 
 final class LivePlaybackPolicyTests: XCTestCase {
-  func testDefaultProfileIsLowerLatency() {
-    XCTAssertEqual(LivePlaybackProfile.default, .lowerLatency)
+  func testNewDefaultDoesNotReplaceLegacyProfiles() {
+    XCTAssertEqual(LivePlaybackProfile.default, .nativeLowLatency)
+    XCTAssertEqual(LivePlaybackProfile.nativeLowLatency.pickerLabel, "Auto · Native Low Latency")
+    XCTAssertEqual(LivePlaybackProfile.allCases.count, 3)
+    let policy = LivePlaybackPolicy.live(profile: .nativeLowLatency, isPinned: false)
+    XCTAssertEqual(policy.preferredForwardBufferDuration, 1)
+    XCTAssertEqual(policy.minPlaybackRate, 1)
+    XCTAssertEqual(policy.maxCatchUpRate, 1)
   }
 
   func testProfileRawValuesAreStable() {
     // Persisted via @AppStorage — changing these would silently reset users.
     XCTAssertEqual(LivePlaybackProfile.lowerLatency.rawValue, "lowerLatency")
     XCTAssertEqual(LivePlaybackProfile.higherQuality.rawValue, "higherQuality")
+  }
+
+  func testNativeModeIsIndependentOfLegacyProxyDisable() {
+    XCTAssertTrue(LivePlaybackProfile.nativeLowLatency.requestsNativePlayback)
+    XCTAssertTrue(LivePlaybackProfile.nativeLowLatency.promotesPrefetch(legacyEnabled: false, unstable: false))
+    XCTAssertFalse(LivePlaybackProfile.lowerLatency.promotesPrefetch(legacyEnabled: false, unstable: false))
+    XCTAssertFalse(LivePlaybackProfile.higherQuality.promotesPrefetch(legacyEnabled: false, unstable: false))
+    for profile in LivePlaybackProfile.allCases {
+      XCTAssertFalse(profile.promotesPrefetch(legacyEnabled: true, unstable: true))
+    }
+  }
+
+  func testUnavailableNativeModeCannotRemainOfferedOrChecked() {
+    XCTAssertFalse(LivePlaybackProfile.available(nativeAvailable: false).contains(.nativeLowLatency))
+    XCTAssertEqual(LivePlaybackProfile.nativeLowLatency.effectiveSelection(nativeAvailable: false), .lowerLatency)
+    XCTAssertEqual(LivePlaybackProfile.nativeLowLatency.effectiveSelection(nativeAvailable: true), .nativeLowLatency)
+    XCTAssertEqual(LivePlaybackProfile.higherQuality.effectiveSelection(nativeAvailable: false), .higherQuality)
+    XCTAssertEqual(LivePlaybackProfile.available(nativeAvailable: true), [.nativeLowLatency, .lowerLatency, .higherQuality])
   }
 
   func testPickerLabels() {

@@ -108,6 +108,7 @@ enum PersistenceKey {
 
   static let preferredQuality = "preferredQuality"
   static let livePlaybackProfile = "livePlaybackProfile"
+  static let nativePlaybackDefaultApplied = "nativePlaybackDefaultApplied"
   static let autoClaimWatchBonuses = "autoClaimWatchBonuses"
 
   // MARK: Chat appearance — live controls (bound via `@AppStorage` in PlayerView)
@@ -123,6 +124,7 @@ enum PersistenceKey {
   static let chatHighlightKeywords = "chatHighlightKeywords"
   static let chatLayoutMode = "chatLayoutMode"
   static let chatSyncToStream = "chatSyncToStream"
+  static let extraDelayChatDefaultApplied = "extraDelayChatDefaultApplied"
 
   // MARK: Experimental cross-platform chat merge (bound via `@AppStorage` in PlayerView)
 

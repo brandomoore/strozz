@@ -13,6 +13,7 @@ struct StrozzApp: App {
     SDImageCodersManager.shared.addCoder(SDImageWebPCoder.shared)
     ImageCacheConfigurator.configure()
     ChatAppearanceMigration.runIfNeeded()
+    ChatSyncDefaultsMigration.runIfNeeded()
   }
 
   var body: some Scene {

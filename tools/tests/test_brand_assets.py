@@ -53,7 +53,7 @@ class BrandAssetsTests(unittest.TestCase):
     def test_every_declared_variant_is_regenerated_without_changing_catalog_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             assets = Path(directory)
-            for name in ("AppIcon.brandassets", "SplashScreenLogo.imageset", "StrozzPixelLogo.imageset"):
+            for name in ("AppIcon.brandassets", "MobileAppIcon.appiconset", "SplashScreenLogo.imageset", "StrozzPixelLogo.imageset"):
                 for source in (brand_assets.ASSETS / name).rglob("Contents.json"):
                     target = assets / source.relative_to(brand_assets.ASSETS)
                     target.parent.mkdir(parents=True, exist_ok=True)
@@ -77,7 +77,10 @@ class BrandAssetsTests(unittest.TestCase):
                     scale = 3 if "@3x" in path.name else 2 if "@2x" in path.name else 1
                     expected[relative] = (width * scale, height * scale)
             self.assertEqual(len(expected), 18)
-            self.assertEqual(len(outputs), 19)
+            self.assertEqual(len(outputs), 20)
+            with Image.open(assets / "MobileAppIcon.appiconset/mobile-icon.png") as image:
+                self.assertEqual(image.size, (1024, 1024))
+                self.assertEqual(image.mode, "RGB")
             for relative, size in expected.items():
                 with Image.open(assets / relative) as image:
                     self.assertEqual(image.size, size, str(relative))

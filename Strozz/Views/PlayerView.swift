@@ -97,7 +97,7 @@ struct PlayerView: View {
   /// normalized list by `chatHighlightKeywordList`.
   @AppStorage(PersistenceKey.chatHighlightKeywords) var chatHighlightKeywords = ""
   @AppStorage(PersistenceKey.chatLayoutMode) var chatLayoutModeRaw = ChatLayoutMode.side.rawValue
-  @AppStorage(PersistenceKey.chatSyncToStream) var chatSyncToStream = false
+  @AppStorage(PersistenceKey.chatSyncToStream) var chatSyncToStream = true
   @AppStorage(PersistenceKey.experimentalYouTubeMergeEnabled) var experimentalYouTubeMergeEnabled = true
   /// Optional manual override for the YouTube merge target. Kept per-channel and
   /// non-persistent so a value entered for one streamer never leaks into another
@@ -451,7 +451,7 @@ struct PlayerView: View {
   var targetLiveEdgeSeconds: Double {
     // YouTube's native seekable end already reflects configuredTimeOffsetFromLive.
     // Subtracting that offset again would unnecessarily double the DVR margin.
-    isUsingAltSource ? 0 : 3.5
+    isUsingAltSource || model.isUsingNativeHLS ? 0 : 3.5
   }
   let edgeLatencyUnavailableEpsilonSeconds: Double = 0.2
   let edgeLatencyUnavailableSamples = 4
@@ -514,10 +514,6 @@ struct PlayerView: View {
   /// of making you watch it sort itself out.
   let unstableStartupEventThreshold = 1
   let unstableStartupGraceSeconds: Double = 12
-  /// On entering stability mode, seek back to roughly this far behind the live
-  /// edge to build a cushion (and skip past a stuck near-edge segment). Only used
-  /// when the proxy was already off; otherwise a reload repositions the timeline.
-  let stabilityTargetBehindEdgeSeconds: Double = 20
   /// Predictive stability: the proxy (`LowLatencyHLSProxy`) analyzes each HLS
   /// media-playlist refresh and latches a `predictedUnstable` verdict when a
   /// struggling encoder's manifests show structural trouble (media-sequence
@@ -976,7 +972,7 @@ struct PlayerView: View {
       isLive: !isVOD,
       isReady: !isLoading && errorMessage == nil && !isOffline,
       timingOffset: captionsTimingOffset,
-      playerClock: { [weak player] in player?.currentItem?.currentDate() }
+      playerClock: { [weak model] in model?.player.currentItem?.currentDate() }
     )
   }
 

@@ -1,11 +1,10 @@
 import Foundation
 
 /// User-selectable live playback profile, surfaced in the quality picker as the
-/// two "Auto" options. Both keep prefetch promotion on (the real latency win) and
-/// both must never stutter; they differ only in how they trade quality for
-/// latency. An explicit rendition pick (e.g. "1080p60") is a third, fixed-quality
-/// case that ignores the profile.
+/// Auto options. Native LL-HLS uses source-CMAF parts; the two legacy profiles
+/// retain whole-segment prefetch promotion. A fixed rendition ignores the profile.
 enum LivePlaybackProfile: String, CaseIterable, Identifiable {
+  case nativeLowLatency
   /// Latency priority: keep a shallow buffer near the live edge and let adaptive
   /// bitrate drop resolution to avoid a stall. Degraded quality is acceptable;
   /// stutter is not.
@@ -17,14 +16,27 @@ enum LivePlaybackProfile: String, CaseIterable, Identifiable {
 
   var id: String { rawValue }
 
-  /// Default for new installs. Matches the app's historical "low-latency on"
-  /// stance — latency is the priority, with the no-stutter guarantee provided by
-  /// ABR headroom plus the live-edge drift recovery.
-  static let `default`: LivePlaybackProfile = .lowerLatency
+  var requestsNativePlayback: Bool { self == .nativeLowLatency }
+
+  static func available(nativeAvailable: Bool) -> [Self] {
+    nativeAvailable ? [.nativeLowLatency, .lowerLatency, .higherQuality] : [.lowerLatency, .higherQuality]
+  }
+
+  func effectiveSelection(nativeAvailable: Bool) -> Self {
+    self == .nativeLowLatency && !nativeAvailable ? .lowerLatency : self
+  }
+
+  func promotesPrefetch(legacyEnabled: Bool, unstable: Bool) -> Bool {
+    !unstable && (requestsNativePlayback || legacyEnabled)
+  }
+
+  /// Default for new installs; the old profile raw values remain selectable.
+  static let `default`: LivePlaybackProfile = .nativeLowLatency
 
   /// Short label used in the quality picker's two Auto rows and the button.
   var pickerLabel: String {
     switch self {
+    case .nativeLowLatency: return "Auto · Native Low Latency"
     case .lowerLatency: return "Auto · Low Latency"
     case .higherQuality: return "Auto · High Quality"
     }
@@ -33,6 +45,7 @@ enum LivePlaybackProfile: String, CaseIterable, Identifiable {
   /// Even shorter tag for the quality button (e.g. "Auto · LL (1080p60)").
   var shortTag: String {
     switch self {
+    case .nativeLowLatency: return "Native Low Latency"
     case .lowerLatency: return "Low Latency"
     case .higherQuality: return "Quality"
     }
@@ -90,6 +103,12 @@ struct LivePlaybackPolicy: Equatable {
     }
 
     switch profile {
+    case .nativeLowLatency:
+      return LivePlaybackPolicy(
+        preferredForwardBufferDuration: 1, enablesGentleCatchUp: false,
+        catchUpThresholdSeconds: .greatestFiniteMagnitude, maxCatchUpRate: 1,
+        catchUpRampPerSecond: 0, minPlaybackRate: 1, slowdownBufferFloorSeconds: 0,
+        catchUpHealthyBufferSeconds: .greatestFiniteMagnitude)
     case .lowerLatency:
       return LivePlaybackPolicy(
         // Shallow forward buffer: sit close to the edge and, critically, resume

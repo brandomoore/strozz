@@ -103,6 +103,7 @@ struct ChatMessagesColumn: View {
 struct QualityMenu: View, Equatable {
   let options: [String]
   let selectedOption: String
+  let engineStatus: String?
   let buttonLabel: String
   let reservedWidthLabels: [String]
   let displayLabel: (String) -> String
@@ -150,6 +151,7 @@ struct QualityMenu: View, Equatable {
   nonisolated static func == (lhs: QualityMenu, rhs: QualityMenu) -> Bool {
     lhs.options == rhs.options
       && lhs.selectedOption == rhs.selectedOption
+      && lhs.engineStatus == rhs.engineStatus
       && lhs.buttonLabel == rhs.buttonLabel
       && lhs.reservedWidthLabels == rhs.reservedWidthLabels
       && lhs.sourceAvailable == rhs.sourceAvailable
@@ -244,6 +246,9 @@ struct QualityMenu: View, Equatable {
       }
 
       Menu {
+        if let engineStatus {
+          Text(engineStatus)
+        }
         // NOTE (tvOS 27 dev-beta regression, build 24J5289o): on a focused
         // submenu row the white focus pill correctly inverts the row's text and
         // leading icon to dark, but the *system* trailing disclosure chevron does

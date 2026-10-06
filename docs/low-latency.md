@@ -9,6 +9,100 @@ on-device observation). Hypotheses go under "Open questions" until proven.
 
 ## TL;DR
 
+- **Auto · Native Low Latency** is the new default Twitch profile. The original
+  **Auto · Low Latency**, **Auto · High Quality**, and fixed-quality options
+  remain available. Native source-CMAF indexing and original-CDN byte ranges
+  now run in Swift in the app; no desktop helper or certificate is required.
+  The adaptive master is preserved. Transient failures retry native playback
+  before considering the existing player; fallback is explicit in the quality
+  menu/diagnostics.
+- Choose the old **Auto · Low Latency** row for an immediate comparison. Native
+  mode uses AVPlayer's LL-HLS timing, not the legacy variable-rate controller.
+  Choosing native mode explicitly selects Twitch rather than a YouTube simulcast.
+  Fixed-quality selections keep their existing stable-buffer policy.
+- Native mode is independent of the legacy Diagnostics **Prefetch Proxy**
+  kill-switch. Its fallback honors that legacy kill-switch, just like the legacy
+  profiles themselves. The selected native row and latency badge explicitly
+  identify standard playback after fallback; selection is not proof of activation.
+- The native engine now indexes both H.264/AAC MPEG-TS and CMAF. TS parts are
+  packet-aligned, retain PAT/PMT initialization, and use measured PES timestamps.
+  Both formats serve short, bounded media chunks through an app-owned
+  **127.0.0.1-only** listener. This avoids an observed AVPlayer/CDN range mismatch
+  on large source segments (`-12939`, cached bytes starting at zero instead of the
+  requested offset). No re-encoding, certificate, external process, or remote
+  service is required. Retained media is capped at 96 MiB; older rewind media
+  continues using original CDN segment URLs.
+- Native startup waits until the indexer has actual live-prefetch content and
+  aligns once to live after native playback begins. Returning to live preserves
+  the engine; native stalls no longer invoke legacy stability recovery.
+  A shared budget permits two fresh native attempts per rolling minute for
+  temporary origin, timeline, startup, or watchdog failures. Each retry resolves
+  a fresh signed master and replaces the failed engine instead of reusing it.
+  Verified unsupported formats skip those futile attempts; repeated failure
+  still permits a visible legacy fallback. Deliberate pauses and rewinds disable
+  automatic offset preservation.
+- When native activation fails, its row disappears for that channel and the
+  checkmark moves to the actual fallback mode. The old **Auto · Low Latency**
+  label refers to the original prefetch engine, not native partial playback.
+- Normal HLS discontinuities, initialization-map changes, and ad date ranges are
+  now retained per segment rather than treated as fatal. The native decoder
+  timeline resets at a period boundary; completed ad playlists without prefetch
+  use a conservative hold-back until live parts resume. Encryption, missing
+  packets, and malformed media still fail explicitly.
+- Native Auto excludes audio-only variants from its adaptive **video** master.
+  The existing explicit Audio Only quality remains available on the normal path.
+  Modern Twitch masters may identify audio-only entries solely by audio codecs
+  and absence of a resolution, without the old `VIDEO="audio_only"` attribute.
+- Cold startup seeds the rewind window from verified complete-segment metadata
+  instead of downloading all historical media. Only the newest segment and
+  live edge are indexed. Idle renditions resume their retained timeline, and
+  active media requests keep their indexer alive during adaptive switches.
+
+### Native-first recovery
+
+The native profile remains the default. Previously, the TV watchdog had a
+two-attempt recovery budget, but direct origin failures and failed-to-end events
+could bypass it and downgrade immediately. These paths now use
+`NativePlaybackRecovery`, also shared by the mobile player. Brief unavailability,
+timeouts, discontinuity/timeline failures, incomplete keyframes and indexer
+overruns get bounded fresh-native attempts. Unsupported codecs/program tables
+and unsupported part durations can still fall back immediately.
+
+Duplicate callbacks coalesce during a TV source refresh. Startup waits follow a
+retry-owned replacement rather than launching a competing load. Pause/rewind
+intent is retained, a newer pause remains paused, and discarded-source or
+dismissed-player completions cannot resurrect playback. A failed fresh source
+resolution reports an error rather than pretending standard playback was
+necessary. The default does not force unsupported media to play or promise
+unlimited retries; legacy playback is the last-resort stability path, not the
+first response to a transient engine error.
+
+**Physical-device finding:** the first installed integration was blocked by a
+persisted legacy proxy-off setting. Device telemetry on Caedrel showed
+`native_ll_hls=false`, `promotes_prefetch=false`, and roughly 20.6s source-date
+age despite the native row being selected. The gate has been corrected. Caedrel's
+inspected H.264 feed was MPEG-TS rather than CMAF. The subsequent TS implementation
+and physical-device verification supersede that original format limitation.
+
+**Physical TV verification (2026-10-04):** `NativeTwitchDeviceTests`, explicitly
+run on the paired Apple TV, passed with MPEG-TS at 50/50 fresh-frame samples and
+3.75s median source-date age. The CMAF case produced 48/50 fresh-frame samples,
+3.47s initially and 6.47s after forced quality changes, with no native error-log
+entries. Both used a 1.5s native live offset. These are bounded measurements,
+not a universal latency guarantee or proof that all network/ad transitions
+work. Follow-up changes realign after a native quality transition as well.
+
+**Sustained full-app verification:** after the transition fixes, the actual
+`PlayerView` (including its recovery loops, not just a bare AVPlayer) completed
+six minutes each on live TS and CMAF broadcasts on the paired TV. Recorded samples
+from 20s through 350s stayed native with no fallback: roughly 2.78s source-date
+age for TS and 2.60s for CMAF. Both playback test cases passed their assertions.
+The overall Xcode command nevertheless returned 65 because its remote
+test-runner connection was invalidated afterward; that infrastructure error is
+not represented as a clean test-command pass. Earlier failed long runs are
+retained in session evidence. This does not establish unlimited-session or
+every-ad-transition reliability.
+
 - Twitch's own low-latency relies on a proprietary HLS tag AVPlayer ignores.
 - We close most of that gap with an in-process proxy that promotes those
   segments. It is always on for live and is the real, stable latency win.
@@ -16,8 +110,9 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   **Auto · High Quality** — that differ only in buffer depth and gentle
   catch-up (see `LivePlaybackPolicy`). An explicit rendition pick is a third,
   fixed-quality case.
-- AVPlayer on tvOS cannot match the Twitch app's sub-second player; ~2–6s
-  behind the freshest segment is the realistic floor here.
+- The current whole-segment proxy typically sits several seconds behind the
+  available edge. This is not a proven AVPlayer limit: a standards-compliant
+  partial-segment bridge is a separate approach (see the isolated prototype below).
 - Sharpness, freezes, and "jumps" are governed by buffering and ABR behavior,
   not by playback speed. Those are still being tuned; use the Diagnostics
   overlay to gather real data.
@@ -62,13 +157,12 @@ concrete tuning lives in `Strozz/Models/LivePlaybackProfile.swift`:
   latency. No rate games (always 1.0×); it never sacrifices quality on its own.
 - **Pinned rendition** — a stable buffer (~8s) with no rate games; ABR is off, so
   it holds exactly that rendition (and rebuffers rather than downshifting).
-- **Stability fallback** (automatic, all profiles) — a runtime override, not a
+- **Stability fallback** (automatic, legacy playback) — a runtime override, not a
   user-selectable row. A **stream-stability watchdog** counts destabilizing
   events — stalls plus involuntary backward playhead jumps (an AVPlayer rewind we
   never request) — in a rolling window (`unstableEventWindowSeconds`). Reaching
-  the threshold flags the stream *chronically unstable* — almost always a
-  struggling **broadcaster** encoder (lots of stalls/rewinds despite ample
-  observed bandwidth), not the viewer's connection. To stabilize a bad stream as
+  the threshold flags repeated instability; those symptoms alone do not identify
+  whether the source, network, or player caused it. To stabilize a bad stream as
   soon as you arrive, the trip is **aggressive and front-loaded**: during the
   first `unstableStartupGraceSeconds` of playback a **single** event trips it;
   after that any **two** events in the window do (so "2 stalls", "2 jumps", or "1
@@ -81,22 +175,36 @@ concrete tuning lives in `Strozz/Models/LivePlaybackProfile.swift`:
   **low-latency prefetch proxy** keeps promoting `#EXT-X-TWITCH-PREFETCH` segments
   and shoving the playhead at a live edge the source can't sustain, so it stalls,
   rewinds, and loops. The fallback inverts the trade-off:
-  - **Drops the prefetch proxy.** `makeItem` suppresses promotion while unstable
-    (`promotePrefetch = lowLatencyProxyEnabled && !isStreamUnstable`) and, when
-    Stream Rewind isn't separately holding the proxy on for DVR, detaches it
-    entirely so AVPlayer plays the plain Twitch playlist — exactly what a manual
-    "LL proxy off" does. Entering stability triggers a lightweight reload so the
-    pipeline rebuilds without the proxy.
+  - **Stops prefetch promotion in place.** The current proxy stops promoting
+    segments but retains its DVR history and the current AVPlayer item. Stability
+    entry does not reload or seek backward; it never replays watched content to
+    manufacture a buffer. Later necessary recovery loads also suppress promotion.
   - **Deep forward buffer (~12s), no catch-up, edge-resync suppressed.** The
     anti-stall slow-down stays on as the last line of defence.
-  This is the single biggest win for a bad stream in practice: with the proxy off
-  the deep buffer actually *fills* and playback goes rock-solid (riding ~15-20s
-  behind) instead of stuttering near the edge. The flag **latches for the whole
+  AVPlayer can rebuffer at the current position rather than deliberately rewinding.
+  This does not guarantee smooth playback on a broken feed. The flag **latches for the whole
   channel session** — a stream that has proven it can't hold the edge keeps the
   safe strategy until the viewer changes channel (there is no auto-recovery; we
   never flap the proxy back on and risk re-destabilizing it). Surfaced in the
   Diagnostics overlay as "LL proxy auto-off (unstable)" + "⚠︎ STABILITY MODE".
   Resets on every new channel session (`resetDiagnostics`).
+
+An October 5 Ludwig capture on build 1908 showed a native stall/fallback followed
+by an app-requested `stability_buffer` seek: the playhead was around 23.5 seconds,
+the advertised seekable edge was only 22.061 seconds, and subtracting the old
+20-second cushion sent playback to 2 seconds. Source-date age increased from
+roughly 16.7 to 38.6 seconds. That automatic backward-seek path is removed.
+The same capture exposed a second mismatch: the stored native profile could
+enable legacy prefetch promotion after native failure even with the legacy
+switch off. Item construction now uses the same effective fallback profile as
+the quality menu, preserving the disabled switch while retaining DVR.
+
+`StandardPlaybackStabilityTests` reproduces the lagging-edge numbers, verifies
+zero seeks/item reloads on stability entry, checks paused/background/alternate
+source exclusions, and verifies native fallback honors the legacy switch. The
+capture does not identify the original upstream/native failure beyond
+`unavailable`; preventing this app-induced rewind is not proof that native
+fallbacks can no longer occur.
 
 ### Predictive instability (manifest analysis)
 
@@ -106,7 +214,7 @@ of a chronically-bad stream. The **predictive** path closes that gap by reading
 the stream's own HLS media playlists — which the low-latency proxy already
 parses on every refresh — and flagging a struggling encoder *before* playback
 stutters. When it fires it trips the exact same `enterStreamStabilityMode()`
-path (drop the prefetch proxy, deep-buffer, reload), so all the behavior above is
+path (stop promotion in place and deepen buffering without a seek/reload), so all the behavior above is
 reused unchanged; only the *trigger* is earlier.
 
 It lives in `LowLatencyHLSProxy` (`recordInstabilitySignals`), accumulates a
@@ -239,7 +347,8 @@ of stalling, and the slow-down rides out short buffer dips.
 - There are two different "latency" numbers, and they mean different things:
   - **Wall-clock behind-live** = `Date()` − `PROGRAM-DATE-TIME` of the current
     frame. This is how far behind the real broadcast the on-screen picture is —
-    the metric a viewer actually experiences (and the one used for chat sync).
+    the metric a viewer actually experiences. Chat sync uses **excess** delay
+    relative to normal live playback, not this entire value.
     For Twitch low-latency this is typically ~5–15s.
   - **Edge gap** = how far the playhead trails the freshest segment we can fetch
     (the seekable-window end). This is ~2–6s; it collapses to ~0 at the edge and
@@ -390,13 +499,324 @@ of stalling, and the slow-down rides out short buffer dips.
   false-trips it. On-device the fast tier logs
   "offline forced (edge frozen + hard stall)".
 
+## Background return and release review
+
+### Coordinated native catch-up
+
+Native playback no longer seeks automatically on every resolution change.
+`NativeLiveCatchUp` requires four seconds of steady quality and advancing
+playback, at least one second of buffered media, and a sustained forward gap
+of at least three seconds beyond the native live target. A stream already
+near live gets no automatic seek. The normal LL-HLS hold-back remains unchanged.
+
+Only one catch-up seek may own the current item. It expires after five seconds
+and cannot immediately restart (15-second completion/cancellation cooldown).
+Manual pause, scrub, source/item changes, backgrounding, and recovery invalidate
+the request before cancelling its AVPlayer seek. A late completion cannot
+resume playback or overwrite another request. The legacy numeric live-edge
+resync does not run on the native path, and the watchdog waits for a bounded
+catch-up to finish before issuing its own recovery.
+
+Buddha's captured black-screen sequence also showed replacement attempts
+followed by `currentItem == nil` and an indefinite `noItemToPlay` wait.
+The app now rebuilds an AVPlayer in terminal failure (as required by AVFoundation),
+or one that rejects its replacement item. Player-level status/errors are recorded
+separately from item failures. A missing requested item triggers bounded recovery
+instead of leaving a blank player indefinitely. Caption/visualizer clocks follow
+the replacement player.
+
+Deterministic tests cover the observed startup quality churn, cooldowns, timeout,
+stale completions, manual interruption, native-vs-legacy recovery exclusion, and
+failed/rejected-player replacement. A bounded three-minute full-app simulator
+run on Buddha included forced quality changes, advancing video and fresh decoded
+frame observations, with no native fallback. Simulator results do not establish
+that every cause of the physical-device black screen has been eliminated.
+
+Native playback now stops its indexers and invalidates old callbacks when the
+app backgrounds. On return it resolves a fresh signed Twitch master and creates
+a new native engine instead of reusing a suspended engine with stale media URLs.
+This addresses the captured Charli failure immediately after a roughly one-hour
+background absence. Pause and rewind intent are preserved; an unavailable old
+position is reported instead of silently resuming somewhere else.
+
+The release review also corrected:
+
+- Legacy Auto profile changes while watching a YouTube simulcast no longer
+  replace its item with Twitch while leaving the source state set to YouTube.
+- Async fallback restoration rechecks the current item, generation, user seek
+  intent, pause, and visibility before resuming. New items and manual scrubs
+  invalidate old restoration work.
+- CMAF aggregation flushes an accumulated part before adding a valid fragment
+  that would exceed the part target. Two valid 250ms fragments are emitted as
+  separate parts instead of being combined into an invalid 500ms part.
+- Previously nested test functions are now actual discovered XCTest methods.
+
+The final simulator run passed 344 tests, with three physical-device-only tests
+skipped. The standalone probe suite passed 31 tests. Background recovery was
+covered deterministically without waking the physical TV; these checks do not
+replace future observation of long background/foreground trips on hardware.
+
+## Chat synchronization: extra delay, not total video latency
+
+**Sync Chat to Extra Delay** is on by default. A one-time app-launch migration
+enables it on every existing install, including previously stored off values.
+The toggle remains available; turning it off after that migration is respected
+on subsequent launches.
+It never delays the outbound send API. Incoming messages, including the echo of
+your own sent message, are held only for the estimated **extra** video delay.
+
+`LiveChatSyncBaseline` tracks a reference per channel and video source:
+
+- Native playback compares the displayed program date with the origin's
+  `liveTargetDate()` (fresh indexed media minus the native hold-back).
+  These dates share the same source clock, so broadcaster/device clock skew
+  cancels. This is our stream's reachable live position, not a measurement
+  of other Twitch viewers.
+- Five steady, advancing samples over at least four seconds may establish
+  a normal playback cushion. Native calibration must be within two seconds
+  of the origin target. Startup, pause, scrubbing, recovery, deep-buffered
+  profiles, and unhealthy playback cannot teach a larger baseline.
+- On legacy playback, a previously learned baseline survives item reloads,
+  fallback and quality changes. A baseline can also be learned during healthy
+  Auto Low Latency playback near its reachable edge. A fresh high-quality or
+  unsupported-source fallback cannot assume a universal three-second baseline.
+- A stall or rewind cannot raise an established baseline. Fresh, consistently
+  faster live playback can lower it. Switching channels or video sources resets
+  it; VOD handoff continues to use the existing timestamped chat replay.
+- Missing/stale timestamps leave chat live and expose an unavailable reference
+  in settings/telemetry instead of inventing a delay. Differences under 0.75s
+  are ignored to avoid holding chat for ordinary segment-delivery jitter.
+
+With a learned 3s normal delay, 3s playback adds no chat hold, 8s adds 5s,
+and 23s adds 20s. Existing queued live messages are retimed in **both**
+directions as playback falls behind or catches up; unrelated backlog trickling
+is unchanged. The previous 30s startup ramp is removed because calibration
+already gates uncertain startup, and ramping a real rewind delay would leak
+messages ahead of the picture. Returning to normal releases queued messages.
+The local "Sent — appears in..." indicator follows the current additional hold;
+the message has already been sent to Twitch.
+
+This is an estimate of this session's extra delay. It is not proof of exact
+social synchronization with all viewers or a guarantee against every spoiler.
+
 ## Realistic floor
 
-Twitch's app renders sub-second LL-HLS *parts* in a custom player. We can only
-hand AVPlayer whole ~2s prefetch segments plus AVPlayer's own buffering. So
-matching the Twitch app's ~5–7s is unlikely on AVPlayer/tvOS. Being a few
-seconds behind the freshest segment is the realistic target. This is the same
-wall Frosty's native (non-web-view) path hits.
+Our shipping proxy hands AVPlayer whole prefetch segments; it does not generate
+LL-HLS partial segments. Its observed delay does not establish a minimum delay
+for AVPlayer itself. AVPlayer supports Apple's LL-HLS protocol, including partial
+segments and blocking playlist reloads, but the origin must also satisfy its
+transport requirements. A Twitch-to-LL-HLS bridge needs measurement on the target
+device before assigning a latency target.
+
+### Isolated native A/B prototype
+
+`tools/run-ll-hls-probe.sh` runs two muted macOS AVPlayers side by side, without
+changing the app, installing on Apple TV, or uploading to TestFlight:
+
+- **Baseline:** compiles the actual `LowLatencyHLSProxy` and
+  `LivePlaybackPolicy` from this checkout, uses the same selected rendition,
+  and reproduces the low-latency rate policy. It deliberately excludes app
+  watchdog recovery, UI, and adaptive rendition switching. It retains the default
+  rewind playlist history but never initiates user scrubs.
+  This is a proxy/policy baseline, not a complete running Strozz session.
+- **Candidate:** when Twitch supplies CMAF, reads its in-progress segments,
+  groups complete original fragments into roughly 400ms parts, and preserves
+  their encoded bytes, decode timestamps, and source program-date anchor.
+  `PART-TARGET=0.45` and `PART-HOLD-BACK=1.5` allow AVPlayer to choose its
+  low-latency mode without repeated seeks or a custom catch-up controller.
+  The candidate's default buffer preference is 1s. Keyframe-aligned parents,
+  preload hints, blocking reloads, gzip playlists, and bounded retained bytes
+  are provided by the experimental origin.
+  The older MPEG-TS/FFmpeg remux experiment remains available but does not yet
+  preserve source program-date mapping; it is **not** a verified low-latency path.
+- **Evidence:** first decoded frame, fresh decoded-frame coverage, stationary
+  playhead/paused/waiting fractions, buffer levels, native errors, and actual
+  HTTP/2/part requests. A low-resolution luminance fingerprint provides a
+  tentative relative alignment only when both players sustain decoding and the
+  best alignment is distinguishable. Alignment uses short windows so drift
+  cannot smear the whole run into an ambiguous match. Source program-date
+  differences cross-check the decoded-video matches; absolute program-date age
+  still depends on the broadcaster's clock and is not glass-to-glass latency.
+  Native AVFoundation segment metrics also verify direct-CDN byte-range requests
+  without storing the signed URLs.
+
+The original desktop comparison bridge does not support adaptive quality, rewind, ad transitions, encryption,
+or discontinuities. It stops explicitly on unsupported transitions rather than
+skipping ads or concealing a broken timeline. Signed upstream URLs stay in
+memory; evidence contains no playback tokens, audio, or full-resolution video.
+All servers and subprocesses are owned by the bounded run.
+
+Prerequisites: macOS/Xcode and Python 3.10+. CMAF needs no FFmpeg. The old TS
+experiment requires an explicitly installed FFmpeg supporting fragmented MP4.
+The HTTPS experiment also requires OpenSSL supporting `req -addext`.
+The server dependency is separate from app dependencies:
+
+```bash
+./tools/with-apple-build-lease.sh strozz/ll-hls-probe-setup -- /bin/bash -c \
+  'python3 -m venv build/ll-hls-probe/venv &&
+   build/ll-hls-probe/venv/bin/pip install -r tools/requirements-ll-hls-probe.txt'
+
+PYTHONDONTWRITEBYTECODE=1 build/ll-hls-probe/venv/bin/python -m unittest discover \
+  -s tools/tests -p test_ll_hls_probe.py
+```
+
+There are two usable transports:
+
+- **HTTPS/HTTP2 local origin:** serves playlists and cached parts. This proves
+  the native protocol behavior, but requires the temporary-certificate approval
+  described below.
+- **Resource-loader playlists + direct CDN ranges:** `--resource-loader
+  --direct-media` fulfills playlist requests through a custom scheme and gives
+  AVPlayer real `BYTERANGE` parts on Twitch's original trusted HTTPS URLs.
+  Preload requests redirect once their actual source byte range exists.
+  This path does **not** create or trust a certificate and avoids a local
+  media server. The prototype still uses a loopback Python process for
+  playlist generation; a production port would generate those responses
+  in-process in Swift. The source reader and AVPlayer currently download
+  overlapping data, so reducing that overhead is a production requirement.
+
+```bash
+# No certificate or keychain changes; requires a channel with source CMAF.
+bash tools/run-ll-hls-probe.sh CHANNEL /absolute/path/to/new-evidence 240 \
+  --resource-loader --direct-media
+```
+
+`--resource-loader` **without** `--direct-media` is a negative-control experiment:
+AVPlayer rejects custom-scheme media bytes with `custom url not redirect`.
+This is why the practical path retains native HTTPS media delivery.
+
+**Certificate approval is required for the HTTPS-origin comparison.** AVPlayer does
+not accept the generated localhost certificate via the resource-loader trust
+callback. With explicit approval, `--trust-localhost` temporarily adds only that
+run's certificate to the login keychain, then removes its trust and exact
+fingerprint in cleanup. It never changes system trust, existing certificates,
+or TCP settings. Without the flag the experiment makes no keychain changes,
+and native playback is expected to fail certificate validation. Do not grant
+trust on the user's behalf without asking.
+
+```bash
+# Only after approval; choose a live channel and a NEW evidence directory.
+bash tools/run-ll-hls-probe.sh CHANNEL /absolute/path/to/new-evidence 90 --trust-localhost
+```
+
+The duration is bounded to 30-300 seconds. Evidence is kept in the supplied
+directory; output directories are never overwritten. `report.json` distinguishes
+`native_candidate_playback_verified`, `comparison_valid`,
+`sustained_partial_delivery_observed`, and `latency_improvement_observed`.
+Exit status is nonzero unless both paths sustain native decoding, parts
+continue across multiple post-startup windows, and at least two distinctive
+decoded-video alignment windows show a candidate lead of at least one second.
+The candidate must also have at least 99% fresh-frame coverage and at most
+0.5% stationary-playhead samples. Some part requests alone are not a success.
+Direct-CDN mode uses native segment/byte-range metrics rather than counting
+local redirects as downloaded video.
+A frozen baseline must not be presented as a latency win. Check
+`temporary_certificate_removed`; a cleanup
+failure is an error and preserves the certificate identity for recovery.
+
+**Initial macOS prototype:** a plain HTTP/1.1 origin was rejected with
+`Low Latency: Server must support http2 ECN and SACK`. After switching to HTTPS/
+HTTP2 and approved temporary trust, a 90-second H.264 run produced 359 candidate
+decoded-frame samples, no post-startup waiting samples, 371 HTTP/2 requests,
+7 part requests, and 46 whole-segment requests. The baseline, in the original no-history harness configuration, stopped advancing
+after about 15 seconds, so this run establishes native
+candidate playback, **not** a reliable latency improvement or sustained
+parts-only delivery. No Apple TV result or audio-sync guarantee is established.
+The temporary certificate was removed and its absence verified.
+
+In the final 90-second comparison, restoring the baseline's default history
+retention kept **both** players advancing throughout the measurement:
+
+| Observation | Baseline proxy/policy | Candidate origin |
+| --- | --- | --- |
+| Fresh decoded-frame samples | 356 | 359 |
+| Post-startup decoded-frame coverage | 100% | 100% |
+| Median buffered media | 2.92s | 3.93s |
+| Native playback errors | None | None |
+
+The candidate made 365 HTTP/2 requests and 315 blocking playlist requests, but
+requested **47 complete segments and zero parts**, despite 457 parts being
+published. Its reported configured live offset was 6s. The result is a valid
+native playback comparison, **not successful sustained partial-segment playback
+or a demonstrated reduction in delay**. Buffer duration is not live latency;
+fingerprint matching did not produce a sufficiently distinct alignment to report
+a reliable relative delay. Startup times also exclude origin warm-up and must
+not be compared as end-to-end channel-switch performance.
+
+### Native low-latency activation and follow-up results
+
+The missing activation requirement was **`EXT-X-PROGRAM-DATE-TIME`**.
+Appendix B.1 of the HLS specification requires it on every LL-HLS Media Playlist;
+gzip delivery is also required. Preserving the original CMAF timeline avoids
+inventing a mapping for remuxed timestamps.
+
+A negative control removed **only** program-date tags from the otherwise-working
+CMAF/gzip/HTTP2 path. AVPlayer reverted to a 6s configured/recommended offset,
+requested 31 whole segments, and fetched zero parts in 60 seconds. With the
+source date mapping present, it selected a 1.5s offset and continued fetching
+parts. Merely writing a smaller `configuredTimeOffsetFromLive` was insufficient:
+an early assignment was overwritten during preparation, and even a ready-time
+assignment did not activate sustained parts in the timestamp-free stream.
+
+Follow-up live measurements on two CMAF channels:
+
+| Run | Candidate result | Delay evidence |
+| --- | --- | --- |
+| 3-minute HTTPS run, second channel | 425 post-startup parts, zero whole segments; continuous decoded frames, no waiting/stationary samples | Median source program-date age 2.15s; distinctive frame matches 12.5s and 19.25s ahead of the reduced baseline |
+| 5-minute HTTPS soak | 725 post-startup parts, zero whole segments, zero failed local requests; continuous decoded frames, no waiting/stationary samples | Median source program-date age 3.54s; matched windows 11.25-25s ahead as the baseline drifted |
+| 4-minute certificate-free direct-CDN soak | 270 native partial byte-range request events across the run; continuous decoded frames, no waiting/stationary samples | Median source program-date age 3.27s; matched windows 10.25s, 21.5s and 22.25s ahead |
+
+The direct-CDN run also contained native events with a 2s duration. It is not
+described as parts-only delivery; some requests use complete source objects.
+The native metrics prove partial ranges continue throughout playback. A separate
+2-minute direct-CDN run produced 301 partial-range events and a 1.5s native
+offset, but only one distinctive alignment window, so its conservative
+`latency_improvement_observed` result remained false.
+
+These are **macOS AVPlayer prototype** results against the reduced
+proxy/policy harness, not a comparison with the full shipping tvOS app.
+The baseline slows and accumulates delay; its increasing gap must not be
+marketed as a universal latency reduction. Program-date age is source-clock
+dependent; the 1.5s native offset is not total capture-to-display delay.
+Decoded video was measured while audio was muted, so audible synchronization,
+long sessions, ad transitions, codec changes, and impaired-network behavior
+remain unverified.
+
+The native app implementation now lives in `NativeCMAF.swift` and
+`NativeLowLatencyHLS.swift`. It indexes source fragments, generates adaptive
+playlists, and delivers original-CDN byte ranges. The old profiles remain
+unchanged. Runtime format changes and unsupported streams fall back for the
+channel session rather than repeatedly restarting the native path. It retains
+bounded source metadata for rewind, but never caches the media itself.
+The production path must continue to preserve
+adaptive quality, user-selected rewind positions, ad/raid transitions, and
+the existing fallback. The app's later MPEG-TS path is independently packet-indexed and physically
+verified as described above; those results do not come from the CMAF-only
+prototype. Continuous device observation and transition coverage remain important.
+
+### Upstream implementation comparison and reuse
+
+The comparison used StreamNook commit
+[`76b81ca`](https://github.com/StreamNook/StreamNook/tree/76b81ca0d935cd01b8e3cffaafcfc23de716aae9).
+Its selected-rendition local origin generates parts for hls.js, with
+headroom-aware rate control and per-channel cushion adaptation. Its current
+settings enable the parts engine by default, despite older comments calling it
+opt-in. Its latency targets are not independently measured tvOS results.
+
+StreamNook's license is **PolyForm Noncommercial with additional permissions**,
+not MIT/BSD-style unrestricted reuse. Do not copy or translate its engine and
+relabel the result as MIT. Streamlink is BSD-2-Clause; hls.js is Apache-2.0;
+reusing their code would still require preserving applicable notices and terms.
+This prototype copies no StreamNook implementation. It uses the HLS/MP4 protocol
+structures. The successful CMAF path does not remux or re-encode video. The older
+TS comparison uses local FFmpeg as an external experimental tool, not as a
+new bundled app dependency.
+
+References:
+[Apple LL-HLS](https://developer.apple.com/documentation/http-live-streaming/enabling-low-latency-http-live-streaming-hls),
+[LL-HLS server profile](https://www.ietf.org/archive/id/draft-pantos-hls-rfc8216bis-19.html#appendix-B.1),
+[StreamNook license](https://github.com/StreamNook/StreamNook/blob/76b81ca0d935cd01b8e3cffaafcfc23de716aae9/LICENSE),
+[Streamlink Twitch plugin](https://github.com/streamlink/streamlink/blob/master/src/streamlink/plugins/twitch.py).
 
 ## Open questions (NOT yet confirmed — under investigation)
 

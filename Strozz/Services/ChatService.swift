@@ -115,12 +115,6 @@ final class ChatService {
   var chatSyncDelaySeconds: Double = 0
   /// Minimum delay for sync to actually hold messages; below this it's a no-op.
   let chatSyncMinDelaySeconds: Double = 0.75
-  /// On a fresh connect the effective sync delay eases from 0 up to the full
-  /// `chatSyncDelaySeconds` over this window, so live Twitch + YouTube messages
-  /// surface almost immediately at the start and gradually settle into sync.
-  let chatSyncWarmupSeconds: Double = 30
-  /// Wall-clock anchor for the warm-up ramp, set on each fresh `connect`.
-  var syncWarmupStart: Date?
   /// Hard ceiling on how many already-behind-the-playhead backlog messages we
   /// dump immediately on connect, so the panel seeds with recent context
   /// instead of a wall of history.
@@ -317,13 +311,13 @@ final class ChatService {
   func configureChatSync(enabled: Bool, delaySeconds: Double) {
     let clamped = max(0, delaySeconds)
     let shouldHold = enabled && clamped >= chatSyncMinDelaySeconds
-    let shortenedDelay = chatSyncEnabled && clamped < chatSyncDelaySeconds
+    let changedDelay = chatSyncEnabled && clamped != chatSyncDelaySeconds
 
     chatSyncDelaySeconds = clamped
 
     if shouldHold {
       chatSyncEnabled = true
-      if shortenedDelay { shortenPendingSyncDelay() }
+      if changedDelay { retimePendingSyncDelay() }
     } else if chatSyncEnabled || !syncBuffer.isEmpty {
       chatSyncEnabled = false
       flushSyncBuffer()
@@ -358,7 +352,6 @@ final class ChatService {
     kickSeenMessageIDs.removeAll()
     kickSeenMessageOrder.removeAll()
     kickStatusMessage = nil
-    syncWarmupStart = Date()
     connection.resetBackoff()
     ircReconnectCount = 0
     ircLastRecoveryReason = nil
@@ -429,7 +422,6 @@ final class ChatService {
     syncDrainDeadline = nil
     syncBuffer.removeAll()
     pendingSyncMessageCount = 0
-    syncWarmupStart = nil
     emoteURLs.removeAll()
     badgeURLs.removeAll()
     cheermotes.removeAll()
@@ -528,7 +520,9 @@ final class ChatService {
   /// bounded caches don't sit full of dead entries.
   static func clearLineCaches() {
     RichChatLineView.clearSegmentCache()
+    #if os(tvOS)
     ChatView.clearLineCaches()
+    #endif
   }
 
   /// Registers a single process-wide memory-pressure observer that drops the

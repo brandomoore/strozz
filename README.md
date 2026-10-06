@@ -20,7 +20,14 @@ watch several channels in multi-view. It's built for the Apple TV remote and the
 tvOS focus engine — not a stretched phone app — with native 7TV, BTTV, and FFZ
 emotes. It's free and open source.
 
+An initial **iPhone and iPad app (iOS 18+)** is also available to build from the
+`StrozzMobile` scheme. It shares the Twitch streaming, account, and chat services,
+with a separate touch interface rather than the TV's remote controls.
+
 ## Features
+
+The feature list below describes the Apple TV app. See
+[iPhone and iPad](#iphone-and-ipad) for the smaller mobile feature set.
 
 ### Watch
 
@@ -107,6 +114,73 @@ Found a bug or have an idea? Please open a
 model, tvOS version, and the stream where something went wrong helps a lot. See
 **[CONTRIBUTING.md](CONTRIBUTING.md)** for details.
 
+## iPhone and iPad
+
+The first mobile version includes live Twitch recommendations, followed live
+channels, category browsing, search, native low-latency playback, standard Auto
+and fixed qualities (including audio-only), and chat with Twitch/7TV/BTTV/FFZ
+emotes. Sign in through **Account > Sign in to Twitch**, open the Twitch link,
+approve the displayed code, then return to Strozz. Browsing, playback, and
+reading chat also work anonymously.
+
+Home automatically previews one mostly visible stream at a time, nearest the
+middle of the screen. Previews are always muted and stop when you scroll away,
+switch tabs, open a stream, or background the app. Lower-bandwidth preview
+renditions are preferred; an undecodable preview gets one Source-quality retry.
+
+Video sits above chat on a portrait iPhone; landscape iPhone shows video alone.
+A wide iPad window places chat beside video, while narrow multitasking windows
+stack them. Dedicated over-video controls provide play/pause, mute, quality,
+**Back to live** (return from paused/delayed playback), fullscreen/rotation,
+chat visibility, sharing the Twitch link, and Apple's AirPlay picker. Rendering
+still uses AVKit. Controls hide after inactivity and reappear on tap; they stay
+available when paused or using VoiceOver. AirPlay switches native low latency
+to standard playback because a receiver cannot access the app's loopback
+media server; keep the app open while using it. System,
+Dark, OLED, and Light appearances are available in Account, and chat follows
+Dynamic Type and Reduce Motion. App panels use opaque theme-aware surfaces.
+Browse shows three categories across on iPhone (two at accessibility text sizes)
+and an adaptive grid on iPad. Typing in Browse's search field switches to compact
+channel and category results with artwork and viewer counts.
+
+This is not full TV feature parity: VODs/clips, multiview, YouTube/Kick playback
+and chat merging, rewards, and advanced TV settings are not included. Playback
+stops in the background; Picture in Picture/background audio are not yet
+supported. Returning resolves fresh stream URLs instead of reviving an expired
+native engine. Paused/rewound positions are preserved when still available; an
+expired position shows an error rather than silently jumping to live.
+Transient native-engine failures get up to two fresh native attempts in a
+rolling minute before standard fallback; unsupported formats still fail over
+explicitly instead of leaving playback stuck.
+If audio advances without decodable video, the mobile player makes one recovery
+attempt using the primary video rendition and displays the actual selected
+quality and a notice. A failed recovery shows an error instead of staying black.
+
+Use the same Twitch client configuration described in CONTRIBUTING.md, then:
+
+```bash
+./tools/generate-project.sh
+./tools/xcbuild.sh -project Strozz.xcodeproj -scheme StrozzMobile \
+  -destination 'generic/platform=iOS Simulator' build
+# Substitute an available iPhone or iPad simulator UUID:
+./tools/xcbuild.sh -project Strozz.xcodeproj -scheme StrozzMobile \
+  -destination 'platform=iOS Simulator,id=<SIMULATOR_UUID>' test
+```
+
+`StrozzMobileTests` covers playback lifecycle and layout policy;
+`StrozzMobileUITests` covers navigation and themes. Set
+`STROZZ_MOBILE_LIVE_TESTS=1` in the scheme's **Test** environment to opt into
+bounded real-stream/frame, browse/search, quality, and rotation checks. They
+connect anonymously, run muted, and never send chat messages. Set
+`STROZZ_MOBILE_LIVE_CHANNEL` to a live channel for the native full-player check;
+the test requires native playback rather than treating a compatibility fallback
+as a native success.
+
+Both platform targets retain `com.thatcube.Twozz` so iOS can join the existing
+Strozz App Store Connect record. Credentials are local to each device; signing
+in on the TV does not sign in the phone. The existing Fastlane lanes still ship
+**tvOS only**. Adding this target does not upload or distribute an iOS build.
+
 ## Contributing & development
 
 Build instructions, the Twitch auth setup, how playback is resolved, versioning,
@@ -137,6 +211,10 @@ python3 -m pip install -r tools/requirements-brand-assets.txt
 python3 tools/generate_brand_assets.py
 python3 -m unittest discover -s tools/tests -p 'test_brand_assets.py'
 ```
+
+The iOS `MobileAppIcon` uses the same mark and opaque charcoal treatment.
+Regenerate only that 1024-pixel icon with
+`python3 tools/generate_brand_assets.py --mobile-only`.
 
 ### Go Live Alerts
 

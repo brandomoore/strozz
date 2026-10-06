@@ -82,6 +82,10 @@ extension PlayerView {
     var snapshot = PlaybackTelemetrySnapshot()
     snapshot.attributes = playbackTelemetryContext
     snapshot.attributes["item_status"] = telemetryItemStatus(player.currentItem?.status)
+    snapshot.attributes["player_status"] = String(player.status.rawValue)
+    if let error = player.error {
+      snapshot.attributes.merge(PlaybackTelemetryRecorder.errorAttributes(error)) { _, new in new }
+    }
     snapshot.attributes["time_control_status"] = telemetryTimeControlStatus()
     snapshot.attributes["waiting_reason"] = diagWaitingReasonDescription()
     snapshot.attributes["thermal_state"] = telemetryThermalState()
@@ -118,6 +122,17 @@ extension PlayerView {
     snapshot.flags["video_output_observed"] = model.playbackTelemetry.videoFrameAge != nil
     snapshot.metrics["video_frame_age_seconds"] = model.playbackTelemetry.videoFrameAge
     snapshot.flags["using_alt_source"] = isUsingAltSource
+    snapshot.flags["native_ll_hls"] = model.isUsingNativeHLS
+    snapshot.flags["native_catch_up_pending"] = model.nativeCatchUp.inFlight != nil
+    snapshot.counters["native_parts_indexed"] = model.nativeParts
+    snapshot.attributes["native_fallback"] = model.nativeFallbackReason
+    if let native = model.nativeHLS {
+      Task { @MainActor in
+        let stats = await native.origin.snapshot()
+        guard model.nativeHLS === native else { return }
+        model.nativeParts = stats.parts
+      }
+    }
     snapshot.attributes["watch_rewards_state"] = model.watchTracker.state.rawValue
     snapshot.counters["watch_rewards_reports_accepted"] = model.watchTracker.acceptedReports
     snapshot.counters["watch_rewards_streak"] = model.watchTracker.streak
@@ -134,6 +149,10 @@ extension PlayerView {
     snapshot.counters["chat_frozen_messages"] = chatFrozenMessages?.count ?? 0
     snapshot.counters["chat_pending_sync"] = chat.pendingSyncMessageCount
     snapshot.flags["chat_sync_enabled"] = chat.chatSyncEnabled
+    snapshot.attributes["chat_sync_reference"] = model.chatSyncBaseline.reference.rawValue
+    snapshot.metrics["chat_sync_normal_delay_seconds"] = model.chatSyncBaseline.normalDelay
+    snapshot.metrics["chat_sync_native_cushion_seconds"] = model.chatSyncBaseline.nativeCushion
+    snapshot.metrics["chat_sync_extra_delay_seconds"] = model.chatSyncBaseline.extraDelay
     snapshot.flags["chat_sync_drain_active"] = chat.syncDrainTask != nil
     snapshot.metrics["chat_sync_delay_seconds"] = chat.chatSyncDelaySeconds
     snapshot.metrics["chat_sync_next_release_seconds"] = chat.syncBuffer.first.map {
@@ -255,12 +274,45 @@ extension PlayerView {
 
   func replacePlaybackItem(with item: AVPlayerItem?) {
     if item !== player.currentItem {
+      cancelNativeCatchUp(reason: "item_replaced")
+      model.nativeCatchUp = NativeLiveCatchUp()
+    }
+    let rebuildingFailedPlayer = player.status == .failed && item != nil
+    if rebuildingFailedPlayer { rebuildPlaybackPlayer(reason: "terminal_failure") }
+    if (item?.asset as? AVURLAsset)?.url.scheme != NativeLowLatencyHLS.scheme {
+      model.nativeNeedsRefresh = false
+      model.nativeRefreshTask?.cancel()
+      model.nativeHLS?.stop()
+      model.nativeHLS = nil
+      model.isUsingNativeHLS = false
+      model.nativeGeneration = UUID()
+    }
+    if item !== player.currentItem {
+      model.fallbackRestoreTask?.cancel()
+      model.fallbackRestoreTask = nil
+      model.chatSyncItemID = UUID()
+      model.chatSyncBaseline.itemChanged()
+      model.chatSyncSendAnchor = nil
+      chatSyncSendClearTask?.cancel()
+      chatSyncSendDeadline = nil
+      applyChatSyncSettings()
       resetPlaybackHealth()
       model.startupProgress = LivePlaybackStartup.Progress()
     }
     model.playbackTelemetry.trackItem(item, source: playbackTelemetrySource)
     player.replaceCurrentItem(with: item)
+    if let item, player.currentItem !== item, !rebuildingFailedPlayer {
+      rebuildPlaybackPlayer(reason: "replacement_rejected")
+      player.replaceCurrentItem(with: item)
+    }
     if let item {
+      guard player.currentItem === item else {
+        player.pause()
+        errorMessage = String(localized: "The video player couldn't restart. Please try again.")
+        isLoading = false
+        recordPlaybackEvent("player_item_replacement_failed", level: .error)
+        return
+      }
       let url = (item.asset as? AVURLAsset)?.url
       let usesProxy = url?.scheme == LowLatencyHLSProxy.scheme
       recordPlaybackEvent(
@@ -269,12 +321,30 @@ extension PlayerView {
         metrics: ["preferred_forward_buffer_seconds": item.preferredForwardBufferDuration],
         flags: [
           "uses_proxy": usesProxy,
-          "promotes_prefetch": usesProxy && lowLatencyProxyEnabled && !isStreamUnstable,
+          "promotes_prefetch": usesProxy && livePlaybackProfile
+            .effectiveSelection(nativeAvailable: model.nativeFallbackReason == nil)
+            .promotesPrefetch(legacyEnabled: lowLatencyProxyEnabled, unstable: isStreamUnstable),
           "retains_history": usesProxy && streamRewindEnabled,
           "stream_unstable": isStreamUnstable,
         ]
       )
     }
+  }
+
+  private func rebuildPlaybackPlayer(reason: String) {
+    recordPlaybackEvent("failed_player_replaced", level: .error,
+      attributes: PlaybackTelemetryRecorder.errorAttributes(player.error)
+        .merging(["reason": reason]) { _, new in new })
+    removeVODTimeObserver()
+    let previous = player
+    previous.pause()
+    let replacement = AVPlayer()
+    replacement.volume = previous.volume
+    replacement.isMuted = previous.isMuted
+    replacement.automaticallyWaitsToMinimizeStalling = previous.automaticallyWaitsToMinimizeStalling
+    replacement.appliesMediaSelectionCriteriaAutomatically = previous.appliesMediaSelectionCriteriaAutomatically
+    replacement.actionAtItemEnd = previous.actionAtItemEnd
+    model.player = replacement
   }
 
   private func telemetryItemStatus(_ status: AVPlayerItem.Status?) -> String {

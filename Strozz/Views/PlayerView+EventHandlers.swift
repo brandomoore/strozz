@@ -88,6 +88,12 @@ extension PlayerView {
     .task { await monitorWatchRewards() }
     .task {
       if activeChannel.isEmpty { activeChannel = channel }
+      if !UserDefaults.standard.bool(forKey: PersistenceKey.nativePlaybackDefaultApplied) {
+        if preferredQuality == "Auto", livePlaybackProfile == .lowerLatency {
+          livePlaybackProfile = .nativeLowLatency
+        }
+        UserDefaults.standard.set(true, forKey: PersistenceKey.nativePlaybackDefaultApplied)
+      }
       if isVOD {
         beginPlaybackTelemetry()
         await startVOD()
@@ -127,6 +133,7 @@ extension PlayerView {
     ) { _ in
       model.beginPlaybackAbsence(.background, isVOD: isVOD)
       backgroundedAt = Date()
+      suspendNativePlayback()
       updateWatchRewards()
       recordPlaybackEvent("app_backgrounded")
       recordPlaybackTelemetrySnapshot()
@@ -221,6 +228,9 @@ extension PlayerView {
         attributes: PlaybackTelemetryRecorder.errorAttributes(error)
       )
       recordCurrentErrorLog()
+      if model.isUsingNativeHLS {
+        recoverNativeHLS(.unavailable)
+      }
       if isUsingAltSource, let master = altYouTubeMasterURL, currentSourceURL == master {
         model.altRecovery.noteTerminalFailure()
         recoverAltSourceIfNeeded(reason: "failed_to_play_to_end")
@@ -239,6 +249,8 @@ extension PlayerView {
     }
     .onDisappear {
       model.watchTracker.stop()
+      model.nativeRefreshTask?.cancel()
+      model.nativeNeedsRefresh = false
       model.livePlaybackReturn = LivePlaybackReturnState()
       backgroundedAt = nil
       hideTask?.cancel()
