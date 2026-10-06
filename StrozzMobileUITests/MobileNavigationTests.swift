@@ -12,7 +12,12 @@ final class MobileNavigationTests: XCTestCase {
     app.launchEnvironment["STROZZ_MUTE_PLAYBACK"] = "1"
     app.launch()
     defer { app.terminate() }
-    app.buttons["Following"].firstMatch.tap()
+    for title in ["Home", "Browse", "Account"] { XCTAssertTrue(app.buttons[title].firstMatch.exists) }
+    if UIDevice.current.userInterfaceIdiom == .phone {
+      XCTAssertEqual(app.tabBars.buttons.count, 3)
+      XCTAssertFalse(app.tabBars.buttons["Following"].exists)
+    }
+    app.segmentedControls.buttons["Following"].tap()
     XCTAssertTrue(app.buttons["Sign in to Twitch"].waitForExistence(timeout: 10))
     app.buttons["Account"].firstMatch.tap()
     XCTAssertTrue(app.navigationBars["Account"].waitForExistence(timeout: 10))
@@ -61,6 +66,9 @@ final class MobileNavigationTests: XCTestCase {
     mute.tap()
     XCTAssertTrue(app.buttons["Mute"].exists)
     app.buttons["Mute"].tap()
+    // Pause keeps controls visible while screenshots and rotation are inspected.
+    playPause.tap()
+    XCTAssertEqual(playPause.label, "Play")
     let fullscreen = app.buttons["Fullscreen"]
     XCTAssertTrue(fullscreen.waitForExistence(timeout: 5))
     fullscreen.tap()
@@ -71,9 +79,12 @@ final class MobileNavigationTests: XCTestCase {
       waitForExpectations(timeout: 10)
     }
     capture(app, name: "custom-fullscreen")
+    showControls(app)
     exitFullscreen.tap()
     showControls(app)
     XCTAssertTrue(app.buttons["Close player"].waitForExistence(timeout: 5))
+    XCTAssertEqual(playPause.label, "Play", "Fullscreen must preserve the paused state")
+    playPause.tap()
     XCTAssertTrue(app.buttons["Back to live"].exists)
     XCTAssertTrue(app.buttons["Share stream"].exists)
     app.buttons["Playback quality"].tap()
@@ -129,16 +140,28 @@ final class MobileNavigationTests: XCTestCase {
     let previews = app.buttons.matching(NSPredicate(format: "value == 'Muted live preview'"))
     XCTAssertTrue(previews.firstMatch.waitForExistence(timeout: 35))
     XCTAssertEqual(previews.count, 1)
-    let navigationBar = app.navigationBars["Strozz"]
+    let heading = app.staticTexts["mobile-home-heading"]
+    let filters = app.scrollViews["mobile-home-filters"]
     let firstCard = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'stream-'")).firstMatch
-    XCTAssertLessThanOrEqual(navigationBar.frame.height, 60, "Home uses a compact navigation header")
-    XCTAssertGreaterThanOrEqual(firstCard.frame.minY, navigationBar.frame.maxY)
-    XCTAssertLessThanOrEqual(firstCard.frame.minY - navigationBar.frame.maxY, 16,
-                            "Streams should start directly below the navigation bar")
+    XCTAssertTrue(heading.isHittable)
+    XCTAssertFalse(app.navigationBars["Strozz"].exists)
+    XCTAssertEqual(heading.frame.minX, firstCard.frame.minX, accuracy: 1)
+    XCTAssertGreaterThanOrEqual(firstCard.frame.minY, filters.frame.maxY)
+    XCTAssertLessThanOrEqual(firstCard.frame.minY - filters.frame.maxY, 20,
+                            "Streams should follow the compact Home controls")
+    let channelKey = String(firstCard.identifier.dropFirst("stream-".count))
+    let artwork = app.descendants(matching: .any).matching(identifier: "artwork-\(channelKey)").firstMatch
+    let viewers = app.descendants(matching: .any).matching(identifier: "viewers-\(channelKey)").firstMatch
+    XCTAssertTrue(artwork.exists)
+    XCTAssertTrue(viewers.exists)
+    XCTAssertLessThan(viewers.frame.midX, artwork.frame.midX)
+    XCTAssertGreaterThan(viewers.frame.midY, artwork.frame.midY)
+    XCTAssertEqual(viewers.frame.maxY, artwork.frame.maxY, accuracy: 8)
     XCTAssertFalse(app.staticTexts["Live now"].exists)
     let first = previews.firstMatch.identifier
     capture(app, name: "home-muted-preview")
     app.scrollViews.firstMatch.swipeUp()
+    XCTAssertFalse(heading.exists && heading.isHittable, "The Home heading must scroll away with the feed")
     let next = previews.matching(NSPredicate(format: "identifier != %@", first)).firstMatch
     XCTAssertTrue(next.waitForExistence(timeout: 35))
     XCTAssertEqual(previews.count, 1)
@@ -150,13 +173,47 @@ final class MobileNavigationTests: XCTestCase {
     XCTAssertEqual(previews.count, 0)
     app.buttons["Close player"].tap()
     app.buttons["Browse"].firstMatch.tap()
+    XCTAssertTrue(app.navigationBars["Browse"].waitForExistence(timeout: 5))
     XCTAssertEqual(previews.count, 0)
   }
 
-  private func showControls(_ app: XCUIApplication) {
-    if !app.buttons["mobile-play-pause"].exists {
-      app.descendants(matching: .any).matching(identifier: "mobile-controls-toggle").firstMatch.tap()
+  func testHomeCategoryFiltersAndFeedSwitching() throws {
+    guard ProcessInfo.processInfo.environment["STROZZ_MOBILE_LIVE_TESTS"] == "1" else {
+      throw XCTSkip("Set STROZZ_MOBILE_LIVE_TESTS=1 for Home category filtering.")
     }
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_MUTE_PLAYBACK"] = "1"
+    app.launch()
+    defer { app.terminate() }
+    let filter = app.buttons.matching(NSPredicate(
+      format: "identifier BEGINSWITH 'home-filter-' AND identifier != 'home-filter-all'")).firstMatch
+    XCTAssertTrue(filter.waitForExistence(timeout: 30))
+    let category = filter.label
+    filter.tap()
+    let stream = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'stream-'")).firstMatch
+    XCTAssertTrue(stream.waitForExistence(timeout: 30))
+    XCTAssertTrue(stream.label.contains(category))
+    capture(app, name: "home-category")
+    app.segmentedControls.buttons["Following"].tap()
+    XCTAssertTrue(app.buttons["Sign in to Twitch"].waitForExistence(timeout: 5))
+    XCTAssertEqual(app.buttons.matching(NSPredicate(format: "value == 'Muted live preview'")).count, 0)
+    app.buttons["Sign in to Twitch"].tap()
+    XCTAssertTrue(app.navigationBars["Account"].waitForExistence(timeout: 5))
+    app.buttons["Home"].firstMatch.tap()
+    app.segmentedControls.buttons["Live"].tap()
+    app.buttons["home-filter-all"].tap()
+    XCTAssertTrue(stream.waitForExistence(timeout: 30))
+  }
+
+  private func showControls(_ app: XCUIApplication) {
+    let playPause = app.buttons["mobile-play-pause"]
+    if playPause.exists && playPause.label == "Play" { return }
+    let toggle = app.descendants(matching: .any).matching(identifier: "mobile-controls-toggle").firstMatch
+    // Refresh the timeout using video space that isn't covered by Play/Pause.
+    let videoSpace = toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.4))
+    if playPause.exists { videoSpace.tap() }
+    if !playPause.exists { videoSpace.tap() }
+    XCTAssertTrue(playPause.exists)
   }
 
   private func capture(_ app: XCUIApplication, name: String) {

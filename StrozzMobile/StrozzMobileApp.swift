@@ -29,7 +29,6 @@ struct StrozzMobileApp: App {
 
 struct MobileRootView: View {
   @Environment(ThemeManager.self) private var theme
-  @Environment(TwitchAuthSession.self) private var auth
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.scenePhase) private var scenePhase
   @State private var selectedChannel: FollowedChannel?
@@ -42,30 +41,23 @@ struct MobileRootView: View {
     let previewsEnabled = tab == 0 && selectedChannel == nil && !playbackModel.isActive && scenePhase == .active
     TabView(selection: $tab) {
       NavigationStack {
-        MobileHomeView(preview: preview, previewsEnabled: previewsEnabled, onSelect: select)
+        MobileHomeView(preview: preview, previewsEnabled: previewsEnabled,
+                       onSelect: select, onAccount: { tab = 2 })
       }
-      .tabItem { Label { Text("Live") } icon: { Image("tb-home") } }
+      .tabItem { Label { Text("Home") } icon: { Image("tb-home") } }
       .tag(0)
-
-      NavigationStack {
-        MobileFollowingView(onSelect: select)
-          .id(auth.userID)
-      }
-      .tabItem { Label { Text("Following") } icon: { Image("tb-heart") } }
-      .tag(1)
 
       NavigationStack {
         MobileBrowseView(onSelect: select)
       }
       .tabItem { Label { Text("Browse") } icon: { Image("tb-layout-grid") } }
-      .tag(2)
+      .tag(1)
 
       NavigationStack { MobileAccountView() }
         .tabItem { Label { Text("Account") } icon: { Image("tb-user-circle") } }
-        .tag(3)
+        .tag(2)
     }
     .environment(\.themePalette, palette)
-    .onChange(of: previewsEnabled, initial: true) { _, enabled in preview.setEnabled(enabled) }
     .fullScreenCover(item: $selectedChannel, onDismiss: { playbackModel.stop() }) { channel in
       MobilePlayerView(channel: channel, model: playbackModel)
         .environment(\.themePalette, palette)

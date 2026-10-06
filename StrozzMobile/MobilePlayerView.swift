@@ -245,13 +245,7 @@ struct MobileStreamDetails: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
-      HStack {
-        Text(channel.displayName).font(.headline)
-        Spacer()
-        if let count = channel.viewerCount {
-          Text("\(count.formatted(.number.notation(.compactName))) watching").font(.caption)
-        }
-      }
+      Text(channel.displayName).font(.headline)
       Text(channel.title).font(.subheadline).lineLimit(2)
       Text(model.qualityLabel).font(.caption).foregroundStyle(.secondary)
       if let notice = model.recoveryNotice {
