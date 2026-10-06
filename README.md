@@ -128,14 +128,17 @@ middle of the screen. A small, leading-aligned heading scrolls with the feed
 instead of occupying a fixed navigation bar. Previews are always muted and stop when you scroll away,
 switch tabs, open a stream, or background the app. Lower-bandwidth preview
 renditions are preferred; an undecodable preview gets one Source-quality retry.
-Home contains native **Following / Live** selection and category filters, with
+Home contains **Following / Live** text tabs with an active underline and category filters, with
 **Home, Browse, and Account** in the bottom bar. Live shows up to six compact
 followed-channel shortcuts above the video feed; Following uses compact thumbnail
-rows. Large stream thumbnails show viewer counts at bottom-left and the muted
+rows. Large stream thumbnails show a red-dot **Live** badge at top-right,
+viewer counts at bottom-left, and the muted
 preview indicator at bottom-right. Compact Following thumbnails combine a red
 live dot and viewer count in one small badge, without a separate LIVE pill.
 Anonymous/demo recommendations are
 never presented as personal follows.
+The category rail scrolls to the screen edges, and the feed draws behind the
+floating tab bar while leaving enough end-of-feed clearance to reach the last card.
 
 Video sits above chat on a portrait iPhone; landscape iPhone shows video alone.
 A wide iPad window places chat beside video, while narrow multitasking windows

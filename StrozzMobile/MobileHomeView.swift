@@ -37,49 +37,58 @@ struct MobileHomeView: View {
   }
 
   var body: some View {
-    ScrollViewReader { proxy in
-      ScrollView {
-        VStack(alignment: .leading, spacing: 16) {
-          MobileHomeHeading(feed: $feed)
-            .id("mobile-home-top")
-          MobileHomeFilters(categories: recommendations.categories, selection: $category)
-          if feed == .following {
-            MobileFollowingContent(
-              authenticated: auth.isAuthenticated, channels: visibleFollows,
-              isLoading: follows.isLoading, errorMessage: follows.errorMessage,
-              filtered: category != nil, onAccount: onAccount,
-              onRetry: { Task { await follows.refresh(using: auth) } }, onSelect: onSelect)
-          } else {
-            if !visibleFollows.isEmpty {
-              MobileFollowedShortcuts(channels: visibleFollows, onSelect: onSelect,
-                                     onSeeAll: { feed = .following })
+    GeometryReader { viewport in
+      ScrollViewReader { proxy in
+        ScrollView {
+          VStack(alignment: .leading, spacing: 16) {
+            MobileHomeHeading(feed: $feed)
+              .padding(.horizontal)
+              .id("mobile-home-top")
+            MobileHomeFilters(categories: recommendations.categories, selection: $category)
+            if feed == .following {
+              MobileFollowingContent(
+                authenticated: auth.isAuthenticated, channels: visibleFollows,
+                isLoading: follows.isLoading, errorMessage: follows.errorMessage,
+                filtered: category != nil, onAccount: onAccount,
+                onRetry: { Task { await follows.refresh(using: auth) } }, onSelect: onSelect)
+                .padding(.horizontal)
+            } else {
+              if !visibleFollows.isEmpty {
+                MobileFollowedShortcuts(channels: visibleFollows, onSelect: onSelect,
+                                       onSeeAll: { feed = .following })
+                  .padding(.horizontal)
+              }
+              MobileLiveFeedContent(
+                channels: category == nil ? recommendations.channels : categoryStreams.categoryStreams,
+                isLoading: category == nil ? recommendations.isLoading : categoryStreams.isLoadingStreams,
+                errorMessage: category == nil ? recommendations.errorMessage : categoryStreams.streamsErrorMessage,
+                preview: preview, onSelect: onSelect, onRetry: { Task { await refreshLive() } })
+                .padding(.horizontal)
             }
-            MobileLiveFeedContent(
-              channels: category == nil ? recommendations.channels : categoryStreams.categoryStreams,
-              isLoading: category == nil ? recommendations.isLoading : categoryStreams.isLoadingStreams,
-              errorMessage: category == nil ? recommendations.errorMessage : categoryStreams.streamsErrorMessage,
-              preview: preview, onSelect: onSelect, onRetry: { Task { await refreshLive() } })
+          }
+          .padding(.top, 8)
+          .padding(.bottom)
+          .coordinateSpace(name: "mobile-home-content")
+        }
+        // Draw beneath the floating tab bar, but let the final card scroll clear
+        // of it. Clipping still protects the status-bar area at the top.
+        .contentMargins(.bottom, viewport.safeAreaInsets.bottom, for: .scrollContent)
+        .clipped()
+        .accessibilityIdentifier("mobile-home-scroll")
+        .onScrollGeometryChange(for: CGRect.self) { $0.visibleRect } action: { _, visible in
+          preview.updateViewport(visible)
+        }
+        .onChange(of: feed) { _, _ in proxy.scrollTo("mobile-home-top", anchor: .top) }
+        .refreshable {
+          if feed == .following {
+            if auth.isAuthenticated { await follows.refresh(using: auth) }
+          } else {
+            await refreshLive()
+            if auth.isAuthenticated { await follows.refresh(using: auth) }
           }
         }
-        .padding(.horizontal)
-        .padding(.top, 8)
-        .padding(.bottom)
-        .coordinateSpace(name: "mobile-home-content")
       }
-      .clipped()
-      .onScrollGeometryChange(for: CGRect.self) { $0.visibleRect } action: { _, viewport in
-        preview.updateViewport(viewport)
-      }
-      .onChange(of: feed) { _, _ in proxy.scrollTo("mobile-home-top", anchor: .top) }
-      .refreshable {
-        if feed == .following {
-          if auth.isAuthenticated { await follows.refresh(using: auth) }
-        }
-        else {
-          await refreshLive()
-          if auth.isAuthenticated { await follows.refresh(using: auth) }
-        }
-      }
+      .ignoresSafeArea(.container, edges: .bottom)
     }
     .onChange(of: shouldPreview, initial: true) { _, enabled in preview.setEnabled(enabled) }
     .onAppear { preview.setEnabled(shouldPreview) }
@@ -111,20 +120,49 @@ struct MobileHomeView: View {
 
 struct MobileHomeHeading: View {
   @Binding var feed: MobileHomeFeed
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    VStack(alignment: .leading, spacing: 8) {
       Text("Strozz")
         .font(.title2.bold())
         .accessibilityAddTraits(.isHeader)
         .accessibilityIdentifier("mobile-home-heading")
-      Picker("Home feed", selection: $feed) {
-        Text("Following").tag(MobileHomeFeed.following)
-        Text("Live").tag(MobileHomeFeed.live)
+      HStack(spacing: 24) {
+        MobileHomeFeedTab(title: "Following", selected: feed == .following) { feed = .following }
+          .accessibilityIdentifier("home-feed-following")
+        MobileHomeFeedTab(title: "Live", selected: feed == .live) { feed = .live }
+          .accessibilityIdentifier("home-feed-live")
+        Spacer(minLength: 0)
       }
-      .pickerStyle(.segmented)
-      .accessibilityIdentifier("mobile-home-feed-picker")
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel("Home feed")
     }
+    .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: feed)
+  }
+}
+
+struct MobileHomeFeedTab: View {
+  let title: LocalizedStringKey
+  let selected: Bool
+  let action: () -> Void
+  @Environment(\.themePalette) private var palette
+
+  var body: some View {
+    Button(action: action) {
+      VStack(alignment: .leading, spacing: 4) {
+        Text(title).font(.headline)
+          .foregroundStyle(selected ? palette.chromeOnOpaque : .secondary)
+        Capsule().fill(palette.chromeOnOpaque)
+          .frame(width: 24, height: 3)
+          .opacity(selected ? 1 : 0)
+          .accessibilityHidden(true)
+      }
+      .frame(minWidth: 44, minHeight: 44, alignment: .leading)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(selected ? .isSelected : [])
   }
 }
 
@@ -151,6 +189,7 @@ struct MobileHomeFilters: View {
       .buttonBorderShape(.capsule)
       .frame(minHeight: 44)
     }
+    .contentMargins(.horizontal, 16, for: .scrollContent)
     .scrollIndicators(.hidden)
     .accessibilityIdentifier("mobile-home-filters")
   }

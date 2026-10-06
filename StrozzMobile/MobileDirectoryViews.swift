@@ -205,7 +205,7 @@ struct MobileChannelGrid: View {
   var preview: MobileHomePreview? = nil
 
   var body: some View {
-    LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 20)], spacing: 24) {
+    LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 20, alignment: .top)], spacing: 24) {
       ForEach(channels, id: \.channelKey) { channel in
         Button { onSelect(channel) } label: {
           MobileChannelCard(channel: channel, preview: preview)
@@ -280,11 +280,19 @@ struct MobileStreamArtwork: View {
     .onDisappear { preview?.updateFrame(nil, for: channelKey) }
     .overlay(alignment: .topTrailing) {
       if !isCompact {
-        Text(isLive ? "LIVE" : "Offline")
-          .font(.caption2.bold())
-          .padding(.horizontal, 6).padding(.vertical, 3)
-          .modifier(MobileControlSurface())
-          .padding(6)
+        HStack(spacing: 4) {
+          if isLive {
+            Circle().fill(palette.liveIndicator).frame(width: 6, height: 6)
+              .accessibilityHidden(true)
+          }
+          Text(isLive ? "Live" : "Offline")
+        }
+        .font(.caption2.bold())
+        .padding(.horizontal, 6).padding(.vertical, 3)
+        .modifier(MobileControlSurface())
+        .padding(6)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("live-label-\(channelKey)")
       }
     }
     .overlay(alignment: .bottomLeading) {
