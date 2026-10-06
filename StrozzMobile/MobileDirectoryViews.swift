@@ -10,17 +10,15 @@ struct MobileHomeView: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 20) {
-        HStack(spacing: 10) {
-          Image("StrozzPixelLogo").resizable().interpolation(.none).frame(width: 36, height: 36)
-          Text("Live now").font(.title2.bold())
-        }
         if let error = service.errorMessage {
           MobileStatusView(message: error) { Task { await service.refresh() } }
         }
         MobileChannelGrid(channels: service.channels, onSelect: onSelect, preview: preview)
         if service.isLoading { ProgressView("Loading streams").frame(maxWidth: .infinity) }
       }
-      .padding()
+      .padding(.horizontal)
+      .padding(.top, 8)
+      .padding(.bottom)
       .coordinateSpace(name: "mobile-home-content")
     }
     .onScrollGeometryChange(for: CGRect.self) { $0.visibleRect } action: { _, viewport in
@@ -30,6 +28,7 @@ struct MobileHomeView: View {
     .onDisappear { preview.stop() }
     .background(palette.backgroundColors.last ?? palette.cardOpaqueSurface)
     .navigationTitle("Strozz")
+    .navigationBarTitleDisplayMode(.inline)
     .refreshable { await service.refresh() }
     .task { if service.lastUpdatedAt == nil { await service.refresh() } }
   }

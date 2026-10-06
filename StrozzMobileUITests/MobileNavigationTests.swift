@@ -129,6 +129,13 @@ final class MobileNavigationTests: XCTestCase {
     let previews = app.buttons.matching(NSPredicate(format: "value == 'Muted live preview'"))
     XCTAssertTrue(previews.firstMatch.waitForExistence(timeout: 35))
     XCTAssertEqual(previews.count, 1)
+    let navigationBar = app.navigationBars["Strozz"]
+    let firstCard = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'stream-'")).firstMatch
+    XCTAssertLessThanOrEqual(navigationBar.frame.height, 60, "Home uses a compact navigation header")
+    XCTAssertGreaterThanOrEqual(firstCard.frame.minY, navigationBar.frame.maxY)
+    XCTAssertLessThanOrEqual(firstCard.frame.minY - navigationBar.frame.maxY, 16,
+                            "Streams should start directly below the navigation bar")
+    XCTAssertFalse(app.staticTexts["Live now"].exists)
     let first = previews.firstMatch.identifier
     capture(app, name: "home-muted-preview")
     app.scrollViews.firstMatch.swipeUp()

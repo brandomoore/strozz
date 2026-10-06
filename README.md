@@ -124,7 +124,8 @@ approve the displayed code, then return to Strozz. Browsing, playback, and
 reading chat also work anonymously.
 
 Home automatically previews one mostly visible stream at a time, nearest the
-middle of the screen. Previews are always muted and stop when you scroll away,
+middle of the screen. A compact navigation header keeps streams near the top
+without a duplicate page heading. Previews are always muted and stop when you scroll away,
 switch tabs, open a stream, or background the app. Lower-bandwidth preview
 renditions are preferred; an undecodable preview gets one Source-quality retry.
 
