@@ -79,6 +79,31 @@ necessary. The default does not force unsupported media to play or promise
 unlimited retries; legacy playback is the last-resort stability path, not the
 first response to a transient engine error.
 
+### Silent audio after returning to the TV app
+
+A physical build 1921 report followed a thirteen-minute background interval:
+native xQc video resumed at 1080p60, normal rate and about 2.12 seconds of
+source-date latency, but stream audio was silent while interface sounds worked.
+Pause/resume did not help; closing and reopening the stream restored audio.
+Inspection of a source segment and its generated native parts produced identical
+AAC bytes with normal decoded levels. This points to retained playback/render
+state rather than audio removed by the native indexer; the exact private
+AVFoundation failure was not observable in that build.
+
+The native foreground refresh now recreates the AVPlayer and its AVKit rendering
+surface as well as the signed source, engine and item. It preserves mute, volume,
+external-playback policy and paused/rewound intent. Ordinary live playback,
+catch-up and source retries do not gain another reset. A fresh paused owner may
+expose its date/seekable timeline before `readyToPlay`; restoration uses that
+timeline with a bounded date seek instead of briefly playing to prepare it.
+
+Snapshots now include player mute/volume, audio-session category/mode, output-port
+types, system output volume, external playback, and loaded/enabled audio-track
+counts. These describe configuration, not proof that sound reached the speakers.
+Device/port names and identifiers are not recorded. The foreground regression
+probe remains muted and verifies new player/controller ownership, enabled audio
+tracks, decoded video, and preservation of a paused position.
+
 ### Whole-segment sources and native quality selection
 
 The physical AustinShow capture on build 1920 started about 20 seconds behind

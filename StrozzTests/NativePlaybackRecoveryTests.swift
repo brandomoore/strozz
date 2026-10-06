@@ -63,17 +63,74 @@ final class NativeRecoveryIntegrationTests: XCTestCase {
   func testOriginFailureResolvesFreshNativeSourceWithoutLegacyFallback() async throws {
     try await withModel { model, view in
       let old = model.nativeHLS
+      let originalPlayer = model.player
       let fresh = URL(string: "https://example.invalid/new-master.m3u8")!
       view.recoverNativeHLS(.unavailable) { StreamPlayback(master: fresh, qualities: []) }
       await model.nativeRefreshTask?.value
       XCTAssertFalse(model.nativeHLS === old)
       XCTAssertEqual(model.nativeHLS?.sourceURL, fresh)
       XCTAssertTrue(model.isUsingNativeHLS)
+      XCTAssertTrue(model.player === originalPlayer, "Only foreground return adds a non-failure player reset")
       XCTAssertNil(model.nativeFallbackReason)
       XCTAssertEqual(model.nativeRecovery.attempts.count, 1)
       XCTAssertEqual(view.selectedQualityOption, LivePlaybackProfile.nativeLowLatency.pickerLabel)
       XCTAssertEqual(model.player.rate, 0, "Retry must preserve a paused viewer")
       XCTAssertEqual((try XCTUnwrap(model.player.currentItem).asset as? AVURLAsset)?.url.scheme, NativeLowLatencyHLS.scheme)
+    }
+  }
+
+  func testForegroundRefreshRecreatesPlayerAndPreservesPausedAudioPreferences() async throws {
+    try await withModel { model, view in
+      let oldPlayer = model.player
+      let oldItem = AVPlayerItem(url: URL(fileURLWithPath: "/nonexistent-foreground.m3u8"))
+      oldPlayer.replaceCurrentItem(with: oldItem)
+      oldPlayer.volume = 0.35
+      oldPlayer.isMuted = true
+      oldPlayer.allowsExternalPlayback = false
+      view.suspendNativePlayback()
+      let fresh = URL(string: "https://example.invalid/resumed-master.m3u8")!
+      view.refreshNativeAfterSuspension { StreamPlayback(master: fresh, qualities: []) }
+      await model.nativeRefreshTask?.value
+      XCTAssertFalse(model.player === oldPlayer)
+      XCTAssertNil(oldPlayer.currentItem)
+      XCTAssertEqual(oldPlayer.rate, 0)
+      XCTAssertTrue(model.isUsingNativeHLS)
+      XCTAssertEqual(model.nativeHLS?.sourceURL, fresh)
+      XCTAssertEqual(model.player.volume, 0.35, accuracy: 0.001)
+      XCTAssertTrue(model.player.isMuted)
+      XCTAssertFalse(model.player.allowsExternalPlayback)
+      XCTAssertTrue(model.isUserPaused)
+      XCTAssertEqual(model.player.rate, 0)
+      XCTAssertNotNil(model.player.currentItem)
+      let resumedPlayer = model.player
+      view.refreshNativeAfterSuspension {
+        XCTFail("A completed foreground refresh must not run again")
+        throw URLError(.cancelled)
+      }
+      XCTAssertTrue(model.player === resumedPlayer)
+    }
+  }
+
+  func testCancelledForegroundResolveCannotReplaceAPlayerThatWasDismissed() async throws {
+    try await withModel { model, view in
+      let oldPlayer = model.player
+      var continuation: CheckedContinuation<StreamPlayback, Never>?
+      view.suspendNativePlayback()
+      view.refreshNativeAfterSuspension {
+        await withCheckedContinuation { continuation = $0 }
+      }
+      for _ in 0..<100 {
+        if continuation != nil { break }
+        try await Task.sleep(for: .milliseconds(5))
+      }
+      XCTAssertNotNil(continuation)
+      view.replacePlaybackItem(with: nil)
+      continuation?.resume(returning: StreamPlayback(
+        master: URL(string: "https://example.invalid/stale-resume.m3u8")!, qualities: []))
+      await model.nativeRefreshTask?.value
+      XCTAssertTrue(model.player === oldPlayer)
+      XCTAssertNil(model.player.currentItem)
+      XCTAssertNil(model.nativeHLS)
     }
   }
 

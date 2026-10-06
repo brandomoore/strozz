@@ -39,6 +39,7 @@ extension PlayerView {
   var videoColumn: some View {
     ZStack(alignment: .bottom) {
       VideoSurface(player: player)
+        .id(ObjectIdentifier(player))
         .ignoresSafeArea()
         // Shared loading surface: the stream's frame behind the channel's
         // avatar, name, and a native spinner. Anchored as an overlay on the

@@ -91,6 +91,21 @@ extension PlayerView {
     snapshot.attributes["thermal_state"] = telemetryThermalState()
 
     snapshot.metrics["player_rate"] = Double(player.rate)
+    snapshot.metrics["player_volume"] = Double(player.volume)
+    snapshot.flags["player_muted"] = player.isMuted
+    snapshot.flags["external_playback_active"] = player.isExternalPlaybackActive
+    let audioSession = AVAudioSession.sharedInstance()
+    snapshot.attributes["audio_session_category"] = audioSession.category.rawValue
+    snapshot.attributes["audio_session_mode"] = audioSession.mode.rawValue
+    snapshot.attributes["audio_output_ports"] = audioSession.currentRoute.outputs.map(\.portType.rawValue).joined(separator: ",")
+    snapshot.flags["other_audio_playing"] = audioSession.isOtherAudioPlaying
+    let outputVolume = Double(audioSession.outputVolume)
+    if outputVolume.isFinite { snapshot.metrics["audio_output_volume"] = outputVolume }
+    if let item = player.currentItem, item.status == .readyToPlay {
+      let audioTracks = item.tracks.filter { $0.assetTrack?.mediaType == .audio }
+      snapshot.counters["audio_track_count"] = audioTracks.count
+      snapshot.counters["enabled_audio_track_count"] = audioTracks.filter(\.isEnabled).count
+    }
     snapshot.metrics["preferred_forward_buffer_seconds"] =
       player.currentItem?.preferredForwardBufferDuration ?? 0
     if let item = player.currentItem {
@@ -363,19 +378,22 @@ extension PlayerView {
     }
   }
 
-  private func rebuildPlaybackPlayer(reason: String) {
-    recordPlaybackEvent("failed_player_replaced", level: .error,
+  func rebuildPlaybackPlayer(reason: String, isFailure: Bool = true) {
+    recordPlaybackEvent(isFailure ? "failed_player_replaced" : "playback_player_recreated",
+      level: isFailure ? .error : .info,
       attributes: PlaybackTelemetryRecorder.errorAttributes(player.error)
         .merging(["reason": reason]) { _, new in new })
     removeVODTimeObserver()
     let previous = player
     previous.pause()
+    previous.replaceCurrentItem(with: nil)
     let replacement = AVPlayer()
     replacement.volume = previous.volume
     replacement.isMuted = previous.isMuted
     replacement.automaticallyWaitsToMinimizeStalling = previous.automaticallyWaitsToMinimizeStalling
     replacement.appliesMediaSelectionCriteriaAutomatically = previous.appliesMediaSelectionCriteriaAutomatically
     replacement.actionAtItemEnd = previous.actionAtItemEnd
+    replacement.allowsExternalPlayback = previous.allowsExternalPlayback
     model.player = replacement
   }
 

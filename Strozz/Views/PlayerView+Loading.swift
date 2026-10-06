@@ -472,15 +472,34 @@ extension PlayerView {
   }
 
   func restoreNativePosition(_ position: Date, item: AVPlayerItem, generation: UUID, intent: UUID) async {
+    var canSeek = false
     for _ in 0..<100 {
       guard !Task.isCancelled, item === player.currentItem, generation == model.nativeGeneration,
         intent == model.nativePositionIntent else { return }
-      if item.status == .readyToPlay || item.status == .failed { break }
+      if item.status == .failed { break }
+      // A fresh paused HLS owner can expose its date timeline before readyToPlay.
+      // The seek prepares it without briefly resuming a paused viewer.
+      if item.status == .readyToPlay || (!item.seekableTimeRanges.isEmpty && item.currentDate() != nil) {
+        canSeek = true
+        break
+      }
       do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
     }
     guard !Task.isCancelled, item === player.currentItem, generation == model.nativeGeneration,
       intent == model.nativePositionIntent else { return }
-    let restored = item.status == .readyToPlay ? await item.seek(to: position) : false
+    let restored: Bool
+    if canSeek {
+      let timeout = Task { @MainActor in
+        do { try await Task.sleep(for: .seconds(5)) } catch { return }
+        guard item === player.currentItem, generation == model.nativeGeneration,
+          intent == model.nativePositionIntent else { return }
+        item.cancelPendingSeeks()
+      }
+      restored = await item.seek(to: position)
+      timeout.cancel()
+    } else {
+      restored = false
+    }
     guard !Task.isCancelled, item === player.currentItem, generation == model.nativeGeneration,
       intent == model.nativePositionIntent else { return }
     recordPlaybackEvent("native_hls_position_restore", flags: ["restored": restored])
@@ -535,6 +554,10 @@ extension PlayerView {
         playback = resolved
         model.nativeFallbackReason = nil
         let item = makeItem(url: resolved.url(forQuality: preferredQuality))
+        if reason == "suspension" {
+          // Video progress does not prove the old audio renderer survived suspension.
+          rebuildPlaybackPlayer(reason: "native_foreground_refresh", isFailure: false)
+        }
         replacePlaybackItem(with: item)
         recordPlaybackEvent(reason == "suspension"
           ? "native_hls_fresh_source_after_suspension" : "native_hls_fresh_source_after_failure")
