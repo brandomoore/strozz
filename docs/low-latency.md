@@ -165,13 +165,31 @@ the media bytes or forcing an Auto resolution.
 
 Rendition reports use relative URIs and verified upstream sequences. A cold
 rendition indexes the requested complete sequence rather than skipping directly
-to a newer segment whose parts cannot satisfy that request. Metadata refreshes
-are coalesced; an unavailable report is logged rather than inventing its sequence.
+to a newer segment whose parts cannot satisfy that request. Optional metadata
+refreshes are coalesced background work, and already-running rendition indexers
+are not fetched a second time just to build reports. An active playlist never
+waits for an unused rendition's network request. Previously, the active response
+awaited the entire report refresh, allowing one slow unused quality to hold
+already-available playback data. A regression reproduces that dependency and
+requires cached responses to complete while the unused request remains blocked.
+Unavailable reports are logged and removed rather than inventing their sequence.
 Shutdown rejects new requests and drains in-flight manifest fetches before
 invalidating their shared URLSession, including when a quality change cancels
 concurrent report refreshes.
 Diagnostics include the source's prefetch capability, live hold-back and edge age,
-plus reasons for stopping rate correction.
+reasons for stopping rate correction, and the last/maximum rendition-report
+refresh duration. The same report-blocking, failure, and cancellation regressions
+run in both TV and mobile targets.
+
+The subsequent physical check held AustinShow at 720p60 for about eight minutes
+without stalls or resolution drops before the broadcast ended and produced a
+timeline error; that is a partial run, not a completed twelve-minute test.
+Normal Auto/native playback on Burn then retained 1080p for 904 of 906 rendered
+samples over roughly thirty minutes. One brief stall coincided with four seconds
+at 720p; there were no 160p/360p collapses. Auto remains adaptive rather than
+pinning a quality or hiding real network/decode pressure. The tvOS simulator's
+inability to render that AustinShow feed also reproduced with the original report
+wait restored; simulator clock progress was not counted as successful video.
 
 TV and mobile fixed-video selections now retain native playback, fresh-native
 recovery and pause/rewind intent. Audio Only, explicitly selected legacy modes,

@@ -93,6 +93,8 @@ final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unche
 }
 
 actor NativeHLSOrigin {
+  typealias DataLoader = @Sendable (URLRequest) async throws -> (Data, URLResponse)
+
   enum Response: Sendable {
     case playlist(Data)
     case redirect(URL, Int, Int)
@@ -159,6 +161,7 @@ actor NativeHLSOrigin {
   let history: Double
   let failure: @Sendable (NativeHLSError) -> Void
   let session: URLSession
+  private let loadData: DataLoader?
   private var master: String?
   private var sources: [Int: Rendition] = [:]
   private var lastActive = 0
@@ -169,15 +172,18 @@ actor NativeHLSOrigin {
   private var mediaBase: URL?
   private var cachedMediaBytes = 0
   private var reportsUpdatedAt = Date.distantPast
-  private var reportTask: Task<[Int: Int], Never>?
+  private var reportTask: Task<Void, Never>?
+  private var reportRefreshSeconds: TimeInterval?
+  private var reportRefreshMaxSeconds: TimeInterval?
   private var inFlightRequests = 0
   private var requestDrainWaiters: [CheckedContinuation<Void, Never>] = []
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "native-hls")
 
-  init(root: URL, headers: [String: String], history: Double,
+  init(root: URL, headers: [String: String], history: Double, loadData: DataLoader? = nil,
        failure: @escaping @Sendable (NativeHLSError) -> Void) {
     self.root = root; self.headers = headers; self.history = max(12, min(history, 1800))
     self.failure = failure
+    self.loadData = loadData
     let config = URLSessionConfiguration.ephemeral
     config.urlCache = nil
     config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
@@ -200,12 +206,14 @@ actor NativeHLSOrigin {
     session.invalidateAndCancel()
   }
 
-  func snapshot() -> (parts: Int, renditions: Int, edgeAge: Double?, holdBack: Double?, hasPrefetch: Bool?, forwardBuffer: Double?) {
+  func snapshot() -> (parts: Int, renditions: Int, edgeAge: Double?, holdBack: Double?, hasPrefetch: Bool?,
+                     forwardBuffer: Double?, reportRefreshSeconds: Double?, reportRefreshMaxSeconds: Double?) {
     let source = sources[lastActive]
     let tail = source?.segments.last
     return (publishedParts, sources.count,
       tail.map { Date().timeIntervalSince($0.date.addingTimeInterval($0.duration)) },
-      source?.liveHoldBack, source?.hasPrefetch, source?.forwardBuffer)
+      source?.liveHoldBack, source?.hasPrefetch, source?.forwardBuffer,
+      reportRefreshSeconds, reportRefreshMaxSeconds)
   }
 
   func liveTargetDate() -> Date? {
@@ -222,13 +230,18 @@ actor NativeHLSOrigin {
 
   func renderForTesting(_ segments: [Segment], ended: Bool = false,
                         hasPrefetch: Bool = true, target: Int = 2,
-                        otherRenditions: [Int: Rendition] = [:]) throws -> String {
+                        otherRenditions: [Int: Rendition] = [:], readyToServe: Bool = false) throws -> String {
     sources = otherRenditions
     sources[0] = Rendition(url: root, segments: segments)
     sources[0]?.ended = ended
     sources[0]?.hasPrefetch = hasPrefetch
     sources[0]?.target = target
     sources[0]?.publicationDuration = segments.filter(\.complete).map(\.duration).max()
+    if readyToServe {
+      master = ""
+      sources[0]?.reachedLiveEdge = true
+      sources[0]?.task = Task {}
+    }
     return String(decoding: try playlist(0, base: URL(string: "\(NativeLowLatencyHLS.scheme)://test/root.m3u8")!), as: UTF8.self)
   }
 
@@ -270,7 +283,10 @@ actor NativeHLSOrigin {
         waiters.forEach { $0.resume() }
       }
     }
-    let (data, response) = try await session.data(for: request(url))
+    let data: Data
+    let response: URLResponse
+    if let loadData { (data, response) = try await loadData(request(url)) }
+    else { (data, response) = try await session.data(for: request(url)) }
     try Task.checkCancellation()
     guard !stopped else { throw CancellationError() }
     guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 4 * 1024 * 1024 else {
@@ -321,37 +337,51 @@ actor NativeHLSOrigin {
     master = output.joined(separator: "\n")
   }
 
-  private func updateRenditionReports() async {
-    guard sources.count > 1, Date().timeIntervalSince(reportsUpdatedAt) >= 1 else { return }
-    if reportTask == nil {
-      let urls = sources.mapValues(\.url)
-      reportTask = Task {
-        await withTaskGroup(of: (Int, Int?).self) { group in
-          for (index, url) in urls {
-            group.addTask {
-              do {
-                let manifest = try NativeCMAF.manifest(
-                  String(decoding: await self.data(url), as: UTF8.self), url: url)
-                return (index, manifest.entries.last(where: { $0.duration != nil })?.sequence)
-              } catch {
-                if !Task.isCancelled {
-                  Self.logger.warning("Rendition report refresh failed for variant \(index): \((error as NSError).code)")
-                }
-                return (index, nil)
-              }
+  private func updateRenditionReports() {
+    guard sources.count > 1, reportTask == nil,
+      Date().timeIntervalSince(reportsUpdatedAt) >= 1 else { return }
+    let urls = sources.filter { $0.value.task == nil }.mapValues(\.url)
+    guard !urls.isEmpty else { return }
+    // Reports help a later quality switch; an unused rendition must never hold
+    // the active blocking playlist or compete with its already-indexed metadata.
+    reportTask = Task(priority: .utility) { [weak self] in
+      await self?.refreshRenditionReports(urls)
+    }
+  }
+
+  private func refreshRenditionReports(_ urls: [Int: URL]) async {
+    let start = ProcessInfo.processInfo.systemUptime
+    defer {
+      let duration = max(0, ProcessInfo.processInfo.systemUptime - start)
+      reportRefreshSeconds = duration
+      reportRefreshMaxSeconds = max(reportRefreshMaxSeconds ?? duration, duration)
+      reportsUpdatedAt = Date()
+      reportTask = nil
+    }
+    guard !stopped, !Task.isCancelled else { return }
+    let reports = await withTaskGroup(of: (Int, Int?).self) { group in
+      for (index, url) in urls {
+        group.addTask {
+          do {
+            let manifest = try NativeCMAF.manifest(
+              String(decoding: await self.data(url), as: UTF8.self), url: url)
+            return (index, manifest.entries.last(where: { $0.duration != nil })?.sequence)
+          } catch {
+            if !Task.isCancelled {
+              Self.logger.warning("Rendition report refresh failed for variant \(index): \((error as NSError).code)")
             }
+            return (index, nil)
           }
-          var reports: [Int: Int] = [:]
-          for await (index, sequence) in group { reports[index] = sequence }
-          return reports
         }
       }
+      var reports: [Int: Int] = [:]
+      for await (index, sequence) in group { reports[index] = sequence }
+      return reports
     }
-    let reports = await reportTask?.value ?? [:]
-    guard !stopped else { return }
-    for index in sources.keys { sources[index]?.reportedCompleteSequence = reports[index] }
-    reportsUpdatedAt = Date()
-    reportTask = nil
+    guard !stopped, !Task.isCancelled else { return }
+    for index in urls.keys {
+      sources[index]?.reportedCompleteSequence = reports[index]
+    }
   }
 
   func response(_ url: URL) async throws -> Response {
@@ -375,7 +405,7 @@ actor NativeHLSOrigin {
         if sources[index]?.task == nil {
           sources[index]?.task = Task { [weak self] in await self?.run(index, startingAt: msn) }
         }
-        await updateRenditionReports()
+        updateRenditionReports()
       }
       let deadline = Date().addingTimeInterval(components.first == "part" ? 4 : 12)
       while !stopped {

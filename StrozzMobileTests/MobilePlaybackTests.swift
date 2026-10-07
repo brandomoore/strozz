@@ -254,6 +254,42 @@ final class MobilePlaybackTests: XCTestCase {
     await Task.yield()
     XCTAssertNil(model.player.currentItem)
   }
+
+  func testSlowMetadataDoesNotBlockPlaybackResolutionOrResurrectStoppedState() async throws {
+    let gate = ResolutionGate()
+    var metadata: CheckedContinuation<ChannelMetadata?, Never>?
+    let model = MobilePlaybackModel(muted: true) { _ in await gate.wait() }
+    model.activateAudioSession = {}
+    model.loadMetadata = { _ in await withCheckedContinuation { metadata = $0 } }
+    model.start(channel: "fixture")
+    await gate.waitUntilRequested()
+    XCTAssertNotNil(metadata)
+    XCTAssertTrue(model.isLoading, "Optional uptime metadata must not block stream resolution")
+    XCTAssertNil(model.streamStartedAt)
+    model.stop()
+    gate.finish()
+    metadata?.resume(returning: ChannelMetadata(displayName: "Fixture", title: "",
+      profileImageURL: nil, viewersCount: 10, streamStartedAt: Date(timeIntervalSince1970: 1000)))
+    await Task.yield()
+    XCTAssertNil(model.streamStartedAt)
+    XCTAssertFalse(model.isActive)
+  }
+
+  func testMobileUptimeRetainsTheBroadcastersOriginalStart() async {
+    let gate = ResolutionGate()
+    let start = Date(timeIntervalSince1970: 1000)
+    let model = MobilePlaybackModel(muted: true) { _ in await gate.wait() }
+    model.activateAudioSession = {}
+    model.loadMetadata = { _ in
+      ChannelMetadata(displayName: "Fixture", title: "", profileImageURL: nil,
+        viewersCount: 10, streamStartedAt: start)
+    }
+    model.start(channel: "fixture")
+    await gate.waitUntilRequested()
+    XCTAssertEqual(model.streamStartedAt, start)
+    model.stop()
+    gate.finish()
+  }
 }
 
 @MainActor

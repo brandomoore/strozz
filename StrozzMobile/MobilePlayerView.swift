@@ -289,7 +289,12 @@ struct MobileStreamDetails: View {
     VStack(alignment: .leading, spacing: 4) {
       Text(channel.displayName).font(.headline)
       Text(channel.title).font(.subheadline).lineLimit(2)
-      Text(model.qualityLabel).font(.caption).foregroundStyle(.secondary)
+      HStack(alignment: .firstTextBaseline, spacing: 12) {
+        Text(model.qualityLabel)
+        BroadcastUptimeView(startedAt: model.streamStartedAt)
+      }
+      .font(.caption)
+      .foregroundStyle(.secondary)
       if let notice = model.recoveryNotice {
         Text(notice).font(.caption).foregroundStyle(.secondary).lineLimit(2)
       } else if let failure = model.nativeFailure {

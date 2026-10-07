@@ -151,6 +151,8 @@ extension PlayerView {
     snapshot.counters["native_parts_indexed"] = model.nativeParts
     snapshot.metrics["native_live_hold_back_seconds"] = model.nativeLiveHoldBack
     snapshot.metrics["native_source_edge_age_seconds"] = model.nativeSourceEdgeAge
+    snapshot.metrics["native_report_refresh_seconds"] = model.nativeReportRefreshSeconds
+    snapshot.metrics["native_report_refresh_max_seconds"] = model.nativeReportRefreshMaxSeconds
     snapshot.flags["native_source_has_prefetch"] = model.nativeSourceHasPrefetch
     snapshot.attributes["native_fallback"] = model.nativeFallbackReason
     if let native = model.nativeHLS {
@@ -161,6 +163,8 @@ extension PlayerView {
         model.nativeLiveHoldBack = stats.holdBack
         model.nativeSourceHasPrefetch = stats.hasPrefetch
         model.nativeSourceEdgeAge = stats.edgeAge
+        model.nativeReportRefreshSeconds = stats.reportRefreshSeconds
+        model.nativeReportRefreshMaxSeconds = stats.reportRefreshMaxSeconds
       }
     }
     snapshot.attributes["watch_rewards_state"] = model.watchTracker.state.rawValue
@@ -318,6 +322,8 @@ extension PlayerView {
   func replacePlaybackItem(with item: AVPlayerItem?) {
     if item == nil { model.mediaServicesResetPending = false }
     if item !== player.currentItem {
+      model.nativeReportRefreshSeconds = nil
+      model.nativeReportRefreshMaxSeconds = nil
       cancelNativeStartup()
       model.nativeStartupComplete = (item?.asset as? AVURLAsset)?.url.scheme != NativeLowLatencyHLS.scheme
       lastPlaybackDateSample = nil

@@ -174,6 +174,7 @@ struct PlayerTitleHeader: View {
   let showSubheader: Bool
   let showLatency: Bool
   let showViewerCount: Bool
+  let streamStartedAt: Date?
 
   /// Title/subheader foreground. The header sits on the always-dark top scrim
   /// (matching the bottom scrim), so white reads in every theme.
@@ -242,7 +243,7 @@ struct PlayerTitleHeader: View {
 
       if showSubheader {
         let counts = platformViewerCounts
-        if !counts.isEmpty || showLatency {
+        if !counts.isEmpty || showLatency || streamStartedAt != nil {
           HStack(spacing: 16) {
             if !counts.isEmpty {
               HStack(spacing: 16) {
@@ -275,6 +276,9 @@ struct PlayerTitleHeader: View {
                   .foregroundStyle(foreground)
               }
             }
+            BroadcastUptimeView(startedAt: streamStartedAt)
+              .font(.footnote)
+              .foregroundStyle(foreground)
           }
           .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 1)
           .animation(.easeInOut(duration: 0.25), value: counts)

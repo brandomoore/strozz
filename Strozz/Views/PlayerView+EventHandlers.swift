@@ -268,6 +268,8 @@ extension PlayerView {
     }
     .onDisappear {
       cancelNativeStartup()
+      model.channelMetadataTask?.cancel()
+      model.channelMetadataTask = nil
       model.mediaServicesResetPending = false
       model.mediaServicesUnavailable = false
       model.audioInterrupted = false

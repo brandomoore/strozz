@@ -66,6 +66,8 @@ final class PlayerModel {
   @ObservationIgnored var nativeLiveHoldBack: Double?
   @ObservationIgnored var nativeSourceHasPrefetch: Bool?
   @ObservationIgnored var nativeSourceEdgeAge: Double?
+  @ObservationIgnored var nativeReportRefreshSeconds: Double?
+  @ObservationIgnored var nativeReportRefreshMaxSeconds: Double?
   var isUsingNativeHLS = false
   @ObservationIgnored var nativeCatchUp = NativeLiveCatchUp()
   @ObservationIgnored var nativeCatchUpItem: AVPlayerItem?
@@ -291,6 +293,8 @@ final class PlayerModel {
   var streamTitle: String = ""
   var channelDisplayName: String = ""
   var channelAvatarURL: URL?
+  var channelStreamStartedAt: Date?
+  @ObservationIgnored var channelMetadataTask: Task<Void, Never>?
   var pendingSwitchLogin: String?
   var chatReplayStartMessageID: ChatMessage.ID?
 

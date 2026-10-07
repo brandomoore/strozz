@@ -94,6 +94,7 @@ targets:
           - "TopShelfSnapshot.swift"
       - path: Strozz/Views/Icon.swift
       - path: Strozz/Views/StreamLoadingView.swift
+      - path: Strozz/Views/BroadcastUptimeView.swift
       - path: Strozz/Views/TwitchICloudSyncControls.swift
       - path: Strozz/Resources/StreamerAffinity.json
       - path: Strozz/Views/RichChatLineView.swift
@@ -131,6 +132,8 @@ targets:
     sources:
       - path: StrozzMobileTests
       - path: StrozzTests/PlaybackPresentationStateTests.swift
+      - path: StrozzTests/NativeRenditionReportTests.swift
+      - path: StrozzTests/BroadcastUptimeTests.swift
     dependencies:
       - target: StrozzMobile
     settings:

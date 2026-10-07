@@ -34,6 +34,7 @@ final class MobilePlaybackModel {
   private(set) var isMuted: Bool
   private(set) var isExternalPlayback = false
   private(set) var livePosition = LivePlaybackPosition()
+  private(set) var streamStartedAt: Date?
 
   @ObservationIgnored private var channel = ""
   @ObservationIgnored private var generation = UUID()
@@ -41,6 +42,7 @@ final class MobilePlaybackModel {
   @ObservationIgnored private var videoOutput: AVPlayerItemVideoOutput?
   @ObservationIgnored private var loadTask: Task<Void, Never>?
   @ObservationIgnored private var monitorTask: Task<Void, Never>?
+  @ObservationIgnored private var metadataTask: Task<Void, Never>?
   @ObservationIgnored private var jumpObserver: NSObjectProtocol?
   @ObservationIgnored private var rateObserver: NSKeyValueObservation?
   @ObservationIgnored private var routeObserver: NSKeyValueObservation?
@@ -62,6 +64,9 @@ final class MobilePlaybackModel {
   @ObservationIgnored private var nativeRecovery = NativePlaybackRecovery()
   @ObservationIgnored private let muteForTesting: Bool
   @ObservationIgnored private let resolve: (String) async throws -> StreamPlayback
+  @ObservationIgnored var loadMetadata: (String) async -> ChannelMetadata? = {
+    await PlaybackService.channelMetadata(for: $0)
+  }
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "mobile-playback")
 
   struct Position {
@@ -119,6 +124,7 @@ final class MobilePlaybackModel {
     guard !isActive else { return }
     self.channel = channel
     isActive = true
+    refreshStreamMetadata()
     observeAudioSession()
     chat.connect(to: channel)
     load(position: Position(shouldPlay: true, date: nil))
@@ -138,6 +144,7 @@ final class MobilePlaybackModel {
 
   func goLive() {
     followsLive = true
+    refreshStreamMetadata()
     load(position: Position(shouldPlay: true, date: nil))
   }
 
@@ -174,6 +181,7 @@ final class MobilePlaybackModel {
   }
 
   func retry() {
+    refreshStreamMetadata()
     load(position: Position(shouldPlay: true, date: nil))
   }
 
@@ -191,11 +199,15 @@ final class MobilePlaybackModel {
     guard isActive, let position = suspendedPosition else { return }
     suspendedPosition = nil
     chat.connect(to: channel)
+    refreshStreamMetadata()
     load(position: position)
   }
 
   func stop() {
     isActive = false
+    metadataTask?.cancel()
+    metadataTask = nil
+    streamStartedAt = nil
     suspendedPosition = nil
     interruptedPosition = nil
     resetPosition = nil
@@ -215,6 +227,19 @@ final class MobilePlaybackModel {
     if let loadingPosition { return loadingPosition }
     return Position(shouldPlay: !isPaused,
              date: followsLive && !isPaused ? nil : player.currentItem?.currentDate())
+  }
+
+  private func refreshStreamMetadata() {
+    guard isActive else { return }
+    metadataTask?.cancel()
+    let login = channel
+    let loadMetadata = loadMetadata
+    metadataTask = Task { [weak self] in
+      let metadata = await loadMetadata(login)
+      guard let self, self.isActive, self.channel == login, !Task.isCancelled else { return }
+      self.streamStartedAt = metadata?.streamStartedAt
+      if metadata == nil { Self.logger.warning("Mobile stream metadata unavailable") }
+    }
   }
 
   private func prepareAudioSession() -> Bool {

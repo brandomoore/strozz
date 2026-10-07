@@ -785,6 +785,8 @@ extension PlayerView {
   func handleReturnToForeground() {
     guard let leftAt = backgroundedAt else { return }
     backgroundedAt = nil
+    model.channelMetadataTask?.cancel()
+    model.channelMetadataTask = Task { await refreshChannelMetadata() }
     resetPlaybackHealth()
     let backgroundDuration = Date().timeIntervalSince(leftAt)
     let restoreLive = model.endPlaybackAbsence(
@@ -1624,10 +1626,12 @@ extension PlayerView {
       recordPlaybackEvent("channel_metadata_unavailable", level: .warning)
       channelDisplayName = login
       channelAvatarURL = nil
+      model.channelStreamStartedAt = nil
       return
     }
     channelDisplayName = metadata.displayName
     channelAvatarURL = metadata.profileImageURL
+    model.channelStreamStartedAt = metadata.streamStartedAt
     // VOD mode keeps the broadcast's own title; only the live player adopts the
     // channel's current stream title here.
     if !isVOD {
