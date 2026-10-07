@@ -1,0 +1,6 @@
+// Copy to Signing.xcconfig.local when automatic tvOS development provisioning
+// cannot select the app's explicit App Group profiles. Install both profiles
+// first and use their names below. This does not affect Release or simulators.
+STROZZ_TVOS_DEBUG_SIGNING_STYLE = Manual
+STROZZ_TVOS_DEBUG_APP_PROFILE = Your tvOS App Development Profile
+STROZZ_TVOS_DEBUG_TOPSHELF_PROFILE = Your tvOS Top Shelf Development Profile

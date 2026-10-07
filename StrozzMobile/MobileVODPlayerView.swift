@@ -57,7 +57,7 @@ struct MobileVODPlayerView: View {
       player.currentItem?.cancelPendingSeeks()
       player.replaceCurrentItem(with: nil)
       do { try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
-      catch { Logger(subsystem: "com.thatcube.Twozz", category: "mobile-vod").error("Could not release audio session: \(error.localizedDescription, privacy: .public)") }
+      catch { Logger(subsystem: "com.thatcube.Strozz", category: "mobile-vod").error("Could not release audio session: \(error.localizedDescription, privacy: .public)") }
     }
   }
 

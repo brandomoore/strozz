@@ -4,6 +4,12 @@ import XCTest
 
 @MainActor
 final class MobilePlaybackTests: XCTestCase {
+  func testReplacementMobileAppUsesTheNewIdentityAndStorage() {
+    XCTAssertEqual(Bundle.main.bundleIdentifier, "com.thatcube.Strozz")
+    XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, "Strozz")
+    XCTAssertEqual(TopShelf.appGroupID, "group.com.thatcube.Strozz")
+  }
+
   func testResponsiveLayouts() {
     XCTAssertEqual(MobilePlayerLayout.resolve(size: CGSize(width: 390, height: 780), isPhone: true, hideChat: false), .portrait)
     XCTAssertEqual(MobilePlayerLayout.resolve(size: CGSize(width: 780, height: 390), isPhone: true, hideChat: false, phoneLandscape: true), .videoOnly)

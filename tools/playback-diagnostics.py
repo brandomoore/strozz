@@ -20,7 +20,7 @@ from typing import Any, Iterable
 
 SCHEMA_VERSION = 1
 TOOL_SCHEMA_VERSION = 1
-DEFAULT_BUNDLE = "com.thatcube.Twozz"
+DEFAULT_BUNDLE = "com.thatcube.Strozz"
 REMOTE_SOURCE = "Library/Caches/PlaybackDiagnostics"
 KINDS = {"event", "sample", "summary", "access_log", "error_log"}
 LEVELS = {"debug", "info", "warning", "error"}

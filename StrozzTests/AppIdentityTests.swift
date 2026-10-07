@@ -4,11 +4,12 @@ import SwiftUI
 
 @MainActor
 final class AppIdentityTests: XCTestCase {
-  func testRenamedAppKeepsItsShippingIdentity() {
-    XCTAssertEqual(Bundle.main.bundleIdentifier, "com.thatcube.Twozz")
+  func testReplacementAppUsesItsOwnIdentityAndStorage() {
+    XCTAssertEqual(Bundle.main.bundleIdentifier, "com.thatcube.Strozz")
     XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String, "Strozz")
     XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, "Strozz")
-    XCTAssertEqual(TopShelf.appGroupID, "group.com.thatcube.Twozz")
+    XCTAssertEqual(TopShelf.appGroupID, "group.com.thatcube.Strozz")
+    XCTAssertEqual(TwitchWatchRewardsStore.keychainService, "com.thatcube.Strozz.watch-rewards")
   }
 
   func testNewLinksUseStrozzAndLegacyLinksStillOpen() throws {

@@ -17,7 +17,7 @@
 require "shellwords"
 require File.expand_path("../tools/lib/apple_build_lease", __dir__)
 
-APP_IDENTIFIER = "com.thatcube.Twozz"
+APP_IDENTIFIER = "com.thatcube.Strozz"
 SCHEME         = "Strozz"
 XCODEPROJ      = "Strozz.xcodeproj"
 OUTPUT_DIR     = "build"

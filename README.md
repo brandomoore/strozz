@@ -212,8 +212,9 @@ connect anonymously, run muted, and never send chat messages. Set
 the test requires native playback rather than treating a compatibility fallback
 as a native success.
 
-Both platform targets retain `com.thatcube.Twozz` so iOS can join the existing
-Strozz App Store Connect record. Credentials are local to each device; signing
+Both platform targets use `com.thatcube.Strozz` in the new universal App Store
+Connect record. This is a separate app from the legacy `com.thatcube.Twozz`
+installation, not an in-place update. Credentials are local to each device; signing
 in on the TV does not sign in the phone. The existing Fastlane lanes still ship
 **tvOS only**. Adding this target does not upload or distribute an iOS build.
 
@@ -226,14 +227,31 @@ the low-latency playback work are in
 
 ### Brand assets
 
-Strozz is the new name of this app. The Xcode project, scheme, source module,
-assets, and repository use Strozz. Apple bundle IDs, the shared App Group, and the
-watch-rewards Keychain service intentionally retain their existing `Twozz`
-identifiers: changing those would create a different app or discard access to
-saved sign-ins. New channel links use `strozz://`; existing `twozz://` and
-`twizz://` links still open. Shared build/cleanup protocol identifiers also stay
+Strozz now has its own Apple app identity: `com.thatcube.Strozz`, with
+`com.thatcube.Strozz.TopShelfExtension`, App Group `group.com.thatcube.Strozz`,
+and Keychain service `com.thatcube.Strozz.watch-rewards`. The new universal
+App Store Connect record is `6819913170`; the legacy `com.thatcube.Twozz`
+record (`6782643545`, now named **Strozz Old**) and its installed data remain
+untouched.
+
+This is a clean replacement installation. Testers install the new TestFlight
+app and sign in again; local preferences, history, and saved sessions are not
+automatically imported. Separate storage prevents signing out of the new app
+from deleting the old app's credentials. Twitch-side follows, points, and
+streaks remain attached to the Twitch account. iCloud sign-in sync is a separate
+feature and is not enabled merely by changing the bundle ID.
+
+The Xcode project, scheme, source module, assets, and repository use Strozz.
+Channel links use `strozz://`; the parser also recognizes legacy `twozz://` and
+`twizz://` links. With both apps installed, custom-scheme routing can be ambiguous;
+use the intended app's own navigation until switching fully to the replacement.
+Shared build/cleanup protocol identifiers also stay
 unchanged for interoperability. Historical Git branches and commits are not
 renamed or rewritten.
+
+The diagnostics CLI defaults to the new app. To inspect a still-installed
+legacy build, explicitly pass `--bundle com.thatcube.Twozz`. Keep historical
+release archives and receipts associated with their original bundle ID.
 
 `Branding/strozz_logo.svg` is the canonical Strozz mark. The in-app SVG and
 transparent splash artwork use it unchanged; the layered tvOS icons and static

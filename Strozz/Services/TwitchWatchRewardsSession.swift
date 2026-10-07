@@ -157,6 +157,7 @@ final class TwitchWatchRewardsSession {
 /// A separate, non-synchronizing Keychain item; never shared with Top Shelf or UserDefaults.
 @MainActor
 struct TwitchWatchRewardsStore {
+  static let keychainService = "com.thatcube.Strozz.watch-rewards"
   let read: () throws -> Data?
   let write: (Data) throws -> Void
   let remove: () throws -> Void
@@ -201,8 +202,7 @@ struct TwitchWatchRewardsStore {
   private static var keychainQuery: [CFString: Any] {
     [
       kSecClass: kSecClassGenericPassword,
-      // The shipping service name must survive app rebrands to retain pairing.
-      kSecAttrService: "com.thatcube.Twozz.watch-rewards",
+      kSecAttrService: keychainService,
       kSecAttrAccount: "twitch-session",
       kSecAttrSynchronizable: false,
     ]

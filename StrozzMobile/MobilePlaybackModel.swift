@@ -54,7 +54,7 @@ final class MobilePlaybackModel {
   @ObservationIgnored private var nativeRecovery = NativePlaybackRecovery()
   @ObservationIgnored private let muteForTesting: Bool
   @ObservationIgnored private let resolve: (String) async throws -> StreamPlayback
-  private static let logger = Logger(subsystem: "com.thatcube.Twozz", category: "mobile-playback")
+  private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "mobile-playback")
 
   struct Position {
     var shouldPlay: Bool

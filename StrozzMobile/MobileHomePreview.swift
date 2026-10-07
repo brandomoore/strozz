@@ -32,7 +32,7 @@ final class MobileHomePreview {
   @ObservationIgnored private var generation = UUID()
   @ObservationIgnored private var task: Task<Void, Never>?
   @ObservationIgnored private let resolve: (String) async throws -> URL
-  private static let logger = Logger(subsystem: "com.thatcube.Twozz", category: "home-preview")
+  private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "home-preview")
 
   init(resolve: @escaping (String) async throws -> URL = { try await PlaybackService.previewHLSURL(for: $0) }) {
     self.resolve = resolve

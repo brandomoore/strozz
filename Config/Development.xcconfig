@@ -1,0 +1,8 @@
+#include "App.xcconfig"
+
+// Optional local overrides for explicit tvOS development profiles.
+// Release and simulator signing remain automatic.
+STROZZ_TVOS_DEBUG_SIGNING_STYLE = Automatic
+STROZZ_TVOS_DEBUG_APP_PROFILE =
+STROZZ_TVOS_DEBUG_TOPSHELF_PROFILE =
+#include? "Signing.xcconfig.local"

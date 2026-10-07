@@ -172,7 +172,7 @@ actor NativeHLSOrigin {
   private var reportTask: Task<[Int: Int], Never>?
   private var inFlightRequests = 0
   private var requestDrainWaiters: [CheckedContinuation<Void, Never>] = []
-  private static let logger = Logger(subsystem: "com.thatcube.Twozz", category: "native-hls")
+  private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "native-hls")
 
   init(root: URL, headers: [String: String], history: Double,
        failure: @escaping @Sendable (NativeHLSError) -> Void) {
