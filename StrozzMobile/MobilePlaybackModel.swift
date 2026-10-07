@@ -196,8 +196,12 @@ final class MobilePlaybackModel {
   }
 
   func resume() {
-    guard isActive, let position = suspendedPosition else { return }
+    guard isActive, let suspended = suspendedPosition else { return }
+    // Returning is an opportunity to reactivate even if the OS never ended
+    // its suspension interruption. Preserve any newer explicit pause intent.
+    let position = interruptedPosition ?? suspended
     suspendedPosition = nil
+    interruptedPosition = nil
     chat.connect(to: channel)
     refreshStreamMetadata()
     load(position: position)

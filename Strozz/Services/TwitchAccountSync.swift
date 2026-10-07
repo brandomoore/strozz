@@ -11,6 +11,7 @@ final class TwitchAccountSync {
   private(set) var errorMessage: String?
   private(set) var isSignedOutLocally: Bool
   private(set) var hasAccountConflict = false
+  private(set) var hasCompletedInitialSync = false
   @ObservationIgnored private let database: any TwitchCloudDatabase
   @ObservationIgnored private let defaults: UserDefaults
   @ObservationIgnored private weak var auth: TwitchAuthSession?
@@ -18,39 +19,47 @@ final class TwitchAccountSync {
   @ObservationIgnored private var rewardsDirty = false
   @ObservationIgnored private var rewardChange: TwitchRewardsChange?
   @ObservationIgnored private var loop: Task<Void, Never>?
+  @ObservationIgnored private var initialSync: Task<Void, Never>?
   @ObservationIgnored private var accountObserver: NSObjectProtocol?
-  private static let pendingService = "com.thatcube.Strozz.pending-token-publication"
-  private static let rewardsChangeService = "com.thatcube.Strozz.pending-rewards-change"
+  @ObservationIgnored private let pendingService: String
+  @ObservationIgnored private let rewardsChangeService: String
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "account-sync")
 
-  init(database: any TwitchCloudDatabase = CloudKitTwitchDatabase(), defaults: UserDefaults = .standard) {
+  init(database: any TwitchCloudDatabase = CloudKitTwitchDatabase(), defaults: UserDefaults = .standard,
+       storagePrefix: String = "com.thatcube.Strozz") {
     self.database = database
     self.defaults = defaults
+    pendingService = "\(storagePrefix).pending-token-publication"
+    rewardsChangeService = "\(storagePrefix).pending-rewards-change"
     isSignedOutLocally = defaults.bool(forKey: PersistenceKey.icloudAccountSignedOut)
     do {
-      if let data = try CredentialKeychain.read(service: Self.rewardsChangeService) {
+      if let data = try CredentialKeychain.read(service: rewardsChangeService) {
         rewardChange = try JSONDecoder().decode(TwitchRewardsChange.self, from: data)
         rewardsDirty = true
       }
     } catch { report(error) }
   }
 
-  func start(auth: TwitchAuthSession, rewards: TwitchWatchRewardsSession) {
+  func start(auth: TwitchAuthSession, rewards: TwitchWatchRewardsSession) async {
+    if let initialSync {
+      await initialSync.value
+      return
+    }
     self.auth = auth
     self.rewards = rewards
     auth.cloudSync = self
+    auth.restore()
     rewards.onCredentialChange = { [weak self] in
       guard let self, let userID = self.auth?.userID else { return }
       let change = TwitchRewardsChange(owner: self.auth?.credentialCloudOwner, userID: userID,
                                       credential: self.rewards?.credential)
       do {
-        try CredentialKeychain.write(JSONEncoder().encode(change), service: Self.rewardsChangeService)
+        try CredentialKeychain.write(JSONEncoder().encode(change), service: self.rewardsChangeService)
         self.rewardChange = change
         self.rewardsDirty = true
         Task { await self.synchronize() }
       } catch { self.report(error) }
     }
-    guard loop == nil else { return }
     accountObserver = NotificationCenter.default.addObserver(forName: .CKAccountChanged, object: nil, queue: .main) {
       [weak self] _ in
       Task { @MainActor in
@@ -61,12 +70,51 @@ final class TwitchAccountSync {
         await self.synchronize()
       }
     }
+    let startup = Task { [weak self] in
+      guard let self else { return }
+      await self.synchronize()
+      guard !Task.isCancelled else { return }
+      self.hasCompletedInitialSync = true
+      auth.startSessionValidation()
+    }
+    initialSync = startup
+    await startup.value
+    guard !startup.isCancelled, loop == nil else { return }
     loop = Task { [weak self] in
       while !Task.isCancelled {
-        await self?.synchronize()
         do { try await Task.sleep(for: .seconds(30)) } catch { return }
+        await self?.synchronize()
       }
     }
+  }
+
+  var shouldOfferInitialSignIn: Bool {
+    hasCompletedInitialSync && !isBusy && !isSignedOutLocally
+      && errorMessage == nil && !hasAccountConflict && auth?.isAuthenticated == false
+  }
+
+  /// A user-selected Sign in first adopts a saved connection. Automatic sync
+  /// never clears the local sign-out choice or replaces a different account.
+  func restoreBeforeSignIn() async -> Bool {
+    if let initialSync { await initialSync.value }
+    guard !Task.isCancelled else { return false }
+    if auth?.isAuthenticated == true { return false }
+    guard !isBusy, auth != nil else { report(TwitchSyncError.busy); return false }
+    isSignedOutLocally = false
+    defaults.set(false, forKey: PersistenceKey.icloudAccountSignedOut)
+    await synchronize()
+    return !Task.isCancelled && auth?.isAuthenticated == false
+      && errorMessage == nil && !hasAccountConflict
+  }
+
+  func stop() {
+    initialSync?.cancel()
+    loop?.cancel()
+    initialSync = nil
+    loop = nil
+    if let accountObserver { NotificationCenter.default.removeObserver(accountObserver) }
+    accountObserver = nil
+    hasCompletedInitialSync = false
   }
 
   func signedOutLocally() {
@@ -123,7 +171,7 @@ final class TwitchAccountSync {
       _ = try await database.save(account, replacing: snapshot)
       try check(generation)
       try auth.useCredential(shared)
-      try CredentialKeychain.remove(service: Self.pendingService)
+      try CredentialKeychain.remove(service: pendingService)
       clearRewardChange()
       succeeded()
     } catch is CancellationError {
@@ -149,7 +197,7 @@ final class TwitchAccountSync {
         if var local = auth.storedCredential {
           guard local.cloudOwner == nil else {
             auth.isAuthenticated = false
-            try TopShelfCredentialStore.save(nil)
+            try auth.saveTopShelf(nil)
             throw TwitchSyncError.invalidAccount
           }
           local.cloudOwner = owner
@@ -250,30 +298,30 @@ final class TwitchAccountSync {
     // A second device must never guess that the single-use token is unspent.
     let fresh = try await auth.refreshSyncedCredential(previous)
     let pending = TwitchPendingPublication(owner: reserved.account.owner, refreshID: id, credential: fresh)
-    try CredentialKeychain.write(JSONEncoder().encode(pending), service: Self.pendingService)
+    try CredentialKeychain.write(JSONEncoder().encode(pending), service: pendingService)
     guard try await database.owner() == pending.owner else { throw TwitchSyncError.accountChanged }
     let latest = try await database.fetch(owner: pending.owner)
     guard let latest else { throw TwitchSyncError.conflict }
     _ = try await database.save(TwitchCloudRefresh.publication(pending, into: latest), replacing: latest)
-    try CredentialKeychain.remove(service: Self.pendingService)
+    try CredentialKeychain.remove(service: pendingService)
     try check(generation)
     return fresh
   }
 
   private func finishPending(owner: String) async throws -> TwitchCloudSnapshot? {
     let snapshot = try await database.fetch(owner: owner)
-    guard let data = try CredentialKeychain.read(service: Self.pendingService) else { return snapshot }
+    guard let data = try CredentialKeychain.read(service: pendingService) else { return snapshot }
     let pending = try JSONDecoder().decode(TwitchPendingPublication.self, from: data)
     guard pending.owner == owner else {
-      try CredentialKeychain.remove(service: Self.pendingService)
+      try CredentialKeychain.remove(service: pendingService)
       throw TwitchSyncError.accountChanged
     }
     guard let snapshot, snapshot.account.refreshID == pending.refreshID else {
-      try CredentialKeychain.remove(service: Self.pendingService)
+      try CredentialKeychain.remove(service: pendingService)
       return snapshot
     }
     let saved = try await database.save(TwitchCloudRefresh.publication(pending, into: snapshot), replacing: snapshot)
-    try CredentialKeychain.remove(service: Self.pendingService)
+    try CredentialKeychain.remove(service: pendingService)
     return saved
   }
 
@@ -290,9 +338,9 @@ final class TwitchAccountSync {
       _ = try await database.save(.init(owner: owner), replacing: snapshot)
       try Task.checkCancellation()
       guard auth.sessionGeneration == generation else { throw CancellationError() }
-      try CredentialKeychain.remove(service: Self.pendingService)
+      try CredentialKeychain.remove(service: pendingService)
       auth.signOut()
-      status = "Signed out on all synced devices"
+      status = "Signed out everywhere"
     } catch { report(error) }
   }
 
@@ -309,7 +357,7 @@ final class TwitchAccountSync {
 
   private func clearRewardChange() {
     do {
-      try CredentialKeychain.remove(service: Self.rewardsChangeService)
+      try CredentialKeychain.remove(service: rewardsChangeService)
       rewardsDirty = false
       rewardChange = nil
     } catch { report(error) }

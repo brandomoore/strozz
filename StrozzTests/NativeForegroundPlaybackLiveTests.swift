@@ -28,6 +28,7 @@ final class NativeForegroundPlaybackLiveTests: XCTestCase {
     defer {
       window.rootViewController = previous
       model.nativeRefreshTask?.cancel()
+      model.channelMetadataTask?.cancel()
       view.cancelNativeStartup()
       view.stopLatencyMonitor()
       view.stopPlaybackWatchdog()
@@ -40,11 +41,17 @@ final class NativeForegroundPlaybackLiveTests: XCTestCase {
     XCTAssertEqual(AVAudioSession.sharedInstance().mode, .moviePlayback)
     let firstPlayer = model.player
     let firstSurface = try XCTUnwrap(videoController(in: host))
+    model.backgroundedAt = Date().addingTimeInterval(-600)
     view.suspendNativePlayback(reason: "foreground_probe")
-    view.refreshNativeAfterSuspension()
+    view.handleAudioInterruption(Notification(name: AVAudioSession.interruptionNotification, userInfo: [
+      AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue,
+    ]))
+    XCTAssertTrue(model.audioInterrupted)
+    view.handleReturnToForeground()
     await model.nativeRefreshTask?.value
     try await waitForPlayback(model)
     XCTAssertFalse(model.player === firstPlayer)
+    XCTAssertFalse(model.audioInterrupted, "No interruption-ended notification arrives in this regression")
     XCTAssertNil(firstPlayer.currentItem)
     XCTAssertEqual(firstPlayer.rate, 0)
     XCTAssertTrue(model.player.isMuted, "A player replacement must not unmute the simulator")

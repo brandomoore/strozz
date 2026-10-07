@@ -249,10 +249,14 @@ between devices using the same Apple Account. The existing Fastlane lanes still 
 
 Sign in once in the new Strozz app, then open Strozz on another iPhone, iPad, or
 Apple TV using the same Apple Account. The connection is fetched on launch and
-checked periodically while the app is running. **Account > Use iCloud connection**
-reconnects a device you deliberately signed out of. Different Twitch accounts
-on the same Apple Account require an explicit choice; Strozz does not silently
-overwrite one with the other.
+checked periodically while the app is running. Startup restores local state and
+finishes the first iCloud check before offering a new Twitch approval, so the
+sign-in screen cannot race and block automatic restoration. **Sign in** also
+checks for a saved connection first; there is no separate routine "Use iCloud
+connection" step. If iCloud is unavailable, an explicit **Sign in with Twitch
+instead** action still allows local sign-in. Different Twitch accounts on the
+same Apple Account require an explicit choice; Strozz does not silently overwrite
+one with the other.
 
 **Connect rewards** requires a separate Twitch approval for the same Twitch
 account. On iPhone/iPad it opens Twitch's prefilled approval link directly and
@@ -264,9 +268,11 @@ about credit. Preview, paused and background time do not count.
 Tokens are cached in device Keychain, with only the access token shared with
 Top Shelf. Cloud copies use `CKRecord.encryptedValues` in the private
 `iCloud.com.thatcube.Strozz` database; no credential fields have public-database
-permissions. Signing out **this device** does not disconnect the others.
-**Manage connected account > Sign out all synced devices** requires confirmation
-and writes a cloud sign-out marker that other devices observe when connected.
+permissions. **Sign out** affects only this device and suppresses automatic
+restoration until the viewer chooses **Sign in** again. **Sign out everywhere**
+requires confirmation and writes a cloud sign-out marker that the other devices
+observe when connected. It signs out Strozz's synced connections, not unrelated
+Twitch apps or browser sessions.
 
 Twitch's device-flow refresh tokens are single-use. A conditional cloud record
 update reserves renewal before contacting Twitch, and a rotated pair is saved

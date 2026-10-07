@@ -134,6 +134,7 @@ targets:
       - path: StrozzTests/PlaybackPresentationStateTests.swift
       - path: StrozzTests/NativeRenditionReportTests.swift
       - path: StrozzTests/BroadcastUptimeTests.swift
+      - path: StrozzTests/TwitchAutomaticSignInTests.swift
     dependencies:
       - target: StrozzMobile
     settings:

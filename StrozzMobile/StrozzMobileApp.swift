@@ -25,9 +25,7 @@ struct StrozzMobileApp: App {
         .environment(accountSync)
         .preferredColorScheme(theme.theme.preferredColorScheme)
         .task {
-          auth.restore()
-          accountSync.start(auth: auth, rewards: rewards)
-          auth.startSessionValidation()
+          await accountSync.start(auth: auth, rewards: rewards)
         }
         .onChange(of: auth.userID) { _, userID in rewards.accountChanged(to: userID) }
         #if DEBUG

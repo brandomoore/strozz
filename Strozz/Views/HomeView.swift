@@ -300,8 +300,8 @@ struct HomeView: View {
     }
     .animation(.motionAware(.easeOut(duration: 0.25), reduceMotion: reduceMotion), value: goLive.pending)
     .task {
-      auth.restore()
-      auth.startSessionValidation()
+      await environment.accountSync.start(auth: auth, rewards: environment.watchRewards)
+      guard !Task.isCancelled else { return }
       youtubeAuth.restore()
       goLive.start(using: auth)
       promptFirstLaunchSignInIfNeeded()
@@ -320,6 +320,7 @@ struct HomeView: View {
       isForeground = phase == .active
       guard phase == .active else { return }
       Task {
+        await environment.accountSync.synchronize()
         await auth.validateSessionIfNeeded()
       }
       // Returning to the app — even a day later — must not leave stale cards on
@@ -652,10 +653,12 @@ struct HomeView: View {
   /// or the Home banner).
   private func promptFirstLaunchSignInIfNeeded() {
     let defaults = UserDefaults.standard
+    guard environment.accountSync.hasCompletedInitialSync else { return }
+    guard auth.isAuthenticated || environment.accountSync.shouldOfferInitialSignIn else { return }
     guard !defaults.bool(forKey: firstLaunchSignInPromptKey) else { return }
     defaults.set(true, forKey: firstLaunchSignInPromptKey)
 
-    guard !auth.isAuthenticated else { return }
+    guard environment.accountSync.shouldOfferInitialSignIn else { return }
     showSignIn = true
   }
 

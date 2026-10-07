@@ -11,13 +11,13 @@ extension TwitchAuthSession {
   }
 
   func readSecureCredential() throws -> TwitchCredential? {
-    guard let data = try CredentialKeychain.read(service: Self.credentialService) else { return nil }
+    guard let data = try CredentialKeychain.read(service: secureService) else { return nil }
     return try JSONDecoder().decode(TwitchCredential.self, from: data)
   }
 
   func persistCredential(_ credential: TwitchCredential) throws {
-    try CredentialKeychain.write(JSONEncoder().encode(credential), service: Self.credentialService)
-    try TopShelfCredentialStore.save(.init(clientID: credential.clientID, accessToken: credential.accessToken,
+    try CredentialKeychain.write(JSONEncoder().encode(credential), service: secureService)
+    try saveTopShelf(.init(clientID: credential.clientID, accessToken: credential.accessToken,
                                          userID: credential.userID))
     removeLegacyCredentials()
   }
@@ -38,15 +38,16 @@ extension TwitchAuthSession {
 
   func removeSecureCredentials() {
     do {
-      try CredentialKeychain.remove(service: Self.credentialService)
-      try TopShelfCredentialStore.save(nil)
+      try CredentialKeychain.remove(service: secureService)
+      try saveTopShelf(nil)
       removeLegacyCredentials()
     } catch { errorMessage = error.localizedDescription }
     credentialCloudOwner = nil
   }
 
   private func removeLegacyCredentials() {
-    for defaults in [userDefaults, UserDefaults.standard] {
+    let stores = secureService == Self.credentialService ? [userDefaults, UserDefaults.standard] : [userDefaults]
+    for defaults in stores {
       for key in [StorageKey.accessToken, StorageKey.refreshToken, StorageKey.userID, StorageKey.clientID,
                   StorageKey.userLogin, StorageKey.userDisplayName, StorageKey.profileImageURL, StorageKey.lastValidatedAt] {
         defaults.removeObject(forKey: key)

@@ -124,6 +124,9 @@ final class MobileLivePlaybackTests: XCTestCase {
     let pausedDate = try XCTUnwrap(model.player.currentItem?.currentDate())
     model.suspend()
     XCTAssertNil(model.player.currentItem)
+    model.handleAudioInterruption(Notification(name: AVAudioSession.interruptionNotification, userInfo: [
+      AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue,
+    ]))
     model.resume()
     try await waitForPlayback(model, shouldPlay: false)
     XCTAssertFalse(model.player === pausedPlayer)

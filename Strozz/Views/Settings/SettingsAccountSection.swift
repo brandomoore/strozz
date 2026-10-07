@@ -35,7 +35,7 @@ struct SettingsAccountSection: View {
 
           Spacer(minLength: 24)
 
-          Button("Sign out this device", role: .destructive) {
+          Button("Sign out", role: .destructive) {
             showSignOutConfirm = true
           }
           .font(.headline)
@@ -51,7 +51,7 @@ struct SettingsAccountSection: View {
           isPresented: $showSignOutConfirm,
           titleVisibility: .visible
         ) {
-          Button("Sign out this device", role: .destructive) {
+          Button("Sign out", role: .destructive) {
             auth.signOut()
             onAccountChanged()
           }

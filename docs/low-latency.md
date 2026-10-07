@@ -129,6 +129,14 @@ reconfigured audio, fresh AVKit ownership, and paused restoration. It remains
 muted: it verifies recovery mechanics, not audible output through physical
 Bluetooth hardware.
 
+A later physical return exposed an unmatched audio interruption: tvOS sent
+`interruption began` after backgrounding but never sent `ended`. The stale flag
+blocked foreground restoration indefinitely despite the viewer never pausing.
+On a real background-to-active transition, TV and mobile now recheck audio
+activation instead of waiting forever for that missing notification. Explicit
+pause intent remains intact, and failed activation surfaces an error. Ordinary
+interruptions while already foregrounded still honor their resume permission.
+
 The same live-playback recovery contract also applies on iPhone/iPad.
 `PlaybackAudioSession` and `PlaybackPositionRestoration` are compiled into both
 targets instead of maintaining separate setup and date-seek implementations.

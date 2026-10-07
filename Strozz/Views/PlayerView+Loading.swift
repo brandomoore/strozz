@@ -785,6 +785,12 @@ extension PlayerView {
   func handleReturnToForeground() {
     guard let leftAt = backgroundedAt else { return }
     backgroundedAt = nil
+    // Interruption-ended notifications may be lost across suspension. A fresh
+    // activation will either restore audio or surface an error; user pause stays intact.
+    if model.audioInterrupted {
+      model.audioInterrupted = false
+      recordPlaybackEvent("audio_interruption_rechecked_on_foreground")
+    }
     model.channelMetadataTask?.cancel()
     model.channelMetadataTask = Task { await refreshChannelMetadata() }
     resetPlaybackHealth()
