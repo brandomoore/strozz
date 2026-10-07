@@ -93,6 +93,10 @@ extension PlayerView {
     snapshot.metrics["player_rate"] = Double(player.rate)
     snapshot.metrics["player_volume"] = Double(player.volume)
     snapshot.flags["player_muted"] = player.isMuted
+    snapshot.flags["audio_interrupted"] = model.audioInterrupted
+    snapshot.flags["audio_session_activation_failed"] = model.audioSessionActivationFailed
+    snapshot.flags["media_services_unavailable"] = model.mediaServicesUnavailable
+    snapshot.flags["media_services_reset_pending"] = model.mediaServicesResetPending
     snapshot.flags["external_playback_active"] = player.isExternalPlaybackActive
     let audioSession = AVAudioSession.sharedInstance()
     snapshot.attributes["audio_session_category"] = audioSession.category.rawValue
@@ -312,6 +316,7 @@ extension PlayerView {
   }
 
   func replacePlaybackItem(with item: AVPlayerItem?) {
+    if item == nil { model.mediaServicesResetPending = false }
     if item !== player.currentItem {
       cancelNativeStartup()
       model.nativeStartupComplete = (item?.asset as? AVURLAsset)?.url.scheme != NativeLowLatencyHLS.scheme

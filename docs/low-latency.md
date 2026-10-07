@@ -104,6 +104,31 @@ Device/port names and identifiers are not recorded. The foreground regression
 probe remains muted and verifies new player/controller ownership, enabled audio
 tracks, decoded video, and preservation of a paused position.
 
+A later xQc startup on the physical TV failed with
+`AVFoundationErrorDomain/-11819` (`mediaServicesWereReset`). Video resumed after
+player replacement, but the audio session still reported `SoloAmbient/default`
+on a Bluetooth output. An enabled audio track and advancing video did not prove
+audible recovery. The logs identify the system reset, not what caused it.
+
+The TV player now configures and activates a `playback/moviePlayback` audio
+session before starting or resuming, including after a fresh foreground owner.
+Foreground recovery waits for the app to become active. Media-service loss
+pauses playback until reset; reset recreates the player and item even if their
+status has not yet failed, coalesces with a pending native source refresh, and
+does not spend the native source-failure retry budget. Interruption handling
+honors the system's resume permission and the viewer's pause/scrub/background
+intent.
+Activation failures stop playback and present an error rather than leaving
+silent video presented as healthy. Route changes and audio-session lifecycle
+events are recorded without device names or identifiers.
+
+Paused date restoration corrects a nearby-keyframe landing against the new
+item's date/time mapping with a bounded precise seek. Live simulator coverage
+checks startup, foreground replacement, media-loss/reset notification delivery,
+reconfigured audio, fresh AVKit ownership, and paused restoration. It remains
+muted: it verifies recovery mechanics, not audible output through physical
+Bluetooth hardware.
+
 ### Whole-segment sources and native quality selection
 
 The physical AustinShow capture on build 1920 started about 20 seconds behind

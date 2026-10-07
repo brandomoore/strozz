@@ -97,6 +97,7 @@ private struct BrowseCategoriesView: View {
       .padding(.horizontal, AppLayout.horizontalPadding)
       .padding(.bottom, 12)
     }
+    .scrollClipDisabled()
   }
 }
 
@@ -111,7 +112,7 @@ struct CategoryStreamsView: View {
   @Binding var channelPageTarget: ChannelPageTarget?
   @Environment(PlaybackReturnRefreshCoordinator.self) private var playbackReturnRefresh
 
-  @State private var service = BrowseService()
+  @State private var service: BrowseService
   @FocusState private var focusedStreamID: String?
 
   @AppStorage(StreamCardSize.storageKey) private var streamCardSizeRaw = StreamCardSize.fallback.rawValue
@@ -127,6 +128,18 @@ struct CategoryStreamsView: View {
     )
   }
   private let gridBottomInset: CGFloat = 12
+
+  init(
+    category: TwitchCategory,
+    selectedChannel: Binding<FollowedChannel?>,
+    channelPageTarget: Binding<ChannelPageTarget?>,
+    service: BrowseService = BrowseService()
+  ) {
+    self.category = category
+    self._selectedChannel = selectedChannel
+    self._channelPageTarget = channelPageTarget
+    self._service = State(initialValue: service)
+  }
 
   private func preparePlaybackReturn() {
     playbackReturnRefresh.prepareOrigin {
@@ -218,6 +231,7 @@ struct CategoryStreamsView: View {
         .padding(.top, 8)
         .padding(.bottom, gridBottomInset)
       }
+      .scrollClipDisabled()
     }
     .padding(.top, 8)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

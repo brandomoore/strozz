@@ -40,6 +40,11 @@ final class PlayerModel {
   // MARK: Playback
 
   var player = AVPlayer()
+  @ObservationIgnored var activateAudioSession: @MainActor () throws -> Void = PlaybackAudioSession.activate
+  @ObservationIgnored var audioSessionActivationFailed = false
+  @ObservationIgnored var audioInterrupted = false
+  @ObservationIgnored var mediaServicesUnavailable = false
+  @ObservationIgnored var mediaServicesResetPending = false
 
   /// Drives the audio-only visualizer orb. Reacts to real audio when the player
   /// item exposes a tappable audio track (best effort on live HLS), otherwise
@@ -122,6 +127,7 @@ final class PlayerModel {
     isLoading = true
     errorMessage = nil
     isOffline = false
+    audioSessionActivationFailed = false
   }
 
   /// Presentation follows native playback immediately; rate/stability controls
