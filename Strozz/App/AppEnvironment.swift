@@ -23,6 +23,7 @@ final class AppEnvironment {
   /// Twitch account / OAuth session.
   let auth = TwitchAuthSession()
   let watchRewards = TwitchWatchRewardsSession()
+  let accountSync = TwitchAccountSync()
   /// The viewer's followed channels (live + offline) and their liveness.
   let follows = FollowedChannelsService()
   /// Anonymous "popular / top streams" recommendations and categories.

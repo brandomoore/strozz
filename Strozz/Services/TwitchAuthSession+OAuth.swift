@@ -27,8 +27,9 @@ extension TwitchAuthSession {
         let task = Task { () throws -> String in
             try await performTokenRefresh(rejectedAccessToken: rejectedAccessToken)
         }
+        let generation = sessionGeneration
         refreshInFlight = task
-        defer { refreshInFlight = nil }
+        defer { if sessionGeneration == generation { refreshInFlight = nil } }
         return try await task.value
     }
 
@@ -40,7 +41,12 @@ extension TwitchAuthSession {
         // Always start from the persisted source of truth. If the token that
         // triggered a 401 has already been replaced, use the replacement instead
         // of spending another refresh token.
-        reloadTokensFromStore()
+        try reloadTokensFromStore()
+        if credentialCloudOwner != nil {
+            guard let cloudSync else { throw TwitchSyncError.unavailable }
+            return try await cloudSync.renew(rejectedAccessToken: rejectedAccessToken)
+        }
+        if cloudSync?.isBusy == true { throw TwitchSyncError.busy }
         if let rejectedAccessToken,
            let storedAccessToken = accessToken,
            storedAccessToken != rejectedAccessToken {
@@ -53,12 +59,13 @@ extension TwitchAuthSession {
         do {
             let token = try await requestRefreshToken(
                 clientID: clientID, refreshToken: currentRefreshToken)
-            return applyRefreshedTokens(token)
+            try Task.checkCancellation()
+            return try applyRefreshedTokens(token)
         } catch let error as TwitchAuthHTTPError where isInvalidRefreshError(error) {
             // A concurrent app request may have published a replacement while
             // this request was in flight. Reload once before declaring the
             // session dead.
-            reloadTokensFromStore()
+            try reloadTokensFromStore()
             if let rejectedAccessToken,
                let storedAccessToken = accessToken,
                storedAccessToken != rejectedAccessToken {
@@ -68,7 +75,8 @@ extension TwitchAuthSession {
                 do {
                     let token = try await requestRefreshToken(
                         clientID: clientID, refreshToken: reloaded)
-                    return applyRefreshedTokens(token)
+                    try Task.checkCancellation()
+                    return try applyRefreshedTokens(token)
                 } catch let retryError as TwitchAuthHTTPError
                     where isInvalidRefreshError(retryError) {
                     // Both tokens are genuinely invalid — fall through to sign-out.
@@ -82,38 +90,37 @@ extension TwitchAuthSession {
         }
     }
 
-    /// Persists a freshly-issued token pair to memory and the shared App Group
-    /// store (which the Top Shelf extension also reads), returning the new
-    /// access token.
+    /// Saves the pair in private Keychain storage and mirrors only the access
+    /// token into the shared Top Shelf Keychain item.
     @discardableResult
-    private func applyRefreshedTokens(_ token: DeviceTokenResponse) -> String {
-        accessToken = token.accessToken
-        userDefaults.set(token.accessToken, forKey: StorageKey.accessToken)
-
-        if let nextRefreshToken = token.refreshToken,
-           !nextRefreshToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            self.refreshToken = nextRefreshToken
-            userDefaults.set(nextRefreshToken, forKey: StorageKey.refreshToken)
-        }
-
+    private func applyRefreshedTokens(_ token: DeviceTokenResponse) throws -> String {
+        guard var credential = storedCredential else { throw TwitchAuthRefreshError.sessionExpired }
+        credential.accessToken = token.accessToken
+        if let next = token.refreshToken, !next.isEmpty { credential.refreshToken = next }
+        try useCredential(credential)
         return token.accessToken
     }
 
-    /// Pulls the latest persisted tokens from the shared App Group store before
+    /// Pulls the latest persisted tokens from Keychain before
     /// any refresh/recovery decision.
-    private func reloadTokensFromStore() {
-        accessToken = userDefaults.string(forKey: StorageKey.accessToken)
-        refreshToken = userDefaults.string(forKey: StorageKey.refreshToken)
+    private func reloadTokensFromStore() throws {
+        if let stored = try readSecureCredential() {
+            accessToken = stored.accessToken
+            refreshToken = stored.refreshToken
+            credentialCloudOwner = stored.cloudOwner
+        }
     }
 
     func startSessionValidation() {
         guard clientIDValidationIssue == nil,
+              isAuthenticated,
               accessToken != nil || refreshToken != nil else { return }
         startValidationLoop(validateImmediately: true)
     }
 
     func validateSessionIfNeeded(force: Bool = false) async {
         guard clientIDValidationIssue == nil,
+              isAuthenticated,
               let expectedClientID = clientID else { return }
 
         if !force,
@@ -123,6 +130,7 @@ extension TwitchAuthSession {
         }
 
         let currentAccessToken: String
+        let generation = sessionGeneration
         if let accessToken {
             currentAccessToken = accessToken
         } else {
@@ -135,12 +143,14 @@ extension TwitchAuthSession {
 
         do {
             let identity = try await requestValidatedIdentity(accessToken: currentAccessToken)
+            guard generation == sessionGeneration, accessToken == currentAccessToken else { return }
             applyValidatedIdentity(identity, expectedClientID: expectedClientID)
         } catch let error as TwitchAuthHTTPError where error.status == 401 {
             do {
                 let recovered = try await recoverAccessToken(
                     afterUnauthorized: currentAccessToken)
                 let identity = try await requestValidatedIdentity(accessToken: recovered)
+                guard generation == sessionGeneration, accessToken == recovered else { return }
                 applyValidatedIdentity(identity, expectedClientID: expectedClientID)
             } catch let refreshError as TwitchAuthRefreshError {
                 if case .missingRefreshToken = refreshError {
@@ -174,9 +184,6 @@ extension TwitchAuthSession {
         errorMessage = nil
         let now = Date()
         lastValidatedAt = now
-        userDefaults.set(identity.userID, forKey: StorageKey.userID)
-        userDefaults.set(identity.login, forKey: StorageKey.userLogin)
-        userDefaults.set(now, forKey: StorageKey.lastValidatedAt)
     }
 
     private func startValidationLoop(validateImmediately: Bool = false) {
@@ -209,6 +216,7 @@ extension TwitchAuthSession {
         guard let clientID else { return }
 
         isAuthenticating = true
+        sessionGeneration = UUID()
         statusMessage = "Requesting Twitch sign-in code..."
 
         do {
@@ -239,6 +247,9 @@ extension TwitchAuthSession {
         pollTask = nil
         isAuthenticating = false
         statusMessage = nil
+        activationCode = nil
+        verificationURI = nil
+        verificationURIComplete = nil
     }
 
     private func pollForAccessToken(deviceCode: String, interval: Int, expiresIn: Int, clientID: String) async {
@@ -289,42 +300,45 @@ extension TwitchAuthSession {
     private func finishSignIn(token: DeviceTokenResponse, clientID: String) async throws {
         let identity = try await requestValidatedIdentity(accessToken: token.accessToken)
         let profile = try? await requestUserProfile(accessToken: token.accessToken, clientID: clientID, userID: identity.userID)
+        try Task.checkCancellation()
+        guard identity.clientID == clientID else { throw TwitchSyncError.invalidAccount }
 
         let resolvedLogin = profile?.login ?? identity.login
         let resolvedDisplayName = profile?.displayName ?? identity.login
         let resolvedImageURL = profile?.profileImageURL.flatMap(URL.init(string:))
-
-        self.accessToken = token.accessToken
-        self.refreshToken = token.refreshToken
-        self.userID = identity.userID
-        self.userLogin = resolvedLogin
-        self.userDisplayName = resolvedDisplayName
-        self.profileImageURL = resolvedImageURL
-        self.isAuthenticated = true
+        let credential = TwitchCredential(accessToken: token.accessToken, refreshToken: token.refreshToken,
+          userID: identity.userID, clientID: clientID, login: resolvedLogin,
+          displayName: resolvedDisplayName, imageURL: resolvedImageURL)
+        try useCredential(credential)
         self.isAuthenticating = false
         self.statusMessage = "Signed in as \(resolvedDisplayName)."
         self.errorMessage = nil
-
-        userDefaults.set(token.accessToken, forKey: StorageKey.accessToken)
-        if let refreshToken = token.refreshToken,
-           !refreshToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            userDefaults.set(refreshToken, forKey: StorageKey.refreshToken)
-        } else {
-            userDefaults.removeObject(forKey: StorageKey.refreshToken)
-        }
-        userDefaults.set(identity.userID, forKey: StorageKey.userID)
-        userDefaults.set(clientID, forKey: StorageKey.clientID)
-        userDefaults.set(resolvedLogin, forKey: StorageKey.userLogin)
-        userDefaults.set(resolvedDisplayName, forKey: StorageKey.userDisplayName)
-        if let resolvedImageURL {
-            userDefaults.set(resolvedImageURL.absoluteString, forKey: StorageKey.profileImageURL)
-        } else {
-            userDefaults.removeObject(forKey: StorageKey.profileImageURL)
-        }
-        let now = Date()
-        lastValidatedAt = now
-        userDefaults.set(now, forKey: StorageKey.lastValidatedAt)
+        lastValidatedAt = Date()
+        await cloudSync?.signedIn(credential)
         startValidationLoop()
+    }
+
+    func validateSyncedCredential(_ credential: TwitchCredential) async throws {
+        guard credential.clientID == clientID else { throw TwitchSyncError.invalidAccount }
+        let identity = try await requestValidatedIdentity(accessToken: credential.accessToken)
+        try Task.checkCancellation()
+        guard identity.clientID == credential.clientID, identity.userID == credential.userID else {
+            throw TwitchSyncError.invalidAccount
+        }
+    }
+
+    func refreshSyncedCredential(_ credential: TwitchCredential) async throws -> TwitchCredential {
+        guard credential.clientID == clientID, let refresh = credential.refreshToken else {
+            throw TwitchSyncError.invalidAccount
+        }
+        let token = try await requestRefreshToken(clientID: credential.clientID, refreshToken: refresh)
+        guard !token.accessToken.isEmpty, token.refreshToken?.isEmpty == false else {
+            throw TwitchSyncError.invalidAccount
+        }
+        var updated = credential
+        updated.accessToken = token.accessToken
+        updated.refreshToken = token.refreshToken
+        return updated
     }
 
     private func requestDeviceCode(clientID: String) async throws -> DeviceCodeResponse {

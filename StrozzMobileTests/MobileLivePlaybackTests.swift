@@ -23,7 +23,7 @@ final class MobileLivePlaybackTests: XCTestCase {
     let previousController = window.rootViewController
     window.rootViewController = UIHostingController(rootView:
       MobilePlayerView(channel: channel, model: model)
-        .environment(TwitchAuthSession()).environment(ThemeManager()))
+        .environment(TwitchAuthSession()).environment(ThemeManager()).environment(TwitchWatchRewardsSession()))
     defer {
       window.rootViewController = previousController
       model.stop()

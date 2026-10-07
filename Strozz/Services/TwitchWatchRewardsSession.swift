@@ -21,6 +21,20 @@ final class TwitchWatchRewardsSession {
   @ObservationIgnored private let store: TwitchWatchRewardsStore
   @ObservationIgnored private let preferences: UserDefaults
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "WatchRewards")
+  @ObservationIgnored var onCredentialChange: (() -> Void)?
+  @ObservationIgnored private var boundUserID: String?
+  @ObservationIgnored private var pairingTask: Task<Void, Never>?
+  @ObservationIgnored private var pairingID = UUID()
+
+  func beginConnection(expectedUserID: String) {
+    guard !isConnecting, pairingTask == nil else { return }
+    let id = UUID()
+    pairingID = id
+    pairingTask = Task { [weak self] in
+      await self?.connect(expectedUserID: expectedUserID)
+      if self?.pairingID == id { self?.pairingTask = nil }
+    }
+  }
 
   init(
     api: TwitchWatchRewardsAPI = TwitchWatchRewardsAPI(),
@@ -46,6 +60,7 @@ final class TwitchWatchRewardsSession {
       report(TwitchWatchRewardsAPI.Failure.accountMismatch)
       return
     }
+    boundUserID = expectedUserID
     generation = UUID()
     let attempt = generation
     isConnecting = true
@@ -80,6 +95,7 @@ final class TwitchWatchRewardsSession {
         try store.write(JSONEncoder().encode(credential))
         self.credential = credential
         validatedAt = Date()
+        onCredentialChange?()
         Self.logger.info("Watch rewards account connected")
         return
       }
@@ -93,12 +109,20 @@ final class TwitchWatchRewardsSession {
   }
 
   func cancelConnection() {
+    pairingID = UUID()
+    pairingTask?.cancel()
+    pairingTask = nil
     generation = UUID()
     isConnecting = false
     deviceCode = nil
   }
 
   func disconnect() {
+    clearLocalConnection()
+    onCredentialChange?()
+  }
+
+  func clearLocalConnection() {
     cancelConnection()
     credential = nil
     validatedAt = nil
@@ -108,8 +132,22 @@ final class TwitchWatchRewardsSession {
   }
 
   func accountChanged(to userID: String?) {
+    guard userID != boundUserID else { return }
+    boundUserID = userID
     cancelConnection()
-    if let credential, credential.userID != userID { disconnect() }
+    if let credential, credential.userID != userID { clearLocalConnection() }
+  }
+
+  func importSyncedCredential(_ saved: TwitchWatchRewardsAPI.Credential?, expectedUserID: String) async throws {
+    guard saved != credential else { return }
+    guard let saved else { clearLocalConnection(); return }
+    let attempt = generation
+    let validated = try await api.validate(saved.token, expectedUserID: expectedUserID)
+    try check(attempt)
+    try store.write(JSONEncoder().encode(validated))
+    credential = validated
+    validatedAt = Date()
+    errorMessage = nil
   }
 
   func validatedCredential(expectedUserID: String) async throws -> TwitchWatchRewardsAPI.Credential {
@@ -154,7 +192,8 @@ final class TwitchWatchRewardsSession {
   }
 }
 
-/// A separate, non-synchronizing Keychain item; never shared with Top Shelf or UserDefaults.
+/// Device-local rewards Keychain cache. Cloud sync uses encrypted private records,
+/// not Keychain synchronization, and never exposes this credential to Top Shelf.
 @MainActor
 struct TwitchWatchRewardsStore {
   static let keychainService = "com.thatcube.Strozz.watch-rewards"

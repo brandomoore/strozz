@@ -21,6 +21,9 @@ struct MobilePlayerView: View {
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.themePalette) private var palette
   @Environment(\.verticalSizeClass) private var verticalSizeClass
+  @Environment(TwitchAuthSession.self) private var auth
+  @Environment(TwitchWatchRewardsSession.self) private var rewards
+  @State private var watchTracker = TwitchWatchTracker()
 
   init(channel: FollowedChannel, model: MobilePlaybackModel = MobilePlaybackModel()) {
     self.channel = channel
@@ -43,6 +46,7 @@ struct MobilePlayerView: View {
             VStack(spacing: 0) {
               video
               MobileStreamDetails(channel: channel, model: model)
+              MobileWatchRewardsStatus(tracker: watchTracker)
             }
             .frame(minWidth: 0, maxWidth: .infinity)
             Divider()
@@ -55,6 +59,7 @@ struct MobilePlayerView: View {
                    : min(geometry.size.width * 9 / 16, geometry.size.height * 0.42))
           if layout == .portrait {
             MobileStreamDetails(channel: channel, model: model)
+            MobileWatchRewardsStatus(tracker: watchTracker)
             Divider()
             MobileChatView(service: model.chat, channel: channel.login)
           }
@@ -63,11 +68,29 @@ struct MobilePlayerView: View {
     }
     .background(palette.chatSideSurface)
     .task { model.start(channel: channel.login) }
+    .task {
+      while !Task.isCancelled {
+        if auth.isAuthenticated, let userID = auth.userID, let item = model.player.currentItem {
+          watchTracker.update(.init(
+            target: .init(channel: channel.login, userID: userID, itemID: ObjectIdentifier(item)),
+            uptime: ProcessInfo.processInfo.systemUptime, playhead: item.currentTime().seconds,
+            rate: Double(model.player.rate),
+            ready: item.status == .readyToPlay && !model.isLoading && model.errorMessage == nil,
+            playing: model.player.timeControlStatus == .playing,
+            foreground: scenePhase == .active, visible: model.isActive,
+            userPaused: model.isPaused, muted: model.player.isMuted || model.player.volume == 0),
+            session: rewards)
+        } else { watchTracker.stop() }
+        do { try await Task.sleep(for: .seconds(1)) } catch { break }
+      }
+      watchTracker.stop()
+    }
     .onDisappear { model.stop() }
     .onChange(of: scenePhase) { _, phase in
       if phase == .background { model.suspend() }
       else if phase == .active { model.resume() }
     }
+
     .alert("Display rotation", isPresented: Binding(
       get: { rotationError != nil }, set: { if !$0 { rotationError = nil } }
     )) {
@@ -86,6 +109,24 @@ struct MobilePlayerView: View {
     windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: exiting ? .portrait : .landscapeRight)) { error in
       Task { @MainActor in rotationError = error.localizedDescription }
     }
+  }
+}
+
+struct MobileWatchRewardsStatus: View {
+  let tracker: TwitchWatchTracker
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      if let error = tracker.errorMessage { Text(error).font(.caption).foregroundStyle(.secondary) }
+      HStack(spacing: 16) {
+        if let points = tracker.channelRewards.points {
+          Text("\(points.balance.formatted()) points").font(.caption)
+        }
+        if let streak = tracker.streak { Text("\(streak)-stream watch streak").font(.caption) }
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.horizontal)
   }
 }
 

@@ -180,7 +180,7 @@ and an adaptive grid on iPad. Typing in Browse's search field switches to compac
 channel and category results with artwork and viewer counts.
 
 This is not full TV feature parity: VOD chat replay, clips, multiview, YouTube/Kick playback
-and chat merging, rewards, and advanced TV settings are not included. Playback
+and chat merging, interactive reward redemption/polls, and advanced TV settings are not included. Playback
 stops in the background; Picture in Picture/background audio are not yet
 supported. Returning resolves fresh stream URLs instead of reviving an expired
 native engine. Paused/rewound positions are preserved when still available; an
@@ -214,11 +214,51 @@ as a native success.
 
 Both platform targets use `com.thatcube.Strozz` in the new universal App Store
 Connect record. This is a separate app from the legacy `com.thatcube.Twozz`
-installation, not an in-place update. Credentials are local to each device; signing
-in on the TV does not sign in the phone. The existing Fastlane lanes still ship
+installation, not an in-place update. Twitch sign-in and the optional rewards
+connection now sync through encrypted records in your private iCloud database
+between devices using the same Apple Account. The existing Fastlane lanes still ship
 **tvOS only**. Adding this target does not upload or distribute an iOS build.
 
 ## Contributing & development
+
+### Twitch sign-in across devices
+
+Sign in once in the new Strozz app, then open Strozz on another iPhone, iPad, or
+Apple TV using the same Apple Account. The connection is fetched on launch and
+checked periodically while the app is running. **Account > Use iCloud connection**
+reconnects a device you deliberately signed out of. Different Twitch accounts
+on the same Apple Account require an explicit choice; Strozz does not silently
+overwrite one with the other.
+
+**Connect rewards** requires a separate Twitch approval for the same Twitch
+account. On iPhone/iPad it opens Twitch's prefilled approval link directly and
+keeps the connection process alive when you return from the browser. Once
+connected, that authorization also syncs. Mobile live playback reports observed
+watch time and shows Twitch-provided points/streaks; Twitch remains authoritative
+about credit. Preview, paused and background time do not count.
+
+Tokens are cached in device Keychain, with only the access token shared with
+Top Shelf. Cloud copies use `CKRecord.encryptedValues` in the private
+`iCloud.com.thatcube.Strozz` database; no credential fields have public-database
+permissions. Signing out **this device** does not disconnect the others.
+**Manage connected account > Sign out all synced devices** requires confirmation
+and writes a cloud sign-out marker that other devices observe when connected.
+
+Twitch's device-flow refresh tokens are single-use. A conditional cloud record
+update reserves renewal before contacting Twitch, and a rotated pair is saved
+locally before publication. Other devices never take over an ambiguous renewal
+after an arbitrary timeout. If the renewing device loses connectivity, reopen
+Strozz there to finish; if it crashed before saving the new pair, Twitch approval
+may be necessary again. Expiry, revoked Twitch permission, or an unavailable
+iCloud account can also require attention; the UI reports these rather than
+claiming a permanent login.
+
+`Config/StrozzAccounts.ckdb` is the versioned CloudKit schema. Deploy its
+Development schema to Production before shipping TestFlight builds. Simulator
+tests cover conditional-write contention, account boundaries, pending renewal
+and sign-out fencing. Explicit Debug-only probes verify private encrypted
+cross-device reads and Keychain access using synthetic data, not Twitch tokens.
+Viewing history and VOD progress remain device-local.
 
 Build instructions, the Twitch auth setup, how playback is resolved, versioning,
 and release steps all live in **[CONTRIBUTING.md](CONTRIBUTING.md)**. Notes on
@@ -238,8 +278,8 @@ This is a clean replacement installation. Testers install the new TestFlight
 app and sign in again; local preferences, history, and saved sessions are not
 automatically imported. Separate storage prevents signing out of the new app
 from deleting the old app's credentials. Twitch-side follows, points, and
-streaks remain attached to the Twitch account. iCloud sign-in sync is a separate
-feature and is not enabled merely by changing the bundle ID.
+streaks remain attached to the Twitch account. iCloud sign-in sync uses the new `iCloud.com.thatcube.Strozz` container; the old
+app does not participate.
 
 The Xcode project, scheme, source module, assets, and repository use Strozz.
 Channel links use `strozz://`; the parser also recognizes legacy `twozz://` and
@@ -369,9 +409,10 @@ In **Settings > Accounts > Twitch Rewards**, connect watch rewards using
 the same Twitch account as your normal Strozz login. This is a separate,
 unofficial Twitch TV device-code connection: approve it on Twitch's activation
 page using your phone. Strozz never asks for your password. The rewards session
-is stored in a device-only Keychain item, not in preferences or the Top Shelf
-shared container. Disconnecting removes the saved rewards session from the TV;
-it does not sign out your normal account or revoke other Twitch sessions.
+is cached in a device-only Keychain item, never preferences or Top Shelf, and
+shared through encrypted private iCloud records. Disconnecting removes the
+rewards connection from synced Strozz devices; it does not sign out the normal
+Twitch account or revoke unrelated Twitch sessions.
 
 When connected, Strozz reports one minute only after observing a minute of
 advancing, visible Twitch live playback. Pauses, buffering, seeking, background

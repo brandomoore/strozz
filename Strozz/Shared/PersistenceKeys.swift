@@ -41,6 +41,7 @@ enum PersistenceKey {
   static let watchHistoryEntries = "watchHistoryEntriesV1"
   static let recommendationFeedback = "recommendationFeedbackV1"
   static let personalizedRecommendationsEnabled = "personalizedRecommendationsEnabled"
+  static let icloudAccountSignedOut = "icloudAccountSignedOut"
   static func mobileWatchHistory(accountID: String) -> String { "mobile.watchHistory.\(accountID)" }
   static func mobileVODProgress(accountID: String) -> String { "mobile.vodProgress.\(accountID)" }
 

@@ -577,6 +577,24 @@ final class TwitchWatchRewardsIntegrationTests: XCTestCase {
     XCTAssertNil(store.data)
   }
 
+  func testSessionOwnedPairingSurvivesThePresentingTaskAndSameAccountRefresh() async throws {
+    let scenario = WatchRewardsScenario()
+    let api = TwitchWatchRewardsAPI(load: { await scenario.load($0) })
+    let store = WatchRewardsMemoryStore()
+    let session = TwitchWatchRewardsSession(api: api, store: store.store)
+    let screen = Task { session.beginConnection(expectedUserID: "viewer") }
+    await screen.value
+    try await eventually { session.deviceCode != nil }
+    screen.cancel()
+    session.accountChanged(to: "viewer")
+    session.beginConnection(expectedUserID: "viewer")
+    try await Task.sleep(for: .seconds(2.2))
+    XCTAssertTrue(session.isConnected)
+    XCTAssertEqual(store.writes, 1)
+    let requests = await scenario.requests
+    XCTAssertEqual(requests.filter { $0.url?.path == "/oauth2/device" }.count, 1)
+  }
+
   func testNonExpiringSessionConnectsAndRevalidatesAfterRestore() async throws {
     let scenario = WatchRewardsScenario()
     await scenario.setValidation(lifetime: 0)

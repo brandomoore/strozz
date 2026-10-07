@@ -14,9 +14,13 @@ settings:
     GENERATE_INFOPLIST_FILE: NO
     INFOPLIST_FILE: Strozz/App/Info.plist
     TARGETED_DEVICE_FAMILY: "3" # Apple TV
+    STROZZ_ICLOUD_ENVIRONMENT: Development
+  configs:
+    Release:
+      STROZZ_ICLOUD_ENVIRONMENT: Production
 configFiles:
   Debug: Config/Development.xcconfig
-  Release: Config/App.xcconfig
+  Release: Config/Release.xcconfig
 packages:
   SDWebImage:
     url: https://github.com/SDWebImage/SDWebImage.git
@@ -50,6 +54,13 @@ targets:
           - "ChannelProfileService.swift"
           - "FollowedChannels*.swift"
           - "TwitchAuthSession*.swift"
+          - "TwitchAccountSync.swift"
+          - "TwitchCloud*.swift"
+          - "CloudKitTwitchDatabase.swift"
+          - "TwitchWatchRewards*.swift"
+          - "TwitchWatchTracker.swift"
+          - "TwitchChannelRewards*.swift"
+          - "PlaybackTelemetry*.swift"
           - "TwitchYouTubeAliasService.swift"
           - "YouTubeLiveSnapshotService.swift"
           - "YouTubeConcurrentViewersService.swift"
@@ -75,8 +86,10 @@ targets:
           - "CardMetrics.swift"
           - "TopShelfStore.swift"
           - "TopShelfCredentialStore.swift"
+          - "CredentialKeychain.swift"
           - "TopShelfSnapshot.swift"
       - path: Strozz/Views/Icon.swift
+      - path: Strozz/Views/TwitchICloudSyncControls.swift
       - path: Strozz/Resources/StreamerAffinity.json
       - path: Strozz/Views/RichChatLineView.swift
       - path: Strozz/Views/Chat/ChatColor.swift
@@ -98,6 +111,15 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: MobileAppIcon
+      configs:
+        Debug:
+          "CODE_SIGN_STYLE[sdk=iphoneos*]": "$(STROZZ_IOS_DEBUG_SIGNING_STYLE)"
+          "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Development"
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]": "$(STROZZ_IOS_DEBUG_APP_PROFILE)"
+        Release:
+          "CODE_SIGN_STYLE[sdk=iphoneos*]": "$(STROZZ_RELEASE_SIGNING_STYLE)"
+          "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]": "$(STROZZ_IOS_RELEASE_APP_PROFILE)"
   StrozzMobileTests:
     type: bundle.unit-test
     platform: iOS
@@ -155,6 +177,10 @@ targets:
           "CODE_SIGN_STYLE[sdk=appletvos*]": "$(STROZZ_TVOS_DEBUG_SIGNING_STYLE)"
           "CODE_SIGN_IDENTITY[sdk=appletvos*]": "Apple Development"
           "PROVISIONING_PROFILE_SPECIFIER[sdk=appletvos*]": "$(STROZZ_TVOS_DEBUG_APP_PROFILE)"
+        Release:
+          "CODE_SIGN_STYLE[sdk=appletvos*]": "$(STROZZ_RELEASE_SIGNING_STYLE)"
+          "CODE_SIGN_IDENTITY[sdk=appletvos*]": "Apple Distribution"
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=appletvos*]": "$(STROZZ_TVOS_RELEASE_APP_PROFILE)"
   TopShelfExtension:
     type: com.apple.product-type.tv-app-extension
     platform: tvOS
@@ -164,6 +190,7 @@ targets:
       - path: Strozz/Shared/TopShelfSnapshot.swift
       - path: Strozz/Shared/TopShelfStore.swift
       - path: Strozz/Shared/TopShelfCredentialStore.swift
+      - path: Strozz/Shared/CredentialKeychain.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Strozz.TopShelfExtension
@@ -184,6 +211,10 @@ targets:
           "CODE_SIGN_STYLE[sdk=appletvos*]": "$(STROZZ_TVOS_DEBUG_SIGNING_STYLE)"
           "CODE_SIGN_IDENTITY[sdk=appletvos*]": "Apple Development"
           "PROVISIONING_PROFILE_SPECIFIER[sdk=appletvos*]": "$(STROZZ_TVOS_DEBUG_TOPSHELF_PROFILE)"
+        Release:
+          "CODE_SIGN_STYLE[sdk=appletvos*]": "$(STROZZ_RELEASE_SIGNING_STYLE)"
+          "CODE_SIGN_IDENTITY[sdk=appletvos*]": "Apple Distribution"
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=appletvos*]": "$(STROZZ_TVOS_RELEASE_TOPSHELF_PROFILE)"
   StrozzTests:
     type: bundle.unit-test
     platform: tvOS

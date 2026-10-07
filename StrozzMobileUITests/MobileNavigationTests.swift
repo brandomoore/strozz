@@ -23,11 +23,39 @@ final class MobileNavigationTests: XCTestCase {
     app.buttons["Account"].firstMatch.tap()
     XCTAssertTrue(app.navigationBars["Account"].waitForExistence(timeout: 10))
     for theme in ["Light", "Dark", "OLED", "System"] {
-      app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Theme")).firstMatch.tap()
+      let picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Theme")).firstMatch
+      for _ in 0..<5 {
+        if picker.isHittable { break }
+        app.swipeUp()
+      }
+      picker.tap()
       app.buttons[theme].firstMatch.tap()
       capture(app, name: "account-\(theme)")
     }
     XCTAssertTrue(app.switches["Sync chat to extra delay"].exists)
+  }
+
+  func testAccountSyncHasItsOwnTapTargetAndGlobalSignOutIsSeparate() {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_MUTE_PLAYBACK"] = "1"
+    app.launch()
+    defer { app.terminate() }
+    app.buttons["Account"].firstMatch.tap()
+    let sync = app.buttons["account-sync"]
+    XCTAssertTrue(sync.waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["account-connect-rewards"].exists, "Rewards must not depend on an active OAuth flow")
+    XCTAssertFalse(app.buttons["account-sign-out-all"].exists)
+    sync.tap()
+    XCTAssertFalse(app.buttons["Sign out all devices"].exists, "Sync must never invoke a destructive action")
+    XCTAssertTrue(app.buttons["account-sign-in"].exists)
+    capture(app, name: "account-sync-separated")
+    app.buttons["account-manage-sync"].tap()
+    XCTAssertTrue(app.navigationBars["Connected account"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["account-sign-out-all"].exists)
+    app.buttons["account-sign-out-all"].tap()
+    XCTAssertTrue(app.sheets["Sign out of Twitch and rewards on all synced devices?"].waitForExistence(timeout: 5))
+    if app.buttons["Cancel"].exists { app.buttons["Cancel"].tap() }
+    else { app.buttons["OK"].tap() }
   }
 
   func testLiveBrowseSearchAndPlayerRotation() throws {

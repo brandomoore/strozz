@@ -25,6 +25,10 @@ final class TwitchAuthSession {
     var verificationURIComplete: String?
     var statusMessage: String?
     var errorMessage: String?
+    @ObservationIgnored weak var cloudSync: TwitchAccountSync?
+    @ObservationIgnored var credentialCloudOwner: String?
+    @ObservationIgnored var sessionGeneration = UUID()
+    @ObservationIgnored private var didRestore = false
 
     let userDefaults: UserDefaults = {
         guard let suite = UserDefaults(suiteName: TopShelf.appGroupID) else {
@@ -103,10 +107,8 @@ final class TwitchAuthSession {
     }
 
     /// One-time copy of any auth previously stored in `UserDefaults.standard`
-    /// into the shared App Group suite. Auth now lives in the App Group so the
-    /// Top Shelf extension can read it (and write back refreshed tokens). Without
-    /// this migration, already-signed-in users would appear signed out after the
-    /// switch. The legacy values are left in place harmlessly.
+    /// into the shared App Group suite. `restore()` then migrates these values to
+    /// Keychain and removes both legacy copies after successful persistence.
     private static func migrateLegacyAuthIfNeeded(into suite: UserDefaults) {
         guard suite.string(forKey: PersistenceKey.twitchAccessToken) == nil else { return }
         let legacy = UserDefaults.standard
@@ -126,6 +128,22 @@ final class TwitchAuthSession {
     }
 
     func restore() {
+        guard !didRestore else { return }
+        didRestore = true
+        do {
+            if let credential = try readSecureCredential() {
+                try useCredential(credential)
+                if credential.cloudOwner != nil {
+                    isAuthenticated = false
+                    try TopShelfCredentialStore.save(nil)
+                }
+                return
+            }
+        } catch {
+            isAuthenticated = false
+            errorMessage = error.localizedDescription
+            return
+        }
         accessToken = userDefaults.string(forKey: StorageKey.accessToken)
         refreshToken = userDefaults.string(forKey: StorageKey.refreshToken)
         userID = userDefaults.string(forKey: StorageKey.userID)
@@ -152,10 +170,18 @@ final class TwitchAuthSession {
         // extension can perform its own Helix requests for fresh live streams.
         if isAuthenticated, let clientID {
             userDefaults.set(clientID, forKey: StorageKey.clientID)
+            if let credential = storedCredential {
+                do { try persistCredential(credential) }
+                catch { isAuthenticated = false; errorMessage = error.localizedDescription }
+            }
         }
     }
 
     func signOut() {
+        cloudSync?.signedOutLocally()
+        sessionGeneration = UUID()
+        refreshInFlight?.cancel()
+        refreshInFlight = nil
         pollTask?.cancel()
         pollTask = nil
         validationTask?.cancel()
@@ -175,6 +201,7 @@ final class TwitchAuthSession {
         verificationURIComplete = nil
         statusMessage = nil
         errorMessage = nil
+        removeSecureCredentials()
 
         userDefaults.removeObject(forKey: StorageKey.accessToken)
         userDefaults.removeObject(forKey: StorageKey.refreshToken)
@@ -195,6 +222,11 @@ final class TwitchAuthSession {
     }
 
     func clearStoredAuthState() {
+        sessionGeneration = UUID()
+        pollTask?.cancel()
+        pollTask = nil
+        refreshInFlight?.cancel()
+        refreshInFlight = nil
         validationTask?.cancel()
         validationTask = nil
         accessToken = nil
@@ -206,6 +238,7 @@ final class TwitchAuthSession {
         lastValidatedAt = nil
         isAuthenticated = false
         isAuthenticating = false
+        removeSecureCredentials()
 
         userDefaults.removeObject(forKey: StorageKey.accessToken)
         userDefaults.removeObject(forKey: StorageKey.refreshToken)

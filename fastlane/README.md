@@ -60,9 +60,27 @@ only to **Debug builds for a physical tvOS device**. Regenerate with
 
 Without the local file, signing remains automatic. Simulator, iPhone/iPad and
 Release configurations do not receive the tvOS development-profile overrides.
+The example also lists **separate**, optional iOS development and per-platform
+Release distribution overrides. `Config/Release.xcconfig` only consumes the
+Release keys, so a development profile cannot leak into a TestFlight archive.
 In particular, these profiles do not replace the distribution profiles required
 by TestFlight archives. Never disable signing or remove App Groups to work
 around an incompatible profile.
+
+### CloudKit distribution prerequisites
+
+The main iOS/tvOS app profiles must include CloudKit container
+`iCloud.com.thatcube.Strozz` and App Group `group.com.thatcube.Strozz`.
+Top Shelf needs the App Group only. Release builds select the Production
+CloudKit environment; Debug defaults to Development. A deliberately authorized
+device verification can pass `STROZZ_ICLOUD_ENVIRONMENT=Production` to exercise
+the same private schema that TestFlight will use.
+
+Validate/import `Config/StrozzAccounts.ckdb` into Development with `cktool`,
+then use CloudKit Console's **Deploy Schema Changes** to promote it. Export and
+verify Production before uploading. Store management tokens with
+`xcrun cktool save-token --type management --method keychain`, never in the
+repository or shell command arguments.
 
 ```bash
 fastlane beta --env fastlane
