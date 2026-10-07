@@ -40,6 +40,11 @@ final class PlayerModel {
   // MARK: Playback
 
   var player = AVPlayer()
+  @ObservationIgnored var activateAudioSession: @MainActor () throws -> Void = PlaybackAudioSession.activate
+  @ObservationIgnored var audioSessionActivationFailed = false
+  @ObservationIgnored var audioInterrupted = false
+  @ObservationIgnored var mediaServicesUnavailable = false
+  @ObservationIgnored var mediaServicesResetPending = false
 
   /// Drives the audio-only visualizer orb. Reacts to real audio when the player
   /// item exposes a tappable audio track (best effort on live HLS), otherwise
@@ -61,6 +66,8 @@ final class PlayerModel {
   @ObservationIgnored var nativeLiveHoldBack: Double?
   @ObservationIgnored var nativeSourceHasPrefetch: Bool?
   @ObservationIgnored var nativeSourceEdgeAge: Double?
+  @ObservationIgnored var nativeReportRefreshSeconds: Double?
+  @ObservationIgnored var nativeReportRefreshMaxSeconds: Double?
   var isUsingNativeHLS = false
   @ObservationIgnored var nativeCatchUp = NativeLiveCatchUp()
   @ObservationIgnored var nativeCatchUpItem: AVPlayerItem?
@@ -115,6 +122,9 @@ final class PlayerModel {
   var errorMessage: String?
   var isOffline = false
   var isLoading = true
+  var presentationState: PlaybackPresentationState {
+    .init(isLoading: isLoading, isUnavailable: isOffline || errorMessage != nil)
+  }
 
   /// Item/source reloads do not change channels. Keep resolved metadata,
   /// including metadata that arrived while preferred-source selection waited.
@@ -122,6 +132,7 @@ final class PlayerModel {
     isLoading = true
     errorMessage = nil
     isOffline = false
+    audioSessionActivationFailed = false
   }
 
   /// Presentation follows native playback immediately; rate/stability controls
@@ -282,6 +293,8 @@ final class PlayerModel {
   var streamTitle: String = ""
   var channelDisplayName: String = ""
   var channelAvatarURL: URL?
+  var channelStreamStartedAt: Date?
+  @ObservationIgnored var channelMetadataTask: Task<Void, Never>?
   var pendingSwitchLogin: String?
   var chatReplayStartMessageID: ChatMessage.ID?
 

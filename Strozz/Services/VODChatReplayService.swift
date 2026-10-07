@@ -45,7 +45,7 @@ final class VODChatReplayService {
   private var nextFetchAt = Date.distantPast
   private let loadData: NetworkClient.DataLoader
   private let now: () -> Date
-  private static let logger = Logger(subsystem: "com.thatcube.Twozz", category: "chat-replay")
+  private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "chat-replay")
 
   init(loadData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) },
        now: @escaping () -> Date = Date.init) {

@@ -253,6 +253,7 @@ class PlaybackDiagnosticsTests(unittest.TestCase):
         self.assertEqual(session["metric_distributions"]["observed_bitrate_bps"]["count"], 1)
 
     def test_pull_requires_device_and_refuses_overwrite(self):
+        self.assertEqual(playback_diagnostics.DEFAULT_BUNDLE, "com.thatcube.Strozz")
         with self.assertRaisesRegex(playback_diagnostics.DiagnosticsError, "pass --device"):
             playback_diagnostics.pull(None, "com.thatcube.Twozz", self.directory)
         with mock.patch.object(playback_diagnostics.shutil, "which", return_value="/usr/bin/xcrun"):

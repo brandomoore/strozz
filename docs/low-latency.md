@@ -104,6 +104,41 @@ Device/port names and identifiers are not recorded. The foreground regression
 probe remains muted and verifies new player/controller ownership, enabled audio
 tracks, decoded video, and preservation of a paused position.
 
+A later xQc startup on the physical TV failed with
+`AVFoundationErrorDomain/-11819` (`mediaServicesWereReset`). Video resumed after
+player replacement, but the audio session still reported `SoloAmbient/default`
+on a Bluetooth output. An enabled audio track and advancing video did not prove
+audible recovery. The logs identify the system reset, not what caused it.
+
+The TV player now configures and activates a `playback/moviePlayback` audio
+session before starting or resuming, including after a fresh foreground owner.
+Foreground recovery waits for the app to become active. Media-service loss
+pauses playback until reset; reset recreates the player and item even if their
+status has not yet failed, coalesces with a pending native source refresh, and
+does not spend the native source-failure retry budget. Interruption handling
+honors the system's resume permission and the viewer's pause/scrub/background
+intent.
+Activation failures stop playback and present an error rather than leaving
+silent video presented as healthy. Route changes and audio-session lifecycle
+events are recorded without device names or identifiers.
+
+Paused date restoration corrects a nearby-keyframe landing against the new
+item's date/time mapping with a bounded precise seek. Live simulator coverage
+checks startup, foreground replacement, media-loss/reset notification delivery,
+reconfigured audio, fresh AVKit ownership, and paused restoration. It remains
+muted: it verifies recovery mechanics, not audible output through physical
+Bluetooth hardware.
+
+The same live-playback recovery contract also applies on iPhone/iPad.
+`PlaybackAudioSession` and `PlaybackPositionRestoration` are compiled into both
+targets instead of maintaining separate setup and date-seek implementations.
+Mobile replaces its AVPlayer/AVKit owner on foreground return and media-service
+reset; ordinary rendition changes do not recreate the renderer.
+Loading and transport presentation use the shared
+`PlaybackPresentationState` and `StreamLoadingView`: mobile keeps Close available,
+but does not stack a disabled pause icon over the loading indicator. Error and
+retry content replace loading rather than coexisting with it.
+
 ### Whole-segment sources and native quality selection
 
 The physical AustinShow capture on build 1920 started about 20 seconds behind
@@ -130,13 +165,31 @@ the media bytes or forcing an Auto resolution.
 
 Rendition reports use relative URIs and verified upstream sequences. A cold
 rendition indexes the requested complete sequence rather than skipping directly
-to a newer segment whose parts cannot satisfy that request. Metadata refreshes
-are coalesced; an unavailable report is logged rather than inventing its sequence.
+to a newer segment whose parts cannot satisfy that request. Optional metadata
+refreshes are coalesced background work, and already-running rendition indexers
+are not fetched a second time just to build reports. An active playlist never
+waits for an unused rendition's network request. Previously, the active response
+awaited the entire report refresh, allowing one slow unused quality to hold
+already-available playback data. A regression reproduces that dependency and
+requires cached responses to complete while the unused request remains blocked.
+Unavailable reports are logged and removed rather than inventing their sequence.
 Shutdown rejects new requests and drains in-flight manifest fetches before
 invalidating their shared URLSession, including when a quality change cancels
 concurrent report refreshes.
 Diagnostics include the source's prefetch capability, live hold-back and edge age,
-plus reasons for stopping rate correction.
+reasons for stopping rate correction, and the last/maximum rendition-report
+refresh duration. The same report-blocking, failure, and cancellation regressions
+run in both TV and mobile targets.
+
+The subsequent physical check held AustinShow at 720p60 for about eight minutes
+without stalls or resolution drops before the broadcast ended and produced a
+timeline error; that is a partial run, not a completed twelve-minute test.
+Normal Auto/native playback on Burn then retained 1080p for 904 of 906 rendered
+samples over roughly thirty minutes. One brief stall coincided with four seconds
+at 720p; there were no 160p/360p collapses. Auto remains adaptive rather than
+pinning a quality or hiding real network/decode pressure. The tvOS simulator's
+inability to render that AustinShow feed also reproduced with the original report
+wait restored; simulator clock progress was not counted as successful video.
 
 TV and mobile fixed-video selections now retain native playback, fresh-native
 recovery and pause/rewind intent. Audio Only, explicitly selected legacy modes,

@@ -1,7 +1,7 @@
 name: Strozz
 options:
-  # Preserve the shipping Apple identity so Strozz updates the existing app.
-  bundleIdPrefix: com.thatcube.Twozz
+  # New app identity; the legacy Twozz app remains a separate installation.
+  bundleIdPrefix: com.thatcube.Strozz
   deploymentTarget:
     tvOS: "18.0"
     iOS: "18.0"
@@ -14,9 +14,15 @@ settings:
     GENERATE_INFOPLIST_FILE: NO
     INFOPLIST_FILE: Strozz/App/Info.plist
     TARGETED_DEVICE_FAMILY: "3" # Apple TV
+    STROZZ_ICLOUD_ENVIRONMENT: Development
+    STROZZ_APS_ENVIRONMENT: development
+  configs:
+    Release:
+      STROZZ_ICLOUD_ENVIRONMENT: Production
+      STROZZ_APS_ENVIRONMENT: production
 configFiles:
-  Debug: Config/App.xcconfig
-  Release: Config/App.xcconfig
+  Debug: Config/Development.xcconfig
+  Release: Config/Release.xcconfig
 packages:
   SDWebImage:
     url: https://github.com/SDWebImage/SDWebImage.git
@@ -50,6 +56,15 @@ targets:
           - "ChannelProfileService.swift"
           - "FollowedChannels*.swift"
           - "TwitchAuthSession*.swift"
+          - "TwitchAccountSync.swift"
+          - "TwitchCloud*.swift"
+          - "CloudKitTwitchDatabase.swift"
+          - "TwitchWatchRewards*.swift"
+          - "TwitchWatchTracker.swift"
+          - "TwitchChannelRewards*.swift"
+          - "PlaybackTelemetry*.swift"
+          - "PlaybackAudioSession.swift"
+          - "PlaybackPositionRestoration.swift"
           - "TwitchYouTubeAliasService.swift"
           - "YouTubeLiveSnapshotService.swift"
           - "YouTubeConcurrentViewersService.swift"
@@ -75,8 +90,12 @@ targets:
           - "CardMetrics.swift"
           - "TopShelfStore.swift"
           - "TopShelfCredentialStore.swift"
+          - "CredentialKeychain.swift"
           - "TopShelfSnapshot.swift"
       - path: Strozz/Views/Icon.swift
+      - path: Strozz/Views/StreamLoadingView.swift
+      - path: Strozz/Views/BroadcastUptimeView.swift
+      - path: Strozz/Views/TwitchICloudSyncControls.swift
       - path: Strozz/Resources/StreamerAffinity.json
       - path: Strozz/Views/RichChatLineView.swift
       - path: Strozz/Views/Chat/ChatColor.swift
@@ -89,7 +108,7 @@ targets:
         product: SDWebImageWebPCoder
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Twozz
+        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Strozz
         PRODUCT_NAME: StrozzMobile
         DEVELOPMENT_TEAM: N8Z5T4AK3X
         CODE_SIGN_STYLE: Automatic
@@ -98,16 +117,28 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: MobileAppIcon
+      configs:
+        Debug:
+          "CODE_SIGN_STYLE[sdk=iphoneos*]": "$(STROZZ_IOS_DEBUG_SIGNING_STYLE)"
+          "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Development"
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]": "$(STROZZ_IOS_DEBUG_APP_PROFILE)"
+        Release:
+          "CODE_SIGN_STYLE[sdk=iphoneos*]": "$(STROZZ_RELEASE_SIGNING_STYLE)"
+          "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]": "$(STROZZ_IOS_RELEASE_APP_PROFILE)"
   StrozzMobileTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: StrozzMobileTests
+      - path: StrozzTests/PlaybackPresentationStateTests.swift
+      - path: StrozzTests/NativeRenditionReportTests.swift
+      - path: StrozzTests/BroadcastUptimeTests.swift
     dependencies:
       - target: StrozzMobile
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Twozz.MobileTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Strozz.MobileTests
         DEVELOPMENT_TEAM: N8Z5T4AK3X
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_FILE: ""
@@ -123,7 +154,7 @@ targets:
       - target: StrozzMobile
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Twozz.MobileUITests
+        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Strozz.MobileUITests
         DEVELOPMENT_TEAM: N8Z5T4AK3X
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_FILE: ""
@@ -145,11 +176,20 @@ targets:
         embed: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Twozz
+        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Strozz
         DEVELOPMENT_TEAM: N8Z5T4AK3X
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_ENTITLEMENTS: Strozz/App/Strozz.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        Debug:
+          "CODE_SIGN_STYLE[sdk=appletvos*]": "$(STROZZ_TVOS_DEBUG_SIGNING_STYLE)"
+          "CODE_SIGN_IDENTITY[sdk=appletvos*]": "Apple Development"
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=appletvos*]": "$(STROZZ_TVOS_DEBUG_APP_PROFILE)"
+        Release:
+          "CODE_SIGN_STYLE[sdk=appletvos*]": "$(STROZZ_RELEASE_SIGNING_STYLE)"
+          "CODE_SIGN_IDENTITY[sdk=appletvos*]": "Apple Distribution"
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=appletvos*]": "$(STROZZ_TVOS_RELEASE_APP_PROFILE)"
   TopShelfExtension:
     type: com.apple.product-type.tv-app-extension
     platform: tvOS
@@ -159,9 +199,10 @@ targets:
       - path: Strozz/Shared/TopShelfSnapshot.swift
       - path: Strozz/Shared/TopShelfStore.swift
       - path: Strozz/Shared/TopShelfCredentialStore.swift
+      - path: Strozz/Shared/CredentialKeychain.swift
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Twozz.TopShelfExtension
+        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Strozz.TopShelfExtension
         DEVELOPMENT_TEAM: N8Z5T4AK3X
         CODE_SIGN_STYLE: Automatic
         INFOPLIST_FILE: TopShelfExtension/Info.plist
@@ -174,6 +215,15 @@ targets:
         # ExtensionKit/XPC runtime and instantiates ContentProvider.
         LD_ENTRY_POINT: _NSExtensionMain
         CODE_SIGN_ENTITLEMENTS: TopShelfExtension/TopShelfExtension.entitlements
+      configs:
+        Debug:
+          "CODE_SIGN_STYLE[sdk=appletvos*]": "$(STROZZ_TVOS_DEBUG_SIGNING_STYLE)"
+          "CODE_SIGN_IDENTITY[sdk=appletvos*]": "Apple Development"
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=appletvos*]": "$(STROZZ_TVOS_DEBUG_TOPSHELF_PROFILE)"
+        Release:
+          "CODE_SIGN_STYLE[sdk=appletvos*]": "$(STROZZ_RELEASE_SIGNING_STYLE)"
+          "CODE_SIGN_IDENTITY[sdk=appletvos*]": "Apple Distribution"
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=appletvos*]": "$(STROZZ_TVOS_RELEASE_TOPSHELF_PROFILE)"
   StrozzTests:
     type: bundle.unit-test
     platform: tvOS
@@ -183,7 +233,7 @@ targets:
       - target: Strozz
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Twozz.Tests
+        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Strozz.Tests
         DEVELOPMENT_TEAM: N8Z5T4AK3X
         CODE_SIGN_STYLE: Automatic
         # These pure-logic tests use `@testable import Strozz`, so the bundle is

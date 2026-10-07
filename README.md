@@ -179,12 +179,33 @@ Browse shows three categories across on iPhone (two at accessibility text sizes)
 and an adaptive grid on iPad. Typing in Browse's search field switches to compact
 channel and category results with artwork and viewer counts.
 
+TV and mobile share the stream loading view and a loading/ready/unavailable
+presentation contract. Until playback is prepared and video is displayable,
+mobile shows the channel poster, avatar, and one native loading indicator;
+play/pause and other transport controls are not layered over it. Close remains
+available, and errors replace loading with a retry action.
+The mobile **Live** badge describes the achievable playback edge, not the
+broadcast's absolute delivery delay. **Back to live** appears only while paused
+or measurably behind; unknown timing shows **Checking live** instead. The status
+uses the shared source-relative delay estimate and catch-up tolerances so normal
+segment/buffer variation does not flash an unnecessary jump button.
+Player stream information on TV and mobile also shows **Streaming for 2h 14m**,
+using Twitch's broadcast start time rather than the viewer's watch time. It
+updates once per minute, keeps counting while playback is paused, and is omitted
+when the start time is unknown. Mobile fetches this optional metadata separately
+so it cannot delay playback startup.
+
 This is not full TV feature parity: VOD chat replay, clips, multiview, YouTube/Kick playback
-and chat merging, rewards, and advanced TV settings are not included. Playback
+and chat merging, interactive reward redemption/polls, and advanced TV settings are not included. Playback
 stops in the background; Picture in Picture/background audio are not yet
 supported. Returning resolves fresh stream URLs instead of reviving an expired
 native engine. Paused/rewound positions are preserved when still available; an
 expired position shows an error rather than silently jumping to live.
+Like TV, mobile recreates both its player and AVKit rendering owner on foreground
+return and media-service reset, preserving mute, volume, quality, and pause/DVR
+intent. Both targets use the same audio-session setup and bounded date-position
+restoration. Audio activation failures surface an error without exhausting the
+native stream retry budget; interruptions honor the system's resume permission.
 Transient native-engine failures get up to two fresh native attempts in a
 rolling minute before standard fallback; unsupported formats still fail over
 explicitly instead of leaving playback stuck.
@@ -212,12 +233,53 @@ connect anonymously, run muted, and never send chat messages. Set
 the test requires native playback rather than treating a compatibility fallback
 as a native success.
 
-Both platform targets retain `com.thatcube.Twozz` so iOS can join the existing
-Strozz App Store Connect record. Credentials are local to each device; signing
-in on the TV does not sign in the phone. The existing Fastlane lanes still ship
+Both platform targets use `com.thatcube.Strozz` in the new universal App Store
+Connect record. This is a separate app from the legacy `com.thatcube.Twozz`
+installation, not an in-place update. Twitch sign-in and the optional rewards
+connection now sync through encrypted records in your private iCloud database
+between devices using the same Apple Account. The existing Fastlane lanes still ship
 **tvOS only**. Adding this target does not upload or distribute an iOS build.
 
 ## Contributing & development
+
+### Twitch sign-in across devices
+
+Sign in once in the new Strozz app, then open Strozz on another iPhone, iPad, or
+Apple TV using the same Apple Account. The connection is fetched on launch and
+checked periodically while the app is running. **Account > Use iCloud connection**
+reconnects a device you deliberately signed out of. Different Twitch accounts
+on the same Apple Account require an explicit choice; Strozz does not silently
+overwrite one with the other.
+
+**Connect rewards** requires a separate Twitch approval for the same Twitch
+account. On iPhone/iPad it opens Twitch's prefilled approval link directly and
+keeps the connection process alive when you return from the browser. Once
+connected, that authorization also syncs. Mobile live playback reports observed
+watch time and shows Twitch-provided points/streaks; Twitch remains authoritative
+about credit. Preview, paused and background time do not count.
+
+Tokens are cached in device Keychain, with only the access token shared with
+Top Shelf. Cloud copies use `CKRecord.encryptedValues` in the private
+`iCloud.com.thatcube.Strozz` database; no credential fields have public-database
+permissions. Signing out **this device** does not disconnect the others.
+**Manage connected account > Sign out all synced devices** requires confirmation
+and writes a cloud sign-out marker that other devices observe when connected.
+
+Twitch's device-flow refresh tokens are single-use. A conditional cloud record
+update reserves renewal before contacting Twitch, and a rotated pair is saved
+locally before publication. Other devices never take over an ambiguous renewal
+after an arbitrary timeout. If the renewing device loses connectivity, reopen
+Strozz there to finish; if it crashed before saving the new pair, Twitch approval
+may be necessary again. Expiry, revoked Twitch permission, or an unavailable
+iCloud account can also require attention; the UI reports these rather than
+claiming a permanent login.
+
+`Config/StrozzAccounts.ckdb` is the versioned CloudKit schema. Deploy its
+Development schema to Production before shipping TestFlight builds. Simulator
+tests cover conditional-write contention, account boundaries, pending renewal
+and sign-out fencing. Explicit Debug-only probes verify private encrypted
+cross-device reads and Keychain access using synthetic data, not Twitch tokens.
+Viewing history and VOD progress remain device-local.
 
 Build instructions, the Twitch auth setup, how playback is resolved, versioning,
 and release steps all live in **[CONTRIBUTING.md](CONTRIBUTING.md)**. Notes on
@@ -226,14 +288,31 @@ the low-latency playback work are in
 
 ### Brand assets
 
-Strozz is the new name of this app. The Xcode project, scheme, source module,
-assets, and repository use Strozz. Apple bundle IDs, the shared App Group, and the
-watch-rewards Keychain service intentionally retain their existing `Twozz`
-identifiers: changing those would create a different app or discard access to
-saved sign-ins. New channel links use `strozz://`; existing `twozz://` and
-`twizz://` links still open. Shared build/cleanup protocol identifiers also stay
+Strozz now has its own Apple app identity: `com.thatcube.Strozz`, with
+`com.thatcube.Strozz.TopShelfExtension`, App Group `group.com.thatcube.Strozz`,
+and Keychain service `com.thatcube.Strozz.watch-rewards`. The new universal
+App Store Connect record is `6819913170`; the legacy `com.thatcube.Twozz`
+record (`6782643545`, now named **Strozz Old**) and its installed data remain
+untouched.
+
+This is a clean replacement installation. Testers install the new TestFlight
+app and sign in again; local preferences, history, and saved sessions are not
+automatically imported. Separate storage prevents signing out of the new app
+from deleting the old app's credentials. Twitch-side follows, points, and
+streaks remain attached to the Twitch account. iCloud sign-in sync uses the new `iCloud.com.thatcube.Strozz` container; the old
+app does not participate.
+
+The Xcode project, scheme, source module, assets, and repository use Strozz.
+Channel links use `strozz://`; the parser also recognizes legacy `twozz://` and
+`twizz://` links. With both apps installed, custom-scheme routing can be ambiguous;
+use the intended app's own navigation until switching fully to the replacement.
+Shared build/cleanup protocol identifiers also stay
 unchanged for interoperability. Historical Git branches and commits are not
 renamed or rewritten.
+
+The diagnostics CLI defaults to the new app. To inspect a still-installed
+legacy build, explicitly pass `--bundle com.thatcube.Twozz`. Keep historical
+release archives and receipts associated with their original bundle ID.
 
 `Branding/strozz_logo.svg` is the canonical Strozz mark. The in-app SVG and
 transparent splash artwork use it unchanged; the layered tvOS icons and static
@@ -351,9 +430,10 @@ In **Settings > Accounts > Twitch Rewards**, connect watch rewards using
 the same Twitch account as your normal Strozz login. This is a separate,
 unofficial Twitch TV device-code connection: approve it on Twitch's activation
 page using your phone. Strozz never asks for your password. The rewards session
-is stored in a device-only Keychain item, not in preferences or the Top Shelf
-shared container. Disconnecting removes the saved rewards session from the TV;
-it does not sign out your normal account or revoke other Twitch sessions.
+is cached in a device-only Keychain item, never preferences or Top Shelf, and
+shared through encrypted private iCloud records. Disconnecting removes the
+rewards connection from synced Strozz devices; it does not sign out the normal
+Twitch account or revoke unrelated Twitch sessions.
 
 When connected, Strozz reports one minute only after observing a minute of
 advancing, visible Twitch live playback. Pauses, buffering, seeking, background

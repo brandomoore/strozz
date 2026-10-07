@@ -35,7 +35,7 @@ struct SettingsAccountSection: View {
 
           Spacer(minLength: 24)
 
-          Button("Sign Out", role: .destructive) {
+          Button("Sign out this device", role: .destructive) {
             showSignOutConfirm = true
           }
           .font(.headline)
@@ -47,11 +47,11 @@ struct SettingsAccountSection: View {
         .settingsGlassPanel(disabled: glassDisabled)
         .focusSection()
         .confirmationDialog(
-          "Sign out of Twitch?",
+          "Sign out on this device? Other synced devices stay connected.",
           isPresented: $showSignOutConfirm,
           titleVisibility: .visible
         ) {
-          Button("Sign Out", role: .destructive) {
+          Button("Sign out this device", role: .destructive) {
             auth.signOut()
             onAccountChanged()
           }
@@ -86,5 +86,9 @@ struct SettingsAccountSection: View {
         .focusSection()
       }
     }
+    TwitchICloudSyncControls(sync: environment.accountSync)
+      .padding(20)
+      .settingsGlassPanel(disabled: glassDisabled)
+      .focusSection()
   }
 }

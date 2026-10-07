@@ -3,25 +3,6 @@ import Observation
 
 // MARK: - Public moment models
 
-/// A live poll running on the watched channel.
-struct LivePoll: Equatable, Identifiable {
-  struct Choice: Equatable, Identifiable {
-    let id: String
-    let title: String
-    let votes: Int
-  }
-  let id: String
-  let title: String
-  let choices: [Choice]
-  let isActive: Bool
-
-  var totalVotes: Int { choices.reduce(0) { $0 + $1.votes } }
-  /// Leading choice fraction 0…1 (for a progress bar). Zero when no votes yet.
-  func fraction(of choice: Choice) -> Double {
-    totalVotes > 0 ? Double(choice.votes) / Double(totalVotes) : 0
-  }
-}
-
 /// A live Channel-Points prediction on the watched channel.
 struct LivePrediction: Equatable, Identifiable {
   enum Status: Equatable { case active, locked, resolved, canceled }

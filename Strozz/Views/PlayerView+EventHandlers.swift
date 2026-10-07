@@ -118,6 +118,25 @@ extension PlayerView {
       setIdleTimer(disabled: true)
       trackpad.start()
     }
+    .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.mediaServicesWereLostNotification)
+      .receive(on: RunLoop.main)) { _ in
+      handleMediaServicesLost()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.mediaServicesWereResetNotification)
+      .receive(on: RunLoop.main)) { _ in
+      handleMediaServicesReset()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
+      .receive(on: RunLoop.main)) { notification in
+      handleAudioInterruption(notification)
+    }
+    .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
+      .receive(on: RunLoop.main)) { notification in
+      recordPlaybackEvent("audio_route_changed", counters: [
+        "reason": (notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? NSNumber)?.intValue ?? -1
+      ])
+      recordPlaybackTelemetrySnapshot()
+    }
     .onReceive(player.publisher(for: \.timeControlStatus).receive(on: RunLoop.main)) { _ in
       updateWatchRewards()
       // Read the current item/status rather than a queued notification's value,
@@ -141,7 +160,7 @@ extension PlayerView {
       Task { await model.playbackTelemetry.flush() }
     }
     .onReceive(
-      NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
+      NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
     ) { _ in
       recordPlaybackEvent(
         "app_foregrounded",
@@ -249,6 +268,11 @@ extension PlayerView {
     }
     .onDisappear {
       cancelNativeStartup()
+      model.channelMetadataTask?.cancel()
+      model.channelMetadataTask = nil
+      model.mediaServicesResetPending = false
+      model.mediaServicesUnavailable = false
+      model.audioInterrupted = false
       model.watchTracker.stop()
       model.nativeRefreshTask?.cancel()
       model.nativeNeedsRefresh = false

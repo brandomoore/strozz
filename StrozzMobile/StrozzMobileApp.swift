@@ -6,6 +6,8 @@ import SwiftUI
 struct StrozzMobileApp: App {
   @State private var auth = TwitchAuthSession()
   @State private var theme = ThemeManager()
+  @State private var rewards = TwitchWatchRewardsSession()
+  @State private var accountSync = TwitchAccountSync()
 
   init() {
     SDImageCodersManager.shared.addCoder(SDImageWebPCoder.shared)
@@ -19,11 +21,18 @@ struct StrozzMobileApp: App {
         .id(auth.userID ?? "anonymous")
         .environment(auth)
         .environment(theme)
+        .environment(rewards)
+        .environment(accountSync)
         .preferredColorScheme(theme.theme.preferredColorScheme)
         .task {
           auth.restore()
+          accountSync.start(auth: auth, rewards: rewards)
           auth.startSessionValidation()
         }
+        .onChange(of: auth.userID) { _, userID in rewards.accountChanged(to: userID) }
+        #if DEBUG
+        .task { await TwitchCloudProbe.runIfRequested() }
+        #endif
     }
   }
 }

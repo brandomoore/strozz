@@ -51,6 +51,7 @@ struct ChannelMetadata {
     /// channels. Used only to seed the player's count instantly on open; live
     /// updates afterwards come from Hermes pubsub.
     let viewersCount: Int?
+    let streamStartedAt: Date?
 }
 
 /// Authoritative live state for a channel, used to decide whether to surface the
@@ -192,7 +193,7 @@ struct PlaybackService {
         var req = TwitchAPIClient.graphQLRequest(
             clientID: clientID, clientIDField: "Client-ID", userAgent: userAgent)
 
-        let query = "query ChannelMetadata($login: String!) { user(login: $login) { displayName profileImageURL(width: 70) stream { title viewersCount } } }"
+        let query = "query ChannelMetadata($login: String!) { user(login: $login) { displayName profileImageURL(width: 70) stream { title viewersCount createdAt } } }"
         let body: [String: Any] = [
             "query": query,
             "variables": ["login": channel.lowercased()],
@@ -202,7 +203,12 @@ struct PlaybackService {
         guard let (data, response) = try? await networkSession.data(for: req) else { return nil }
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard (200...299).contains(status) else { return nil }
+        return parseChannelMetadata(data, for: channel)
+    }
+
+    static func parseChannelMetadata(_ data: Data, for channel: String) -> ChannelMetadata? {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        guard json["errors"] == nil else { return nil }
         guard let dataObj = json["data"] as? [String: Any] else { return nil }
         guard let userObj = dataObj["user"] as? [String: Any] else { return nil }
 
@@ -217,7 +223,8 @@ struct PlaybackService {
             displayName: (displayName?.isEmpty == false ? displayName! : channel),
             title: title,
             profileImageURL: profileImageURL,
-            viewersCount: viewersCount
+            viewersCount: viewersCount,
+            streamStartedAt: parseDate(streamObj?["createdAt"])
         )
     }
 

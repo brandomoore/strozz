@@ -55,7 +55,7 @@ extension PlayerView {
             isLoading: isLoading
           )
           .padding(.trailing, loadingChatInset)
-          .opacity(isLoading && errorMessage == nil && !isOffline ? 1 : 0)
+          .opacity(model.presentationState == .loading ? 1 : 0)
           .allowsHitTesting(false)
           .animation(nil, value: isLoading)
         }
@@ -93,9 +93,7 @@ extension PlayerView {
         .transition(.opacity)
       }
 
-      if showControls, !isLoading,
-        errorMessage == nil, !isOffline
-      {
+      if showControls, model.presentationState == .ready {
         VStack {
           HStack(alignment: .top) {
             PlayerTitleHeader(
@@ -106,7 +104,8 @@ extension PlayerView {
               youtubeViewerCount: youtubeViewerCountForCurrentStream,
               showSubheader: !isVOD,
               showLatency: showLatencyBadge,
-              showViewerCount: showViewerCount
+              showViewerCount: showViewerCount,
+              streamStartedAt: isUsingAltSource ? nil : model.channelStreamStartedAt
             )
             Spacer(minLength: 24)
             if let remaining = sleepRemainingSeconds {

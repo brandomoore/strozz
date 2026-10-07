@@ -97,7 +97,7 @@ extension PlayerView {
         "selected_rate": Double(next),
       ]
     )
-    if !isUserPaused, !isScrubbing {
+    if shouldPlayAltSource {
       player.rate = next
     }
     updateRewindReadout()

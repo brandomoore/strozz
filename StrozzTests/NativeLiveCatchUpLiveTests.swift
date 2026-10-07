@@ -1,4 +1,5 @@
 import AVFoundation
+import AVKit
 import SwiftUI
 import XCTest
 @testable import Strozz
@@ -30,15 +31,37 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
     try await runLiveScenario(probeRecovery: false, probeQuality: true)
   }
 
+  func testOptInSustainedAutoQualityWithoutControllerIntervention() async throws {
+    guard ProcessInfo.processInfo.environment["STROZZ_NATIVE_STEADY_QUALITY_PROBE"] == "1" else {
+      throw XCTSkip("Set STROZZ_NATIVE_STEADY_QUALITY_PROBE=1 for a twelve-minute Auto quality check.")
+    }
+    try await runLiveScenario(probeRecovery: false, probeSteadyQuality: true)
+  }
+
   private func runLiveScenario(probeRecovery: Bool, probeDrift: Bool = false,
-                               probeQuality: Bool = false) async throws {
-    #if targetEnvironment(simulator)
-    guard let channel = ProcessInfo.processInfo.environment["STROZZ_CATCH_UP_LIVE_CHANNEL"],
+                               probeQuality: Bool = false, probeSteadyQuality: Bool = false) async throws {
+    #if !targetEnvironment(simulator)
+    guard probeSteadyQuality,
+      ProcessInfo.processInfo.environment["STROZZ_NATIVE_PHYSICAL_QUALITY_PROBE"] == "1" else {
+      throw XCTSkip("Physical playback requires explicit STROZZ_NATIVE_PHYSICAL_QUALITY_PROBE=1.")
+    }
+    #endif
+    guard var channel = ProcessInfo.processInfo.environment["STROZZ_CATCH_UP_LIVE_CHANNEL"],
       !channel.isEmpty, channel.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") })
     else { throw XCTSkip("Set STROZZ_CATCH_UP_LIVE_CHANNEL for a bounded live simulator check.") }
+    #if !targetEnvironment(simulator)
+    if await PlaybackService.streamLiveStatus(for: channel) == .offline,
+      let fallback = ProcessInfo.processInfo.environment["STROZZ_PHYSICAL_FALLBACK_CHANNEL"],
+      !fallback.isEmpty, fallback.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }) {
+      channel = fallback
+    }
+    #endif
     let environment = AppEnvironment()
     let model = PlayerModel()
     model.player.isMuted = true
+    #if !targetEnvironment(simulator)
+    model.player.isMuted = ProcessInfo.processInfo.environment["STROZZ_PHYSICAL_TEST_AUDIO"] != "1"
+    #endif
     var engineBeforeRetry: NativeLowLatencyHLS?
     let suite = "NativeCatchUpLive.\(UUID().uuidString)"
     let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -46,13 +69,17 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
     defaults.set(LivePlaybackProfile.nativeLowLatency.rawValue, forKey: PersistenceKey.livePlaybackProfile)
     defer { defaults.removePersistentDomain(forName: suite) }
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
-    let window = try XCTUnwrap(scene.keyWindow)
-    let previous = window.rootViewController
+    let previousWindow = scene.keyWindow
+    let window = UIWindow(windowScene: scene)
+    window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue + 1)
     let view = PlayerView(channel: channel, auth: environment.auth, model: model)
     window.rootViewController = UIHostingController(rootView:
       view.environment(environment).defaultAppStorage(defaults))
+    window.makeKeyAndVisible()
     defer {
-      window.rootViewController = previous
+      window.isHidden = true
+      window.rootViewController = nil
+      previousWindow?.makeKey()
       view.stopLatencyMonitor()
       view.stopPlaybackWatchdog()
       model.nativeHLS?.stop()
@@ -77,11 +104,43 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
     var qualitySamples: [[Bool]] = [[], [], []]
     var qualityFrameItem: AVPlayerItem?
     var qualityFrameOutput: AVPlayerItemVideoOutput?
-    let durationSeconds = probeDrift || probeQuality ? 240 : 180
+    var steadyQualitySamples = 0
+    var bestQualitySamples = 0
+    var severeQualitySamples = 0
+    let durationSeconds = probeSteadyQuality ? 720 : (probeDrift || probeQuality ? 240 : 180)
     for second in 0..<durationSeconds {
       try await Task.sleep(for: .seconds(1))
-      if !probeRecovery && !probeDrift && !probeQuality && second == 45 { model.player.currentItem?.preferredPeakBitRate = 1_500_000 }
-      if !probeRecovery && !probeDrift && !probeQuality && second == 90 { model.player.currentItem?.preferredPeakBitRate = 0 }
+      if probeSteadyQuality && second == 5 {
+        func surfaces(_ controller: UIViewController) -> String {
+          let ready = (controller as? AVPlayerViewController).map { " ready=\($0.isReadyForDisplay)" } ?? ""
+          return "\(type(of: controller)) bounds=\(controller.view.bounds) window=\(controller.view.window != nil)\(ready)\n"
+            + controller.children.map(surfaces).joined()
+        }
+        if let controller = window.rootViewController {
+          observations.append("Surface: key=\(window.isKeyWindow) hidden=\(window.isHidden)\n\(surfaces(controller))")
+          let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+          }
+          let attachment = XCTAttachment(image: image)
+          attachment.name = "Sustained quality player surface"
+          attachment.lifetime = .keepAlways
+          add(attachment)
+        }
+      }
+      if !probeRecovery && !probeDrift && !probeQuality && !probeSteadyQuality && second == 45 {
+        model.player.currentItem?.preferredPeakBitRate = 1_500_000
+      }
+      if !probeRecovery && !probeDrift && !probeQuality && !probeSteadyQuality && second == 90 {
+        model.player.currentItem?.preferredPeakBitRate = 0
+      }
+      if probeSteadyQuality && second >= 20 {
+        let best = try XCTUnwrap(model.playback?.qualities.filter { !$0.isAudioOnly }.max { $0.bitrate < $1.bitrate })
+        let height = try XCTUnwrap(PlayerView.verticalResolution(from: best.name))
+        let renderedHeight = model.player.currentItem?.presentationSize.height ?? 0
+        steadyQualitySamples += 1
+        if renderedHeight >= CGFloat(height) { bestQualitySamples += 1 }
+        if renderedHeight < CGFloat(min(height, 480)) { severeQualitySamples += 1 }
+      }
       if probeQuality && second >= 20 {
         let best = try XCTUnwrap(model.playback?.qualities.filter { !$0.isAudioOnly }.max { $0.bitrate < $1.bitrate })
         if second == 60 {
@@ -180,7 +239,8 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
       }
       previousClock = clock
       if second.isMultiple(of: 5) {
-        observations.append("\(second) native=\(model.isUsingNativeHLS) clock=\(clock) frameAge=\(model.playbackTelemetry.videoFrameAge ?? -1) age=\(ages.last ?? -1) rate=\(model.player.rate) extra=\(model.nativeCatchUp.extraDelay ?? -1) quality=\(model.resolvedQualityName ?? "-")")
+        let reportSeconds = await model.nativeHLS?.origin.snapshot().reportRefreshSeconds
+        observations.append("\(second) native=\(model.isUsingNativeHLS) clock=\(clock) frameAge=\(model.playbackTelemetry.videoFrameAge ?? -1) age=\(ages.last ?? -1) rate=\(model.player.rate) extra=\(model.nativeCatchUp.extraDelay ?? -1) quality=\(model.resolvedQualityName ?? "-") reportSeconds=\(reportSeconds ?? -1)")
       }
       if model.errorMessage != nil || model.isOffline || model.nativeFallbackReason != nil { break }
     }
@@ -192,6 +252,14 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
     XCTAssertNil(model.nativeFallbackReason)
     XCTAssertFalse(model.isOffline)
     XCTAssertTrue(model.isUsingNativeHLS)
+    if probeSteadyQuality {
+      XCTAssertEqual(view.preferredQuality, "Auto")
+      XCTAssertEqual(severeQualitySamples, 0, "Healthy Auto playback must not collapse to 160p/360p")
+      XCTAssertEqual(steadyQualitySamples, durationSeconds - 20)
+      XCTAssertGreaterThanOrEqual(bestQualitySamples, Int(ceil(Double(steadyQualitySamples) * 0.99)))
+      XCTAssertTrue(model.nativeRecovery.attempts.isEmpty)
+      XCTAssertEqual(model.player.currentItem?.accessLog()?.events.reduce(0) { $0 + $1.numberOfStalls }, 0)
+    }
     if probeQuality {
       for (index, samples) in qualitySamples.enumerated() {
         XCTAssertFalse(samples.isEmpty)
@@ -232,8 +300,5 @@ final class NativeLiveCatchUpLiveTests: XCTestCase {
     let sortedAges = ages.sorted()
     XCTAssertFalse(sortedAges.isEmpty)
     if !sortedAges.isEmpty { XCTAssertLessThan(sortedAges[sortedAges.count / 2], 10) }
-    #else
-    throw XCTSkip("This live smoke check only runs on an explicitly configured simulator.")
-    #endif
   }
 }

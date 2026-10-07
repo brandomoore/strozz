@@ -1,23 +1,24 @@
 import Foundation
+import OSLog
 
 /// The minimum Twitch credentials the Top Shelf extension needs to fetch fresh
 /// live streams at render time.
-struct TopShelfCredentials: Equatable {
+struct TopShelfCredentials: Equatable, Codable {
     var clientID: String
     var accessToken: String
     var userID: String
 }
 
 /// Shares read-only Twitch credentials from the main app to Top Shelf through
-/// the App Group `UserDefaults` suite.
+/// an App Group Keychain item. Refresh tokens stay in the main app's Keychain.
 ///
 /// The extension runs in a separate process and cannot see the app's in-memory
 /// auth state. Only the main app rotates refresh tokens: an extension can be
 /// terminated after Twitch spends a refresh token but before persistence, which
 /// would irrecoverably lose the replacement token.
 enum TopShelfCredentialStore {
-    // Canonical key strings. `TwitchAuthSession` references these so the app and
-    // the extension always read and write the same `UserDefaults` entries.
+    private static let service = "com.thatcube.Strozz.topshelf-auth"
+    // Legacy defaults keys retained only for migration of existing installs.
     static let clientIDKey = "twitch.auth.clientID"
     static let accessTokenKey = "twitch.auth.accessToken"
     static let refreshTokenKey = "twitch.auth.refreshToken"
@@ -29,9 +30,16 @@ enum TopShelfCredentialStore {
         UserDefaults(suiteName: TopShelf.appGroupID) ?? .standard
     }
 
-    /// Returns the shared credentials, or `nil` when the user is not signed in
-    /// (no access token / user id) or the client id has not been mirrored yet.
+    /// The extension reads only the access token; it never rotates refresh tokens.
     static func load() -> TopShelfCredentials? {
+        do {
+            if let data = try CredentialKeychain.read(service: service, group: TopShelf.appGroupID) {
+                return try JSONDecoder().decode(TopShelfCredentials.self, from: data)
+            }
+        } catch {
+            Logger(subsystem: "com.thatcube.Strozz", category: "credentials").error("Top Shelf credentials unavailable")
+            return nil
+        }
         let defaults = defaults
         guard let clientID = nonEmpty(defaults.string(forKey: clientIDKey)),
               let accessToken = nonEmpty(defaults.string(forKey: accessTokenKey)),
@@ -43,6 +51,14 @@ enum TopShelfCredentialStore {
             accessToken: accessToken,
             userID: userID
         )
+    }
+
+    static func save(_ credentials: TopShelfCredentials?) throws {
+        if let credentials {
+            try CredentialKeychain.write(JSONEncoder().encode(credentials), service: service, group: TopShelf.appGroupID)
+        } else {
+            try CredentialKeychain.remove(service: service, group: TopShelf.appGroupID)
+        }
     }
 
     private static func nonEmpty(_ value: String?) -> String? {

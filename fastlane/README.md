@@ -30,11 +30,61 @@ directory `ASC_KEY_PATH` points at); only its path is referenced.
 
 ## Shipping a build
 
-The project and scheme are `Strozz`. Keep `APP_IDENTIFIER` set to
-`com.thatcube.Twozz`: Apple identifies the existing app and its TestFlight builds
-by this immutable bundle ID, not by the displayed name. The App Store Connect
-name and the metadata in `metadata/en-US` use **Strozz**. Do not create a second
-app record or replace the App Group/Keychain identifiers during a rename.
+The project and scheme are `Strozz`. `APP_IDENTIFIER` is
+`com.thatcube.Strozz`, the new universal app record (`6819913170`).
+The legacy `com.thatcube.Twozz` record (`6782643545`, **Strozz Old**) is a
+separate app and remains available; new builds must not be uploaded to it.
+The new app uses App Group `group.com.thatcube.Strozz` and its own rewards
+Keychain service. This replacement is not an automatic update to legacy installs.
+
+These lanes still build **tvOS only**. An iPhone/iPad archive must use the
+`StrozzMobile` scheme and the same new bundle ID. Any separately maintained
+release runner must verify the new app and Top Shelf identifiers before upload;
+historical runners/receipts for the legacy app must not be reused unmodified.
+
+### Explicit tvOS development profiles
+
+If automatic signing falls back to a wildcard profile that lacks App Groups,
+install an explicit **tvOS App Development** profile for each target. Both
+profiles must include `group.com.thatcube.Strozz`, the development certificate
+available on your Mac, and your registered test device:
+
+- App: `com.thatcube.Strozz`
+- Top Shelf: `com.thatcube.Strozz.TopShelfExtension`
+
+Copy `Config/Signing.xcconfig.example` to the gitignored
+`Config/Signing.xcconfig.local`, then set the two installed profile names.
+`Config/Development.xcconfig` loads this override, and `project.yml` applies it
+only to **Debug builds for a physical tvOS device**. Regenerate with
+`./tools/generate-project.sh`; the profile choices survive regeneration.
+
+Without the local file, signing remains automatic. Simulator, iPhone/iPad and
+Release configurations do not receive the tvOS development-profile overrides.
+The example also lists **separate**, optional iOS development and per-platform
+Release distribution overrides. `Config/Release.xcconfig` only consumes the
+Release keys, so a development profile cannot leak into a TestFlight archive.
+In particular, these profiles do not replace the distribution profiles required
+by TestFlight archives. Never disable signing or remove App Groups to work
+around an incompatible profile.
+
+### CloudKit distribution prerequisites
+
+The main iOS/tvOS app profiles must include CloudKit container
+`iCloud.com.thatcube.Strozz` and App Group `group.com.thatcube.Strozz`.
+Apple also requires `aps-environment` for tvOS CloudKit apps; enable Push
+Notifications on the app ID and regenerate profiles after changing capabilities.
+Release entitlements use `production`, and development uses `development`.
+This capability alone does not request user-facing notification permission.
+Top Shelf needs the App Group only. Release builds select the Production
+CloudKit environment; Debug defaults to Development. A deliberately authorized
+device verification can pass `STROZZ_ICLOUD_ENVIRONMENT=Production` to exercise
+the same private schema that TestFlight will use.
+
+Validate/import `Config/StrozzAccounts.ckdb` into Development with `cktool`,
+then use CloudKit Console's **Deploy Schema Changes** to promote it. Export and
+verify Production before uploading. Store management tokens with
+`xcrun cktool save-token --type management --method keychain`, never in the
+repository or shell command arguments.
 
 ```bash
 fastlane beta --env fastlane

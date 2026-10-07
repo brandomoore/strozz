@@ -33,6 +33,8 @@ final class MobilePlaybackModel {
   private(set) var isPaused = false
   private(set) var isMuted: Bool
   private(set) var isExternalPlayback = false
+  private(set) var livePosition = LivePlaybackPosition()
+  private(set) var streamStartedAt: Date?
 
   @ObservationIgnored private var channel = ""
   @ObservationIgnored private var generation = UUID()
@@ -40,6 +42,7 @@ final class MobilePlaybackModel {
   @ObservationIgnored private var videoOutput: AVPlayerItemVideoOutput?
   @ObservationIgnored private var loadTask: Task<Void, Never>?
   @ObservationIgnored private var monitorTask: Task<Void, Never>?
+  @ObservationIgnored private var metadataTask: Task<Void, Never>?
   @ObservationIgnored private var jumpObserver: NSObjectProtocol?
   @ObservationIgnored private var rateObserver: NSKeyValueObservation?
   @ObservationIgnored private var routeObserver: NSKeyValueObservation?
@@ -50,11 +53,21 @@ final class MobilePlaybackModel {
   @ObservationIgnored private var suspendedPosition: Position?
   @ObservationIgnored private var loadingPosition: Position?
   @ObservationIgnored private var audioSessionActive = false
+  @ObservationIgnored private var audioObservers: [NSObjectProtocol] = []
+  @ObservationIgnored private var interruptedPosition: Position?
+  @ObservationIgnored private var resetPosition: Position?
+  @ObservationIgnored private var mediaServicesUnavailable = false
+  @ObservationIgnored private var mediaResetInProgress = false
+  @ObservationIgnored private var needsFreshPlayer = false
+  @ObservationIgnored var activateAudioSession: @MainActor () throws -> Void = PlaybackAudioSession.activate
   @ObservationIgnored private var triedDecodeRecovery = false
   @ObservationIgnored private var nativeRecovery = NativePlaybackRecovery()
   @ObservationIgnored private let muteForTesting: Bool
   @ObservationIgnored private let resolve: (String) async throws -> StreamPlayback
-  private static let logger = Logger(subsystem: "com.thatcube.Twozz", category: "mobile-playback")
+  @ObservationIgnored var loadMetadata: (String) async -> ChannelMetadata? = {
+    await PlaybackService.channelMetadata(for: $0)
+  }
+  private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "mobile-playback")
 
   struct Position {
     var shouldPlay: Bool
@@ -90,6 +103,17 @@ final class MobilePlaybackModel {
     prefersNativePlayback && nativeFailure == nil && !isAudioOnly && !isExternalPlayback
   }
 
+  var presentationState: PlaybackPresentationState {
+    .init(isLoading: isLoading,
+      awaitingVideo: !isReadyForDisplay && !isAudioOnly && !isPaused && !isExternalPlayback,
+      isUnavailable: errorMessage != nil)
+  }
+
+  var liveStatus: LivePlaybackPosition.State {
+    guard presentationState == .ready else { return .checking }
+    return isPaused ? .paused : livePosition.state
+  }
+
   func displayReady(_ ready: Bool, for source: AVPlayer) {
     guard player === source else { return }
     isReadyForDisplay = ready
@@ -100,6 +124,8 @@ final class MobilePlaybackModel {
     guard !isActive else { return }
     self.channel = channel
     isActive = true
+    refreshStreamMetadata()
+    observeAudioSession()
     chat.connect(to: channel)
     load(position: Position(shouldPlay: true, date: nil))
   }
@@ -118,12 +144,20 @@ final class MobilePlaybackModel {
 
   func goLive() {
     followsLive = true
+    refreshStreamMetadata()
     load(position: Position(shouldPlay: true, date: nil))
   }
 
   func togglePlayPause() {
+    if var interrupted = interruptedPosition {
+      interrupted.shouldPlay = false
+      interruptedPosition = interrupted
+      isPaused = true
+      return
+    }
     guard !isLoading, errorMessage == nil, player.currentItem != nil else { return }
     if isPaused {
+      guard prepareAudioSession() else { return }
       isPaused = false
       player.play()
     } else {
@@ -147,12 +181,15 @@ final class MobilePlaybackModel {
   }
 
   func retry() {
+    refreshStreamMetadata()
     load(position: Position(shouldPlay: true, date: nil))
   }
 
   func suspend() {
     guard isActive, suspendedPosition == nil else { return }
     suspendedPosition = position()
+    needsFreshPlayer = true
+    mediaResetInProgress = false
     invalidate()
     chat.disconnect()
     releaseAudioSession()
@@ -162,21 +199,155 @@ final class MobilePlaybackModel {
     guard isActive, let position = suspendedPosition else { return }
     suspendedPosition = nil
     chat.connect(to: channel)
+    refreshStreamMetadata()
     load(position: position)
   }
 
   func stop() {
     isActive = false
+    metadataTask?.cancel()
+    metadataTask = nil
+    streamStartedAt = nil
     suspendedPosition = nil
+    interruptedPosition = nil
+    resetPosition = nil
+    mediaServicesUnavailable = false
+    mediaResetInProgress = false
+    for observer in audioObservers { NotificationCenter.default.removeObserver(observer) }
+    audioObservers.removeAll()
     invalidate()
     chat.disconnect()
     releaseAudioSession()
   }
 
   private func position() -> Position {
+    if let suspendedPosition { return suspendedPosition }
+    if let resetPosition { return resetPosition }
+    if let interruptedPosition { return interruptedPosition }
     if let loadingPosition { return loadingPosition }
-    return Position(shouldPlay: player.timeControlStatus != .paused,
-             date: followsLive && player.timeControlStatus != .paused ? nil : player.currentItem?.currentDate())
+    return Position(shouldPlay: !isPaused,
+             date: followsLive && !isPaused ? nil : player.currentItem?.currentDate())
+  }
+
+  private func refreshStreamMetadata() {
+    guard isActive else { return }
+    metadataTask?.cancel()
+    let login = channel
+    let loadMetadata = loadMetadata
+    metadataTask = Task { [weak self] in
+      let metadata = await loadMetadata(login)
+      guard let self, self.isActive, self.channel == login, !Task.isCancelled else { return }
+      self.streamStartedAt = metadata?.streamStartedAt
+      if metadata == nil { Self.logger.warning("Mobile stream metadata unavailable") }
+    }
+  }
+
+  private func prepareAudioSession() -> Bool {
+    guard isActive, suspendedPosition == nil, interruptedPosition == nil,
+      !mediaServicesUnavailable else { return false }
+    do {
+      try activateAudioSession()
+      audioSessionActive = true
+      return true
+    } catch {
+      fail(String(localized: "Couldn't start audio playback. Please try again."))
+      Self.logger.error("Could not activate mobile audio: \(error.localizedDescription, privacy: .public)")
+      return false
+    }
+  }
+
+  private func recreatePlayer() {
+    let previous = player
+    previous.pause()
+    previous.replaceCurrentItem(with: nil)
+    let replacement = AVPlayer()
+    replacement.volume = previous.volume
+    replacement.isMuted = isMuted || muteForTesting
+    replacement.automaticallyWaitsToMinimizeStalling = previous.automaticallyWaitsToMinimizeStalling
+    replacement.allowsExternalPlayback = previous.allowsExternalPlayback
+    replacement.appliesMediaSelectionCriteriaAutomatically = previous.appliesMediaSelectionCriteriaAutomatically
+    replacement.actionAtItemEnd = previous.actionAtItemEnd
+    player = replacement
+  }
+
+  private func observeAudioSession() {
+    guard audioObservers.isEmpty else { return }
+    let center = NotificationCenter.default
+    audioObservers = [
+      center.addObserver(forName: AVAudioSession.mediaServicesWereLostNotification, object: nil, queue: .main) {
+        [weak self] _ in MainActor.assumeIsolated { self?.handleMediaServicesLost() }
+      },
+      center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) {
+        [weak self] _ in MainActor.assumeIsolated { self?.handleMediaServicesReset() }
+      },
+      center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) {
+        [weak self] notification in
+        let type = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+        let options = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+        MainActor.assumeIsolated { self?.handleAudioInterruption(type: type, options: options) }
+      },
+    ]
+  }
+
+  func handleMediaServicesLost() {
+    guard isActive else { return }
+    resetPosition = position()
+    mediaServicesUnavailable = true
+    mediaResetInProgress = false
+    needsFreshPlayer = true
+    audioSessionActive = false
+    invalidate()
+    isLoading = true
+    Self.logger.warning("Mobile media services lost; waiting for reset")
+  }
+
+  func handleMediaServicesReset() {
+    guard isActive, !mediaResetInProgress else { return }
+    let saved = position()
+    resetPosition = saved
+    mediaServicesUnavailable = false
+    needsFreshPlayer = true
+    audioSessionActive = false
+    Self.logger.warning("Recreating mobile playback after media services reset")
+    if suspendedPosition != nil {
+      suspendedPosition = saved
+      return
+    }
+    if interruptedPosition != nil { return }
+    mediaResetInProgress = true
+    load(position: saved)
+  }
+
+  func handleAudioInterruption(_ notification: Notification) {
+    handleAudioInterruption(
+      type: notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+      options: notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0)
+  }
+
+  private func handleAudioInterruption(type value: UInt?, options: UInt) {
+    guard isActive, let value,
+      let type = AVAudioSession.InterruptionType(rawValue: value) else { return }
+    switch type {
+    case .began:
+      guard interruptedPosition == nil else { return }
+      interruptedPosition = position()
+      mediaResetInProgress = false
+      audioSessionActive = false
+      invalidate()
+      isLoading = true
+      Self.logger.info("Mobile playback interrupted")
+    case .ended:
+      guard var saved = interruptedPosition else { return }
+      interruptedPosition = nil
+      let options = AVAudioSession.InterruptionOptions(rawValue: options)
+      saved.shouldPlay = saved.shouldPlay && options.contains(.shouldResume)
+      isPaused = !saved.shouldPlay
+      if suspendedPosition != nil { suspendedPosition = saved }
+      else if mediaServicesUnavailable { resetPosition = saved }
+      else { load(position: saved) }
+    @unknown default:
+      Self.logger.warning("Unknown mobile audio interruption")
+    }
   }
 
   private func releaseAudioSession() {
@@ -208,6 +379,7 @@ final class MobilePlaybackModel {
     catchUp = NativeLiveCatchUp()
     catchUpRateChange = nil
     baseline.itemChanged()
+    livePosition = LivePlaybackPosition()
     extraChatDelay = nil
     chat.configureChatSync(enabled: false, delaySeconds: 0)
     isLoading = false
@@ -216,8 +388,13 @@ final class MobilePlaybackModel {
   }
 
   private func load(position: Position) {
-    guard isActive, suspendedPosition == nil else { return }
+    guard isActive, suspendedPosition == nil, interruptedPosition == nil,
+      !mediaServicesUnavailable else { return }
     invalidate()
+    if needsFreshPlayer || player.status == .failed {
+      recreatePlayer()
+      needsFreshPlayer = false
+    }
     let request = generation
     let selection = selection
     isLoading = true
@@ -227,10 +404,8 @@ final class MobilePlaybackModel {
     errorMessage = nil
     loadTask = Task { [weak self] in
       guard let self else { return }
+      guard prepareAudioSession() else { return }
       do {
-        try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
-        try AVAudioSession.sharedInstance().setActive(true)
-        audioSessionActive = true
         let playback = try await resolve(channel)
         guard isCurrent(request) else { return }
         qualities = playback.qualities
@@ -258,19 +433,21 @@ final class MobilePlaybackModel {
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [:])
         item.add(output)
         videoOutput = output
-        // Keep AVKit's rendering owner stable across normal source changes.
-        // Only a terminally failed player requires a new owner and surface.
-        if player.status == .failed { player = AVPlayer() }
+        // Ordinary quality changes retain their AVKit owner. Foreground/reset
+        // recovery replaces it before constructing the new item.
+        if player.status == .failed { recreatePlayer() }
         player.replaceCurrentItem(with: item)
         if player.currentItem !== item {
-          player = AVPlayer(playerItem: item)
+          recreatePlayer()
+          player.replaceCurrentItem(with: item)
         }
         guard player.currentItem === item else { throw MobilePlaybackError.unavailable }
         player.isMuted = isMuted || muteForTesting
         player.allowsExternalPlayback = !useNative
         if position.shouldPlay && position.date == nil { player.play() }
         let deadline = ContinuousClock.now.advanced(by: .seconds(30))
-        while item.status != .readyToPlay ||
+        while (item.status != .readyToPlay &&
+          !(position.date != nil && !item.seekableTimeRanges.isEmpty && item.currentDate() != nil)) ||
           (useNative && position.shouldPlay && item.seekableTimeRanges.isEmpty) {
           guard isCurrent(request) else { return }
           if item.status == .failed { throw item.error ?? MobilePlaybackError.unavailable }
@@ -295,15 +472,20 @@ final class MobilePlaybackModel {
             if offset.seconds.isFinite, offset.seconds >= 0 { item.configuredTimeOffsetFromLive = offset }
             item.automaticallyPreservesTimeOffsetFromLive = false
           }
-          let timeout = Task { [weak self, weak item] in
-            do { try await Task.sleep(for: .seconds(5)) } catch { return }
-            guard self?.isCurrent(request) == true else { return }
-            item?.cancelPendingSeeks()
-          }
           let restored: Bool
-          if let date = position.date { restored = await player.seek(to: date) }
-          else { restored = await player.seek(to: .positiveInfinity) }
-          timeout.cancel()
+          if let date = position.date {
+            restored = await PlaybackPositionRestoration.restore(date, on: item) { [weak self] in
+              self?.isCurrent(request) == true && self?.player.currentItem === item
+            }
+          } else {
+            let timeout = Task { [weak self, weak item] in
+              do { try await Task.sleep(for: .seconds(5)) } catch { return }
+              guard self?.isCurrent(request) == true else { return }
+              item?.cancelPendingSeeks()
+            }
+            restored = await player.seek(to: .positiveInfinity)
+            timeout.cancel()
+          }
           guard isCurrent(request) else { return }
           if !restored {
             throw position.date == nil ? MobilePlaybackError.timeout : MobilePlaybackError.positionUnavailable
@@ -312,12 +494,20 @@ final class MobilePlaybackModel {
         }
         isLoading = false
         loadingPosition = nil
+        resetPosition = nil
+        mediaResetInProgress = false
         if useNative { recoveryNotice = nil }
         installIntentObservers(item: item, request: request)
         startMonitor(item: item, request: request)
       } catch {
         guard isCurrent(request) else { return }
-        if requestsNativePlayback && (error as? MobilePlaybackError) != .positionUnavailable
+        if PlaybackAudioSession.isMediaServicesReset(error) {
+          if mediaResetInProgress {
+            fail(String(localized: "Audio services haven't recovered. Please try again."))
+          } else {
+            handleMediaServicesReset()
+          }
+        } else if requestsNativePlayback && (error as? MobilePlaybackError) != .positionUnavailable
           && (error as? MobilePlaybackError) != .qualityUnavailable {
           recoverNative(error as? NativeHLSError ?? .unavailable,
                         detail: error.localizedDescription, position: position)
@@ -329,7 +519,8 @@ final class MobilePlaybackModel {
   }
 
   private func isCurrent(_ request: UUID) -> Bool {
-    isActive && suspendedPosition == nil && request == generation && !Task.isCancelled
+    isActive && suspendedPosition == nil && interruptedPosition == nil
+      && !mediaServicesUnavailable && request == generation && !Task.isCancelled
   }
 
   private func fallback(_ reason: String, position: Position? = nil) {
@@ -342,7 +533,8 @@ final class MobilePlaybackModel {
   }
 
   func recoverNative(_ reason: NativeHLSError, detail: String? = nil, position: Position? = nil) {
-    guard isActive, suspendedPosition == nil, requestsNativePlayback else { return }
+    guard isActive, suspendedPosition == nil, interruptedPosition == nil,
+      !mediaServicesUnavailable, requestsNativePlayback else { return }
     guard nativeRecovery.takeRetry(for: reason) else {
       fallback(detail ?? reason.rawValue, position: position)
       return
@@ -355,6 +547,8 @@ final class MobilePlaybackModel {
 
   private func fail(_ message: String) {
     invalidate()
+    mediaResetInProgress = false
+    resetPosition = nil
     errorMessage = message
     releaseAudioSession()
     Self.logger.error("Mobile playback failed: \(message, privacy: .public)")
@@ -390,7 +584,8 @@ final class MobilePlaybackModel {
     rateObserver = player.observe(\.rate, options: [.initial, .new]) { [weak self] player, _ in
       let paused = player.rate == 0 && player.timeControlStatus == .paused
       Task { @MainActor [weak self] in
-        guard let self, self.isCurrent(request) else { return }
+        guard let self, self.isCurrent(request),
+          self.player.status != .failed, item.status != .failed else { return }
         self.isPaused = paused
         if paused { self.stopFollowingLive() }
       }
@@ -435,6 +630,11 @@ final class MobilePlaybackModel {
           return
         }
         if player.status == .failed || item.status == .failed {
+          if PlaybackAudioSession.isMediaServicesReset(player.error)
+            || PlaybackAudioSession.isMediaServicesReset(item.error) {
+            handleMediaServicesReset()
+            return
+          }
           let reason = item.error?.localizedDescription ?? player.error?.localizedDescription
             ?? MobilePlaybackError.unavailable.localizedDescription
           if engine != nil { recoverNative(.unavailable, detail: reason) } else { fail(reason) }
@@ -474,6 +674,7 @@ final class MobilePlaybackModel {
                          canCalibrate: followsLive && playing && buffer >= 1 && !catchUp.isActive,
                          now: Date(), uptime: uptime)
         extraChatDelay = baseline.extraDelay
+        livePosition.observe(extraDelay: baseline.extraDelay)
         chat.configureChatSync(
           enabled: UserDefaults.standard.bool(forKey: PersistenceKey.chatSyncToStream),
           delaySeconds: extraChatDelay ?? 0)

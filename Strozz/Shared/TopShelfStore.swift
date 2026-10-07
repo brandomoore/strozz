@@ -5,8 +5,8 @@ import Foundation
 enum TopShelf {
     /// App Group shared between the app and the Top Shelf extension. Must match
     /// the `com.apple.security.application-groups` entitlement on both targets.
-    /// Keep the shipping identifier so upgrades retain sign-ins and snapshots.
-    static let appGroupID = "group.com.thatcube.Twozz"
+    /// Separate from the legacy app so either installation can sign out independently.
+    static let appGroupID = "group.com.thatcube.Strozz"
 
     /// File name of the snapshot inside the shared container.
     static let snapshotFileName = "topshelf-snapshot.json"

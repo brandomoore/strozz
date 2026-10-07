@@ -191,6 +191,7 @@ extension PlayerView {
 
   var shouldPlayAltSource: Bool {
     !isUserPaused && !isScrubbing && !isSleeping && backgroundedAt == nil && channelPageTarget == nil
+      && !model.audioInterrupted && !model.mediaServicesUnavailable && !model.audioSessionActivationFailed
   }
 
   /// Invalidate asynchronous source work on a deliberate switch or teardown,

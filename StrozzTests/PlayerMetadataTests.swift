@@ -10,6 +10,7 @@ final class PlayerMetadataTests: XCTestCase {
     model.channelDisplayName = "Example"
     model.streamTitle = "Today's live broadcast"
     model.channelAvatarURL = URL(string: "https://example.com/avatar.png")
+    model.channelStreamStartedAt = Date(timeIntervalSince1970: 1000)
     model.errorMessage = "Previous load failed"
     model.isOffline = true
     model.isLoading = false
@@ -19,6 +20,7 @@ final class PlayerMetadataTests: XCTestCase {
     XCTAssertEqual(model.streamTitle, "Today's live broadcast")
     XCTAssertEqual(model.channelDisplayName, "Example")
     XCTAssertEqual(model.channelAvatarURL, URL(string: "https://example.com/avatar.png"))
+    XCTAssertEqual(model.channelStreamStartedAt, Date(timeIntervalSince1970: 1000))
     XCTAssertTrue(model.isLoading)
     XCTAssertNil(model.errorMessage)
     XCTAssertFalse(model.isOffline)
@@ -50,6 +52,7 @@ final class PlayerMetadataTests: XCTestCase {
     XCTAssertTrue(model.streamTitle.isEmpty)
     XCTAssertTrue(model.channelDisplayName.isEmpty)
     XCTAssertNil(model.channelAvatarURL)
+    XCTAssertNil(model.channelStreamStartedAt)
   }
 
   func testReloadPreservesBroadcastTitleDuringRewindHandoff() {

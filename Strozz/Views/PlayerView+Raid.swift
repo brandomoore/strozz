@@ -133,6 +133,7 @@ extension PlayerView {
     streamTitle = ""
     channelDisplayName = ""
     channelAvatarURL = nil
+    model.channelStreamStartedAt = nil
     isRecoveringPlayback = false
     altResolveInFlight = false
     beginPlaybackTelemetry()

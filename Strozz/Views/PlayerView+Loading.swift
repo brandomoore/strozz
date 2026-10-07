@@ -140,8 +140,10 @@ extension PlayerView {
         playback = resolved
         replacePlaybackItem(with: makeItem(url: resolved.url(forQuality: preferredQuality)))
         if shouldPlayAltSource { startPlayback() }
+        if model.audioSessionActivationFailed { return }
 
         let started = await waitForPlaybackStart()
+        if model.audioSessionActivationFailed { return }
         guard telemetrySessionID == model.playbackTelemetry.sessionID,
           loadingChannel == activeChannel, sourceGeneration == model.altRecovery.generation else { return }
         if !started {
@@ -254,6 +256,13 @@ extension PlayerView {
     var restartSerial = model.nativeRestartSerial
 
     while Date() < deadline {
+      if model.audioSessionActivationFailed { return false }
+      if model.audioInterrupted || model.mediaServicesUnavailable {
+        guard !Task.isCancelled else { return false }
+        deadline = Date().addingTimeInterval(startupPlaybackTimeoutSeconds)
+        do { try await Task.sleep(for: .milliseconds(50)) } catch { return false }
+        continue
+      }
       if model.nativeNeedsRefresh || restartSerial != model.nativeRestartSerial {
         guard let refresh = model.nativeRefreshTask else { return false }
         await refresh.value
@@ -454,6 +463,11 @@ extension PlayerView {
   ) {
     guard model.isUsingNativeHLS, !model.nativeNeedsRefresh,
       backgroundedAt == nil, !isUsingAltSource, !isVOD else { return }
+    if PlaybackAudioSession.isMediaServicesReset(player.error)
+      || PlaybackAudioSession.isMediaServicesReset(player.currentItem?.error) {
+      handleMediaServicesReset(resolve: resolve)
+      return
+    }
     guard model.nativeRecovery.takeRetry(for: reason) else {
       fallbackFromNativeHLS(reason)
       return
@@ -472,37 +486,16 @@ extension PlayerView {
   }
 
   func restoreNativePosition(_ position: Date, item: AVPlayerItem, generation: UUID, intent: UUID) async {
-    var canSeek = false
-    for _ in 0..<100 {
-      guard !Task.isCancelled, item === player.currentItem, generation == model.nativeGeneration,
-        intent == model.nativePositionIntent else { return }
-      if item.status == .failed { break }
-      // A fresh paused HLS owner can expose its date timeline before readyToPlay.
-      // The seek prepares it without briefly resuming a paused viewer.
-      if item.status == .readyToPlay || (!item.seekableTimeRanges.isEmpty && item.currentDate() != nil) {
-        canSeek = true
-        break
-      }
-      do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+    let restored = await PlaybackPositionRestoration.restore(position, on: item) {
+      item === player.currentItem && generation == model.nativeGeneration
+        && intent == model.nativePositionIntent
     }
     guard !Task.isCancelled, item === player.currentItem, generation == model.nativeGeneration,
       intent == model.nativePositionIntent else { return }
-    let restored: Bool
-    if canSeek {
-      let timeout = Task { @MainActor in
-        do { try await Task.sleep(for: .seconds(5)) } catch { return }
-        guard item === player.currentItem, generation == model.nativeGeneration,
-          intent == model.nativePositionIntent else { return }
-        item.cancelPendingSeeks()
-      }
-      restored = await item.seek(to: position)
-      timeout.cancel()
-    } else {
-      restored = false
-    }
-    guard !Task.isCancelled, item === player.currentItem, generation == model.nativeGeneration,
-      intent == model.nativePositionIntent else { return }
-    recordPlaybackEvent("native_hls_position_restore", flags: ["restored": restored])
+    let positionError = item.currentDate().map { $0.timeIntervalSince(position) }
+    recordPlaybackEvent("native_hls_position_restore",
+      metrics: positionError.map { ["position_error_seconds": $0] } ?? [:],
+      flags: ["restored": restored])
     guard restored else {
       player.pause()
       errorMessage = String(localized: "Couldn't restore the previous playback position. Return to live to continue.")
@@ -520,6 +513,7 @@ extension PlayerView {
     model.nativeNeedsRefresh = true
     model.nativeResumePosition = (!pinnedToLive || isUserPaused) ? player.currentItem?.currentDate() : nil
     model.nativeRefreshTask?.cancel()
+    model.nativeRefreshTask = nil
     model.fallbackRestoreTask?.cancel()
     model.nativeGeneration = UUID()
     model.nativeHLS?.stop()
@@ -541,6 +535,9 @@ extension PlayerView {
     let initialPosition = model.nativeResumePosition
     let initialIntent = model.nativePositionIntent
     model.nativeRefreshTask = Task { @MainActor in
+      defer {
+        if generation == model.nativeGeneration { model.nativeRefreshTask = nil }
+      }
       do {
         let resolved: StreamPlayback
         if let resolve { resolved = try await resolve() }
@@ -548,15 +545,18 @@ extension PlayerView {
         guard !Task.isCancelled, model.nativeNeedsRefresh, generation == model.nativeGeneration,
           sessionID == model.playbackTelemetry.sessionID, channel == activeChannel,
           backgroundedAt == nil, !isUsingAltSource, !isVOD else { return }
+        guard !model.mediaServicesUnavailable else { return }
         let intent = model.nativePositionIntent
         let position = intent == initialIntent ? initialPosition
           : ((!pinnedToLive || isUserPaused) ? player.currentItem?.currentDate() : nil)
         playback = resolved
         model.nativeFallbackReason = nil
         let item = makeItem(url: resolved.url(forQuality: preferredQuality))
-        if reason == "suspension" {
+        if reason == "suspension" || model.mediaServicesResetPending {
           // Video progress does not prove the old audio renderer survived suspension.
-          rebuildPlaybackPlayer(reason: "native_foreground_refresh", isFailure: false)
+          rebuildPlaybackPlayer(reason: model.mediaServicesResetPending
+            ? "media_services_reset" : "native_foreground_refresh", isFailure: false)
+          model.mediaServicesResetPending = false
         }
         replacePlaybackItem(with: item)
         recordPlaybackEvent(reason == "suspension"
@@ -664,6 +664,8 @@ extension PlayerView {
   }
 
   func startPlayback() {
+    guard !isUserPaused, !isScrubbing, !isSleeping, backgroundedAt == nil,
+      channelPageTarget == nil, preparePlaybackAudio(reason: "play") else { return }
     didRequestPlayback = true
     recordPlaybackEvent(
       "play_requested",
@@ -783,6 +785,8 @@ extension PlayerView {
   func handleReturnToForeground() {
     guard let leftAt = backgroundedAt else { return }
     backgroundedAt = nil
+    model.channelMetadataTask?.cancel()
+    model.channelMetadataTask = Task { await refreshChannelMetadata() }
     resetPlaybackHealth()
     let backgroundDuration = Date().timeIntervalSince(leftAt)
     let restoreLive = model.endPlaybackAbsence(
@@ -798,7 +802,12 @@ extension PlayerView {
 
   func resumePlaybackAfterAbsence(restoreLive: Bool) {
     guard !isOffline, !isSleeping, backgroundedAt == nil, channelPageTarget == nil,
-      !model.livePlaybackReturn.isAway else { return }
+      !model.livePlaybackReturn.isAway, !model.audioInterrupted,
+      !model.mediaServicesUnavailable else { return }
+    if model.mediaServicesResetPending {
+      recoverMediaServicesIfNeeded()
+      return
+    }
     if model.nativeNeedsRefresh {
       refreshNativeAfterSuspension()
       return
@@ -1617,10 +1626,12 @@ extension PlayerView {
       recordPlaybackEvent("channel_metadata_unavailable", level: .warning)
       channelDisplayName = login
       channelAvatarURL = nil
+      model.channelStreamStartedAt = nil
       return
     }
     channelDisplayName = metadata.displayName
     channelAvatarURL = metadata.profileImageURL
+    model.channelStreamStartedAt = metadata.streamStartedAt
     // VOD mode keeps the broadcast's own title; only the live player adopts the
     // channel's current stream title here.
     if !isVOD {

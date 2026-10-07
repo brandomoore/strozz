@@ -1,0 +1,9 @@
+#include "App.xcconfig"
+
+// Optional per-target development profiles. Simulator signing stays automatic.
+STROZZ_TVOS_DEBUG_SIGNING_STYLE = Automatic
+STROZZ_TVOS_DEBUG_APP_PROFILE =
+STROZZ_TVOS_DEBUG_TOPSHELF_PROFILE =
+STROZZ_IOS_DEBUG_SIGNING_STYLE = Automatic
+STROZZ_IOS_DEBUG_APP_PROFILE =
+#include? "Signing.xcconfig.local"

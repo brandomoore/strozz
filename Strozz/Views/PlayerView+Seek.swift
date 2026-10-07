@@ -195,10 +195,17 @@ extension PlayerView {
   /// Resumes playback at the correct rate: the selected speed for VODs, normal
   /// 1.0 for live. Centralizes resume so pause/seek/scrub all honor VOD speed.
   func resumePlayback() {
+    guard !isUserPaused, !isScrubbing, !isSleeping, backgroundedAt == nil,
+      channelPageTarget == nil else { return }
+    if model.mediaServicesResetPending {
+      recoverMediaServicesIfNeeded()
+      return
+    }
     if model.isUsingNativeHLS, !model.nativeStartupComplete, pinnedToLive {
       startPlayback()
       return
     }
+    guard preparePlaybackAudio(reason: "resume") else { return }
     if model.isUsingNativeHLS { model.nativeStartupComplete = true }
     recordPlaybackEvent(
       "playback_resumed",
