@@ -21,69 +21,109 @@ struct MobilePlayerControls: View {
             .accessibilityLabel("Close player")
             .modifier(MobileControlSurface())
           Spacer(minLength: 0)
-          MobileAirPlayPicker(onPresentation: onRoutes)
-            .frame(width: 44, height: 44)
-            .modifier(MobileControlSurface())
-          Button(action: onShare) { Icon(glyph: .share, size: 22).frame(width: 44, height: 44) }
-            .accessibilityLabel("Share stream")
-            .modifier(MobileControlSurface())
-          Button(action: onQuality) { Icon(glyph: .settings, size: 22).frame(width: 44, height: 44) }
-            .accessibilityLabel("Playback quality")
-            .accessibilityValue(model.qualityLabel)
-            .modifier(MobileControlSurface())
+          if model.presentationState == .ready {
+            MobileAirPlayPicker(onPresentation: onRoutes)
+              .frame(width: 44, height: 44)
+              .modifier(MobileControlSurface())
+            Button(action: onShare) { Icon(glyph: .share, size: 22).frame(width: 44, height: 44) }
+              .accessibilityLabel("Share stream")
+              .modifier(MobileControlSurface())
+            Button(action: onQuality) { Icon(glyph: .settings, size: 22).frame(width: 44, height: 44) }
+              .accessibilityLabel("Playback quality")
+              .accessibilityValue(model.qualityLabel)
+              .modifier(MobileControlSurface())
+          }
         }
         Spacer(minLength: 12)
-        HStack(alignment: .bottom, spacing: 8) {
-          VStack(alignment: .leading, spacing: 2) {
+        if model.presentationState == .ready {
+          HStack(alignment: .bottom, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+              livePositionControl
+              if let viewerCount {
+                MobileViewerBadge(count: viewerCount)
+              }
+            }
+            Spacer(minLength: 0)
             Button {
               onInteraction()
-              model.goLive()
+              model.toggleMute()
             } label: {
-              Label { Text("Back to live").font(.caption.bold()) } icon: { Icon(glyph: .broadcast, size: 16) }
-                .frame(minHeight: 44).padding(.horizontal, 8)
+              Icon(glyph: model.isMuted ? .volumeOff : .volume, size: 22).frame(width: 44, height: 44)
             }
-            .disabled(model.isLoading)
-            .modifier(MobileControlSurface())
-            if let viewerCount {
-              MobileViewerBadge(count: viewerCount)
-            }
-          }
-          Spacer(minLength: 0)
-          Button {
-            onInteraction()
-            model.toggleMute()
-          } label: { Icon(glyph: model.isMuted ? .volumeOff : .volume, size: 22).frame(width: 44, height: 44) }
             .accessibilityLabel(model.isMuted ? "Unmute" : "Mute")
+            .accessibilityIdentifier("mobile-mute")
             .modifier(MobileControlSurface())
-          Button {
-            onInteraction()
-            hideChat.toggle()
-          } label: {
-            Icon(glyph: hideChat ? .sidebarRightExpand : .sidebarRightCollapse, size: 22).frame(width: 44, height: 44)
+            Button {
+              onInteraction()
+              hideChat.toggle()
+            } label: {
+              Icon(glyph: hideChat ? .sidebarRightExpand : .sidebarRightCollapse, size: 22).frame(width: 44, height: 44)
+            }
+            .accessibilityLabel(hideChat ? "Show chat" : "Hide chat")
+            .modifier(MobileControlSurface())
+            Button(action: onFullscreen) {
+              Icon(glyph: isFullscreen ? .dimensions : .arrowsMaximize, size: 22).frame(width: 44, height: 44)
+            }
+            .accessibilityLabel(isFullscreen ? "Exit fullscreen" : "Fullscreen")
+            .modifier(MobileControlSurface())
           }
-          .accessibilityLabel(hideChat ? "Show chat" : "Hide chat")
-          .modifier(MobileControlSurface())
-          Button(action: onFullscreen) {
-            Icon(glyph: isFullscreen ? .dimensions : .arrowsMaximize, size: 22).frame(width: 44, height: 44)
-          }
-          .accessibilityLabel(isFullscreen ? "Exit fullscreen" : "Fullscreen")
-          .modifier(MobileControlSurface())
         }
       }
-      Button {
-        onInteraction()
-        model.togglePlayPause()
-      } label: {
-        Icon(glyph: model.isPaused ? .playerPlayFilled : .playerPauseFilled, size: 30)
-          .frame(width: 56, height: 56)
+      if model.presentationState == .ready {
+        Button {
+          onInteraction()
+          model.togglePlayPause()
+        } label: {
+          Icon(glyph: model.isPaused ? .playerPlayFilled : .playerPauseFilled, size: 30)
+            .frame(width: 56, height: 56)
+        }
+        .accessibilityLabel(model.isPaused ? "Play" : "Pause")
+        .accessibilityIdentifier("mobile-play-pause")
+        .disabled(model.isLoading || model.errorMessage != nil)
+        .modifier(MobileControlSurface())
       }
-      .accessibilityLabel(model.isPaused ? "Play" : "Pause")
-      .accessibilityIdentifier("mobile-play-pause")
-      .disabled(model.isLoading || model.errorMessage != nil)
-      .modifier(MobileControlSurface())
     }
     .buttonStyle(.plain)
     .padding(10)
+  }
+
+  @ViewBuilder
+  private var livePositionControl: some View {
+    switch model.liveStatus {
+    case .live:
+      Label { Text("Live").font(.caption.bold()) } icon: { Icon(glyph: .broadcast, size: 16) }
+        .frame(minHeight: 44).padding(.horizontal, 8)
+        .modifier(MobileControlSurface())
+        .accessibilityLabel("At the live edge")
+        .accessibilityIdentifier("mobile-live-status")
+    case .checking:
+      Text("Checking live").font(.caption)
+        .frame(minHeight: 44).padding(.horizontal, 8)
+        .modifier(MobileControlSurface())
+        .accessibilityIdentifier("mobile-live-checking")
+    case .paused, .behind:
+      VStack(alignment: .leading, spacing: 2) {
+        if case .behind(let seconds) = model.liveStatus {
+          Text("\(seconds, format: .number.precision(.fractionLength(0)))s behind")
+            .font(.caption)
+            .accessibilityIdentifier("mobile-live-delay")
+        } else {
+          Text("Paused").font(.caption)
+            .accessibilityIdentifier("mobile-live-paused")
+        }
+        Button {
+          onInteraction()
+          model.goLive()
+        } label: {
+          Label { Text("Back to live").font(.caption.bold()) } icon: {
+            Icon(glyph: .broadcast, size: 16)
+          }
+          .frame(minHeight: 44).padding(.horizontal, 8)
+        }
+        .accessibilityIdentifier("mobile-go-live")
+      }
+      .modifier(MobileControlSurface())
+    }
   }
 }
 
@@ -94,8 +134,10 @@ struct MobileControlSurface: ViewModifier {
   func body(content: Content) -> some View {
     content
       .foregroundStyle(palette.chromeOnOpaque)
-      .background(palette.chromeOpaqueSurface.opacity(reduceTransparency ? 1 : 0.88),
-                  in: RoundedRectangle(cornerRadius: 12))
+      .contentShape(RoundedRectangle(cornerRadius: 12))
+      .background(
+        palette.chromeOpaqueSurface.opacity(reduceTransparency ? 1 : 0.88),
+        in: RoundedRectangle(cornerRadius: 12))
   }
 }
 

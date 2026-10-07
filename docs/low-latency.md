@@ -129,6 +129,16 @@ reconfigured audio, fresh AVKit ownership, and paused restoration. It remains
 muted: it verifies recovery mechanics, not audible output through physical
 Bluetooth hardware.
 
+The same live-playback recovery contract also applies on iPhone/iPad.
+`PlaybackAudioSession` and `PlaybackPositionRestoration` are compiled into both
+targets instead of maintaining separate setup and date-seek implementations.
+Mobile replaces its AVPlayer/AVKit owner on foreground return and media-service
+reset; ordinary rendition changes do not recreate the renderer.
+Loading and transport presentation use the shared
+`PlaybackPresentationState` and `StreamLoadingView`: mobile keeps Close available,
+but does not stack a disabled pause icon over the loading indicator. Error and
+retry content replace loading rather than coexisting with it.
+
 ### Whole-segment sources and native quality selection
 
 The physical AustinShow capture on build 1920 started about 20 seconds behind

@@ -63,6 +63,8 @@ targets:
           - "TwitchWatchTracker.swift"
           - "TwitchChannelRewards*.swift"
           - "PlaybackTelemetry*.swift"
+          - "PlaybackAudioSession.swift"
+          - "PlaybackPositionRestoration.swift"
           - "TwitchYouTubeAliasService.swift"
           - "YouTubeLiveSnapshotService.swift"
           - "YouTubeConcurrentViewersService.swift"
@@ -91,6 +93,7 @@ targets:
           - "CredentialKeychain.swift"
           - "TopShelfSnapshot.swift"
       - path: Strozz/Views/Icon.swift
+      - path: Strozz/Views/StreamLoadingView.swift
       - path: Strozz/Views/TwitchICloudSyncControls.swift
       - path: Strozz/Resources/StreamerAffinity.json
       - path: Strozz/Views/RichChatLineView.swift
@@ -127,6 +130,7 @@ targets:
     platform: iOS
     sources:
       - path: StrozzMobileTests
+      - path: StrozzTests/PlaybackPresentationStateTests.swift
     dependencies:
       - target: StrozzMobile
     settings:

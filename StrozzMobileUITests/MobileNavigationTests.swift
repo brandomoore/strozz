@@ -78,23 +78,39 @@ final class MobileNavigationTests: XCTestCase {
     XCTAssertTrue(app.buttons["Sign in to chat"].exists)
     let loaded = NSPredicate(format: "exists == false")
     let spinner = app.descendants(matching: .any).matching(identifier: "mobile-video-loading").firstMatch
+    func identifiers(_ snapshot: any XCUIElementSnapshot) -> Set<String> {
+      Set([snapshot.identifier]).union(snapshot.children.flatMap { identifiers($0) })
+    }
+    let initialIdentifiers = identifiers(try app.snapshot())
+    XCTAssertFalse(initialIdentifiers.contains("mobile-video-loading")
+      && initialIdentifiers.contains("mobile-play-pause"),
+      "A single UI snapshot must never contain both loading and the center transport")
+    XCTAssertTrue(app.buttons["Close player"].isHittable)
+    capture(app, name: initialIdentifiers.contains("mobile-video-loading")
+      ? "shared-loading-state" : "already-ready-player")
     expectation(for: loaded, evaluatedWith: spinner)
     waitForExpectations(timeout: 45)
     XCTAssertFalse(app.buttons["Try again"].exists)
     showControls(app)
+    let liveStatus = app.descendants(matching: .any).matching(identifier: "mobile-live-status").firstMatch
+    XCTAssertTrue(liveStatus.waitForExistence(timeout: 10))
+    XCTAssertFalse(app.buttons["mobile-go-live"].exists, "Already-live playback must not offer a jump")
     capture(app, name: "portrait-player")
     let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
     let playPause = app.buttons["mobile-play-pause"]
     XCTAssertTrue(playPause.waitForExistence(timeout: 5))
     playPause.tap()
     XCTAssertEqual(playPause.label, "Play")
+    XCTAssertTrue(app.buttons["mobile-go-live"].exists, "Paused playback must offer a return to live")
     playPause.tap()
     XCTAssertEqual(playPause.label, "Pause")
-    let mute = app.buttons["Unmute"]
-    XCTAssertTrue(mute.exists)
+    let mute = app.buttons["mobile-mute"]
+    XCTAssertTrue(mute.waitForExistence(timeout: 5))
+    XCTAssertEqual(mute.label, "Unmute")
     mute.tap()
-    XCTAssertTrue(app.buttons["Mute"].exists)
-    app.buttons["Mute"].tap()
+    expectation(for: NSPredicate(format: "label == 'Mute'"), evaluatedWith: mute)
+    waitForExpectations(timeout: 5)
+    mute.tap()
     // Pause keeps controls visible while screenshots and rotation are inspected.
     playPause.tap()
     XCTAssertEqual(playPause.label, "Play")
@@ -114,7 +130,14 @@ final class MobileNavigationTests: XCTestCase {
     XCTAssertTrue(app.buttons["Close player"].waitForExistence(timeout: 5))
     XCTAssertEqual(playPause.label, "Play", "Fullscreen must preserve the paused state")
     playPause.tap()
-    XCTAssertTrue(app.buttons["Back to live"].exists)
+    let goLive = app.buttons["mobile-go-live"]
+    XCTAssertTrue(goLive.waitForExistence(timeout: 5))
+    goLive.tap()
+    expectation(for: loaded, evaluatedWith: spinner)
+    waitForExpectations(timeout: 45)
+    showControls(app)
+    XCTAssertTrue(liveStatus.waitForExistence(timeout: 10))
+    XCTAssertFalse(goLive.exists)
     XCTAssertTrue(app.buttons["Share stream"].exists)
     app.buttons["Playback quality"].tap()
     XCTAssertTrue(app.buttons["Auto - Standard"].waitForExistence(timeout: 5))

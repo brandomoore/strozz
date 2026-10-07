@@ -120,6 +120,9 @@ final class PlayerModel {
   var errorMessage: String?
   var isOffline = false
   var isLoading = true
+  var presentationState: PlaybackPresentationState {
+    .init(isLoading: isLoading, isUnavailable: isOffline || errorMessage != nil)
+  }
 
   /// Item/source reloads do not change channels. Keep resolved metadata,
   /// including metadata that arrived while preferred-source selection waited.

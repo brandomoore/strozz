@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The shared loading state for every surface where a stream can be watched —
-/// the full player, multiview tiles, and the clip player.
+/// the TV and mobile players, multiview tiles, and the clip player.
 ///
 /// Instead of a bare spinner on a black screen, it shows the stream's own
 /// thumbnail as a poster with a centered native cluster (channel avatar, name,
@@ -82,6 +82,7 @@ struct StreamLoadingView: View {
       .frame(width: geo.size.width, height: geo.size.height)
     }
     .clipped()
+    .accessibilityElement(children: .combine)
     .allowsHitTesting(false)
     .onAppear {
       guard !reduceMotion, avatarURL != nil else { return }
@@ -107,6 +108,7 @@ struct StreamLoadingView: View {
   private func cluster(scale: CGFloat) -> some View {
     VStack(spacing: 18 * scale) {
       ProgressView()
+        .accessibilityLabel("Loading stream")
         .tint(foreground)
         .scaleEffect(1.3 * scale)
 

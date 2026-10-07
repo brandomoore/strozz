@@ -486,51 +486,13 @@ extension PlayerView {
   }
 
   func restoreNativePosition(_ position: Date, item: AVPlayerItem, generation: UUID, intent: UUID) async {
-    var canSeek = false
-    for _ in 0..<100 {
-      guard !Task.isCancelled, item === player.currentItem, generation == model.nativeGeneration,
-        intent == model.nativePositionIntent else { return }
-      if item.status == .failed { break }
-      // A fresh paused HLS owner can expose its date timeline before readyToPlay.
-      // The seek prepares it without briefly resuming a paused viewer.
-      if item.status == .readyToPlay || (!item.seekableTimeRanges.isEmpty && item.currentDate() != nil) {
-        canSeek = true
-        break
-      }
-      do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
-    }
-    guard !Task.isCancelled, item === player.currentItem, generation == model.nativeGeneration,
-      intent == model.nativePositionIntent else { return }
-    var restored = false
-    if canSeek {
-      let timeout = Task { @MainActor in
-        do { try await Task.sleep(for: .seconds(5)) } catch { return }
-        guard item === player.currentItem, generation == model.nativeGeneration,
-          intent == model.nativePositionIntent else { return }
-        item.cancelPendingSeeks()
-      }
-      restored = await item.seek(to: position)
-      guard !Task.isCancelled, item === player.currentItem, generation == model.nativeGeneration,
-        intent == model.nativePositionIntent else {
-        timeout.cancel()
-        return
-      }
-      if restored, let actual = item.currentDate() {
-        let correction = position.timeIntervalSince(actual)
-        let target = item.currentTime().seconds + correction
-        // Date seeks may land on a nearby keyframe. Preserve the paused instant,
-        // not that keyframe, using the fresh item's own date/time mapping.
-        if abs(correction) > 0.25, target.isFinite {
-          restored = await item.seek(to: CMTime(seconds: target, preferredTimescale: 600),
-            toleranceBefore: .zero, toleranceAfter: .zero)
-        }
-      }
-      timeout.cancel()
+    let restored = await PlaybackPositionRestoration.restore(position, on: item) {
+      item === player.currentItem && generation == model.nativeGeneration
+        && intent == model.nativePositionIntent
     }
     guard !Task.isCancelled, item === player.currentItem, generation == model.nativeGeneration,
       intent == model.nativePositionIntent else { return }
     let positionError = item.currentDate().map { $0.timeIntervalSince(position) }
-    restored = restored && positionError.map { abs($0) <= 1 } == true
     recordPlaybackEvent("native_hls_position_restore",
       metrics: positionError.map { ["position_error_seconds": $0] } ?? [:],
       flags: ["restored": restored])

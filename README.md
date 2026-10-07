@@ -179,12 +179,28 @@ Browse shows three categories across on iPhone (two at accessibility text sizes)
 and an adaptive grid on iPad. Typing in Browse's search field switches to compact
 channel and category results with artwork and viewer counts.
 
+TV and mobile share the stream loading view and a loading/ready/unavailable
+presentation contract. Until playback is prepared and video is displayable,
+mobile shows the channel poster, avatar, and one native loading indicator;
+play/pause and other transport controls are not layered over it. Close remains
+available, and errors replace loading with a retry action.
+The mobile **Live** badge describes the achievable playback edge, not the
+broadcast's absolute delivery delay. **Back to live** appears only while paused
+or measurably behind; unknown timing shows **Checking live** instead. The status
+uses the shared source-relative delay estimate and catch-up tolerances so normal
+segment/buffer variation does not flash an unnecessary jump button.
+
 This is not full TV feature parity: VOD chat replay, clips, multiview, YouTube/Kick playback
 and chat merging, interactive reward redemption/polls, and advanced TV settings are not included. Playback
 stops in the background; Picture in Picture/background audio are not yet
 supported. Returning resolves fresh stream URLs instead of reviving an expired
 native engine. Paused/rewound positions are preserved when still available; an
 expired position shows an error rather than silently jumping to live.
+Like TV, mobile recreates both its player and AVKit rendering owner on foreground
+return and media-service reset, preserving mute, volume, quality, and pause/DVR
+intent. Both targets use the same audio-session setup and bounded date-position
+restoration. Audio activation failures surface an error without exhausting the
+native stream retry budget; interruptions honor the system's resume permission.
 Transient native-engine failures get up to two fresh native attempts in a
 rolling minute before standard fallback; unsupported formats still fail over
 explicitly instead of leaving playback stuck.

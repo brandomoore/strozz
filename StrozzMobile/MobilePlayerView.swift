@@ -153,8 +153,7 @@ struct MobileVideoView: View {
   }
 
   var body: some View {
-    let held = model.isPaused || model.isLoading || model.errorMessage != nil
-      || (!model.isReadyForDisplay && !model.isAudioOnly && !model.isExternalPlayback)
+    let held = model.isPaused || model.presentationState != .ready
       || voiceOver || showQuality || showShare || showRoutes
     ZStack {
       palette.playerBackdrop
@@ -181,13 +180,10 @@ struct MobileVideoView: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityHidden(voiceOver)
         .accessibilityIdentifier("mobile-controls-toggle")
-      if model.isLoading || (!model.isReadyForDisplay && !model.isAudioOnly && !model.isPaused
-                             && !model.isExternalPlayback && model.errorMessage == nil) {
-        ProgressView("Loading stream")
+      if model.presentationState == .loading {
+        StreamLoadingView(posterURL: channel.thumbnailURL, avatarURL: channel.profileImageURL,
+          title: channel.displayName)
           .accessibilityIdentifier("mobile-video-loading")
-          .padding().background(palette.chromeOpaqueSurface, in: RoundedRectangle(cornerRadius: 12))
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .allowsHitTesting(false)
       }
       if let error = model.errorMessage {
         MobileStatusView(message: error) { model.retry() }
@@ -200,7 +196,10 @@ struct MobileVideoView: View {
           onFullscreen: { interaction += 1; onFullscreen() },
           onQuality: { showQuality = true },
           onShare: { showShare = true },
-          onInteraction: { interaction += 1 },
+          onInteraction: {
+            controlsVisible = true
+            interaction += 1
+          },
           onRoutes: { presenting in
             showRoutes = presenting
             if presenting { model.prepareForAirPlay() }
