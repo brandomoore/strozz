@@ -15,9 +15,11 @@ settings:
     INFOPLIST_FILE: Strozz/App/Info.plist
     TARGETED_DEVICE_FAMILY: "3" # Apple TV
     STROZZ_ICLOUD_ENVIRONMENT: Development
+    STROZZ_APS_ENVIRONMENT: development
   configs:
     Release:
       STROZZ_ICLOUD_ENVIRONMENT: Production
+      STROZZ_APS_ENVIRONMENT: production
 configFiles:
   Debug: Config/Development.xcconfig
   Release: Config/Release.xcconfig

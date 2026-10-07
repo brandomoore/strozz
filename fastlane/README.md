@@ -71,6 +71,10 @@ around an incompatible profile.
 
 The main iOS/tvOS app profiles must include CloudKit container
 `iCloud.com.thatcube.Strozz` and App Group `group.com.thatcube.Strozz`.
+Apple also requires `aps-environment` for tvOS CloudKit apps; enable Push
+Notifications on the app ID and regenerate profiles after changing capabilities.
+Release entitlements use `production`, and development uses `development`.
+This capability alone does not request user-facing notification permission.
 Top Shelf needs the App Group only. Release builds select the Production
 CloudKit environment; Debug defaults to Development. A deliberately authorized
 device verification can pass `STROZZ_ICLOUD_ENVIRONMENT=Production` to exercise
