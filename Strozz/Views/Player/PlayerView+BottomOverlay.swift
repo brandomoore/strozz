@@ -177,6 +177,8 @@ extension PlayerView {
           onToggleRewind: { streamRewindEnabled.toggle() },
           viewerCountEnabled: showViewerCount,
           onToggleViewerCount: { showViewerCount.toggle() },
+          streamDurationEnabled: showStreamDuration,
+          onToggleStreamDuration: { showStreamDuration.toggle() },
           captionsSupported: CaptionController.isSupported,
           captionsEnabled: captionsEnabled,
           onToggleCaptions: { captionsEnabled.toggle() },

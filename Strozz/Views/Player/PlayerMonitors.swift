@@ -276,8 +276,9 @@ struct PlayerTitleHeader: View {
                   .foregroundStyle(foreground)
               }
             }
-            BroadcastUptimeView(startedAt: streamStartedAt)
+            BroadcastUptimeView(startedAt: streamStartedAt, iconSize: 24)
               .font(.footnote)
+              .fontWeight(.semibold)
               .foregroundStyle(foreground)
           }
           .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 1)

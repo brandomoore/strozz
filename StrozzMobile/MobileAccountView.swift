@@ -59,6 +59,8 @@ struct MobileAccountView: View {
         Picker("Theme", selection: $theme.theme) {
           ForEach(AppTheme.allCases) { theme in Text(theme.displayName).tag(theme) }
         }
+        NavigationLink("Overlays") { MobileOverlaySettingsView() }
+          .accessibilityIdentifier("account-overlays")
       }
       Section {
         Toggle("Sync chat to extra delay", isOn: $chatSync)
@@ -85,6 +87,19 @@ struct MobileAccountView: View {
     .onChange(of: scenePhase) { _, phase in
       if phase == .active { Task { await sync.synchronize(); await auth.validateSessionIfNeeded() } }
     }
+  }
+}
+
+private struct MobileOverlaySettingsView: View {
+  @AppStorage(PersistenceKey.showStreamDuration) private var showStreamDuration = true
+
+  var body: some View {
+    Form {
+      Toggle("Stream duration", isOn: $showStreamDuration)
+        .accessibilityIdentifier("overlay-stream-duration")
+    }
+    .navigationTitle("Overlays")
+    .navigationBarTitleDisplayMode(.inline)
   }
 }
 

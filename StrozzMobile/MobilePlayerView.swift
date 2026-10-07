@@ -284,6 +284,7 @@ struct MobilePlayerSurface: UIViewControllerRepresentable {
 struct MobileStreamDetails: View {
   let channel: FollowedChannel
   let model: MobilePlaybackModel
+  @AppStorage(PersistenceKey.showStreamDuration) private var showStreamDuration = true
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
@@ -291,7 +292,9 @@ struct MobileStreamDetails: View {
       Text(channel.title).font(.subheadline).lineLimit(2)
       HStack(alignment: .firstTextBaseline, spacing: 12) {
         Text(model.qualityLabel)
-        BroadcastUptimeView(startedAt: model.streamStartedAt)
+        if showStreamDuration {
+          BroadcastUptimeView(startedAt: model.streamStartedAt)
+        }
       }
       .font(.caption)
       .foregroundStyle(.secondary)

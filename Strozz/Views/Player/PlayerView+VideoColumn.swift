@@ -105,7 +105,7 @@ extension PlayerView {
               showSubheader: !isVOD,
               showLatency: showLatencyBadge,
               showViewerCount: showViewerCount,
-              streamStartedAt: isUsingAltSource ? nil : model.channelStreamStartedAt
+              streamStartedAt: showStreamDuration && !isUsingAltSource ? model.channelStreamStartedAt : nil
             )
             Spacer(minLength: 24)
             if let remaining = sleepRemainingSeconds {

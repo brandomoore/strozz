@@ -151,6 +151,7 @@ enum PersistenceKey {
 
   static let showLatencyDiagnostics = "showLatencyDiagnostics"
   static let showViewerCount = "showViewerCount"
+  static let showStreamDuration = "showStreamDuration"
   static let showLatencyBadge = "showLatencyBadge"
   static let showRaidEvents = "showRaidEvents"
   static let showHypeTrainEvents = "showHypeTrainEvents"

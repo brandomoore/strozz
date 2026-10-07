@@ -142,6 +142,7 @@ struct PlayerView: View {
   /// Live viewer count badge in the top-left HUD. On by default — a glanceable,
   /// non-diagnostic stat most viewers want while watching.
   @AppStorage(PersistenceKey.showViewerCount) var showViewerCount = true
+  @AppStorage(PersistenceKey.showStreamDuration) var showStreamDuration = true
   /// Latency readout in the top-left HUD chip. Off by default and independent of
   /// the full Diagnostics Overlay, so viewers who just want the latency number
   /// can enable it without the developer event log.

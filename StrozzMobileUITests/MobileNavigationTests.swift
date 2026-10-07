@@ -58,6 +58,46 @@ final class MobileNavigationTests: XCTestCase {
     else { app.buttons["OK"].tap() }
   }
 
+  func testStreamDurationOverlayPreferencePersists() {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_MUTE_PLAYBACK"] = "1"
+    app.launch()
+    defer { app.terminate() }
+    func openOverlays() {
+      app.buttons["Account"].firstMatch.tap()
+      let overlays = app.buttons["account-overlays"]
+      for _ in 0..<5 {
+        if overlays.isHittable { break }
+        app.swipeUp()
+      }
+      XCTAssertTrue(overlays.waitForExistence(timeout: 5))
+      overlays.tap()
+    }
+    openOverlays()
+    let toggle = app.switches["overlay-stream-duration"]
+    XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+    guard let original = toggle.value as? String, ["0", "1"].contains(original) else {
+      return XCTFail("The native stream-duration switch has no Boolean value")
+    }
+    let changed = original == "1" ? "0" : "1"
+    func tapSwitch() {
+      let control = toggle.switches.firstMatch
+      if control.exists { control.tap() } else { toggle.tap() }
+    }
+    tapSwitch()
+    expectation(for: NSPredicate(format: "value == %@", changed), evaluatedWith: toggle)
+    waitForExpectations(timeout: 5)
+    capture(app, name: "stream-duration-overlay-setting")
+    app.terminate()
+    app.launch()
+    openOverlays()
+    XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+    XCTAssertEqual(toggle.value as? String, changed)
+    tapSwitch()
+    expectation(for: NSPredicate(format: "value == %@", original), evaluatedWith: toggle)
+    waitForExpectations(timeout: 5)
+  }
+
   func testLiveBrowseSearchAndPlayerRotation() throws {
     guard ProcessInfo.processInfo.environment["STROZZ_MOBILE_LIVE_TESTS"] == "1" else {
       throw XCTSkip("Set STROZZ_MOBILE_LIVE_TESTS=1 for the bounded network/UI smoke test.")

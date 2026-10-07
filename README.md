@@ -189,11 +189,14 @@ broadcast's absolute delivery delay. **Back to live** appears only while paused
 or measurably behind; unknown timing shows **Checking live** instead. The status
 uses the shared source-relative delay estimate and catch-up tolerances so normal
 segment/buffer variation does not flash an unnecessary jump button.
-Player stream information on TV and mobile also shows **Streaming for 2h 14m**,
-using Twitch's broadcast start time rather than the viewer's watch time. It
-updates once per minute, keeps counting while playback is paused, and is omitted
-when the start time is unknown. Mobile fetches this optional metadata separately
-so it cannot delay playback startup.
+Player stream information on TV and mobile also shows a compact clock-and-duration
+readout (for example, **2h 14m**), using Twitch's broadcast start time rather than
+the viewer's watch time. **Overlays > Stream Duration** in the TV player controls
+can hide it; mobile offers the same option under **Account > Overlays**. It is
+enabled by default and saved per device. The readout updates once per minute,
+keeps counting while playback is paused, and is omitted when the start time is
+unknown. Mobile fetches this optional metadata separately so it cannot delay
+playback startup.
 
 This is not full TV feature parity: VOD chat replay, clips, multiview, YouTube/Kick playback
 and chat merging, interactive reward redemption/polls, and advanced TV settings are not included. Playback
