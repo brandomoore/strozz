@@ -1093,6 +1093,25 @@ These are hypotheses. Do not treat them as fact until the Diagnostics overlay
 
 ## Bounded multi-source lifecycle checks
 
+`MultiviewContinuityLiveTests` separately exercises two to four simultaneous
+native panes, expansion into normal controls/chat, and return. It checks the
+identities of every AVPlayer, AVPlayerItem, and AVKit rendering controller as
+well as advancing video samples during the transition. Hidden panes stay live
+with lower adaptive quality preferences; attachments record their actual
+resolution and encoded-media cache use, since preferences are not hard limits.
+`STROZZ_MULTIVIEW_HOLD_SECONDS` can extend the expanded hold from 5 to 120 seconds.
+The separate, explicit physical check accepts only channels in the on-device
+live Following list and keeps its first stream as the sole audible pane.
+Remote interaction tests use the separate `StrozzUI` scheme with
+`STROZZ_MULTIVIEW_UI_TESTS=1` and selected `STROZZ_MATRIX_CHANNELS`. They verify
+normal control navigation, the native quality menu, Back, and reactivation of
+the same returned pane rather than relying on accessibility-container focus
+flags alone.
+
+TV and mobile card previews share `NativeLivePreview`, including native startup,
+bounded source refresh/fallback, video readiness, and teardown. Previews remain
+muted and cannot initiate external playback.
+
 `NativeStreamMatrixLiveTests` is an opt-in, simulator-only test for comparing
 real live sources without taking over a physical Apple TV. Set
 `STROZZ_STREAM_MATRIX=1` and `STROZZ_MATRIX_CHANNELS` to one to ten comma-separated

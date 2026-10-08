@@ -517,6 +517,7 @@ extension PlayerView {
   /// Push the current sync preference + measured latency into the chat service.
   /// Called when the toggle changes and on each latency sample.
   func applyChatSyncSettings() {
+    model.nativeLivePosition.observe(extraDelay: model.chatSyncBaseline.extraDelay)
     let reference = model.chatSyncBaseline.reference
     if model.chatSyncReference != reference {
       model.chatSyncReference = reference

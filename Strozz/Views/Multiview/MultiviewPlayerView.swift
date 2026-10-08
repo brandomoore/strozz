@@ -1,11 +1,11 @@
 import AVFoundation
 import SwiftUI
 
-/// Plays up to four live channels at once. The tvOS focus engine selects one
+/// Plays up to six live channels at once. The tvOS focus engine selects one
 /// pane as "active": that pane is unmuted and highlighted while every other pane
 /// runs muted. Two arrangements are offered — a symmetric **grid** and a
-/// **spotlight** (one large primary pane plus a thumbnail filmstrip) — toggled
-/// with the remote's Play/Pause button or the on-screen control. Panes can be
+/// **spotlight** (one large primary pane plus a thumbnail filmstrip). Play/Pause
+/// reveals the layout controls. Panes can be
 /// added or removed live, any pane can be promoted to the spotlight primary via
 /// its long-press menu, and clicking a pane escalates it to the full
 /// single-stream player. Menu exits multiview.
@@ -13,19 +13,18 @@ struct MultiviewPlayerView: View {
   let channels: [FollowedChannel]
   /// All currently-live channels, used to offer additions while watching.
   let availableChannels: [FollowedChannel]
-  /// Auth + go-live context handed straight to the single-stream player when a
-  /// pane is escalated.
+  /// Shared account context for each retained normal-player instance.
   let auth: TwitchAuthSession
   let goLive: GoLiveWatcher?
   /// Called when a pane is escalated to the full player, so the host can record
-  /// it in watch history. The single player itself is presented here, layered
-  /// over the still-mounted multiview wall, so returning is instant.
+  /// it in watch history. Expansion resizes the existing player in place.
   var onWatch: (FollowedChannel) -> Void
 
   @Environment(\.dismiss) private var dismiss
   @Environment(\.themePalette) private var palette
   @Environment(\.glassDisabled) private var glassDisabled
   @Environment(\.scenePhase) private var scenePhase
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(AppEnvironment.self) private var environment
   @State private var watchTracker = TwitchWatchTracker()
   @State private var controller: MultiviewController
@@ -44,24 +43,22 @@ struct MultiviewPlayerView: View {
   /// A brief on-appear coach hint explaining the hidden controls.
   @State private var hintVisible = true
   @State private var hintHideTask: Task<Void, Never>?
-  /// The pane escalated to the full single-stream player, presented over the
-  /// still-mounted wall so Back returns to multiview instantly (no flash).
-  @State private var escalatedChannel: FollowedChannel?
-  @State private var needsForegroundReload = false
 
   init(
     channels: [FollowedChannel],
     availableChannels: [FollowedChannel],
     auth: TwitchAuthSession,
     goLive: GoLiveWatcher?,
-    onWatch: @escaping (FollowedChannel) -> Void
+    onWatch: @escaping (FollowedChannel) -> Void,
+    controller: MultiviewController? = nil
   ) {
     self.channels = channels
     self.availableChannels = availableChannels
     self.auth = auth
     self.goLive = goLive
     self.onWatch = onWatch
-    _controller = State(initialValue: MultiviewController(channels: channels))
+    _controller = State(initialValue: controller ?? MultiviewController(channels: channels,
+      muted: ProcessInfo.processInfo.environment["STROZZ_MUTE_PLAYBACK"] == "1"))
   }
 
   private var focusedPaneID: String? {
@@ -79,24 +76,21 @@ struct MultiviewPlayerView: View {
 
   var body: some View {
     ZStack(alignment: .top) {
-      Color.black.ignoresSafeArea()
+      palette.playerBackdrop.ignoresSafeArea()
 
       // The video wall fills the entire screen edge-to-edge — no outer margins.
       // While the HUD is open it's disabled so the focus engine can't escape
       // down into the panes — focus stays trapped in the controls until the
       // viewer closes them (Close button or the Menu/Back button).
-      Group {
-        switch controller.layout {
-        case .grid: gridLayout
-        case .spotlight: spotlightLayout
-        }
+      MultiviewVideoStage(controller: controller) { pane in
+        paneView(pane, style: pane.qualityTier == .thumbnail ? .compact : .full)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .ignoresSafeArea()
       .disabled(showingControls)
 
       // While the HUD is open, dim the wall a touch for contrast/modality.
-      if showingControls {
+      if showingControls && controller.expandedPaneID == nil {
         Color.black.opacity(0.4)
           .ignoresSafeArea()
           .allowsHitTesting(false)
@@ -112,7 +106,7 @@ struct MultiviewPlayerView: View {
             .padding(.horizontal, 36)
             .padding(.top, 28)
             .transition(.move(edge: .top).combined(with: .opacity))
-        } else if hintVisible {
+        } else if hintVisible && controller.expandedPaneID == nil {
           revealHint
             .padding(.top, 20)
             .transition(.opacity)
@@ -121,6 +115,8 @@ struct MultiviewPlayerView: View {
       }
     }
     .onAppear {
+      UIApplication.shared.isIdleTimerDisabled = true
+      controller.reduceMotion = reduceMotion
       controller.start()
       if focus == nil {
         focus = controller.panes.first.map { .pane($0.id) }
@@ -129,6 +125,7 @@ struct MultiviewPlayerView: View {
       showHintBriefly()
     }
     .onChange(of: focus) { _, newValue in
+      guard !controller.isTransitioning else { return }
       if case let .pane(id) = newValue {
         if controller.audiblePaneID != id { watchTracker.stop() }
         lastPaneID = id
@@ -143,17 +140,25 @@ struct MultiviewPlayerView: View {
     .onPlayPauseCommand {
       // Play/Pause toggles the controls HUD — a single, discoverable,
       // non-directional button that never fires while navigating the grid.
-      if showingControls {
+      if let expanded = controller.expandedPane {
+        expanded.presentation.playPauseRequests &+= 1
+      } else if showingControls {
         hideControls()
       } else {
         revealControls()
       }
+    }
+    .onMoveCommand { direction in
+      guard let expanded = controller.expandedPane else { return }
+      expanded.presentation.moveDirection = direction
+      expanded.presentation.moveRequests &+= 1
     }
     .onDisappear {
       watchTracker.stop()
       chromeHideTask?.cancel()
       hintHideTask?.cancel()
       controller.teardown()
+      UIApplication.shared.isIdleTimerDisabled = false
     }
     .task {
       while !Task.isCancelled {
@@ -165,20 +170,32 @@ struct MultiviewPlayerView: View {
     }
     .onChange(of: scenePhase) { _, phase in
       updateWatchRewards()
-      if phase == .background {
-        needsForegroundReload = true
-        controller.suspend()
-      } else if phase == .active {
-        reloadWallIfNeeded()
+    }
+    .onChange(of: controller.expandedPaneID) { previous, current in
+      watchTracker.stop()
+      if current == nil {
+        bumpChrome()
+      } else {
+        focus = nil
+        showingControls = false
       }
     }
-    .onChange(of: escalatedChannel?.id) { _, _ in watchTracker.stop() }
+    .onChange(of: controller.focusRestoreRequest) { _, _ in
+      guard controller.expandedPaneID == nil else { return }
+      focus = controller.restoredPaneID.map { .pane($0) }
+    }
+    .onChange(of: reduceMotion) { _, enabled in controller.reduceMotion = enabled }
+    .onChange(of: controller.expandedPane?.model.isSleeping) { _, _ in
+      controller.synchronizeExpandedSleep()
+    }
     .onChange(of: showingAddPicker) { _, _ in
       watchTracker.stop()
-      reloadWallIfNeeded()
     }
     .onExitCommand {
-      if showingControls {
+      if let expanded = controller.expandedPane {
+        expanded.model.playbackTelemetry.recordEvent("multiview_exit_received")
+        expanded.presentation.exitRequests &+= 1
+      } else if showingControls {
         hideControls()
       } else {
         dismiss()
@@ -191,31 +208,12 @@ struct MultiviewPlayerView: View {
         onCancel: { showingAddPicker = false }
       )
     }
-    .fullScreenCover(item: $escalatedChannel, onDismiss: {
-      // Returning from the single stream: resume the wall in place. Because the
-      // multiview view stayed mounted underneath, its layout/focus are intact.
-      if !reloadWallIfNeeded(), scenePhase == .active {
-        controller.resume()
-      }
-    }) { channel in
-      PlayerView(channel: channel.login, auth: auth, goLive: goLive, posterURL: channel.thumbnailURL)
-        .environment(\.themePalette, palette)
-    }
   }
 
   // MARK: Controls
 
-  @discardableResult
-  private func reloadWallIfNeeded() -> Bool {
-    guard needsForegroundReload, scenePhase == .active,
-      escalatedChannel == nil, !showingAddPicker else { return false }
-    needsForegroundReload = false
-    controller.reloadAfterForeground()
-    return true
-  }
-
   private func updateWatchRewards() {
-    guard scenePhase == .active, escalatedChannel == nil, !showingAddPicker,
+    guard scenePhase == .active, controller.expandedPaneID == nil, !showingAddPicker,
       auth.isAuthenticated, let userID = auth.userID,
       let pane = controller.panes.first(where: { $0.id == controller.audiblePaneID }),
       let item = pane.player.currentItem else {
@@ -269,7 +267,7 @@ struct MultiviewPlayerView: View {
     // standard focus capsule/highlight, so it matches buttons elsewhere.
     HStack(spacing: 22) {
       Button {
-        snapLayout { controller.toggleLayout() }
+        controller.toggleLayout()
         bumpChrome()
       } label: {
         Label {
@@ -315,115 +313,55 @@ struct MultiviewPlayerView: View {
     )
   }
 
-  // MARK: Grid layout
-
-  @ViewBuilder
-  private var gridLayout: some View {
-    let panes = controller.panes
-    switch panes.count {
-    case 0:
-      EmptyView()
-    case 1:
-      paneView(panes[0], style: .full)
-    case 2:
-      HStack(spacing: 16) {
-        paneView(panes[0], style: .full)
-        paneView(panes[1], style: .full)
-      }
-    case 3:
-      HStack(spacing: 16) {
-        paneView(panes[0], style: .full)
-        VStack(spacing: 16) {
-          paneView(panes[1], style: .full)
-          paneView(panes[2], style: .full)
-        }
-      }
-    case 4:
-      VStack(spacing: 16) {
-        HStack(spacing: 16) {
-          paneView(panes[0], style: .full)
-          paneView(panes[1], style: .full)
-        }
-        HStack(spacing: 16) {
-          paneView(panes[2], style: .full)
-          paneView(panes[3], style: .full)
-        }
-      }
-    case 5:
-      // Top row of three, bottom row of two. The empty third slot keeps every
-      // tile the same 1/3 width so the wall reads as an even grid, not a ragged
-      // one with oversized bottom tiles.
-      VStack(spacing: 16) {
-        HStack(spacing: 16) {
-          paneView(panes[0], style: .full)
-          paneView(panes[1], style: .full)
-          paneView(panes[2], style: .full)
-        }
-        HStack(spacing: 16) {
-          paneView(panes[3], style: .full)
-          paneView(panes[4], style: .full)
-          Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-      }
-    default:
-      // Six (the max): a symmetric 3×2 wall.
-      VStack(spacing: 16) {
-        HStack(spacing: 16) {
-          paneView(panes[0], style: .full)
-          paneView(panes[1], style: .full)
-          paneView(panes[2], style: .full)
-        }
-        HStack(spacing: 16) {
-          paneView(panes[3], style: .full)
-          paneView(panes[4], style: .full)
-          paneView(panes[5], style: .full)
-        }
-      }
-    }
-  }
-
-  // MARK: Spotlight layout
-
-  @ViewBuilder
-  private var spotlightLayout: some View {
-    let primary = controller.primaryPane
-    let others = controller.panes.filter { $0.id != primary?.id }
-    VStack(spacing: 16) {
-      if let primary {
-        paneView(primary, style: .full)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-      }
-      if !others.isEmpty {
-        HStack(spacing: 16) {
-          ForEach(others) { pane in
-            paneView(pane, style: .compact)
-              .frame(width: 300, height: 169)
-          }
-          Spacer(minLength: 0)
-        }
-        .frame(height: 169)
-      }
-    }
-  }
-
   // MARK: Pane
 
   private func paneView(_ pane: MultiviewPane, style: MultiviewPaneTile.Style) -> some View {
-    MultiviewPaneTile(
-      pane: pane,
-      isFocused: focusedPaneID == pane.id,
-      isPrimary: controller.layout == .spotlight && controller.primaryPane?.id == pane.id,
-      showsMetadata: chromeVisible && focusedPaneID == pane.id,
-      style: style,
-      palette: palette,
-      glassDisabled: glassDisabled,
-      onRetry: { controller.load(pane) }
-    )
+    PlayerView(channel: pane.channel.login, auth: auth, goLive: goLive,
+      posterURL: pane.channel.thumbnailURL, model: pane.model)
+    .accessibilityElement(children: .contain)
+    .accessibilityIdentifier(pane.presentation.isExpanded ? "expanded-stream-\(pane.id)" : "")
+    .accessibilityValue(controller.isTransitioning ? "Transitioning" : "Live")
+    .overlay {
+      ZStack {
+        MultiviewPaneTile(
+          pane: pane,
+          isFocused: focusedPaneID == pane.id,
+          isPrimary: controller.layout == .spotlight && controller.primaryPane?.id == pane.id,
+          showsMetadata: chromeVisible && focusedPaneID == pane.id,
+          style: style,
+          palette: palette,
+          glassDisabled: glassDisabled,
+          onRetry: { controller.load(pane) }
+        )
+        .opacity(pane.presentation.isExpanded ? 0 : 1)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        if controller.expandedPaneID == nil {
+          Button {
+            if pane.hasError { controller.load(pane) } else { escalate(pane) }
+          } label: {
+            Color.clear
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .focusEffectDisabled()
+          .focused($focus, equals: .pane(pane.id))
+          .contextMenu { paneMenu(pane) }
+          .accessibilityIdentifier("multiview-pane-\(pane.id)")
+          .accessibilityLabel(pane.channel.displayName)
+          .accessibilityValue(pane.isLoading ? "Loading"
+            : (pane.hasError ? "Unavailable" : (controller.isTransitioning ? "Transitioning" : "Live")))
+        }
+      }
+    }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .focusable()
-    .focused($focus, equals: .pane(pane.id))
-    .onTapGesture { escalate(pane) }
-    .contextMenu { paneMenu(pane) }
+    .onChange(of: pane.model.activeChannel) { _, login in
+      guard !login.isEmpty, login != pane.channel.login else { return }
+      pane.channel = FollowedChannel(id: pane.id, login: login,
+        displayName: pane.model.channelDisplayName, title: pane.model.streamTitle, gameName: "",
+        viewerCount: nil, thumbnailURL: nil, profileImageURL: pane.model.channelAvatarURL, isLive: true)
+    }
   }
 
   @ViewBuilder
@@ -440,14 +378,14 @@ struct MultiviewPlayerView: View {
 
     if controller.layout == .grid {
       Button {
-        snapLayout { controller.spotlight(pane.id) }
+        controller.spotlight(pane.id)
         bumpChrome()
       } label: {
         Label { Text("Spotlight") } icon: { Icon(glyph: .maximize) }
       }
     } else if controller.primaryPane?.id != pane.id {
       Button {
-        snapLayout { controller.makePrimary(pane.id) }
+        controller.makePrimary(pane.id)
         bumpChrome()
       } label: {
         Label { Text("Make Primary") } icon: { Icon(glyph: .maximize) }
@@ -473,13 +411,10 @@ struct MultiviewPlayerView: View {
 
   // MARK: Actions
 
-  /// Escalates a pane to the full single-stream player. The player is presented
-  /// as a child cover over the still-mounted wall (which is paused), so pressing
-  /// Back drops straight back into this exact multiview with no flash or reload.
+  /// Expand the already-playing pane; no new player or modal cover is created.
   private func escalate(_ pane: MultiviewPane) {
     onWatch(pane.channel)
-    controller.suspend()
-    escalatedChannel = pane.channel
+    controller.expand(pane.id)
   }
 
   private func add(_ channel: FollowedChannel) {
@@ -496,18 +431,6 @@ struct MultiviewPlayerView: View {
       focus = controller.panes.first.map { .pane($0.id) }
     }
     bumpChrome()
-  }
-
-  /// Apply a layout/primary change without the implicit SwiftUI animation that
-  /// otherwise interpolates the grid↔spotlight reflow — during that interpolation
-  /// the new primary momentarily grows to full height while the filmstrip is
-  /// still laid out below it, overflowing the screen and shoving the thumbnails
-  /// off-frame before everything settles. Snapping straight to the final layout
-  /// avoids that jank.
-  private func snapLayout(_ change: () -> Void) {
-    var tx = Transaction()
-    tx.disablesAnimations = true
-    withTransaction(tx, change)
   }
 
   private func bumpChrome() {
@@ -575,28 +498,10 @@ private struct MultiviewPaneTile: View {
   var onRetry: () -> Void
 
   private var cornerRadius: CGFloat { style == .compact ? 12 : 16 }
-  private var focusScale: CGFloat { style == .compact ? 1.06 : 1.02 }
 
   var body: some View {
     ZStack {
-      PreviewVideoSurface(player: pane.player, cornerRadius: cornerRadius)
-        .opacity(pane.isLoading || pane.hasError ? 0 : 1)
-
-      if pane.isLoading {
-        // Mask the initial cold load with the shared loading surface (the
-        // channel's frame behind a spinner) instead of a black tile. Quality
-        // *changes* don't pass through here — they swap to a pre-rendered player
-        // (make-before-break), so they never show a poster. Same cluster as the
-        // full player — it just scales down to the pane. The pane wall is black,
-        // so skip the backdrop.
-        StreamLoadingView(
-          posterURL: pane.channel.thumbnailURL,
-          avatarURL: pane.channel.profileImageURL,
-          title: pane.channel.displayName,
-          drawsBackdrop: false
-        )
-        .environment(\.themePalette, palette)
-      } else if pane.hasError {
+      if pane.hasError {
         statusOverlay {
           Text(pane.channel.displayName)
             .font(style == .compact ? .subheadline : .headline)
@@ -612,13 +517,10 @@ private struct MultiviewPaneTile: View {
 
       overlays
     }
-    .background(Color.black)
-    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         .strokeBorder(borderColor, lineWidth: borderWidth)
     }
-    .scaleEffect(isFocused ? focusScale : 1)
     .animation(.easeOut(duration: 0.18), value: isFocused)
     .animation(.easeOut(duration: 0.2), value: pane.isAudible)
     .shadow(color: .black.opacity(isFocused ? 0.5 : 0), radius: 18, y: 8)

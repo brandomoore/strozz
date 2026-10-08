@@ -138,6 +138,8 @@ middle of the screen. A small, leading-aligned heading scrolls with the feed
 instead of occupying a fixed navigation bar. Previews are always muted and stop when you scroll away,
 switch tabs, open a stream, or background the app. Lower-bandwidth preview
 renditions are preferred; an undecodable preview gets one Source-quality retry.
+Live Twitch previews on both platforms use the native low-latency engine and
+its guarded recovery path, rather than a separate standard-HLS player.
 Home defaults to **For you**: live followed and most-watched channels lead the
 feed, followed by personalized discovery from the shared recommendation engine.
 Watch frequency on this device ranks familiar channels; global popular streams
@@ -413,6 +415,22 @@ including its normal buffering margin, not zero broadcast/network latency.
 Multiview pauses its wall when Strozz goes into the background. On return, it
 re-resolves each pane's live playlist and resumes all streams without changing
 the chosen grid/spotlight layout or audio selection.
+
+Multiview also uses the normal native live player for every pane. Selecting a
+pane zooms that same player and video surface into the single-stream layout
+with normal chat and controls; Back returns it to the wall without reconnecting.
+Explicit source/quality changes and error recovery remain real playback changes.
+Play/Pause opens wall controls in the grid and controls playback when expanded.
+Other panes remain live and muted while expanded, with a lower bitrate and
+resolution preference. These are adaptive preferences, not re-encoding: a
+Source-only feed or decode-recovery override can exceed the requested thumbnail
+budget. The selected pane, player item, and AVKit surface are retained; a normal
+layout transition does not create an extra decoder.
+
+The native live indicator measures extra delay relative to the source's
+available live position, matching mobile's Live/Behind behavior. Raw media
+timestamps can include broadcaster/Twitch delay or clock offset, so their age
+is retained in Diagnostics rather than presented as proven player lag.
 
 Chat's timed read pause releases its frozen snapshot when the countdown ends;
 collapsing chat or changing channels also resets scrolling state. The live list

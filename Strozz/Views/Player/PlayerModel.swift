@@ -40,6 +40,7 @@ final class PlayerModel {
   // MARK: Playback
 
   var player = AVPlayer()
+  @ObservationIgnored var multiviewContext: MultiviewPlaybackContext?
   @ObservationIgnored var activateAudioSession: @MainActor () throws -> Void = PlaybackAudioSession.activate
   @ObservationIgnored var audioSessionActivationFailed = false
   @ObservationIgnored var audioInterrupted = false
@@ -91,6 +92,7 @@ final class PlayerModel {
   let playbackTelemetry = PlaybackTelemetryRecorder()
   @ObservationIgnored var startupProgress = LivePlaybackStartup.Progress()
   @ObservationIgnored var chatSyncBaseline = LiveChatSyncBaseline()
+  @ObservationIgnored var nativeLivePosition = LivePlaybackPosition()
   @ObservationIgnored var chatSyncItemID = UUID()
   @ObservationIgnored var chatSyncSendAnchor: Date?
   var chatSyncReference: LiveChatSyncBaseline.Reference = .unavailable

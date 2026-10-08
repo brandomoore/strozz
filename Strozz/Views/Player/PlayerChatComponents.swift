@@ -389,8 +389,9 @@ struct QualityMenu: View, Equatable {
         }
       } label: {
         qualityLabelText(buttonLabel)
-          .accessibilityLabel("Quality, \(buttonLabel)")
       }
+      .accessibilityLabel("Quality, \(buttonLabel)")
+      .accessibilityIdentifier("player-quality-menu")
     }
   }
 

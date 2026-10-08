@@ -69,11 +69,12 @@ struct PlayerView: View {
   var preferredQuality: String {
     get {
       playback?.qualities.first(where: { $0.id == model.decodeRecoveryQualityID })?.name
-        ?? storedPreferredQuality
+        ?? model.multiviewContext?.quality ?? storedPreferredQuality
     }
     nonmutating set {
       model.decodeRecoveryQualityID = nil
-      storedPreferredQuality = newValue
+      if let context = model.multiviewContext { context.quality = newValue }
+      else { storedPreferredQuality = newValue }
     }
   }
   /// Latency-vs-quality profile for the adaptive ("Auto") stream, surfaced as the
@@ -200,6 +201,7 @@ struct PlayerView: View {
   // Chat send/sync state now lives in PlayerModel.
   @State var hideTask: Task<Void, Never>?
   @State var focusRecoveryTask: Task<Void, Never>?
+  @State var multiviewFocusTask: Task<Void, Never>?
   @State var isQualityMenuPresented = false
   // latencyTask / playbackWatchdogTask / rateControlTask now live in PlayerModel.
   // The adaptive playback-rate controller runs at a sub-second cadence — far
@@ -827,30 +829,17 @@ struct PlayerView: View {
           .environment(\.themePalette, palette)
         }
 
-      if chatLayoutMode.isOverlay {
+      ZStack(alignment: .trailing) {
         videoColumn
           .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .padding(.trailing, !isMultiviewCompact && showChat && !chatLayoutMode.isOverlay ? chatWidth : 0)
           .ignoresSafeArea()
 
-        if showChat {
-          HStack(spacing: 0) {
-            Spacer(minLength: 0)
-            chatPane
-          }
-          .ignoresSafeArea()
-          .transition(.move(edge: .trailing))
+        if showChat && !isMultiviewCompact {
+          chatPane
+            .ignoresSafeArea()
+            .transition(.move(edge: .trailing))
         }
-      } else {
-        HStack(spacing: 0) {
-          videoColumn
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-          if showChat {
-            chatPane
-              .transition(.move(edge: .trailing))
-          }
-        }
-        .ignoresSafeArea()
       }
 
       if showRaidEvents, let raid = chat.pendingRaid, shouldShowIncomingRaid(raid) {
@@ -876,7 +865,7 @@ struct PlayerView: View {
       // treatment and only appear when chat is open — matching how Twitch shows
       // them beside the stream. Read-only.
 
-      if let goLive, let event = goLive.pending {
+      if !isMultiviewCompact, let goLive, let event = goLive.pending {
         goLiveBanner(goLive, event: event)
           .transition(.motionAware(.move(edge: .bottom).combined(with: .opacity), reduceMotion: reduceMotion))
           .zIndex(13)
@@ -978,7 +967,7 @@ struct PlayerView: View {
   /// exist for VOD/clip playback.
   func syncCaptions() {
     captionController.sync(
-      enabled: captionsEnabled,
+      enabled: captionsEnabled && !isMultiviewCompact,
       playlistURL: captionAudioSourceURL,
       headers: captionAudioSourceHeaders,
       isLive: !isVOD,

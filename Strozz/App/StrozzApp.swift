@@ -21,6 +21,7 @@ struct StrozzApp: App {
       HomeView(deepLinkRouter: deepLinkRouter)
         .environment(environment)
         #if DEBUG
+        .onAppear { AppEnvironment.playbackTestEnvironment = environment }
         .task { await TwitchCloudProbe.runIfRequested() }
         #endif
         .onChange(of: environment.auth.userID) { _, userID in

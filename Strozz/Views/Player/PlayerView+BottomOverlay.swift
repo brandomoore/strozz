@@ -144,6 +144,7 @@ extension PlayerView {
           onMenuDismissed: {
             isQualityMenuPresented = false
             focusRecoveryTask?.cancel()
+            guard !isMultiviewCompact, showControls else { return }
             // If selecting a (short) sleep timer already surfaced the
             // still-watching banner or the sleeping overlay, don't yank focus
             // back to the quality button — let those own it.
@@ -311,6 +312,10 @@ extension PlayerView {
     // on the intended button (set via `pendingControlFocus`) instead of tvOS
     // auto-picking the leftmost control. Dormant when focus is sent into chat.
     .defaultFocus($focus, pendingControlFocus)
+    .onAppear {
+      guard model.multiviewContext?.isExpanded == true else { return }
+      requestMultiviewFocus(pendingControlFocus)
+    }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.leading, 48)

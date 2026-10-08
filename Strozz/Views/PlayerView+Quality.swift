@@ -6,8 +6,11 @@ import SwiftUI
 extension PlayerView {
   /// The active latency-vs-quality profile, decoded from its stored raw value.
   var livePlaybackProfile: LivePlaybackProfile {
-    get { LivePlaybackProfile(rawValue: livePlaybackProfileRaw) ?? .default }
-    nonmutating set { livePlaybackProfileRaw = newValue.rawValue }
+    get { model.multiviewContext?.profile ?? LivePlaybackProfile(rawValue: livePlaybackProfileRaw) ?? .default }
+    nonmutating set {
+      if let context = model.multiviewContext { context.profile = newValue }
+      else { livePlaybackProfileRaw = newValue.rawValue }
+    }
   }
 
   /// Concrete buffer / catch-up tuning for the current profile and pin state.

@@ -10,7 +10,8 @@ extension PlayerView {
     let login = activeChannel
     let sessionID = model.playbackTelemetry.sessionID
     let generation = model.altRecovery.generation
-    if preferYouTubeSource, livePlaybackProfile != .nativeLowLatency, !didManuallySelectSource {
+    if model.multiviewContext == nil, preferYouTubeSource,
+      livePlaybackProfile != .nativeLowLatency, !didManuallySelectSource {
       do {
         let source = try await LivePlaybackStartup.resolveYouTube {
           let target = await Self.resolveYouTubeTarget(forTwitchLogin: login)
@@ -173,7 +174,7 @@ extension PlayerView {
         // transport can present one continuous broadcast-length timeline (DVR
         // window + VOD) from the start. Non-blocking; falls back to the DVR-only
         // bar until/unless it resolves.
-        if streamRewindEnabled {
+        if streamRewindEnabled && !isMultiviewCompact {
           Task { await resolveBroadcastVODIfNeeded() }
         }
         return
@@ -315,6 +316,7 @@ extension PlayerView {
     guard let playback else { return }
     switchToSourceIfNeeded(playback.url(forQuality: option))
     player.currentItem?.preferredPeakBitRate = 0
+    applyMultiviewBudget()
   }
 
   /// Replaces the current item only when the underlying source actually changes,
@@ -419,6 +421,10 @@ extension PlayerView {
     // Buffer depth comes from the active profile: shallower for lower latency,
     // deeper to let ABR hold higher quality. (See LivePlaybackPolicy.)
     item.preferredForwardBufferDuration = activeLivePlaybackPolicy.preferredForwardBufferDuration
+    if let context = model.multiviewContext {
+      item.preferredMaximumResolution = context.qualityTier.maximumResolution
+      item.preferredPeakBitRate = Double(context.qualityTier.targetBitrate)
+    }
     // Let AVPlayer establish the initial LL-HLS start, then disable its
     // seek-on-rebuffer behavior as soon as startup progress is established.
     item.automaticallyPreservesTimeOffsetFromLive = model.isUsingNativeHLS && pinnedToLive && !isUserPaused
@@ -621,6 +627,13 @@ extension PlayerView {
   }
 
   var latencyColor: Color {
+    if model.isUsingNativeHLS {
+      switch model.nativeLivePosition.state {
+      case .checking, .paused: return .gray
+      case .live: return .green
+      case .behind(let seconds): return seconds <= 8 ? .yellow : .orange
+      }
+    }
     guard let seconds = measuredLatencySeconds, !isLatencyWarmingUp else { return .gray }
     if seconds <= 8 { return .green }
     if seconds <= 15 { return .yellow }
@@ -630,6 +643,15 @@ extension PlayerView {
   var latencyLabel: String {
     guard isPlaybackActive else {
       return "Waiting for playback"
+    }
+    if model.isUsingNativeHLS {
+      switch model.nativeLivePosition.state {
+      case .checking: return String(localized: "Checking live")
+      case .live: return String(localized: "Live")
+      case .behind(let seconds):
+        return String(localized: "~\(formatLatencySeconds(seconds)) behind available live")
+      case .paused: return String(localized: "Paused")
+      }
     }
     guard let seconds = measuredLatencySeconds else {
       return "Latency unavailable"
@@ -1675,6 +1697,7 @@ extension PlayerView {
   }
 
   func setIdleTimer(disabled: Bool) {
+    guard model.multiviewContext == nil else { return }
     UIApplication.shared.isIdleTimerDisabled = disabled
   }
 }

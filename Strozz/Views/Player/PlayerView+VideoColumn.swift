@@ -37,6 +37,10 @@ extension PlayerView {
   }
 
   var videoColumn: some View {
+    singlePlayerTransportHandler(videoColumnContent)
+  }
+
+  private var videoColumnContent: some View {
     ZStack(alignment: .bottom) {
       VideoSurface(player: player)
         .id(ObjectIdentifier(player))
@@ -54,9 +58,10 @@ extension PlayerView {
             title: isVOD ? activeVOD?.title : offlineDisplayName,
             isLoading: isLoading
           )
-          .padding(.trailing, loadingChatInset)
+          .padding(.trailing, isMultiviewCompact ? 0 : loadingChatInset)
           .opacity(model.presentationState == .loading ? 1 : 0)
           .allowsHitTesting(false)
+          .accessibilityHidden(model.presentationState != .loading)
           .animation(nil, value: isLoading)
         }
 
@@ -77,7 +82,7 @@ extension PlayerView {
         .onDisappear { audioLevelMonitor.stop() }
       }
 
-      if captionsEnabled, !isVOD, errorMessage == nil, !isOffline {
+      if captionsEnabled, !isMultiviewCompact, !isVOD, errorMessage == nil, !isOffline {
         CaptionOverlayView(
           controller: captionController,
           controlsVisible: showControls,
@@ -93,7 +98,7 @@ extension PlayerView {
         .transition(.opacity)
       }
 
-      if showControls, model.presentationState == .ready {
+      if showControls, !isMultiviewCompact, model.presentationState == .ready {
         VStack {
           HStack(alignment: .top) {
             PlayerTitleHeader(
@@ -146,36 +151,49 @@ extension PlayerView {
       // Only expose the video focus target while controls are hidden.
       // Otherwise, left-edge movement from the control cluster can escape
       // into this invisible target and appear as lost focus.
-      if !showControls, !isOffline {
+      if !showControls, !isOffline, !isMultiviewCompact {
         Color.clear
           .frame(maxWidth: .infinity, maxHeight: .infinity)
           .contentShape(Rectangle())
           .focusable()
           .focused($focus, equals: .video)
+          .accessibilityIdentifier("player-video-focus")
+          .accessibilityLabel("Player controls")
           .onTapGesture { revealControls(preferredFocus: .quality) }
       }
 
-      if isOffline {
+      if isOffline && !isMultiviewCompact {
         offlineState
-      } else if let errorMessage {
+      } else if let errorMessage, !isMultiviewCompact {
         VStack(spacing: 24) {
           Text("Couldn't play \(activeChannel)")
             .font(.title2).bold()
           Text(errorMessage)
             .foregroundStyle(.secondary)
-          Button("Back") { dismiss() }
+          Button("Back") { closePlayer() }
             .focused($focus, equals: .errorBack)
         }
         .padding(40)
         .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 24))
-      } else if showControls {
+      } else if showControls && !isMultiviewCompact {
         bottomOverlay
       }
     }
-    .onPlayPauseCommand {
-      guard rewindAvailable, errorMessage == nil, !isOffline, !isLoading else { return }
-      toggleRewindPlayPause()
+    .onChange(of: model.multiviewContext?.playPauseRequests) { _, _ in handlePlayerPlayPauseCommand() }
+  }
+
+  @ViewBuilder
+  private func singlePlayerTransportHandler(_ content: some View) -> some View {
+    if model.multiviewContext == nil {
+      content.onPlayPauseCommand { handlePlayerPlayPauseCommand() }
+    } else {
+      content
     }
+  }
+
+  func handlePlayerPlayPauseCommand() {
+    guard !isMultiviewCompact, rewindAvailable, errorMessage == nil, !isOffline, !isLoading else { return }
+    toggleRewindPlayPause()
   }
 
   // MARK: - Offline empty state

@@ -249,13 +249,13 @@ actor NativeHLSOrigin {
 
   func snapshot() -> (parts: Int, renditions: Int, edgeAge: Double?, holdBack: Double?, hasPrefetch: Bool?,
                      forwardBuffer: Double?, reportRefreshSeconds: Double?, reportRefreshMaxSeconds: Double?,
-                     inferredDiscontinuities: Int) {
+                     inferredDiscontinuities: Int, cachedMediaBytes: Int) {
     let source = sources[lastActive]
     let tail = source?.segments.last
     return (publishedParts, sources.count,
       tail.map { Date().timeIntervalSince($0.date.addingTimeInterval($0.duration)) },
       source?.liveHoldBack, source?.hasPrefetch, source?.forwardBuffer,
-      reportRefreshSeconds, reportRefreshMaxSeconds, source?.inferredDiscontinuities ?? 0)
+      reportRefreshSeconds, reportRefreshMaxSeconds, source?.inferredDiscontinuities ?? 0, cachedMediaBytes)
   }
 
   func liveTargetDate() -> Date? {
