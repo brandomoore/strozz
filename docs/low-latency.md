@@ -1156,6 +1156,41 @@ was 17.81%. The owned simulator was shut down afterward. No physical TV was
 manipulated. This bounded sample does not establish long-session reliability,
 mobile UI parity, or a fix for active playback waiting after its buffer refills.
 
+### October 8, 2026 reliability follow-up
+
+The subsequent eight-channel run passed on TheBurntPeanut, rivers_gg, alanzoka,
+agurin, and stylishnoob4, but failed on GronkhTV after return, Nico_la during
+video startup, and matsuri_hs during steady playback. Those failures remain in
+the original results; later passes do not erase them.
+
+Two native-engine defects were isolated with failing deterministic regressions:
+50fps TS parts could be 380ms despite the 382.5ms minimum, and a cold rendition
+with requested parts already cached still waited to reach live before serving
+them. The corrected parser and cached-request regression pass. A separate shared
+buffer-recovery policy covers the observed refilled-buffer deadlock, including
+one-shot resume, timeout escalation, and pause/invalid-buffer exclusions.
+
+Nico_la's original 1080p50 rendition then rendered 45/45 measured frames in both
+direct and native AVKit playback. The final shared mobile checks passed 27/27,
+including live xQc, audio-reset, quality, and paused-return scenarios. The
+corrected-engine xQc soak rendered 900/900 distinct steady-playback frames with
+zero waiting samples; its aggregate test still failed after return when a 720p
+rendition stopped producing verified video and Source recovery replaced the
+item. A fixed-720p direct Twitch comparison also failed on the tvOS 27 simulator,
+so that failure is not isolated to the native engine. A stable-runtime direct
+comparison additionally encountered an upstream HTTP 500 and is inconclusive.
+
+With explicit viewer permission, Anthonyz was checked on physical Apple TV at
+720p60, with audio and no system-volume change. Both direct and native playback
+rendered 45/45 measured frames without AVPlayer errors. Build 1938, with Production
+CloudKit preserved, then returned to normal native 1080p60 Anthonyz playback.
+This verifies that hardware path, not every broadcaster or an unlimited soak.
+Further simulator runs stopped on sustained host CPU pressure; those runs are
+incomplete. A narrowed Shroud retry then confirmed the channel offline rather
+than reproducing its format event. The original GronkhTV CoreMedia error and Shroud format fallback
+have not been isolated to reproducible input. There is no all-streams,
+long-duration "rock solid" claim.
+
 ## Diagnostics overlay (how to gather data)
 
 Player → open chat settings (`slider.horizontal.3`) → **Playback**. Turn on the
