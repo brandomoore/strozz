@@ -163,8 +163,9 @@ category filters scroll away.
 Mobile loading placeholders use the same artwork and reserved text-line sizes as
 the loaded cards. Live-followed shortcuts reserve three compact rows, so arriving
 follows do not push the feed down. Chat wraps long names and links within the pane;
-scroll up to read earlier messages, then tap **Jump to present** in the bar above
-the composer to resume following live chat. The bar does not cover messages.
+scroll up to read earlier messages, then tap the floating **Jump to present**
+button to resume following live chat. It disappears at the live edge without
+reserving an empty status row or changing the chat viewport.
 
 Past broadcasts use native on-demand controls with seeking. **Continue watching**
 on Home and channel profiles resumes saved progress; finished broadcasts leave

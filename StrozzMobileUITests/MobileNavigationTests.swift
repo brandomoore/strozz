@@ -58,6 +58,30 @@ final class MobileNavigationTests: XCTestCase {
     else { app.buttons["OK"].tap() }
   }
 
+  func testSignInToChatFromPresentedPlayer() throws {
+    guard ProcessInfo.processInfo.environment["STROZZ_MOBILE_LIVE_TESTS"] == "1" else {
+      throw XCTSkip("Set STROZZ_MOBILE_LIVE_TESTS=1 to open chat from a live channel.")
+    }
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_MUTE_PLAYBACK"] = "1"
+    app.launch()
+    defer { app.terminate() }
+    let stream = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'stream-'")).firstMatch
+    XCTAssertTrue(stream.waitForExistence(timeout: 45))
+    stream.tap()
+    let signIn = app.buttons["Sign in to chat"]
+    XCTAssertTrue(signIn.waitForExistence(timeout: 10))
+    for _ in 0..<2 {
+      signIn.tap()
+      XCTAssertTrue(app.navigationBars["Account"].waitForExistence(timeout: 5))
+      XCTAssertTrue(app.buttons["account-sign-in"].exists)
+      XCTAssertTrue(app.buttons["account-sync"].exists)
+      app.buttons["Done"].tap()
+      XCTAssertTrue(signIn.waitForExistence(timeout: 5))
+      XCTAssertEqual(app.state, .runningForeground)
+    }
+  }
+
   func testLiveBrowseSearchAndPlayerRotation() throws {
     guard ProcessInfo.processInfo.environment["STROZZ_MOBILE_LIVE_TESTS"] == "1" else {
       throw XCTSkip("Set STROZZ_MOBILE_LIVE_TESTS=1 for the bounded network/UI smoke test.")

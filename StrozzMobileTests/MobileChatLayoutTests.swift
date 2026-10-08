@@ -60,6 +60,9 @@ final class MobileChatLayoutTests: XCTestCase {
     await layout(host)
     let scroll = try XCTUnwrap(findScroll(in: host.view))
     assertAtBottom(scroll)
+    XCTAssertEqual(scroll.adjustedContentInset.bottom, 0, accuracy: 1,
+                   "Live chat must not reserve an empty footer")
+    let viewport = scroll.bounds.size
 
     for batch in 1...5 {
       XCTContext.runActivity(named: "Rotate history batch \(batch)") { _ in }
@@ -73,6 +76,8 @@ final class MobileChatLayoutTests: XCTestCase {
     await layout(host)
     state.scroll.phaseChanged(.idle)
     XCTAssertFalse(state.scroll.followsLatest)
+    XCTAssertEqual(scroll.bounds.size, viewport)
+    XCTAssertEqual(scroll.adjustedContentInset.bottom, 0, accuracy: 1)
     XCTAssertLessThan(scroll.contentOffset.y, bottomOffset(scroll) - 100)
     state.messages = try messages(1000..<1200)
     await layout(host)
@@ -81,6 +86,8 @@ final class MobileChatLayoutTests: XCTestCase {
     XCTContext.runActivity(named: "Jump to present") { _ in }
     await layout(host)
     assertAtBottom(scroll)
+    XCTAssertEqual(scroll.bounds.size, viewport)
+    XCTAssertEqual(scroll.adjustedContentInset.bottom, 0, accuracy: 1)
     for size in [CGSize(width: 300, height: 240), CGSize(width: 380, height: 640),
                  CGSize(width: 700, height: 300)] {
       state.size = size

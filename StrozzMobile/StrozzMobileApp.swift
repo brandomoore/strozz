@@ -90,13 +90,12 @@ struct MobileRootView: View {
         .tabItem { Label { Text("Account") } icon: { Image("tb-user-circle") } }
         .tag(2)
     }
+    .fullScreenCover(item: $selectedChannel, onDismiss: { playbackModel.stop() }) { channel in
+      MobilePlayerView(channel: channel, model: playbackModel)
+    }
     .environment(\.themePalette, palette)
     .environment(history)
     .environment(vodProgress)
-    .fullScreenCover(item: $selectedChannel, onDismiss: { playbackModel.stop() }) { channel in
-      MobilePlayerView(channel: channel, model: playbackModel)
-        .environment(\.themePalette, palette)
-    }
     .onDisappear { preview.stop() }
   }
 
