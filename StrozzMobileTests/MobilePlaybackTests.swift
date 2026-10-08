@@ -227,6 +227,33 @@ final class MobilePlaybackTests: XCTestCase {
     gate.finish()
   }
 
+  func testForegroundReactivatesWhenBackgroundInterruptionNeverEnds() async {
+    for manuallyPaused in [false, true] {
+      let gate = ResolutionGate()
+      let model = MobilePlaybackModel(muted: true) { _ in await gate.wait() }
+      var activations = 0
+      model.activateAudioSession = { activations += 1 }
+      model.loadMetadata = { _ in nil }
+      model.start(channel: "fixture")
+      await gate.waitUntilRequested()
+      model.suspend()
+      gate.finish()
+      model.handleAudioInterruption(Notification(name: AVAudioSession.interruptionNotification, userInfo: [
+        AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue,
+      ]))
+      if manuallyPaused { model.togglePlayPause() }
+      let previousPlayer = model.player
+      model.resume()
+      await gate.waitUntilRequested()
+      XCTAssertEqual(activations, 2)
+      XCTAssertFalse(model.player === previousPlayer)
+      XCTAssertEqual(model.isPaused, manuallyPaused)
+      XCTAssertTrue(model.isLoading)
+      model.stop()
+      gate.finish()
+    }
+  }
+
   func testTransientNativeFailureResolvesAgainWithoutSelectingStandard() async throws {
     var pending: [CheckedContinuation<StreamPlayback, Never>] = []
     let model = MobilePlaybackModel(muted: true) { _ in

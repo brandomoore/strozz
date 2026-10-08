@@ -205,10 +205,24 @@ extension TwitchAuthSession {
         }
     }
 
-    func beginDeviceCodeSignIn() async {
+    func beginDeviceCodeSignIn(useSavedConnection: Bool = true) async {
         errorMessage = nil
 
-        guard !isAuthenticating else { return }
+        guard !isAuthenticated, !isAuthenticating, !isRestoringConnection else { return }
+        let attempt = UUID()
+        signInAttempt = attempt
+        if useSavedConnection, let cloudSync {
+            isRestoringConnection = true
+            statusMessage = "Checking your saved connection..."
+            let needsApproval = await cloudSync.restoreBeforeSignIn()
+            guard !Task.isCancelled, attempt == signInAttempt else { return }
+            isRestoringConnection = false
+            statusMessage = nil
+            guard needsApproval else {
+                if !isAuthenticated { errorMessage = cloudSync.errorMessage }
+                return
+            }
+        }
         if let issue = clientIDValidationIssue {
             errorMessage = issue
             return
@@ -221,6 +235,7 @@ extension TwitchAuthSession {
 
         do {
             let response = try await requestDeviceCode(clientID: clientID)
+            guard !Task.isCancelled, attempt == signInAttempt else { return }
             activationCode = response.userCode
             verificationURI = response.verificationURI
             verificationURIComplete = response.verificationURIComplete
@@ -236,6 +251,7 @@ extension TwitchAuthSession {
                 )
             }
         } catch {
+            guard !Task.isCancelled, attempt == signInAttempt else { return }
             isAuthenticating = false
             errorMessage = "Could not start Twitch sign-in: \(describe(error))"
             statusMessage = nil
@@ -243,6 +259,8 @@ extension TwitchAuthSession {
     }
 
     func cancelSignIn() {
+        signInAttempt = UUID()
+        isRestoringConnection = false
         pollTask?.cancel()
         pollTask = nil
         isAuthenticating = false
@@ -350,7 +368,7 @@ extension TwitchAuthSession {
         let body = "client_id=\(percentEncode(clientID))&scopes=\(percentEncode(scope))"
         req.httpBody = body.data(using: .utf8)
 
-        let (data, response) = try await NetworkClient.api.data(for: req)
+        let (data, response) = try await loadAuthData(req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard (200...299).contains(status) else {
             throw makeHTTPError(context: "requesting Twitch device code", status: status, data: data)
@@ -368,7 +386,7 @@ extension TwitchAuthSession {
         let body = "client_id=\(percentEncode(clientID))&device_code=\(percentEncode(deviceCode))&grant_type=\(percentEncode(grantType))"
         req.httpBody = body.data(using: .utf8)
 
-        let (data, response) = try await NetworkClient.api.data(for: req)
+        let (data, response) = try await loadAuthData(req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
 
         if status == 400 {
@@ -399,7 +417,7 @@ extension TwitchAuthSession {
         let body = "client_id=\(percentEncode(clientID))&grant_type=\(percentEncode(grantType))&refresh_token=\(percentEncode(refreshToken))"
         req.httpBody = body.data(using: .utf8)
 
-        let (data, response) = try await NetworkClient.api.data(for: req)
+        let (data, response) = try await loadAuthData(req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard (200...299).contains(status) else {
             throw makeHTTPError(context: "refreshing Twitch token", status: status, data: data)
@@ -413,7 +431,7 @@ extension TwitchAuthSession {
         req.httpMethod = "GET"
         req.setValue("OAuth \(accessToken)", forHTTPHeaderField: "Authorization")
 
-        let (data, response) = try await NetworkClient.api.data(for: req)
+        let (data, response) = try await loadAuthData(req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard (200...299).contains(status) else {
             throw makeHTTPError(context: "validating Twitch token", status: status, data: data)

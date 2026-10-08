@@ -23,9 +23,10 @@ enum MobilePreviewSelection {
 @MainActor
 @Observable
 final class MobileHomePreview {
-  private(set) var player = AVPlayer()
+  private let playback = NativeLivePreview()
+  var player: AVPlayer { playback.player }
   private(set) var channel: String?
-  private(set) var isReady = false
+  var isReady: Bool { playback.isReady }
   @ObservationIgnored private var frames: [String: CGRect] = [:]
   @ObservationIgnored private var viewport = CGRect.zero
   @ObservationIgnored private var enabled = false
@@ -36,8 +37,6 @@ final class MobileHomePreview {
 
   init(resolve: @escaping (String) async throws -> URL = { try await PlaybackService.previewHLSURL(for: $0) }) {
     self.resolve = resolve
-    player.isMuted = true
-    player.allowsExternalPlayback = false
   }
 
   func updateFrame(_ frame: CGRect?, for channel: String) {
@@ -66,9 +65,7 @@ final class MobileHomePreview {
     generation = UUID()
     let request = generation
     task?.cancel()
-    player.pause()
-    player.replaceCurrentItem(with: nil)
-    isReady = false
+    playback.stop()
     channel = next
     guard let next else { task = nil; return }
     task = Task { [weak self] in
@@ -76,55 +73,17 @@ final class MobileHomePreview {
         // Avoid resolving every card passed during a fast flick.
         try await Task.sleep(for: .milliseconds(350))
         guard let self else { return }
-        for attempt in 0..<2 {
-          do {
-            let url = attempt == 0 ? try await resolve(next)
-              : try await PlaybackService.pinnedHLSURL(for: next, targetBitrate: 0, forceRefresh: true)
-            guard isCurrent(request) else { return }
-            try await play(url, request: request)
-            return
-          } catch {
-            guard isCurrent(request) else { return }
-            player.pause()
-            player.replaceCurrentItem(with: nil)
-            isReady = false
-            if attempt == 1 { throw error }
-            Self.logger.warning("Retrying muted preview with Source after \(error.localizedDescription, privacy: .public)")
-          }
+        let url = try await resolve(next)
+        guard isCurrent(request) else { return }
+        playback.start(url: url) { original in
+          try await PlaybackService.pinnedHLSURL(for: next,
+            targetBitrate: original ? 0 : 1_500_000, forceRefresh: true)
         }
       } catch {
         guard let self, isCurrent(request) else { return }
-        Self.logger.warning("Muted preview unavailable for \(next, privacy: .public): \(error.localizedDescription, privacy: .public)")
-        player.pause()
-        player.replaceCurrentItem(with: nil)
-        isReady = false
+        Self.logger.warning("Muted preview unavailable: \((error as NSError).domain) \((error as NSError).code)")
+        playback.stop()
       }
-    }
-  }
-
-  private func play(_ url: URL, request: UUID) async throws {
-    let item = AVPlayerItem(asset: AVURLAsset(
-      url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": PlaybackService.streamHeaders]))
-    item.preferredForwardBufferDuration = 0.8
-    if player.status == .failed { player = AVPlayer() }
-    player.isMuted = true
-    player.allowsExternalPlayback = false
-    player.replaceCurrentItem(with: item)
-    let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [:])
-    item.add(output)
-    player.play()
-    var lastFrame = ContinuousClock.now
-    while isCurrent(request) {
-      try await Task.sleep(for: .milliseconds(250))
-      guard isCurrent(request) else { return }
-      if item.status == .failed || player.status == .failed {
-        throw item.error ?? player.error ?? URLError(.cannotDecodeContentData)
-      }
-      if output.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) != nil {
-        isReady = true
-        lastFrame = .now
-      }
-      if lastFrame.duration(to: .now) > .seconds(8) { throw URLError(.timedOut) }
     }
   }
 

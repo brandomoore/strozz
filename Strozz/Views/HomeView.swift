@@ -51,6 +51,9 @@ struct HomeView: View {
   /// with the chosen channels — `isPresented` + a separate roster var raced on
   /// first launch and showed an empty (black) wall.
   @State private var multiviewLaunch: MultiviewLaunch?
+  #if DEBUG && targetEnvironment(simulator)
+  @State private var didLaunchMultiviewUITest = false
+  #endif
   /// Categories opened from the Home tab are pushed one level deep here, so the
   /// category view is genuinely L2 of Home rather than a tab switch into Browse.
   @State private var homePath: [TwitchCategory] = []
@@ -299,9 +302,30 @@ struct HomeView: View {
       }
     }
     .animation(.motionAware(.easeOut(duration: 0.25), reduceMotion: reduceMotion), value: goLive.pending)
+    #if DEBUG && targetEnvironment(simulator)
     .task {
-      auth.restore()
-      auth.startSessionValidation()
+      guard let login = ProcessInfo.processInfo.environment["STROZZ_PLAYER_UI_CHANNEL"],
+        !login.isEmpty, login.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") })
+      else { return }
+      openDeepLinkedChannelIfNeeded(login)
+    }
+    .task {
+      guard !didLaunchMultiviewUITest,
+        let input = ProcessInfo.processInfo.environment["STROZZ_MULTIVIEW_UI_CHANNELS"] else { return }
+      let names = input.split(separator: ",").map(String.init)
+      guard (2...4).contains(names.count),
+        names.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") } })
+      else { return }
+      didLaunchMultiviewUITest = true
+      multiviewLaunch = MultiviewLaunch(channels: names.map {
+        FollowedChannel(id: $0, login: $0, displayName: $0, title: "", gameName: "",
+          viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true)
+      })
+    }
+    #endif
+    .task {
+      await environment.accountSync.start(auth: auth, rewards: environment.watchRewards)
+      guard !Task.isCancelled else { return }
       youtubeAuth.restore()
       goLive.start(using: auth)
       promptFirstLaunchSignInIfNeeded()
@@ -320,6 +344,7 @@ struct HomeView: View {
       isForeground = phase == .active
       guard phase == .active else { return }
       Task {
+        await environment.accountSync.synchronize()
         await auth.validateSessionIfNeeded()
       }
       // Returning to the app — even a day later — must not leave stale cards on
@@ -523,7 +548,9 @@ struct HomeView: View {
             homePath: $homePath,
             focusedItemID: $focusedItemID
           )
-          HomeAuthBanner(onSignIn: { showSignIn = true })
+          HomeAuthBanner(isAuthenticated: auth.isAuthenticated,
+            isRestoringAccount: environment.accountSync.isRestoringAccount,
+            onSignIn: { showSignIn = true })
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(.horizontal, AppLayout.horizontalPadding)
@@ -652,10 +679,12 @@ struct HomeView: View {
   /// or the Home banner).
   private func promptFirstLaunchSignInIfNeeded() {
     let defaults = UserDefaults.standard
+    guard environment.accountSync.hasCompletedInitialSync else { return }
+    guard auth.isAuthenticated || environment.accountSync.shouldOfferInitialSignIn else { return }
     guard !defaults.bool(forKey: firstLaunchSignInPromptKey) else { return }
     defaults.set(true, forKey: firstLaunchSignInPromptKey)
 
-    guard !auth.isAuthenticated else { return }
+    guard environment.accountSync.shouldOfferInitialSignIn else { return }
     showSignIn = true
   }
 

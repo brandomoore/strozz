@@ -15,7 +15,7 @@ struct TwitchWatchRewardsSection: View {
       if let credential = session.credential {
         Text("Connected as \(credential.login)")
           .font(.callout)
-      } else if environment.auth.isAuthenticated {
+      } else if environment.auth.isAuthenticated && !environment.accountSync.isRestoringAccount {
         Text("Connect for watch streaks, polls, and channel rewards.")
           .font(.callout)
           .foregroundStyle(.secondary)
@@ -25,24 +25,28 @@ struct TwitchWatchRewardsSection: View {
           .font(.callout)
           .foregroundStyle(.primary)
       }
-      if !environment.auth.isAuthenticated {
+      if environment.accountSync.isRestoringAccount {
+        TwitchAccountLoadingView()
+      } else if !environment.auth.isAuthenticated {
         Text("Sign in to Strozz with Twitch first.")
           .font(.callout)
           .foregroundStyle(.secondary)
       }
-      HStack(spacing: 24) {
-        Button(session.isConnected ? "Reconnect" : "Connect") {
-          showConnect = true
-        }
-        .disabled(!environment.auth.isAuthenticated)
-        if session.isConnected {
-          Button("Disconnect", role: .destructive) {
-            showDisconnect = true
+      if !environment.accountSync.isRestoringAccount {
+        HStack(spacing: 24) {
+          Button(session.isConnected ? "Reconnect" : "Connect") {
+            showConnect = true
+          }
+          .disabled(!environment.auth.isAuthenticated)
+          if session.isConnected {
+            Button("Disconnect", role: .destructive) {
+              showDisconnect = true
+            }
           }
         }
+        .font(.headline)
+        .settingsProminentActionButtonStyle()
       }
-      .font(.headline)
-      .settingsProminentActionButtonStyle()
       if session.isConnected {
         Toggle("Collect watch bonuses", isOn: Binding(
           get: { session.autoClaimBonuses },

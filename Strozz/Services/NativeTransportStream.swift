@@ -97,7 +97,8 @@ struct NativeTransportStream {
         firstClock = clock
         partClock = clock
       }
-      if let partClock, distance(clock, partClock) >= 34_200 {
+      // LL-HLS requires non-terminal parts to reach 85% of the 0.45s target.
+      if let partClock, distance(clock, partClock) >= 34_425 {
         guard hasInitialIDR else { throw NativeHLSError.transportKeyframe }
         let seconds = Double(distance(clock, partClock)) / 90_000
         guard seconds <= 0.45 else { throw NativeHLSError.partDuration }

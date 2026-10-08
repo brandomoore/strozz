@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import OSLog
 
 struct StreamChannelCard: View {
   enum Layout {
@@ -111,24 +112,28 @@ struct StreamChannelCard: View {
   @Environment(\.themePalette) private var palette
   @Environment(\.glassDisabled) private var glassDisabled
   @AppStorage(CardPresentation.storageKey) private var presentationRaw = CardPresentation.fallback.rawValue
-  @State private var previewPlayer = AVPlayer()
+  @State private var nativePreview = NativeLivePreview()
+  private var previewPlayer: AVPlayer { nativePreview.player }
   @State private var previewTask: Task<Void, Never>?
-  @State private var revealVideoTask: Task<Void, Never>?
+  @State private var previewGeneration = UUID()
+  private static let previewLogger = Logger(subsystem: "com.thatcube.Strozz", category: "native-preview")
   @State private var previewSourceURL: URL?
   @State private var cachedPreviewURL: URL?
   @State private var isShowingLivePreviewSurface = false
   @State private var livePreviewOpacity = 0.0
-  @State private var hasConfiguredPreviewPlayer = false
   private var presentation: CardPresentation { CardPresentation.resolve(presentationRaw) }
 
   var body: some View {
     cardBody
       .onAppear {
-        configurePreviewPlayerIfNeeded()
         handleFocusChange(isFocused)
       }
       .onChange(of: isFocused) { _, focused in
         handleFocusChange(focused)
+      }
+      .onChange(of: nativePreview.isReady) { _, ready in
+        guard isFocused, isShowingLivePreviewSurface else { return }
+        withAnimation(.easeInOut(duration: 0.24)) { livePreviewOpacity = ready ? 1 : 0 }
       }
       .onDisappear {
         stopPreviewPlayback(clearCachedURL: true)
@@ -339,15 +344,6 @@ struct StreamChannelCard: View {
   }
 
   @MainActor
-  private func configurePreviewPlayerIfNeeded() {
-    guard !hasConfiguredPreviewPlayer else { return }
-    previewPlayer.isMuted = true
-    previewPlayer.actionAtItemEnd = .pause
-    previewPlayer.automaticallyWaitsToMinimizeStalling = true
-    hasConfiguredPreviewPlayer = true
-  }
-
-  @MainActor
   private func handleFocusChange(_ focused: Bool) {
     guard focused, channel.isLive else {
       stopPreviewPlayback(clearCachedURL: false)
@@ -355,6 +351,8 @@ struct StreamChannelCard: View {
     }
 
     guard previewTask == nil else { return }
+    let generation = UUID()
+    previewGeneration = generation
     let login = channel.login
     let cachedURL = cachedPreviewURL
 
@@ -367,15 +365,19 @@ struct StreamChannelCard: View {
         let sourceURL = try await sourceURLTask
         guard !Task.isCancelled else { return }
         await MainActor.run {
+          guard !Task.isCancelled, isFocused, previewGeneration == generation else { return }
           startPreviewPlayback(from: sourceURL)
           previewTask = nil
         }
       } catch is CancellationError {
         await MainActor.run {
+          guard previewGeneration == generation else { return }
           previewTask = nil
         }
       } catch {
         await MainActor.run {
+          guard previewGeneration == generation else { return }
+          Self.previewLogger.warning("Preview source resolution failed: \((error as NSError).domain) \((error as NSError).code)")
           previewTask = nil
           stopPreviewPlayback(clearCachedURL: true)
         }
@@ -392,72 +394,27 @@ struct StreamChannelCard: View {
 
   @MainActor
   private func startPreviewPlayback(from sourceURL: URL) {
-    configurePreviewPlayerIfNeeded()
     cachedPreviewURL = sourceURL
     if previewSourceURL != sourceURL {
-      let asset = AVURLAsset(
-        url: sourceURL,
-        options: ["AVURLAssetHTTPHeaderFieldsKey": PlaybackService.streamHeaders]
-      )
-      let item = AVPlayerItem(asset: asset)
-      item.preferredForwardBufferDuration = 0.8
-      item.preferredPeakBitRate = 2_200_000
-      previewPlayer.replaceCurrentItem(with: item)
+      let login = channel.login
+      nativePreview.start(url: sourceURL) { original in
+        try await PlaybackService.pinnedHLSURL(for: login,
+          targetBitrate: original ? 0 : 1_500_000, forceRefresh: true)
+      }
       previewSourceURL = sourceURL
     }
     livePreviewOpacity = 0
     isShowingLivePreviewSurface = true
-    previewPlayer.play()
-    beginLivePreviewRevealWhenReady()
-  }
-
-  @MainActor
-  private func beginLivePreviewRevealWhenReady() {
-    revealVideoTask?.cancel()
-    guard let previewItem = previewPlayer.currentItem else { return }
-    revealVideoTask = Task { [previewItem] in
-      var isReadyToReveal = false
-      for _ in 0..<30 {
-        try? await Task.sleep(for: .milliseconds(100))
-        guard !Task.isCancelled else { return }
-        let readiness = await MainActor.run {
-          (
-            previewPlayer.currentItem === previewItem,
-            previewItem.status == .readyToPlay,
-            previewItem.isPlaybackLikelyToKeepUp || !previewItem.loadedTimeRanges.isEmpty,
-            previewPlayer.timeControlStatus == .playing
-          )
-        }
-        let (isCurrentItem, isReady, hasBuffer, isPlaying) = readiness
-        guard isCurrentItem else { return }
-        if isReady && hasBuffer && isPlaying {
-          isReadyToReveal = true
-          break
-        }
-      }
-      guard isReadyToReveal else { return }
-      try? await Task.sleep(for: .milliseconds(180))
-      guard !Task.isCancelled else { return }
-      await MainActor.run {
-        guard previewPlayer.currentItem === previewItem else { return }
-        withAnimation(.easeInOut(duration: 0.24)) {
-          livePreviewOpacity = 1
-        }
-        revealVideoTask = nil
-      }
-    }
   }
 
   @MainActor
   private func stopPreviewPlayback(clearCachedURL: Bool) {
+    previewGeneration = UUID()
     previewTask?.cancel()
     previewTask = nil
-    revealVideoTask?.cancel()
-    revealVideoTask = nil
     livePreviewOpacity = 0
     isShowingLivePreviewSurface = false
-    previewPlayer.pause()
-    previewPlayer.replaceCurrentItem(with: nil)
+    nativePreview.stop()
     previewSourceURL = nil
     if clearCachedURL {
       cachedPreviewURL = nil

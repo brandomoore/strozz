@@ -23,10 +23,13 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   Explicit legacy profiles and Audio Only keep their existing standard paths.
 - Native mode is independent of the legacy Diagnostics **Prefetch Proxy**
   kill-switch. Its fallback honors that legacy kill-switch, just like the legacy
-  profiles themselves. The selected native row and latency badge explicitly
-  identify standard playback after fallback; selection is not proof of activation.
+  profiles themselves. The quality menu and diagnostics explicitly identify
+  standard playback after fallback; selection is not proof of activation.
 - The native engine now indexes both H.264/AAC MPEG-TS and CMAF. TS parts are
   packet-aligned, retain PAT/PMT initialization, and use measured PES timestamps.
+  Non-terminal TS cut points wait at least 382.5ms: 85% of the advertised 450ms
+  part target. Cutting at 380ms produced invalid parts on 50fps feeds and caused
+  AVPlayer playlist rejection (`CoreMediaErrorDomain -12642`).
   Both formats serve short, bounded media chunks through an app-owned
   **127.0.0.1-only** listener. This avoids an observed AVPlayer/CDN range mismatch
   on large source segments (`-12939`, cached bytes starting at zero instead of the
@@ -43,6 +46,32 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   still permits a visible legacy fallback. Native drift is corrected by gentle
   rate adjustment rather than seeks; automatic seek-on-rebuffer is disabled
   once the initial native live start is established.
+- A quality-switch blocking reload can return its already-indexed parts before
+  that cold rendition catches up to the live edge. Initial tune-in still waits
+  for live content; unpublished parts still block. A reproduced xQc stall
+  exposed a 2.33-second unnecessary wait while the requested rendition's cached
+  parts were available.
+- When native playback stops advancing but its contiguous forward buffer has
+  refilled to at least the configured buffer preference (minimum three seconds),
+  TV and mobile request one same-item resume at normal speed. This does not seek
+  or increase target latency. A stale `isPlaybackLikelyToKeepUp=false` does not
+  suppress the attempt; no clock progress within five seconds escalates through
+  the existing native retry budget. Pause, suspension, startup, seeking, and
+  external playback remain excluded. A resume request is not proof of recovery:
+  subsequent clock and video samples are required.
+- If the clock advances but a video rendition never decodes, TV and mobile
+  make one explicit recovery attempt using the highest-bitrate video rendition.
+  Native playback stays native, audio-only tracks are excluded, and the quality
+  menu reports the change. TV keeps this override local to the current stream;
+  it does not overwrite the viewer's saved Auto/fixed-quality preference.
+  Choosing a quality manually clears the override.
+- Upstream media uses one reusable HTTP session per active rendition, rather
+  than a new TCP/TLS connection for every segment. Cancellation and completion
+  callbacks are fenced to their own task; stopping the reader is terminal.
+  A GronkhTV comparison observed zero reused connections in 30 baseline samples
+  versus 29/29 reused warm connections after the change, removing repeated
+  roughly 90ms connection setup without changing the latency target. This
+  eliminates avoidable setup work, not arbitrary upstream delivery delays.
 - When native activation fails, its row disappears for that channel and the
   checkmark moves to the actual fallback mode. The old **Auto · Low Latency**
   label refers to the original prefetch engine, not native partial playback.
@@ -128,6 +157,14 @@ checks startup, foreground replacement, media-loss/reset notification delivery,
 reconfigured audio, fresh AVKit ownership, and paused restoration. It remains
 muted: it verifies recovery mechanics, not audible output through physical
 Bluetooth hardware.
+
+A later physical return exposed an unmatched audio interruption: tvOS sent
+`interruption began` after backgrounding but never sent `ended`. The stale flag
+blocked foreground restoration indefinitely despite the viewer never pausing.
+On a real background-to-active transition, TV and mobile now recheck audio
+activation instead of waiting forever for that missing notification. Explicit
+pause intent remains intact, and failed activation surfaces an error. Ordinary
+interruptions while already foregrounded still honor their resume permission.
 
 The same live-playback recovery contract also applies on iPhone/iPad.
 `PlaybackAudioSession` and `PlaybackPositionRestoration` are compiled into both
@@ -1053,6 +1090,253 @@ These are hypotheses. Do not treat them as fact until the Diagnostics overlay
   enough irregular-`#EXTINF` or stalled-sequence points to clear the threshold
   alongside the discontinuities. Watch the overlay `Predict:` score across an ad
   to verify it stays under 3.0.
+
+## Bounded multi-source lifecycle checks
+
+`MultiviewContinuityLiveTests` separately exercises two to four simultaneous
+native panes, expansion into normal controls/chat, and return. It checks the
+identities of every AVPlayer, AVPlayerItem, and AVKit rendering controller as
+well as advancing video samples during the transition. Hidden panes stay live
+with lower adaptive quality preferences; attachments record their actual
+resolution and encoded-media cache use, since preferences are not hard limits.
+`STROZZ_MULTIVIEW_HOLD_SECONDS` can extend the expanded hold from 5 to 300 seconds.
+The separate, explicit physical check accepts only channels in the on-device
+live Following list and keeps its first stream as the sole audible pane.
+Remote interaction tests use the separate `StrozzUI` scheme with
+`STROZZ_MULTIVIEW_UI_TESTS=1` and selected `STROZZ_MATRIX_CHANNELS`. They verify
+normal control navigation, the native quality menu, Back, and reactivation of
+the same returned pane rather than relying on accessibility-container focus
+flags alone. The remote regression starts from the second pane so a fallback
+to the first tile cannot accidentally pass. The wall's native focus scope
+prefers the remembered tile as buttons re-enter during collapse, before the
+animation-completion focus request.
+
+`MultiviewFocusRenderingTests` hosts the actual pane hit target over a known
+four-color picture, gives its native Button focus, and checks the picture's
+pixels across all four themes with transparency enabled/disabled. The pane uses
+the shared content-only player button style: tvOS's `.plain` style can still
+paint an opaque focus platter even with `.focusEffectDisabled()`. The separate
+tile border remains the focus indicator. Decoded-frame continuity alone cannot
+detect UI that obscures the video.
+
+`PlayerChatLayoutTests` uses direct stream entry (not multiview expansion) and
+checks the real video, chat, timeline, and collapse-button frames in Side,
+Overlay, and Glass at 460- and 820-point chat widths. Enable
+`STROZZ_PLAYER_LAYOUT_TESTS=1` with a live `STROZZ_MATRIX_CHANNELS` login in the
+`StrozzUI` scheme. Only the shared video/chat container ignores the screen safe
+area: separate child overrides let chat and controls disagree about the right
+edge on direct entry. Side chat reserves video space; floating chat reserves
+control space without shrinking the underlying video.
+
+The TV header's viewer counts, numeric latency, and uptime inherit one
+`.footnote.weight(.semibold)` style with monospaced digits. The numeric latency
+is the difference between the native published live edge and the displayed
+media date, including the normal live cushion; it is not the chat-sync
+extra-delay estimate (which deliberately removes that cushion). Unknown or
+discontinuous date mappings clear the value until verified again. The existing
+readout toggle and control show/hide behavior are unchanged. The direct-entry
+UI regression checks numeric content, matching text heights, chat clearance,
+and disappearance together with the controls.
+
+TV and mobile card previews share `NativeLivePreview`, including native startup,
+bounded source refresh/fallback, video readiness, and teardown. Previews remain
+muted and cannot initiate external playback.
+
+### Adaptive rendition timeline regressions
+
+An October 8 Kyle direct/native crossover reproduced a native-only downshift
+freeze: direct HLS rendered all 165 post-startup samples, while native rendered
+116 (117 on repeat). The playhead stayed near 72 seconds while the new
+rendition's buffered range restarted near 30 seconds. Media kept arriving
+quickly, but its rebased timeline did not reach the playhead for about 43 seconds.
+
+The native origin now retains completed-segment metadata from the existing
+optional rendition-report requests. A cold rendition keeps the earlier playlist
+prefix instead of taking only the newest upstream sliding window, without
+downloading or decoding unused video. Retention follows the existing history
+and count bounds, drops media payloads, and never bridges a missing sequence
+window. Restarting an inactive indexer clears its obsolete `reachedLiveEdge`
+flag so an initial reload cannot immediately return its old edge as current
+live. Active playlists still never wait on optional report work; hold-back and
+forward-buffer targets are unchanged.
+
+Before publishing an adaptive master, a coalesced initial manifest pass now
+establishes one stable maximum target duration across its video renditions.
+This follows rule 8.2 of Apple's
+[HLS authoring specification](https://developer.apple.com/documentation/http-live-streaming/hls-authoring-specification-for-apple-devices).
+Previously, Source and transcodes could advertise different targets (for
+example 2 and 6 seconds). The initial metadata also supplies their timeline
+prefixes. Initial playlist coverage, partial-segment retention, and media-cache
+retention use the common advertised duration; this does not change
+`PART-HOLD-BACK` or AVPlayer's forward-buffer preference. Initial preparation
+must complete before the master is exposed, while subsequent optional report
+refreshes remain off the active request path.
+
+Unused rendition indexers now expire based on actual media demand, not
+playlist probes. The existing eight-second grace period is unchanged, but
+AVPlayer's metadata polling can no longer keep an obsolete rendition downloading
+and indexing indefinitely alongside the displayed one. Diagnostics record
+standalone/grid/expanded presentation, the requested bitrate/resolution budget,
+and opt-in per-rendition timeline state without retaining signed URLs.
+
+Two deterministic regressions reproduce both defects with the old behavior:
+the cold indexer's first sequence incorrectly moves from 0 to 20, and the
+dormant indexer immediately serves its stale edge. Both pass with the correction.
+Kyle's corrected live crossover rendered 165/165 post-startup samples with at
+most about one second of source-age variation, rather than hiding a timeline
+rebase behind advancing frames.
+
+The simulator-only
+`NativeSourceDecodingLiveTests/testOptInAdaptiveRenditionTransitions` accepts
+`STROZZ_ADAPTIVE_SWITCH_COMPARISON=1` and `STROZZ_DECODE_CHANNEL`. It compares
+180 seconds each of direct/native playback sequentially and muted, changes
+the same item's rendition preferences at 45/90/135 seconds, and requires real
+resolution changes, fresh frames, and stable playback-date mapping.
+`STROZZ_ADAPTIVE_SWITCH_NATIVE_ONLY=1` narrows a previously established failure.
+`testOptInGridToExpandedAutoStaysAtSustainableQuality` with
+`STROZZ_AUTO_EXPANSION_COMPARISON=1` separately releases the grid budget after
+30 seconds and checks for repeated quality oscillation over 240 seconds.
+Long multiview holds also check selected-pane frames and settled quality changes,
+not only object identity and hidden-player clocks. Stability requires reaching
+the stream's highest advertised resolution within 30 seconds, then no further
+quality drops in the unthrottled run. A monotonic startup promotion is not
+counted as oscillation. The earlier failing captured run still violates this
+requirement (Buddha reached 1080p at 37 seconds); the corrected longer capture
+reached it at 23 seconds with no later drops.
+
+These checks have limits. Buddha's single-decoder expansion passed with both the
+old and corrected timeline behavior, so it did not reproduce the physical TV's
+roughly six-second quality cycling. The corrected real-player two-pane test on
+tvOS 26.5 passed 90-second expanded holds, frame/quality checks, and retained
+player/item/surface identity. On tvOS 27 Simulator, a hidden 360p pane instead
+needed Source decode recovery, breaking item continuity, followed by a crash in
+CoreMedia's logging path. AnthonyZ low-rendition decoding failed with both direct
+and native AVPlayer on that runtime; that is not a test of twitch.tv and does
+not explain away the user's website-versus-app comparison. Physical Auto
+oscillation remains a separate symptom to verify, not a claimed universal cure.
+The final four-pane 180-second holds retained every player/item/surface and
+recorded 180/180 fresh samples for both expanded streams. Buddha held 1080p
+after its initial promotion; Blau held 1080p throughout. The original runner
+marked that capture failed because its old assertion counted four startup
+quality changes, including promotions; the original failed bundle is retained.
+The replacement assertions check the actual high-quality deadline and
+subsequent downshifts against those recorded samples. Forced low-rendition
+AnthonyZ checks still fail on tvOS 26.5 as well as 27, including direct
+AVPlayer comparison; neither common target duration nor an experimental TS
+initialization override eliminated that failure. The TS override and a
+diagnostic-output-rebinding experiment were discarded, not shipped.
+
+`NativeStreamMatrixLiveTests` is an opt-in, simulator-only test for comparing
+real live sources without taking over a physical Apple TV. Set
+`STROZZ_STREAM_MATRIX=1` and `STROZZ_MATRIX_CHANNELS` to one to ten comma-separated
+live logins in the test-runner environment. Sources run sequentially with one
+muted playback instance, not ten simultaneous decoders.
+For longer soaks, `STROZZ_MATRIX_STEADY_SECONDS` accepts 180–1800 seconds and
+`STROZZ_MATRIX_RESUMED_SECONDS` accepts 45–900 seconds. Increase the XCTest and
+outer supervisor deadlines to cover every selected source, including startup
+and position restoration, rather than interpreting a truncated run as a failure
+of the player.
+
+Each source must produce decoded video in AVKit, sustain three minutes of
+playback, return through simulated background/interruption handlers without an
+interruption-ended notification, play another 45 seconds, and preserve a
+deliberately paused position across a second return. Per-source JSON attachments
+retain quality, buffer, source-age,
+prefetch/hold-back, frame progress, and recovery timing. A failed source remains
+a failure while later sources still get exercised; completion is not a claim
+that every assertion passed. Offline sources, native fallback, player errors,
+item replacements, and startup timeouts have distinct failure labels, with
+terminal source state retained in the attachment. They are not silently
+substituted with another broadcaster. These in-process lifecycle checks do not
+prove behavior during actual OS suspension or audible output.
+Frame checks require a new pixel buffer with an advancing presentation timestamp,
+not just a non-null buffer. Separate request attachments retain redacted AVPlayer
+errors and resource timing; opt-in Debug origin traces capture generated local
+playlist/part requests around a stall, without storing signed upstream URLs.
+
+`NativeSourceDecodingLiveTests` compares direct Twitch HLS with the native engine
+sequentially on the same simulator. Enable `STROZZ_DECODE_COMPARISON=1`, select
+`STROZZ_DECODE_CHANNEL`, and optionally set `STROZZ_DECODE_QUALITY` to `Source`
+or an available quality name. Both modes must render verified frames; an
+advancing clock with a blank AVKit surface fails the comparison.
+Physical comparison is a separate opt-in test, requires explicit channel and
+quality selection, and stays muted unless `STROZZ_PHYSICAL_TEST_AUDIO=audible`.
+Run it only with the viewer's permission: it takes over the app surface.
+
+Use a currently live mix of MPEG-TS and CMAF, with and without upstream prefetch.
+A broadcaster's language or name is not evidence of their ingest region or
+the CDN route chosen for this client. Keep compilation jobs limited, watch host
+CPU/thermal/memory pressure, and stop only the owned test lane and simulator if
+the machine comes under pressure. Do not interpret a resource-aborted run or
+advancing clock without video frames as passing playback.
+Limit both Xcode build jobs and Swift-driver jobs; `-jobs 2` alone does not
+necessarily bound the Swift compiler's workers. A guarded run may be incomplete
+even when memory pressure stays normal, because sustained CPU saturation is
+also a reason to stop.
+
+### October 7, 2026 simulator sample
+
+On the tvOS 27 simulator, Squeex, ESLCS, Elxokas, Burn, Gaules, Kamet0, and xQc
+completed the measured scenarios: each returned 180/180 steady and 45/45 resumed
+decoded-frame samples, zero waiting samples, no sub-480p collapse, and paused
+restoration error below one millisecond. Gaules adapted between 720p and 1080p;
+this is not evidence that Auto should lock to a resolution.
+
+Shroud fell back with `NativeHLSError.unsupported` about 97 seconds after opening.
+The narrower retry found the channel offline, confirmed by the live-status
+lookup, so it could not reproduce or clear the original format failure. The
+specific unsupported input remains unidentified. The original eight-source run
+was interrupted during xQc when its resource-monitor command timed out; xQc
+completed in the subsequent two-source run. Both aggregate XCTest runs remain
+failed, rather than being presented as a clean eight-source pass.
+
+Only one muted simulator decoder ran at a time, with two compiler jobs.
+Memory pressure remained normal; the completed retry's lowest sampled CPU idle
+was 17.81%. The owned simulator was shut down afterward. No physical TV was
+manipulated. This bounded sample does not establish long-session reliability,
+mobile UI parity, or a fix for active playback waiting after its buffer refills.
+
+### October 8, 2026 reliability follow-up
+
+The subsequent eight-channel run passed on TheBurntPeanut, rivers_gg, alanzoka,
+agurin, and stylishnoob4, but failed on GronkhTV after return, Nico_la during
+video startup, and matsuri_hs during steady playback. Those failures remain in
+the original results; later passes do not erase them.
+
+Two native-engine defects were isolated with failing deterministic regressions:
+50fps TS parts could be 380ms despite the 382.5ms minimum, and a cold rendition
+with requested parts already cached still waited to reach live before serving
+them. The corrected parser and cached-request regression pass. A separate shared
+buffer-recovery policy covers the observed refilled-buffer deadlock, including
+one-shot resume, timeout escalation, and pause/invalid-buffer exclusions.
+
+Nico_la's original 1080p50 rendition then rendered 45/45 measured frames in both
+direct and native AVKit playback. The final shared mobile checks passed 27/27,
+including live xQc, audio-reset, quality, and paused-return scenarios. The
+corrected-engine xQc soak rendered 900/900 distinct steady-playback frames with
+zero waiting samples; its aggregate test still failed after return when a 720p
+rendition stopped producing verified video and Source recovery replaced the
+item. A fixed-720p direct Twitch comparison also failed on the tvOS 27 simulator,
+so that failure is not isolated to the native engine. A stable-runtime direct
+comparison additionally encountered an upstream HTTP 500 and is inconclusive.
+
+With explicit viewer permission, Anthonyz was checked on physical Apple TV at
+720p60, with audio and no system-volume change. Both direct and native playback
+rendered 45/45 measured frames without AVPlayer errors. Build 1938, with Production
+CloudKit preserved, then returned to normal native 1080p60 Anthonyz playback.
+This verifies that hardware path, not every broadcaster or an unlimited soak.
+Further simulator runs stopped on sustained host CPU pressure; those runs are
+incomplete. A narrowed Shroud retry then confirmed the channel offline rather
+than reproducing its format event. The original GronkhTV CoreMedia error and Shroud format fallback
+have not been isolated to reproducible input. There is no all-streams,
+long-duration "rock solid" claim.
+
+Reusable upstream sessions subsequently passed 41 TV checks and 31 mobile
+checks, including live playback and cancellation isolation. All five reader
+lifecycle regressions passed, including overlapping-request rejection. A longer
+GronkhTV run recorded no stall/retry event over approximately 17 minutes before
+host CPU pressure stopped the lane during return-from-background coverage.
+That run is incomplete; its xQc portion never started.
 
 ## Diagnostics overlay (how to gather data)
 

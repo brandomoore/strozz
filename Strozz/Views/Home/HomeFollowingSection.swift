@@ -25,7 +25,7 @@ struct HomeFollowingSection: View {
           .font(.system(size: 32, weight: .bold))
           .accessibilityAddTraits(.isHeader)
 
-        if follows.isLoading {
+        if follows.isLoading || environment.accountSync.isRestoringAccount {
           ProgressView()
             .scaleEffect(0.85)
         }
@@ -51,6 +51,7 @@ struct HomeFollowingSection: View {
           }
           .accessibilityLabel("Refresh")
         }
+        .disabled(environment.accountSync.isRestoringAccount)
       }
 
       if let errorMessage = follows.errorMessage {
@@ -61,7 +62,7 @@ struct HomeFollowingSection: View {
 
       if channels.isEmpty {
         HomeStreamRailPlaceholder(rail: rail, style: style,
-          isLoading: follows.isLoading || follows.lastUpdatedAt == nil,
+          isLoading: follows.isLoading || follows.lastUpdatedAt == nil || environment.accountSync.isRestoringAccount,
           emptyMessage: follows.isUsingDemoData
             ? "No trending channels are available right now." : "No followed channels are available yet.")
       } else {

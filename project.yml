@@ -134,7 +134,11 @@ targets:
       - path: StrozzMobileTests
       - path: StrozzTests/PlaybackPresentationStateTests.swift
       - path: StrozzTests/NativeRenditionReportTests.swift
+      - path: StrozzTests/NativeBufferedStallRecoveryTests.swift
+      - path: StrozzTests/NativeHLSChunkReaderTests.swift
+      - path: StrozzTests/NativePreviewTests.swift
       - path: StrozzTests/BroadcastUptimeTests.swift
+      - path: StrozzTests/TwitchAutomaticSignInTests.swift
     dependencies:
       - target: StrozzMobile
     settings:
@@ -244,6 +248,22 @@ targets:
         INFOPLIST_FILE: ""
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Strozz.app/Strozz"
         BUNDLE_LOADER: "$(TEST_HOST)"
+  StrozzUITests:
+    type: bundle.ui-testing
+    platform: tvOS
+    sources:
+      - path: StrozzUITests
+    dependencies:
+      - target: Strozz
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Strozz.UITests
+        DEVELOPMENT_TEAM: N8Z5T4AK3X
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: ""
+        TARGETED_DEVICE_FAMILY: "3"
+        TEST_TARGET_NAME: Strozz
+
 schemes:
   StrozzMobile:
     build:
@@ -274,3 +294,11 @@ schemes:
       config: Debug
     archive:
       config: Release
+  StrozzUI:
+    build:
+      targets:
+        Strozz: all
+    test:
+      config: Debug
+      targets:
+        - StrozzUITests

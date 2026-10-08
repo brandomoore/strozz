@@ -14,7 +14,11 @@ struct SettingsAccountSection: View {
 
   var body: some View {
     Group {
-      if auth.isAuthenticated {
+      if environment.accountSync.isRestoringAccount {
+        TwitchAccountLoadingView()
+          .padding(20)
+          .settingsGlassPanel(disabled: glassDisabled)
+      } else if auth.isAuthenticated {
         HStack(spacing: 20) {
           CachedAsyncImage(url: auth.profileImageURL) { image in
             image.resizable().scaledToFill()
@@ -35,7 +39,7 @@ struct SettingsAccountSection: View {
 
           Spacer(minLength: 24)
 
-          Button("Sign out this device", role: .destructive) {
+          Button("Sign out", role: .destructive) {
             showSignOutConfirm = true
           }
           .font(.headline)
@@ -51,7 +55,7 @@ struct SettingsAccountSection: View {
           isPresented: $showSignOutConfirm,
           titleVisibility: .visible
         ) {
-          Button("Sign out this device", role: .destructive) {
+          Button("Sign out", role: .destructive) {
             auth.signOut()
             onAccountChanged()
           }

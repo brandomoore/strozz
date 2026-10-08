@@ -196,8 +196,12 @@ final class MobilePlaybackModel {
   }
 
   func resume() {
-    guard isActive, let position = suspendedPosition else { return }
+    guard isActive, let suspended = suspendedPosition else { return }
+    // Returning is an opportunity to reactivate even if the OS never ended
+    // its suspension interruption. Preserve any newer explicit pause intent.
+    let position = interruptedPosition ?? suspended
     suspendedPosition = nil
+    interruptedPosition = nil
     chat.connect(to: channel)
     refreshStreamMetadata()
     load(position: position)
@@ -555,9 +559,9 @@ final class MobilePlaybackModel {
   }
 
   static func decodeRecoveryQuality(in qualities: [StreamQuality], selection: MobileQuality) -> StreamQuality? {
-    guard let source = qualities.filter({ !$0.isAudioOnly }).max(by: { $0.bitrate < $1.bitrate }),
-          selection != .fixed(source.id) else { return nil }
-    return source
+    let selectedID: String?
+    if case .fixed(let id) = selection { selectedID = id } else { selectedID = nil }
+    return StreamQuality.decodeRecoveryQuality(in: qualities, selectedID: selectedID)
   }
 
   private func recoverMissingVideo() {
@@ -618,6 +622,7 @@ final class MobilePlaybackModel {
 
   private func startMonitor(item: AVPlayerItem, request: UUID) {
     monitorTask = Task { [weak self] in
+      var bufferedStallRecovery = NativeBufferedStallRecovery()
       var previousClock = item.currentTime().seconds
       var lastProgress = ProcessInfo.processInfo.systemUptime
       var lastVideoFrame = lastProgress
@@ -646,6 +651,28 @@ final class MobilePlaybackModel {
         let paused = player.timeControlStatus == .paused
         if clock > previousClock + 0.05 || paused { lastProgress = uptime }
         previousClock = clock
+        let buffer = item.loadedTimeRanges.map(\.timeRangeValue)
+          .filter { $0.start.seconds <= clock && $0.end.seconds >= clock }
+          .map { $0.end.seconds - clock }.max() ?? 0
+        switch bufferedStallRecovery.observe(clock: clock, uptime: uptime, buffer: buffer,
+          minimumBuffer: item.preferredForwardBufferDuration,
+          waiting: player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+          allowed: engine != nil && !isLoading && !isPaused && !isExternalPlayback && !isAudioOnly) {
+        case .resume:
+          catchUp.interrupt(at: uptime)
+          catchUpRateChange = (uptime, clock, 1)
+          Self.logger.warning("Requesting native playback resume from a refilled buffer")
+          player.playImmediately(atRate: 1)
+          continue
+        case .awaitingProgress:
+          continue
+        case .restart:
+          Self.logger.warning("Buffered native playback did not resume; refreshing the native source")
+          recoverNative(.timeout)
+          return
+        case .none:
+          break
+        }
         if let videoOutput,
            videoOutput.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) != nil {
           lastVideoFrame = uptime
@@ -666,9 +693,6 @@ final class MobilePlaybackModel {
         let target = await engine?.origin.liveTargetDate()
         let sourceBuffer = await engine?.origin.snapshot().forwardBuffer
         guard isCurrent(request), player.currentItem === item else { return }
-        let buffer = item.loadedTimeRanges.map(\.timeRangeValue)
-          .filter { $0.start.seconds <= clock && $0.end.seconds >= clock }
-          .map { $0.end.seconds - clock }.max() ?? 0
         baseline.observe(context: "\(channel)|\(selection)", itemID: request, playbackDate: item.currentDate(),
                          playbackTime: clock, liveTarget: target,
                          canCalibrate: followsLive && playing && buffer >= 1 && !catchUp.isActive,

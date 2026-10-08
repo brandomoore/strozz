@@ -10,7 +10,8 @@ extension PlayerView {
     let login = activeChannel
     let sessionID = model.playbackTelemetry.sessionID
     let generation = model.altRecovery.generation
-    if preferYouTubeSource, livePlaybackProfile != .nativeLowLatency, !didManuallySelectSource {
+    if model.multiviewContext == nil, preferYouTubeSource,
+      livePlaybackProfile != .nativeLowLatency, !didManuallySelectSource {
       do {
         let source = try await LivePlaybackStartup.resolveYouTube {
           let target = await Self.resolveYouTubeTarget(forTwitchLogin: login)
@@ -173,7 +174,7 @@ extension PlayerView {
         // transport can present one continuous broadcast-length timeline (DVR
         // window + VOD) from the start. Non-blocking; falls back to the DVR-only
         // bar until/unless it resolves.
-        if streamRewindEnabled {
+        if streamRewindEnabled && !isMultiviewCompact {
           Task { await resolveBroadcastVODIfNeeded() }
         }
         return
@@ -315,6 +316,7 @@ extension PlayerView {
     guard let playback else { return }
     switchToSourceIfNeeded(playback.url(forQuality: option))
     player.currentItem?.preferredPeakBitRate = 0
+    applyMultiviewBudget()
   }
 
   /// Replaces the current item only when the underlying source actually changes,
@@ -419,6 +421,10 @@ extension PlayerView {
     // Buffer depth comes from the active profile: shallower for lower latency,
     // deeper to let ABR hold higher quality. (See LivePlaybackPolicy.)
     item.preferredForwardBufferDuration = activeLivePlaybackPolicy.preferredForwardBufferDuration
+    if let context = model.multiviewContext {
+      item.preferredMaximumResolution = context.qualityTier.maximumResolution
+      item.preferredPeakBitRate = Double(context.qualityTier.targetBitrate)
+    }
     // Let AVPlayer establish the initial LL-HLS start, then disable its
     // seek-on-rebuffer behavior as soon as startup progress is established.
     item.automaticallyPreservesTimeOffsetFromLive = model.isUsingNativeHLS && pinnedToLive && !isUserPaused
@@ -621,6 +627,13 @@ extension PlayerView {
   }
 
   var latencyColor: Color {
+    if model.isUsingNativeHLS {
+      switch model.nativeLivePosition.state {
+      case .checking, .paused: return .gray
+      case .live: return .green
+      case .behind(let seconds): return seconds <= 8 ? .yellow : .orange
+      }
+    }
     guard let seconds = measuredLatencySeconds, !isLatencyWarmingUp else { return .gray }
     if seconds <= 8 { return .green }
     if seconds <= 15 { return .yellow }
@@ -631,26 +644,23 @@ extension PlayerView {
     guard isPlaybackActive else {
       return "Waiting for playback"
     }
+    if model.isUsingNativeHLS {
+      guard let seconds = model.chatSyncBaseline.liveEdgeDelay else { return String(localized: "Checking live") }
+      return formatLatencySeconds(seconds)
+    }
     guard let seconds = measuredLatencySeconds else {
       return "Latency unavailable"
     }
     if isLatencyWarmingUp {
       return "Estimating latency…"
     }
-    let delay = "~\(formatLatencySeconds(seconds)) behind live"
-    if livePlaybackProfile == .nativeLowLatency, !model.isUsingNativeHLS, !isUsingAltSource {
-      return "Standard playback · \(delay)"
-    }
-    return delay
+    return formatLatencySeconds(seconds)
   }
 
   func formatLatencySeconds(_ seconds: Double) -> String {
     let clamped = max(0, seconds)
-    if clamped < 10 {
-      let tenths = (clamped * 10).rounded() / 10
-      return "\(tenths)s"
-    }
-    return "\(Int(clamped.rounded()))s"
+    let number = clamped.formatted(.number.precision(.fractionLength(clamped < 10 ? 2 : 0)))
+    return String(localized: "\(number)s")
   }
 
   func configurePlayerForLive() {
@@ -767,6 +777,7 @@ extension PlayerView {
   }
 
   func resetPlaybackHealth() {
+    model.nativeBufferedStallRecovery = NativeBufferedStallRecovery()
     model.offlineProbeTask?.cancel()
     model.offlineProbeTask = nil
     mon.resetPlaybackHealth()
@@ -785,6 +796,12 @@ extension PlayerView {
   func handleReturnToForeground() {
     guard let leftAt = backgroundedAt else { return }
     backgroundedAt = nil
+    // Interruption-ended notifications may be lost across suspension. A fresh
+    // activation will either restore audio or surface an error; user pause stays intact.
+    if model.audioInterrupted {
+      model.audioInterrupted = false
+      recordPlaybackEvent("audio_interruption_rechecked_on_foreground")
+    }
     model.channelMetadataTask?.cancel()
     model.channelMetadataTask = Task { await refreshChannelMetadata() }
     resetPlaybackHealth()
@@ -1020,7 +1037,32 @@ extension PlayerView {
       checkVideoDecodeFreeze(item: item, clockAdvanced: advanced)
     }
 
+    guard item === player.currentItem else { return }
     lastObservedPlaybackTimeSeconds = currentSeconds
+
+    let bufferedRecovery = model.nativeBufferedStallRecovery.observe(
+      clock: currentSeconds, uptime: ProcessInfo.processInfo.systemUptime, buffer: bufferAheadSeconds(item),
+      minimumBuffer: item.preferredForwardBufferDuration,
+      waiting: player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+      allowed: model.isUsingNativeHLS && model.nativeStartupComplete && !model.nativeNeedsRefresh
+        && item.status == .readyToPlay && !player.isExternalPlaybackActive
+        && !model.playbackTelemetry.isSeekPending)
+    switch bufferedRecovery {
+    case .resume:
+      cancelNativeCatchUp(reason: "buffered_resume")
+      recordPlaybackEvent("native_buffered_resume_requested", level: .warning,
+        metrics: ["buffer_ahead_seconds": bufferAheadSeconds(item) ?? 0])
+      player.playImmediately(atRate: 1)
+      return
+    case .awaitingProgress:
+      return
+    case .restart:
+      recordPlaybackEvent("native_buffered_resume_timed_out", level: .warning)
+      recoverNativeHLS(.timeout)
+      return
+    case .none:
+      break
+    }
 
     // Live-edge drift recovery. While following live, AVPlayer can involuntarily
     // rewind the playhead far back inside a large (DVR) seekable window to refill
@@ -1643,6 +1685,7 @@ extension PlayerView {
   }
 
   func setIdleTimer(disabled: Bool) {
+    guard model.multiviewContext == nil else { return }
     UIApplication.shared.isIdleTimerDisabled = disabled
   }
 }

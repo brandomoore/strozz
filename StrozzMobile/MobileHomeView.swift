@@ -46,6 +46,7 @@ struct MobileHomeView: View {
   let onProfile: (FollowedChannel) -> Void
   let onAccount: () -> Void
   @Environment(TwitchAuthSession.self) private var auth
+  @Environment(TwitchAccountSync.self) private var sync
   @Environment(\.themePalette) private var palette
   @Environment(MobileVODProgressStore.self) private var vodProgress
   @AppStorage(RecommendationPreferences.enabledDefaultsKey) private var personalizedEnabled = true
@@ -97,6 +98,7 @@ struct MobileHomeView: View {
               if feed == .following {
                 MobileFollowingContent(
                   authenticated: auth.isAuthenticated,
+                  isRestoringAccount: sync.isRestoringAccount,
                   channels: MobileHomeFeed.directory(follows.directory, authenticated: auth.isAuthenticated, category: category),
                   isLoading: follows.isLoadingDirectory
                     || (follows.directoryLoadedAt == nil && follows.directoryErrorMessage == nil),
@@ -385,6 +387,7 @@ struct MobileFollowedShortcut: View {
 
 struct MobileFollowingContent: View {
   let authenticated: Bool
+  var isRestoringAccount = false
   let channels: [FollowedChannel]
   let isLoading: Bool
   let errorMessage: String?
@@ -397,7 +400,9 @@ struct MobileFollowingContent: View {
   var onResume: ((MobileVODSelection) -> Void)? = nil
 
   var body: some View {
-    if !authenticated {
+    if isRestoringAccount {
+      TwitchAccountLoadingView().padding(.vertical, 24)
+    } else if !authenticated {
       VStack(spacing: 16) {
         Text("Sign in to see your followed channels.").foregroundStyle(.secondary)
         Button("Sign in to Twitch", action: onAccount).buttonStyle(.borderedProminent)

@@ -35,7 +35,7 @@ final class MobileNavigationTests: XCTestCase {
     XCTAssertTrue(app.switches["Sync chat to extra delay"].exists)
   }
 
-  func testAccountSyncHasItsOwnTapTargetAndGlobalSignOutIsSeparate() {
+  func testAccountSyncHasItsOwnTapTargetAndGlobalSignOutIsSeparate() throws {
     let app = XCUIApplication()
     app.launchEnvironment["STROZZ_MUTE_PLAYBACK"] = "1"
     app.launch()
@@ -43,19 +43,68 @@ final class MobileNavigationTests: XCTestCase {
     app.buttons["Account"].firstMatch.tap()
     let sync = app.buttons["account-sync"]
     XCTAssertTrue(sync.waitForExistence(timeout: 10))
+    func identifiers(_ snapshot: any XCUIElementSnapshot) -> Set<String> {
+      Set([snapshot.identifier]).union(snapshot.children.flatMap { identifiers($0) })
+    }
+    let initialIdentifiers = identifiers(try app.snapshot())
+    if initialIdentifiers.contains("twitch-account-restoring") {
+      XCTAssertFalse(initialIdentifiers.contains("account-sign-in"))
+      XCTAssertFalse(initialIdentifiers.contains("account-connect-rewards"))
+    }
+    XCTAssertTrue(app.buttons["account-sign-in"].waitForExistence(timeout: 45),
+      "A genuinely signed-out account should offer sign-in after restoration finishes")
     XCTAssertTrue(app.buttons["account-connect-rewards"].exists, "Rewards must not depend on an active OAuth flow")
     XCTAssertFalse(app.buttons["account-sign-out-all"].exists)
     sync.tap()
-    XCTAssertFalse(app.buttons["Sign out all devices"].exists, "Sync must never invoke a destructive action")
+    XCTAssertFalse(app.buttons["Sign out everywhere"].exists, "Sync must never invoke a destructive action")
     XCTAssertTrue(app.buttons["account-sign-in"].exists)
     capture(app, name: "account-sync-separated")
     app.buttons["account-manage-sync"].tap()
     XCTAssertTrue(app.navigationBars["Connected account"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["account-sign-out-all"].exists)
     app.buttons["account-sign-out-all"].tap()
-    XCTAssertTrue(app.sheets["Sign out of Twitch and rewards on all synced devices?"].waitForExistence(timeout: 5))
-    if app.buttons["Cancel"].exists { app.buttons["Cancel"].tap() }
-    else { app.buttons["OK"].tap() }
+    XCTAssertTrue(app.sheets["Sign out of Twitch and rewards everywhere?"].waitForExistence(timeout: 5))
+    // The deferred termination dismisses the confirmation without signing out.
+  }
+
+  func testStreamDurationOverlayPreferencePersists() {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_MUTE_PLAYBACK"] = "1"
+    app.launch()
+    defer { app.terminate() }
+    func openOverlays() {
+      app.buttons["Account"].firstMatch.tap()
+      let overlays = app.buttons["account-overlays"]
+      for _ in 0..<5 {
+        if overlays.isHittable { break }
+        app.swipeUp()
+      }
+      XCTAssertTrue(overlays.waitForExistence(timeout: 5))
+      overlays.tap()
+    }
+    openOverlays()
+    let toggle = app.switches["overlay-stream-duration"]
+    XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+    guard let original = toggle.value as? String, ["0", "1"].contains(original) else {
+      return XCTFail("The native stream-duration switch has no Boolean value")
+    }
+    let changed = original == "1" ? "0" : "1"
+    func tapSwitch() {
+      let control = toggle.switches.firstMatch
+      if control.exists { control.tap() } else { toggle.tap() }
+    }
+    tapSwitch()
+    expectation(for: NSPredicate(format: "value == %@", changed), evaluatedWith: toggle)
+    waitForExpectations(timeout: 5)
+    capture(app, name: "stream-duration-overlay-setting")
+    app.terminate()
+    app.launch()
+    openOverlays()
+    XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+    XCTAssertEqual(toggle.value as? String, changed)
+    tapSwitch()
+    expectation(for: NSPredicate(format: "value == %@", original), evaluatedWith: toggle)
+    waitForExpectations(timeout: 5)
   }
 
   func testLiveBrowseSearchAndPlayerRotation() throws {

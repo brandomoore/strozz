@@ -17,34 +17,41 @@ struct MobileAccountView: View {
     @Bindable var theme = theme
     Form {
       Section {
-        if auth.isAuthenticated {
+        if sync.isRestoringAccount {
+          TwitchAccountLoadingView()
+        } else if auth.isAuthenticated {
           MobileTwitchIdentityRow(name: auth.userDisplayName ?? auth.userLogin ?? "Twitch",
                                  imageURL: auth.profileImageURL)
-          Button("Sign out this device", role: .destructive) { showLocalSignOut = true }
+          Button("Sign out", role: .destructive) { showLocalSignOut = true }
             .accessibilityIdentifier("account-sign-out-local")
         } else {
-          Text("Your follows, chat, and rewards start with your Twitch account.")
+          Text(sync.isSignedOutLocally
+            ? "Signed out on this device. Sign in to reconnect."
+            : "Your saved Twitch connection restores automatically through iCloud.")
             .foregroundStyle(.secondary)
           Button("Sign in to Twitch") { showSignIn = true }
             .accessibilityIdentifier("account-sign-in")
+            .disabled(!sync.hasCompletedInitialSync || sync.isBusy)
         }
         if let error = auth.errorMessage { Text(error).font(.callout).foregroundStyle(.secondary) }
       } header: { Text("Twitch") }
 
       Section {
         HStack {
-          Text(auth.isAuthenticated ? "Sign-in sharing" : "Connect from another device")
+          Text(sync.isRestoringAccount || auth.isAuthenticated ? "Sign-in sharing" : "Connect from another device")
           Spacer()
           if sync.isBusy { ProgressView().accessibilityLabel("Syncing account") }
         }
         Text(sync.status).font(.subheadline).foregroundStyle(.secondary)
           .accessibilityIdentifier("account-sync-status")
         if let error = sync.errorMessage { Text(error).font(.callout).foregroundStyle(.secondary) }
-        Button(auth.isAuthenticated ? "Sync now" : "Use iCloud connection") {
-          Task { await sync.useICloudAccount() }
+        if !sync.isSignedOutLocally {
+          Button("Sync now") {
+            Task { await sync.synchronize() }
+          }
+          .disabled(sync.isBusy || sync.isRestoringAccount)
+          .accessibilityIdentifier("account-sync")
         }
-        .disabled(sync.isBusy)
-        .accessibilityIdentifier("account-sync")
         NavigationLink("Manage connected account") { MobileConnectedAccountView() }
           .accessibilityIdentifier("account-manage-sync")
       } header: {
@@ -59,6 +66,8 @@ struct MobileAccountView: View {
         Picker("Theme", selection: $theme.theme) {
           ForEach(AppTheme.allCases) { theme in Text(theme.displayName).tag(theme) }
         }
+        NavigationLink("Overlays") { MobileOverlaySettingsView() }
+          .accessibilityIdentifier("account-overlays")
       }
       Section {
         Toggle("Sync chat to extra delay", isOn: $chatSync)
@@ -77,14 +86,27 @@ struct MobileAccountView: View {
     .navigationBarTitleDisplayMode(.inline)
     .sheet(isPresented: $showSignIn) { MobileTwitchSignInSheet() }
     .confirmationDialog("Sign out on this device?", isPresented: $showLocalSignOut, titleVisibility: .visible) {
-      Button("Sign out this device", role: .destructive) { auth.signOut() }
-    } message: { Text("Your other devices stay connected. You can reconnect here with iCloud.") }
+      Button("Sign out", role: .destructive) { auth.signOut() }
+    } message: { Text("Your other devices stay connected. This device stays signed out until you choose Sign in.") }
     .confirmationDialog("Clear this account's history on this device?", isPresented: $confirmingClearHistory) {
       Button("Clear history", role: .destructive) { history.clear(); vodProgress.clear() }
     }
     .onChange(of: scenePhase) { _, phase in
       if phase == .active { Task { await sync.synchronize(); await auth.validateSessionIfNeeded() } }
     }
+  }
+}
+
+private struct MobileOverlaySettingsView: View {
+  @AppStorage(PersistenceKey.showStreamDuration) private var showStreamDuration = true
+
+  var body: some View {
+    Form {
+      Toggle("Stream duration", isOn: $showStreamDuration)
+        .accessibilityIdentifier("overlay-stream-duration")
+    }
+    .navigationTitle("Overlays")
+    .navigationBarTitleDisplayMode(.inline)
   }
 }
 
@@ -112,17 +134,23 @@ private struct MobileTwitchSignInSheet: View {
     NavigationStack {
       Form {
         Section {
-          Text("Approve Strozz on Twitch, then return here. Your connection will be saved across your devices.")
+          Text("We'll use your saved connection if available. Otherwise, approve Strozz on Twitch to connect your devices.")
           if let code = auth.activationCode {
             Text(code).font(.title.monospaced().bold()).textSelection(.enabled)
-          } else if auth.isAuthenticating { ProgressView("Requesting a sign-in code") }
+          } else if auth.isRestoringConnection { ProgressView("Checking your saved connection...") }
+          else if auth.isAuthenticating { ProgressView("Requesting a sign-in code") }
           if let raw = auth.verificationURIComplete ?? auth.verificationURI, let url = URL(string: raw) {
             Link("Continue on Twitch", destination: url)
           }
           if let status = auth.statusMessage { Text(status).foregroundStyle(.secondary) }
           if let error = auth.errorMessage { Text(error).foregroundStyle(.secondary) }
-          if !auth.isAuthenticating && !auth.isAuthenticated {
+          if !auth.isAuthenticating && !auth.isAuthenticated && !auth.isRestoringConnection {
             Button("Try again") { Task { await auth.beginDeviceCodeSignIn() } }
+            if auth.errorMessage != nil {
+              Button("Sign in with Twitch instead") {
+                Task { await auth.beginDeviceCodeSignIn(useSavedConnection: false) }
+              }
+            }
           }
         }
       }
@@ -153,9 +181,9 @@ private struct MobileConnectedAccountView: View {
         }
       }
       Section {
-        Button("Sign out all synced devices", role: .destructive) { confirmSignOut = true }
+        Button("Sign out everywhere", role: .destructive) { confirmSignOut = true }
           .accessibilityIdentifier("account-sign-out-all")
-      } footer: { Text("For this device only, use Sign out this device on the Account page.") }
+      } footer: { Text("For this device only, use Sign out on the Account page.") }
     }
     .buttonStyle(.borderless)
     .navigationTitle("Connected account")
@@ -164,8 +192,8 @@ private struct MobileConnectedAccountView: View {
       Button("Replace iCloud connection", role: .destructive) { Task { await sync.replaceICloudAccount() } }
         .disabled(sync.isBusy)
     }
-    .confirmationDialog("Sign out of Twitch and rewards on all synced devices?", isPresented: $confirmSignOut, titleVisibility: .visible) {
-      Button("Sign out all devices", role: .destructive) { Task { await sync.signOutAllDevices() } }
+    .confirmationDialog("Sign out of Twitch and rewards everywhere?", isPresented: $confirmSignOut, titleVisibility: .visible) {
+      Button("Sign out everywhere", role: .destructive) { Task { await sync.signOutAllDevices() } }
         .disabled(sync.isBusy)
     }
   }

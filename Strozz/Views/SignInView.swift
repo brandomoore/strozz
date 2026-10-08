@@ -32,11 +32,8 @@ struct SignInView: View {
         signInContent
       }
     }
-    .onAppear {
-      if !auth.isAuthenticated && !auth.isAuthenticating {
-        Task { await auth.beginDeviceCodeSignIn() }
-      }
-    }
+    .task { await auth.beginDeviceCodeSignIn() }
+    .onDisappear { auth.cancelSignIn() }
     .onChange(of: auth.isAuthenticated) { _, signedIn in
       if signedIn {
         onSignedIn()
@@ -49,17 +46,27 @@ struct SignInView: View {
 
   private var signInContent: some View {
     VStack(spacing: 64) {
-      HStack(alignment: .center, spacing: 96) {
-        qrOption
+      if auth.isRestoringConnection {
+        ProgressView("Checking your saved connection...")
+      } else {
+        HStack(alignment: .center, spacing: 96) {
+          qrOption
 
-        orDivider
+          orDivider
 
-        codeOption
+          codeOption
+        }
+        .padding(.horizontal, 32)
+        .frame(maxWidth: .infinity)
       }
-      .padding(.horizontal, 32)
-      .frame(maxWidth: .infinity)
 
       statusArea
+      if !auth.isRestoringConnection, !auth.isAuthenticating, auth.errorMessage != nil {
+        Button("Try again") { Task { await auth.beginDeviceCodeSignIn() } }
+        Button("Sign in with Twitch instead") {
+          Task { await auth.beginDeviceCodeSignIn(useSavedConnection: false) }
+        }
+      }
 
       if !isEmbedded {
         Button("Cancel") {

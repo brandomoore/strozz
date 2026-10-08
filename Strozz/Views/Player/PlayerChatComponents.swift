@@ -128,6 +128,8 @@ struct QualityMenu: View, Equatable {
   let onToggleRewind: () -> Void
   let viewerCountEnabled: Bool
   let onToggleViewerCount: () -> Void
+  let streamDurationEnabled: Bool
+  let onToggleStreamDuration: () -> Void
   // Captions: demoted here (low priority — auto-generated). On/off plus an
   // "Options…" deep-link to the captions appearance panel. Hidden on
   // unsupported hardware.
@@ -162,6 +164,7 @@ struct QualityMenu: View, Equatable {
       && lhs.sleepIsArmed == rhs.sleepIsArmed
       && lhs.rewindEnabled == rhs.rewindEnabled
       && lhs.viewerCountEnabled == rhs.viewerCountEnabled
+      && lhs.streamDurationEnabled == rhs.streamDurationEnabled
       && lhs.captionsSupported == rhs.captionsSupported
       && lhs.captionsEnabled == rhs.captionsEnabled
       && lhs.latencyBadgeEnabled == rhs.latencyBadgeEnabled
@@ -213,6 +216,9 @@ struct QualityMenu: View, Equatable {
   }
   private var viewerCountBinding: Binding<Bool> {
     Binding(get: { viewerCountEnabled }, set: { _ in onToggleViewerCount() })
+  }
+  private var streamDurationBinding: Binding<Bool> {
+    Binding(get: { streamDurationEnabled }, set: { _ in onToggleStreamDuration() })
   }
   private var captionsBinding: Binding<Bool> {
     Binding(get: { captionsEnabled }, set: { _ in onToggleCaptions() })
@@ -329,6 +335,10 @@ struct QualityMenu: View, Equatable {
           Toggle(isOn: viewerCountBinding) {
             Label("Viewer Count", systemImage: "person.2")
           }
+          Toggle(isOn: streamDurationBinding) {
+            Label { Text("Stream Duration") } icon: { Icon(glyph: .clock, size: 24) }
+          }
+          .accessibilityIdentifier("overlay-stream-duration")
           Toggle(isOn: latencyBadgeBinding) {
             Label("Latency Readout", systemImage: "speedometer")
           }
@@ -379,8 +389,9 @@ struct QualityMenu: View, Equatable {
         }
       } label: {
         qualityLabelText(buttonLabel)
-          .accessibilityLabel("Quality, \(buttonLabel)")
       }
+      .accessibilityLabel("Quality, \(buttonLabel)")
+      .accessibilityIdentifier("player-quality-menu")
     }
   }
 

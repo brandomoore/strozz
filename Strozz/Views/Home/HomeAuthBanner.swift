@@ -1,17 +1,20 @@
 import SwiftUI
 
 /// The signed-out call-to-action card shown at the bottom of the Home tab. Only
-/// rendered while the viewer isn't authenticated; tapping "Sign In" asks
-/// `HomeView` to present the Twitch sign-in cover.
+/// replaced with a neutral loading state until account restoration finishes.
+/// Tapping "Sign In" afterward asks HomeView to present the Twitch sign-in cover.
 struct HomeAuthBanner: View {
+  let isAuthenticated: Bool
+  let isRestoringAccount: Bool
   let onSignIn: () -> Void
 
-  @Environment(AppEnvironment.self) private var environment
   @Environment(\.glassDisabled) private var glassDisabled
-  private var auth: TwitchAuthSession { environment.auth }
 
   var body: some View {
-    if !auth.isAuthenticated {
+    if isRestoringAccount {
+      TwitchAccountLoadingView()
+        .padding(.vertical, 32)
+    } else if !isAuthenticated {
       HStack(spacing: 28) {
         Icon(glyph: .userPlus, size: 44)
           .foregroundStyle(Color(red: 0.58, green: 0.41, blue: 0.96))
@@ -43,6 +46,7 @@ struct HomeAuthBanner: View {
           .stroke(Color.primary.opacity(0.12), lineWidth: 1)
       )
       .padding(.top, 12)
+      .accessibilityIdentifier("home-sign-in-banner")
       .focusSection()
     }
   }

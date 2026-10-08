@@ -30,6 +30,12 @@ struct StreamQuality: Identifiable, Hashable {
     let url: URL          // direct media-playlist URL for this single quality
     let isAudioOnly: Bool
     let bitrate: Int      // BANDWIDTH from #EXT-X-STREAM-INF
+
+    static func decodeRecoveryQuality(in qualities: [StreamQuality], selectedID: String?) -> StreamQuality? {
+        guard let source = qualities.filter({ !$0.isAudioOnly }).max(by: { $0.bitrate < $1.bitrate }),
+              selectedID != source.id else { return nil }
+        return source
+    }
 }
 
 /// Result of resolving a channel: the master (adaptive/"Auto") playlist plus the
