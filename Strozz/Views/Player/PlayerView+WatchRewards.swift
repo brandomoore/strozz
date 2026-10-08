@@ -55,7 +55,7 @@ extension PlayerView {
   }
 
   func updateWatchRewards() {
-    guard auth.isAuthenticated, let userID = auth.userID, let item = player.currentItem else {
+    guard !isMultiviewCompact, auth.isAuthenticated, let userID = auth.userID, let item = player.currentItem else {
       model.watchTracker.stop()
       return
     }

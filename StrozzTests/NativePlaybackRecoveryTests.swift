@@ -176,6 +176,52 @@ final class NativeRecoveryIntegrationTests: XCTestCase {
     }
   }
 
+  func testDecodeRecoveryUsesNativeSourceWithoutPersistingQualityOrSpendingRetryBudget() async throws {
+    try await withModel { model, view in
+      let master = URL(string: "https://example.invalid/master.m3u8")!
+      let lower = StreamQuality(id: "480", name: "480p",
+        url: URL(string: "https://example.invalid/480.m3u8")!, isAudioOnly: false, bitrate: 1000)
+      let source = StreamQuality(id: "source", name: "1080p50 (Source)",
+        url: URL(string: "https://example.invalid/source.m3u8")!, isAudioOnly: false, bitrate: 8000)
+      view.playback = StreamPlayback(master: master, qualities: [lower, source])
+      view.replacePlaybackItem(with: view.makeItem(url: master))
+      XCTAssertTrue(view.recoverUndecodableVideo())
+      XCTAssertTrue(model.isUsingNativeHLS)
+      XCTAssertEqual(model.nativeHLS?.sourceURL, source.url)
+      XCTAssertEqual(view.preferredQuality, source.name)
+      XCTAssertEqual(UserDefaults.standard.string(forKey: PersistenceKey.preferredQuality), "Auto")
+      XCTAssertTrue(model.nativeRecovery.attempts.isEmpty)
+      XCTAssertTrue(view.qualityEngineStatus?.contains("Using \(source.name)") == true)
+      XCTAssertTrue(model.player.isMuted)
+      XCTAssertEqual(model.player.rate, 0)
+      XCTAssertFalse(view.recoverUndecodableVideo(), "Never repeatedly retry the same undecodable source")
+
+      let fresh = StreamQuality(id: source.id, name: source.name,
+        url: URL(string: "https://example.invalid/fresh-source.m3u8")!, isAudioOnly: false, bitrate: source.bitrate)
+      view.recoverNativeHLS(.timeout) { StreamPlayback(master: master, qualities: [lower, fresh]) }
+      await model.nativeRefreshTask?.value
+      XCTAssertEqual(model.nativeHLS?.sourceURL, fresh.url)
+      XCTAssertEqual(view.preferredQuality, source.name)
+      view.resetDiagnostics()
+      XCTAssertEqual(view.preferredQuality, "Auto", "A new stream resumes the viewer's saved preference")
+      XCTAssertFalse(model.triedDecodeRecovery)
+    }
+  }
+
+  func testManualQualityChoiceClearsTheDecodeRecoveryOverride() async {
+    await withModel { model, view in
+      let url = URL(string: "https://example.invalid/video.m3u8")!
+      let source = StreamQuality(id: "source", name: "1080p", url: url, isAudioOnly: false, bitrate: 8000)
+      view.playback = StreamPlayback(master: url, qualities: [source])
+      model.decodeRecoveryQualityID = source.id
+      model.triedDecodeRecovery = true
+      view.selectQuality(at: 0)
+      XCTAssertNil(model.decodeRecoveryQualityID)
+      XCTAssertFalse(model.triedDecodeRecovery)
+      XCTAssertEqual(view.preferredQuality, "Auto")
+    }
+  }
+
   func testMasterFallbackForAnUnavailableSavedQualityStillUsesNative() async {
     await withModel { model, view in
       let master = URL(string: "https://example.invalid/master.m3u8")!

@@ -141,6 +141,8 @@ middle of the screen. A small, leading-aligned heading scrolls with the feed
 instead of occupying a fixed navigation bar. Previews are always muted and stop when you scroll away,
 switch tabs, open a stream, or background the app. Lower-bandwidth preview
 renditions are preferred; an undecodable preview gets one Source-quality retry.
+Live Twitch previews on both platforms use the native low-latency engine and
+its guarded recovery path, rather than a separate standard-HLS player.
 Home defaults to **For you**: live followed and most-watched channels lead the
 feed, followed by personalized discovery from the shared recommendation engine.
 Watch frequency on this device ranks familiar channels; global popular streams
@@ -199,11 +201,14 @@ broadcast's absolute delivery delay. **Back to live** appears only while paused
 or measurably behind; unknown timing shows **Checking live** instead. The status
 uses the shared source-relative delay estimate and catch-up tolerances so normal
 segment/buffer variation does not flash an unnecessary jump button.
-Player stream information on TV and mobile also shows **Streaming for 2h 14m**,
-using Twitch's broadcast start time rather than the viewer's watch time. It
-updates once per minute, keeps counting while playback is paused, and is omitted
-when the start time is unknown. Mobile fetches this optional metadata separately
-so it cannot delay playback startup.
+Player stream information on TV and mobile also shows a compact clock-and-duration
+readout (for example, **2h 14m**), using Twitch's broadcast start time rather than
+the viewer's watch time. **Overlays > Stream Duration** in the TV player controls
+can hide it; mobile offers the same option under **Account > Overlays**. It is
+enabled by default and saved per device. The readout updates once per minute,
+keeps counting while playback is paused, and is omitted when the start time is
+unknown. Mobile fetches this optional metadata separately so it cannot delay
+playback startup.
 
 This is not full TV feature parity: VOD chat replay, clips, multiview, YouTube/Kick playback
 and chat merging, interactive reward redemption/polls, and advanced TV settings are not included. Playback
@@ -256,10 +261,18 @@ between devices using the same Apple Account. The existing Fastlane lanes still 
 
 Sign in once in the new Strozz app, then open Strozz on another iPhone, iPad, or
 Apple TV using the same Apple Account. The connection is fetched on launch and
-checked periodically while the app is running. **Account > Use iCloud connection**
-reconnects a device you deliberately signed out of. Different Twitch accounts
-on the same Apple Account require an explicit choice; Strozz does not silently
-overwrite one with the other.
+checked periodically while the app is running. Startup restores local state and
+finishes the first iCloud check before offering a new Twitch approval, so the
+sign-in screen cannot race and block automatic restoration. **Sign in** also
+stays out of Home, account settings, Following, rewards, and chat while that
+initial account check is pending; these surfaces show a neutral loading state
+instead of briefly suggesting that a returning viewer must sign in again.
+An explicit local sign-out still shows its sign-in action normally. **Sign in**
+checks for a saved connection first; there is no separate routine "Use iCloud
+connection" step. If iCloud is unavailable, an explicit **Sign in with Twitch
+instead** action still allows local sign-in. Different Twitch accounts on the
+same Apple Account require an explicit choice; Strozz does not silently overwrite
+one with the other.
 
 **Connect rewards** requires a separate Twitch approval for the same Twitch
 account. On iPhone/iPad it opens Twitch's prefilled approval link directly and
@@ -271,9 +284,11 @@ about credit. Preview, paused and background time do not count.
 Tokens are cached in device Keychain, with only the access token shared with
 Top Shelf. Cloud copies use `CKRecord.encryptedValues` in the private
 `iCloud.com.thatcube.Strozz` database; no credential fields have public-database
-permissions. Signing out **this device** does not disconnect the others.
-**Manage connected account > Sign out all synced devices** requires confirmation
-and writes a cloud sign-out marker that other devices observe when connected.
+permissions. **Sign out** affects only this device and suppresses automatic
+restoration until the viewer chooses **Sign in** again. **Sign out everywhere**
+requires confirmation and writes a cloud sign-out marker that the other devices
+observe when connected. It signs out Strozz's synced connections, not unrelated
+Twitch apps or browser sessions.
 
 Twitch's device-flow refresh tokens are single-use. A conditional cloud record
 update reserves renewal before contacting Twitch, and a rotated pair is saved
@@ -410,6 +425,26 @@ including its normal buffering margin, not zero broadcast/network latency.
 Multiview pauses its wall when Strozz goes into the background. On return, it
 re-resolves each pane's live playlist and resumes all streams without changing
 the chosen grid/spotlight layout or audio selection.
+
+Multiview also uses the normal native live player for every pane. Selecting a
+pane zooms that same player and video surface into the single-stream layout
+with normal chat and controls; Back returns it to the wall without reconnecting.
+Explicit source/quality changes and error recovery remain real playback changes.
+Play/Pause opens wall controls in the grid and controls playback when expanded.
+Other panes remain live and muted while expanded, with a lower bitrate and
+resolution preference. These are adaptive preferences, not re-encoding: a
+Source-only feed or decode-recovery override can exceed the requested thumbnail
+budget. The selected pane, player item, and AVKit surface are retained; a normal
+layout transition does not create an extra decoder.
+
+The TV latency readout shows numeric seconds behind the available live edge
+(for example, **3.18s**), including the normal playback cushion rather than
+replacing small values with "Live." It shares the viewer-count and uptime font
+size and weight, respects the existing **Latency Readout** toggle, and hides
+with the playback controls. Native measurements compare dates on the same
+source clock; raw timestamp age can include upstream delay or clock offset and
+remains in Diagnostics. Mobile's separate Live/Behind transport status is
+unchanged.
 
 Chat's timed read pause releases its frozen snapshot when the countdown ends;
 collapsing chat or changing channels also resets scrolling state. The live list

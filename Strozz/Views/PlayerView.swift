@@ -64,7 +64,19 @@ struct PlayerView: View {
   /// from the same public live snapshot the Home cards use (followed channels
   /// carry the streamer's YouTube channel ID; the snapshot holds its live count).
   @Environment(AppEnvironment.self) var environment
-  @AppStorage(PersistenceKey.preferredQuality) var preferredQuality = "Auto"
+  @AppStorage(PersistenceKey.preferredQuality) var storedPreferredQuality = "Auto"
+  // Decode recovery is local to this stream, not a new saved quality preference.
+  var preferredQuality: String {
+    get {
+      playback?.qualities.first(where: { $0.id == model.decodeRecoveryQualityID })?.name
+        ?? model.multiviewContext?.quality ?? storedPreferredQuality
+    }
+    nonmutating set {
+      model.decodeRecoveryQualityID = nil
+      if let context = model.multiviewContext { context.quality = newValue }
+      else { storedPreferredQuality = newValue }
+    }
+  }
   /// Latency-vs-quality profile for the adaptive ("Auto") stream, surfaced as the
   /// two Auto rows in the quality picker. Stored as the enum raw value; read it
   /// through `livePlaybackProfile`.
@@ -142,6 +154,7 @@ struct PlayerView: View {
   /// Live viewer count badge in the top-left HUD. On by default — a glanceable,
   /// non-diagnostic stat most viewers want while watching.
   @AppStorage(PersistenceKey.showViewerCount) var showViewerCount = true
+  @AppStorage(PersistenceKey.showStreamDuration) var showStreamDuration = true
   /// Latency readout in the top-left HUD chip. Off by default and independent of
   /// the full Diagnostics Overlay, so viewers who just want the latency number
   /// can enable it without the developer event log.
@@ -188,6 +201,7 @@ struct PlayerView: View {
   // Chat send/sync state now lives in PlayerModel.
   @State var hideTask: Task<Void, Never>?
   @State var focusRecoveryTask: Task<Void, Never>?
+  @State var multiviewFocusTask: Task<Void, Never>?
   @State var isQualityMenuPresented = false
   // latencyTask / playbackWatchdogTask / rateControlTask now live in PlayerModel.
   // The adaptive playback-rate controller runs at a sub-second cadence — far
@@ -815,31 +829,17 @@ struct PlayerView: View {
           .environment(\.themePalette, palette)
         }
 
-      if chatLayoutMode.isOverlay {
+      ZStack(alignment: .trailing) {
         videoColumn
           .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .ignoresSafeArea()
+          .padding(.trailing, !isMultiviewCompact && showChat && !chatLayoutMode.isOverlay ? chatWidth : 0)
 
-        if showChat {
-          HStack(spacing: 0) {
-            Spacer(minLength: 0)
-            chatPane
-          }
-          .ignoresSafeArea()
-          .transition(.move(edge: .trailing))
+        if showChat && !isMultiviewCompact {
+          chatPane
+            .transition(.move(edge: .trailing))
         }
-      } else {
-        HStack(spacing: 0) {
-          videoColumn
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-          if showChat {
-            chatPane
-              .transition(.move(edge: .trailing))
-          }
-        }
-        .ignoresSafeArea()
       }
+      .ignoresSafeArea()
 
       if showRaidEvents, let raid = chat.pendingRaid, shouldShowIncomingRaid(raid) {
         raidBanner(raid)
@@ -864,7 +864,7 @@ struct PlayerView: View {
       // treatment and only appear when chat is open — matching how Twitch shows
       // them beside the stream. Read-only.
 
-      if let goLive, let event = goLive.pending {
+      if !isMultiviewCompact, let goLive, let event = goLive.pending {
         goLiveBanner(goLive, event: event)
           .transition(.motionAware(.move(edge: .bottom).combined(with: .opacity), reduceMotion: reduceMotion))
           .zIndex(13)
@@ -966,7 +966,7 @@ struct PlayerView: View {
   /// exist for VOD/clip playback.
   func syncCaptions() {
     captionController.sync(
-      enabled: captionsEnabled,
+      enabled: captionsEnabled && !isMultiviewCompact,
       playlistURL: captionAudioSourceURL,
       headers: captionAudioSourceHeaders,
       isLive: !isVOD,

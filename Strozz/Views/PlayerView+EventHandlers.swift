@@ -85,10 +85,14 @@ extension PlayerView {
   /// setup and teardown, and stall / end-of-stream recovery.
   func playbackLifecycleHandlers(_ content: some View) -> some View {
     content
-    .task { await monitorWatchRewards() }
-    .task {
+    .task(id: isMultiviewCompact) {
+      guard !isMultiviewCompact else { return }
+      await monitorWatchRewards()
+    }
+    .task(id: model.multiviewContext?.reloadID) {
       if activeChannel.isEmpty { activeChannel = channel }
-      if !UserDefaults.standard.bool(forKey: PersistenceKey.nativePlaybackDefaultApplied) {
+      if model.multiviewContext == nil,
+        !UserDefaults.standard.bool(forKey: PersistenceKey.nativePlaybackDefaultApplied) {
         if preferredQuality == "Auto", livePlaybackProfile == .lowerLatency {
           livePlaybackProfile = .nativeLowLatency
         }
@@ -99,25 +103,34 @@ extension PlayerView {
         await startVOD()
       } else {
         // Don't toast the channel we're already watching.
-        goLive?.suppressedLogin = activeChannel
+        if !isMultiviewCompact { goLive?.suppressedLogin = activeChannel }
         resetDiagnostics()
         beginPlaybackTelemetry()
         configurePlayerForLive()
         applyExperimentalYouTubeSettings()
         applyExperimentalKickSettings()
-        chat.connect(to: activeChannel)
-        eventSub.start(forChannel: activeChannel, auth: auth)
-        hermes.start(forChannel: activeChannel)
+        if !isMultiviewCompact {
+          chat.connect(to: activeChannel)
+          eventSub.start(forChannel: activeChannel, auth: auth)
+          hermes.start(forChannel: activeChannel)
+        }
         async let metadataTask: Void = refreshChannelMetadata()
         await loadInitialSource()
         _ = await metadataTask
       }
-      focus = .video
+      if !isMultiviewCompact { focus = .video }
     }
     .onAppear {
       setIdleTimer(disabled: true)
-      trackpad.start()
+      if !isMultiviewCompact { trackpad.start() }
     }
+    .onChange(of: isMultiviewCompact) { _, _ in updateMultiviewPresentation() }
+    .onChange(of: model.multiviewContext?.focusRequest) { _, _ in
+      guard !isMultiviewCompact else { return }
+      pendingControlFocus = .quality
+      requestMultiviewFocus(showControls ? lastControlFocus : .video)
+    }
+    .onChange(of: model.multiviewContext?.qualityTier) { _, _ in applyMultiviewBudget() }
     .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.mediaServicesWereLostNotification)
       .receive(on: RunLoop.main)) { _ in
       handleMediaServicesLost()
@@ -280,6 +293,7 @@ extension PlayerView {
       backgroundedAt = nil
       hideTask?.cancel()
       focusRecoveryTask?.cancel()
+      multiviewFocusTask?.cancel()
       chatSyncSendClearTask?.cancel()
       outgoingRaidFollowTask?.cancel()
       chatExitFocusTask?.cancel()
@@ -301,7 +315,7 @@ extension PlayerView {
       eventSub.stop()
       hermes.stop()
       // Hand go-live suppression back to Home now that no channel is on screen.
-      goLive?.suppressedLogin = nil
+      if !isMultiviewCompact { goLive?.suppressedLogin = nil }
       setIdleTimer(disabled: false)
     }
   }
@@ -309,82 +323,104 @@ extension PlayerView {
   /// Siri Remote input: the Back (menu) button and directional moves that
   /// reveal controls or drive chat scrolling.
   func remoteCommandHandlers(_ content: some View) -> some View {
-    content
-    .onExitCommand {
-      if showRewards {
-        closeRewards()
-      } else if isSleeping {
-        wakeFromSleep()
-      } else if isChatScrolling || chatSoftPauseRemaining != nil {
-        // Deliberate exit from a chat scroll: land focus on the composer (live)
-        // / collapse button (VOD), reasserting past the control row rejoining the
-        // focus engine so it can't bounce to the far-side channel button.
-        resumeChatLive(restoreFocus: true)
-      } else if showChatSettings {
-        if chatSettingsPage != .main {
-          closeSubpage()
-        } else {
-          showChatSettings = false
-          focus = .chatSettingsButton
-        }
-      } else if showControls {
-        hideControls()
-      } else {
-        dismiss()
-      }
+    singlePlayerMoveHandler(singlePlayerExitHandler(content))
+    .onChange(of: model.multiviewContext?.exitRequests) { old, new in
+      guard let old, let new else { return }
+      for _ in 0..<max(0, min(2, new &- old)) { handlePlayerExitCommand() }
     }
-    .onMoveCommand { direction in
-      guard !showRewards else { return }
-      // While actively scrolling with the chrome hidden, route every directional
-      // input through the scroll handler (and swallow horizontal) so a stray
-      // swipe can't surface the chrome and bump you out of the scroll.
-      if !showControls, showChat, isChatScrolling {
-        switch direction {
-        case .up: handleChatUpPress()
-        case .down: handleChatDownPress()
-        default: break
-        }
+    .onChange(of: model.multiviewContext?.moveRequests) { _, _ in
+      guard let direction = model.multiviewContext?.moveDirection else { return }
+      handlePlayerMoveCommand(direction)
+    }
+  }
+
+  func handlePlayerMoveCommand(_ direction: MoveCommandDirection) {
+    guard !isMultiviewCompact, !showRewards, !isQualityMenuPresented else { return }
+    // While actively scrolling with the chrome hidden, route every directional
+    // input through the scroll handler (and swallow horizontal) so a stray
+    // swipe can't surface the chrome and bump you out of the scroll.
+    if !showControls, showChat, isChatScrolling {
+      switch direction {
+      case .up: handleChatUpPress()
+      case .down: handleChatDownPress()
+      default: break
+      }
+      return
+    }
+    if !showControls {
+      // From the bare video a directional press reveals the familiar controls.
+      guard !isOffline else {
+        scheduleHide()
         return
       }
-      if !showControls {
-        // From the bare video (chrome hidden) a directional press surfaces the
-        // controls and lands focus deliberately rather than letting the focus
-        // engine pick a magnet: up → the middle of the control row
-        // (quality/speed), left → the channel button, right → the chat composer
-        // (opening chat if it's hidden). Down rejoins an in-progress chat scroll,
-        // otherwise it just surfaces the controls. Chat scrolling is only ever
-        // *started* from inside chat (an up-press on the composer) — never by a
-        // bare up-swipe here, which used to dive straight into the scroll area
-        // without ever focusing the input.
-        guard !isOffline else {
-          scheduleHide()
-          return
+      switch direction {
+      case .up:
+        pendingControlFocus = .quality
+        revealControls(preferredFocus: .quality)
+      case .left:
+        pendingControlFocus = .streamInfo
+        revealControls(preferredFocus: .streamInfo)
+      case .right:
+        if !showChat {
+          toggleChatVisibility()
         }
-        switch direction {
-        case .up:
-          pendingControlFocus = .quality
-          revealControls(preferredFocus: .quality)
-        case .left:
-          pendingControlFocus = .streamInfo
-          revealControls(preferredFocus: .streamInfo)
-        case .right:
-          if !showChat {
-            toggleChatVisibility()
-          }
-          // Land on the chat composer (already mounted, so this sticks). Point
-          // the row's default at the collapse button so a later move into the
-          // row from chat is sensible.
-          pendingControlFocus = .chatToggle
-          revealControls(preferredFocus: chatFocusAnchor)
-        case .down where showChat && (isChatScrolling || chatSoftPauseRemaining != nil):
-          handleChatDownPress()
-        default:
-          pendingControlFocus = .quality
-          revealControls(preferredFocus: .quality)
-        }
-      } else {
-        scheduleHide()
+        pendingControlFocus = .chatToggle
+        revealControls(preferredFocus: chatFocusAnchor)
+      case .down where showChat && (isChatScrolling || chatSoftPauseRemaining != nil):
+        handleChatDownPress()
+      default:
+        pendingControlFocus = .quality
+        revealControls(preferredFocus: .quality)
       }
+    } else {
+      scheduleHide()
+    }
+  }
+
+  @ViewBuilder
+  private func singlePlayerMoveHandler(_ content: some View) -> some View {
+    if model.multiviewContext == nil {
+      content.onMoveCommand { handlePlayerMoveCommand($0) }
+    } else {
+      content
+    }
+  }
+
+  @ViewBuilder
+  private func singlePlayerExitHandler(_ content: some View) -> some View {
+    if model.multiviewContext == nil {
+      content.onExitCommand { handlePlayerExitCommand() }
+    } else {
+      // Membership never changes during zoom. Unlike a nil handler, omitting
+      // this modifier leaves the wall's single remote-command owner intact.
+      content
+    }
+  }
+
+  func handlePlayerExitCommand() {
+    guard !isMultiviewCompact else { return }
+    if model.multiviewContext != nil {
+      recordPlaybackEvent("multiview_exit_handled", flags: [
+        "controls_visible": showControls, "quality_menu_presented": isQualityMenuPresented
+      ])
+    }
+    if showRewards {
+      closeRewards()
+    } else if isSleeping {
+      wakeFromSleep()
+    } else if isChatScrolling || chatSoftPauseRemaining != nil {
+      resumeChatLive(restoreFocus: true)
+    } else if showChatSettings {
+      if chatSettingsPage != .main {
+        closeSubpage()
+      } else {
+        showChatSettings = false
+        focus = .chatSettingsButton
+      }
+    } else if showControls {
+      hideControls()
+    } else {
+      closePlayer()
     }
   }
 
@@ -393,7 +429,7 @@ extension PlayerView {
   func focusManagementHandler(_ content: some View) -> some View {
     content
     .onChange(of: focus) { oldFocus, newFocus in
-      guard !showRewards else { return }
+      guard !isMultiviewCompact, !showRewards else { return }
       // Disarm the chat-input hop the moment focus is back on a control button, so
       // the composer drops out of the engine again and a plain swipe can't reach it.
       if isControlRowButton(newFocus), chatInputArmed {
@@ -582,15 +618,17 @@ extension PlayerView {
       goLive?.suppressedLogin = activeChannel
     }
     .task(id: activeChannel) {
+      guard !isMultiviewCompact else { return }
       await refreshYouTubeAutoTarget()
     }
     .task(id: isLoading) {
       // After a slow preferred-source lookup falls back, still allow a manual
       // YouTube choice without replacing the Twitch stream that already started.
-      guard !isLoading, !isUsingAltSource, !youtubeSourceAvailable else { return }
+      guard !isMultiviewCompact, !isLoading, !isUsingAltSource, !youtubeSourceAvailable else { return }
       await refreshYouTubeSourceAvailability()
     }
     .task(id: activeChannel) {
+      guard !isMultiviewCompact else { return }
       await refreshKickAutoTarget()
     }
   }

@@ -488,6 +488,7 @@ extension PlayerView {
     guard !isVOD, let item = player.currentItem else { return }
     let native = model.nativeHLS
     let target = await native?.origin.liveTargetDate()
+    let liveEdge = await native?.origin.liveEdgeDate()
     guard !Task.isCancelled, item === player.currentItem, itemID == model.chatSyncItemID,
       channel == activeChannel, source == (isUsingAltSource ? "youtube" : "twitch"),
       sessionID == model.playbackTelemetry.sessionID, native === model.nativeHLS else { return }
@@ -508,6 +509,7 @@ extension PlayerView {
       context: "\(channel.lowercased())/\(source)", itemID: itemID,
       playbackDate: item.currentDate(), playbackTime: item.currentTime().seconds,
       liveTarget: target,
+      liveEdge: liveEdge,
       canCalibrate: healthy && (target != nil || fallbackCalibration || (isUsingAltSource && nearEdge)),
       now: Date(), uptime: ProcessInfo.processInfo.systemUptime
     )
@@ -517,6 +519,7 @@ extension PlayerView {
   /// Push the current sync preference + measured latency into the chat service.
   /// Called when the toggle changes and on each latency sample.
   func applyChatSyncSettings() {
+    model.nativeLivePosition.observe(extraDelay: model.chatSyncBaseline.extraDelay)
     let reference = model.chatSyncBaseline.reference
     if model.chatSyncReference != reference {
       model.chatSyncReference = reference

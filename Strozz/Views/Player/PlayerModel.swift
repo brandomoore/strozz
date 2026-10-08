@@ -40,6 +40,7 @@ final class PlayerModel {
   // MARK: Playback
 
   var player = AVPlayer()
+  @ObservationIgnored var multiviewContext: MultiviewPlaybackContext?
   @ObservationIgnored var activateAudioSession: @MainActor () throws -> Void = PlaybackAudioSession.activate
   @ObservationIgnored var audioSessionActivationFailed = false
   @ObservationIgnored var audioInterrupted = false
@@ -62,6 +63,8 @@ final class PlayerModel {
   @ObservationIgnored var nativeHLS: NativeLowLatencyHLS?
   @ObservationIgnored var nativeGeneration = UUID()
   var nativeFallbackReason: String?
+  var decodeRecoveryQualityID: String?
+  @ObservationIgnored var triedDecodeRecovery = false
   var nativeParts = 0
   @ObservationIgnored var nativeLiveHoldBack: Double?
   @ObservationIgnored var nativeSourceHasPrefetch: Bool?
@@ -73,6 +76,7 @@ final class PlayerModel {
   @ObservationIgnored var nativeCatchUpItem: AVPlayerItem?
   @ObservationIgnored var nativeCatchUpAppliedRate: Float = 1
   @ObservationIgnored var nativeRecovery = NativePlaybackRecovery()
+  @ObservationIgnored var nativeBufferedStallRecovery = NativeBufferedStallRecovery()
   @ObservationIgnored var nativeRestartSerial = 0
   @ObservationIgnored var fallbackRestoreTask: Task<Void, Never>?
   @ObservationIgnored var nativeNeedsRefresh = false
@@ -88,6 +92,7 @@ final class PlayerModel {
   let playbackTelemetry = PlaybackTelemetryRecorder()
   @ObservationIgnored var startupProgress = LivePlaybackStartup.Progress()
   @ObservationIgnored var chatSyncBaseline = LiveChatSyncBaseline()
+  @ObservationIgnored var nativeLivePosition = LivePlaybackPosition()
   @ObservationIgnored var chatSyncItemID = UUID()
   @ObservationIgnored var chatSyncSendAnchor: Date?
   var chatSyncReference: LiveChatSyncBaseline.Reference = .unavailable

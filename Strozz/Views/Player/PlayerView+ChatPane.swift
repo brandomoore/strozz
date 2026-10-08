@@ -80,6 +80,8 @@ extension PlayerView {
     }
     .frame(width: chatWidth)
     .modifier(GlassChatPaneStyle(enabled: isGlass))
+    .accessibilityElement(children: .contain)
+    .accessibilityIdentifier("player-chat-pane")
     // Prevent the glass container from showing a focus glow when interactive
     // elements inside (e.g. the chat input) receive focus.
     .focusEffectDisabled()
@@ -147,7 +149,10 @@ extension PlayerView {
         ChatSyncSendIndicator(deadline: deadline, total: chatSyncSendDelay)
       }
 
-      if auth.isAuthenticated {
+      if environment.accountSync.isRestoringAccount {
+        TwitchAccountLoadingView()
+          .padding(.vertical, 12)
+      } else if auth.isAuthenticated {
         HStack(spacing: 16) {
           Button {
             chatInputActivationToken &+= 1
@@ -180,7 +185,7 @@ extension PlayerView {
                 .accessibilityHidden(true)
               )
           }
-          .buttonStyle(ChatInputButtonStyle())
+          .buttonStyle(PlayerSurfaceButtonStyle())
           .focusEffectDisabled()
           // Mirror of the scrubber's gate: while the rewind bar is focused the
           // composer leaves the focus engine so a right-swipe/press on the bar
@@ -262,7 +267,7 @@ extension PlayerView {
             .modifier(ChatGlassFieldStyle(isFocused: focus == .chatInput && !chatIsFrozen))
             .animation(.easeOut(duration: 0.18), value: focus == .chatInput && !chatIsFrozen)
         }
-        .buttonStyle(ChatInputButtonStyle())
+        .buttonStyle(PlayerSurfaceButtonStyle())
         .focusEffectDisabled()
         // Rewind-bar focus gate, expressed via `.disabled` rather than
         // `.focusable` so the Button's Select action still fires on tvOS (see

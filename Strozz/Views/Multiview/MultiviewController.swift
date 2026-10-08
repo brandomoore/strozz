@@ -1,355 +1,293 @@
 import AVKit
 import Foundation
 import Observation
+import SwiftUI
 
-/// Maximum simultaneous panes. Six lets big-screen users fill the wall while
-/// staying within the Apple TV 4K hardware-decode budget (~4-6 concurrent
-/// H.264 streams); our grid tiles run ~720p, which is light enough that six
-/// fit. If six ever overflows the decoder (black tiles), scale the grid tier's
-/// resolution down for high pane counts rather than lowering this ceiling.
 let multiviewPaneLimit = 6
 
-/// How the live panes are arranged on screen.
 enum MultiviewLayout {
-  /// Symmetric tiles (1, side-by-side, 1-big-plus-2, 2×2, or up to a 3-wide
-  /// two-row grid for five and six panes).
-  case grid
-  /// One large primary pane with the rest as a thumbnail filmstrip.
-  case spotlight
+  case grid, spotlight
 }
 
-/// Quality budget for a single pane. Each tier *pins* a specific rendition (via
-/// `PlaybackService.pinnedHLSURL(targetBitrate:)`) so the quality is guaranteed
-/// rather than left to the master playlist's adaptive logic (which only treats a
-/// bitrate cap as advisory and routinely serves a softer rendition). A pane's
-/// tier is its structural role; changing it re-pins the pane's single player in
-/// place (we never run a second concurrent decoder per tile — Apple TV's video
-/// decoders are a hard, shared budget).
 enum MultiviewQualityTier {
-  /// Full "Source" quality. Used only by the spotlight primary (the one large
-  /// pane), so the heaviest rendition is decoded at most once at a time.
-  case source
-  /// A large grid quadrant (2×2 / side-by-side / 3-wide): a ~720p rendition,
-  /// sharp enough not to look soft on a 4K panel while keeping the handful of
-  /// concurrent decodes sane.
-  case grid
-  /// A spotlight filmstrip thumbnail: a light ~480p rendition, plenty for a tiny
-  /// tile and cheap to decode.
-  case thumbnail
+  case source, grid, thumbnail
 
-  /// Target bitrate handed to ``PlaybackService/pinnedHLSURL(for:targetBitrate:)``.
-  /// `0` pins the highest "Source" rendition; otherwise the highest rendition at
-  /// or below the target is pinned.
   var targetBitrate: Int {
     switch self {
-    case .source: return 0
-    case .grid: return 3_000_000
-    case .thumbnail: return 800_000
+    case .source: 0
+    case .grid: 3_000_000
+    case .thumbnail: 800_000
     }
   }
 
-  /// How deep to buffer. A pinned rendition never adapts, so this only trades
-  /// startup latency for stall resilience; the Source tier buffers a bit deeper.
-  var forwardBufferDuration: Double {
+  var maximumResolution: CGSize {
     switch self {
-    case .source: return 4
-    case .grid: return 2.5
-    case .thumbnail: return 2
+    case .source: .zero
+    case .grid: CGSize(width: 1280, height: 720)
+    case .thumbnail: CGSize(width: 854, height: 480)
     }
   }
 }
 
-/// One tile in a multiview grid: a channel bound to its own `AVPlayer`.
-///
-/// Every pane plays a *pinned* HLS rendition sized to its role (Source for the
-/// spotlight primary, ~720p for grid quadrants, ~480p for filmstrip thumbnails).
-/// Each pane keeps a *single* player for its whole lifetime — Apple TV's hardware
-/// can only decode so many live streams at once, so we never run a second
-/// concurrent player per tile; a quality change re-pins the existing player's
-/// item in place. Only the focused pane is unmuted; the rest run silently.
+/// Presentation changes must not become playback-session changes.
+@MainActor
+@Observable
+final class MultiviewPlaybackContext {
+  var isExpanded = false
+  var qualityTier: MultiviewQualityTier = .grid
+  var profile = LivePlaybackProfile.nativeLowLatency
+  var quality = "Auto"
+  var reloadID = UUID()
+  var focusRequest = UUID()
+  var exitRequests = 0
+  var playPauseRequests = 0
+  var moveRequests = 0
+  var moveDirection = MoveCommandDirection.up
+  @ObservationIgnored var onClose: (() -> Void)?
+}
+
 @MainActor
 @Observable
 final class MultiviewPane: Identifiable {
   let id: String
-  let channel: FollowedChannel
-  @ObservationIgnored let player: AVPlayer
-
-  /// True until the pane's first frame is ready, so the grid can show a
-  /// loading state instead of a black tile.
-  var isLoading = true
-  /// Set when URL resolution or playback fails; surfaces a retry affordance.
-  var hasError = false
-  /// Whether this pane currently owns audio (mirrors the focused pane).
+  var channel: FollowedChannel
+  let model: PlayerModel
+  let presentation: MultiviewPlaybackContext
   var isAudible = false
-  /// The quality tier this pane is currently running at. Recomputed from the
-  /// layout and the spotlight primary (a purely structural role).
-  @ObservationIgnored var qualityTier: MultiviewQualityTier = .grid
 
-  @ObservationIgnored fileprivate var resolveTask: Task<Void, Never>?
+  var player: AVPlayer { model.player }
+  var isLoading: Bool { model.isLoading }
+  var hasError: Bool { model.errorMessage != nil || model.isOffline }
+  var qualityTier: MultiviewQualityTier { presentation.qualityTier }
 
   init(channel: FollowedChannel) {
-    self.id = channel.id
+    id = channel.id
     self.channel = channel
-    let player = AVPlayer()
-    player.isMuted = true
-    player.actionAtItemEnd = .pause
-    player.automaticallyWaitsToMinimizeStalling = true
-    self.player = player
+    presentation = MultiviewPlaybackContext()
+    model = PlayerModel()
+    model.multiviewContext = presentation
+    model.isLoading = true
+    model.activeChannel = channel.login
+    model.channelDisplayName = channel.displayName
+    model.channelAvatarURL = channel.profileImageURL
+    model.streamTitle = channel.title
+    model.player.isMuted = true
   }
 
-  /// Safety net only — ``MultiviewController/removePane(_:)`` and
-  /// ``MultiviewController/teardown()`` are the primary cleanup and already
-  /// cancel resolution and null the player item. If a pane is ever released
-  /// without going through them, cancel any in-flight URL resolution and tear
-  /// the player down on the main actor so a late resolve / lingering item can't
-  /// keep a dead pane's decoder alive.
-  deinit {
-    resolveTask?.cancel()
-    let player = player
-    Task { @MainActor in
-      player.pause()
-      player.replaceCurrentItem(with: nil)
-    }
+  func stop() {
+    model.isLoading = true
+    model.nativeGeneration = UUID()
+    model.nativeStartupTask?.cancel()
+    model.nativeRefreshTask?.cancel()
+    model.fallbackRestoreTask?.cancel()
+    model.latencyTask?.cancel()
+    model.playbackWatchdogTask?.cancel()
+    model.nativeHLS?.stop()
+    model.nativeHLS = nil
+    player.pause()
+    player.replaceCurrentItem(with: nil)
   }
 }
 
-/// Owns the set of panes for one multiview session and the single "audible"
-/// selection. Created with up to ``multiviewPaneLimit`` channels; extra
-/// channels are dropped. Panes can be added or removed live, and the session can
-/// switch between a symmetric grid and a spotlight (one large + filmstrip)
-/// arrangement.
+/// Owns presentation and resource budgets. Each pane's mounted PlayerView owns
+/// the same live engine, watchdog, and lifecycle behavior as a standalone player.
 @MainActor
 @Observable
 final class MultiviewController {
   private(set) var panes: [MultiviewPane]
   private(set) var audiblePaneID: String?
-  @ObservationIgnored private var isSuspended = false
-  @ObservationIgnored private let resolvePinnedURL: (String, Int, Bool) async throws -> URL
-
-  /// Active on-screen arrangement.
-  private(set) var layout: MultiviewLayout = .grid
-  /// In spotlight mode, the pane shown large. `nil` falls back to the first
-  /// pane. Always points at a pane that still exists.
+  private(set) var layout = MultiviewLayout.grid
   private(set) var primaryPaneID: String?
+  private(set) var expandedPaneID: String?
+  private(set) var isTransitioning = false
+  private(set) var restoredPaneID: String?
+  private(set) var focusRestoreRequest = UUID()
+  @ObservationIgnored var reduceMotion = false
+  @ObservationIgnored private var transitionID = UUID()
+  @ObservationIgnored private let muted: Bool
+  @ObservationIgnored private var sleepSuspendedPaneIDs = Set<String>()
 
-  init(
-    channels: [FollowedChannel],
-    resolvePinnedURL: @escaping (String, Int, Bool) async throws -> URL = {
-      try await PlaybackService.pinnedHLSURL(
-        for: $0, targetBitrate: $1, forceRefresh: $2)
-    }
-  ) {
-    // Dedupe on `channelKey` rather than `id`: the same streamer arrives with a
-    // different `id` depending on which pool they came from (see
-    // `FollowedChannel.channelKey`), so an unfiltered selection could open the
-    // very same stream in two panes.
+  init(channels: [FollowedChannel], muted: Bool = false) {
+    self.muted = muted
     var seen = Set<String>()
-    let unique = channels.filter { seen.insert($0.channelKey).inserted }
-    self.panes = unique.prefix(multiviewPaneLimit).map(MultiviewPane.init)
-    self.resolvePinnedURL = resolvePinnedURL
-    self.primaryPaneID = panes.first?.id
+    panes = channels.filter { seen.insert($0.channelKey).inserted }
+      .prefix(multiviewPaneLimit).map(MultiviewPane.init)
+    primaryPaneID = panes.first?.id
+    for pane in panes { configure(pane) }
   }
 
-  /// True when another channel can still be added.
   var canAddPane: Bool { panes.count < multiviewPaneLimit }
+  var primaryPane: MultiviewPane? { panes.first { $0.id == primaryPaneID } ?? panes.first }
+  var expandedPane: MultiviewPane? { panes.first { $0.id == expandedPaneID } }
 
-  /// The pane currently in the spotlight primary slot (or the first pane).
-  var primaryPane: MultiviewPane? {
-    panes.first { $0.id == primaryPaneID } ?? panes.first
+  func start() { refreshQuality() }
+
+  func load(_ pane: MultiviewPane) {
+    guard panes.contains(where: { $0 === pane }) else { return }
+    pane.presentation.reloadID = UUID()
   }
 
-  /// Resolve and begin playback for every pane.
-  func start() {
-    isSuspended = false
-    syncQualityTiers()
-    for pane in panes { load(pane) }
+  private func configure(_ pane: MultiviewPane) {
+    pane.presentation.onClose = { [weak self] in self?.collapse() }
   }
 
-  /// (Re)load a pane's pinned rendition into its single player. Used for the
-  /// first start, a retry, a newly added pane, and any quality-tier change. The
-  /// tile shows its channel poster while `isLoading` is true, so the brief
-  /// re-pin (a `replaceCurrentItem` on the same player) reads as a quick poster
-  /// flash rather than a black tile — and never spins up a second concurrent
-  /// decoder, which is what the hardware can't afford.
-  func load(_ pane: MultiviewPane, forceRefresh: Bool = false) {
-    pane.isLoading = true
-    pane.hasError = false
-    pane.resolveTask?.cancel()
-    let tier = pane.qualityTier
-    let resolvePinnedURL = resolvePinnedURL
-    pane.resolveTask = Task { [weak self, weak pane] in
-      guard let pane else { return }
-      do {
-        let url = try await resolvePinnedURL(
-          pane.channel.login, tier.targetBitrate, forceRefresh)
-        guard !Task.isCancelled, pane.qualityTier == tier else { return }
-        let asset = AVURLAsset(
-          url: url,
-          options: ["AVURLAssetHTTPHeaderFieldsKey": PlaybackService.streamHeaders]
-        )
-        let item = AVPlayerItem(asset: asset)
-        item.preferredForwardBufferDuration = tier.forwardBufferDuration
-        pane.player.replaceCurrentItem(with: item)
-        pane.player.isMuted = !pane.isAudible
-        if self?.isSuspended == false { pane.player.play() }
-
-        // Hold the loading state (poster shown) until the first frame is actually
-        // decodable so the tile reveals cleanly rather than flashing black.
-        for _ in 0..<40 {
-          if Task.isCancelled || pane.qualityTier != tier { return }
-          if pane.player.currentItem?.status == .readyToPlay { break }
-          try? await Task.sleep(for: .milliseconds(150))
-        }
-        guard !Task.isCancelled, pane.qualityTier == tier else { return }
-        pane.isLoading = false
-      } catch is CancellationError {
-        return
-      } catch {
-        pane.hasError = true
-        pane.isLoading = false
-      }
-    }
-  }
-
-  /// Add a channel as a new pane and start it, if under the pane limit and not
-  /// already present. Returns the new pane's id, or `nil` if it was rejected.
   @discardableResult
   func addPane(_ channel: FollowedChannel) -> String? {
-    guard canAddPane else { return nil }
-    guard !panes.contains(where: { $0.channel.channelKey == channel.channelKey }) else {
-      return nil
-    }
+    guard canAddPane, !panes.contains(where: { $0.channel.channelKey == channel.channelKey }) else { return nil }
     let pane = MultiviewPane(channel: channel)
+    configure(pane)
     panes.append(pane)
-    load(pane)
+    refreshQuality()
     return pane.id
   }
 
-  /// Remove a pane, tearing down its player. Keeps at least one pane alive.
-  /// Re-points the primary/audible selections if they referenced it.
-  func removePane(_ paneID: String) {
-    guard panes.count > 1 else { return }
-    guard let index = panes.firstIndex(where: { $0.id == paneID }) else { return }
-    let pane = panes[index]
-    pane.resolveTask?.cancel()
-    pane.resolveTask = nil
-    pane.player.pause()
-    pane.player.replaceCurrentItem(with: nil)
+  func removePane(_ id: String) {
+    guard panes.count > 1, let index = panes.firstIndex(where: { $0.id == id }) else { return }
+    panes[index].stop()
     panes.remove(at: index)
-
-    if primaryPaneID == paneID {
-      primaryPaneID = panes.first?.id
-    }
-    if audiblePaneID == paneID {
-      setAudiblePane(panes.first?.id)
-    }
-    // The new primary (and the rest) may now warrant a different tier.
+    if expandedPaneID == id { expandedPaneID = nil }
+    if primaryPaneID == id { primaryPaneID = panes.first?.id }
+    if audiblePaneID == id { setAudiblePane(panes.first?.id) }
     refreshQuality()
   }
 
-  /// Promote a pane to the spotlight primary slot (staying in the current
-  /// layout). Use ``spotlight(_:)`` to also switch into spotlight.
-  func makePrimary(_ paneID: String) {
-    guard panes.contains(where: { $0.id == paneID }) else { return }
-    primaryPaneID = paneID
+  func makePrimary(_ id: String) {
+    guard panes.contains(where: { $0.id == id }) else { return }
+    primaryPaneID = id
     refreshQuality()
   }
 
-  /// Switch into spotlight with `paneID` as the primary in one step, so the
-  /// quality refresh sees the final layout *and* primary together (setting them
-  /// separately would refresh while still in grid and miss the upgrade).
-  func spotlight(_ paneID: String) {
-    guard panes.contains(where: { $0.id == paneID }) else { return }
-    primaryPaneID = paneID
+  func spotlight(_ id: String) {
+    guard panes.contains(where: { $0.id == id }) else { return }
+    primaryPaneID = id
     layout = .spotlight
     refreshQuality()
   }
 
-  /// Flip between the grid and spotlight arrangements.
   func toggleLayout() {
-    layout = (layout == .grid) ? .spotlight : .grid
-    if layout == .spotlight, primaryPane == nil {
-      primaryPaneID = panes.first?.id
-    }
+    layout = layout == .grid ? .spotlight : .grid
     refreshQuality()
   }
 
-  /// The tier a pane should run at — a purely structural role, so quality only
-  /// changes on deliberate layout/primary changes (never on every focus move,
-  /// which would flash a poster constantly). The one large spotlight primary gets
-  /// Source; grid quadrants get ~720p; the small spotlight filmstrip thumbnails
-  /// stay light (~480p).
-  private func desiredTier(for pane: MultiviewPane) -> MultiviewQualityTier {
-    if layout == .spotlight && pane.id == primaryPane?.id { return .source }
-    return layout == .grid ? .grid : .thumbnail
+  func expand(_ id: String) {
+    guard expandedPaneID != id, let selected = panes.first(where: { $0.id == id }) else { return }
+    let request = UUID()
+    transitionID = request
+    isTransitioning = true
+    withAnimation(.motionAware(.easeInOut(duration: 0.35), reduceMotion: reduceMotion)) {
+      expandedPaneID = id
+      for pane in panes { pane.presentation.isExpanded = pane.id == id }
+      setAudiblePane(id)
+      refreshQuality()
+    } completion: {
+      guard self.transitionID == request, self.expandedPaneID == id else { return }
+      self.isTransitioning = false
+      selected.presentation.focusRequest = UUID()
+    }
   }
 
-  /// Recompute each pane's desired quality tier (no playback change here).
-  private func syncQualityTiers() {
-    for pane in panes { pane.qualityTier = desiredTier(for: pane) }
+  func collapse() {
+    guard let returning = expandedPaneID else { return }
+    let request = UUID()
+    transitionID = request
+    isTransitioning = true
+    withAnimation(.motionAware(.easeInOut(duration: 0.35), reduceMotion: reduceMotion)) {
+      expandedPaneID = nil
+      for pane in panes { pane.presentation.isExpanded = false }
+      refreshQuality()
+    } completion: {
+      guard self.transitionID == request, self.expandedPaneID == nil else { return }
+      self.isTransitioning = false
+      self.restoredPaneID = returning
+      self.focusRestoreRequest = UUID()
+    }
   }
 
-  /// Re-evaluate each pane's tier and re-pin any that changed. The re-pin is a
-  /// `replaceCurrentItem` on the pane's single player, masked by the channel
-  /// poster while it loads — no second concurrent decoder (the hardware can't
-  /// afford one), so playback stays reliable instead of going black.
   private func refreshQuality() {
     for pane in panes {
-      let desired = desiredTier(for: pane)
-      guard desired != pane.qualityTier else { continue }
-      pane.qualityTier = desired
-      load(pane)
+      if let expandedPaneID {
+        pane.presentation.qualityTier = pane.id == expandedPaneID ? .source : .thumbnail
+      } else if layout == .spotlight {
+        pane.presentation.qualityTier = pane.id == primaryPane?.id ? .source : .thumbnail
+      } else {
+        pane.presentation.qualityTier = .grid
+      }
     }
   }
 
-  /// Make exactly one pane audible (or none when `paneID` is nil). Audio always
-  /// follows the focused pane.
-  func setAudiblePane(_ paneID: String?) {
-    audiblePaneID = paneID
+  func setAudiblePane(_ id: String?) {
+    let next = panes.contains(where: { $0.id == id }) ? id : nil
+    guard audiblePaneID != next else { return }
+    audiblePaneID = next
     for pane in panes {
-      let audible = pane.id == paneID
-      pane.isAudible = audible
-      pane.player.isMuted = !audible
+      pane.isAudible = pane.id == next
+      pane.player.isMuted = muted || !pane.isAudible
     }
   }
 
-  /// Pause every pane without releasing its item — used while a single stream
-  /// is layered on top (escalated to full-screen), so the wall's audio/video
-  /// don't compete and battery isn't wasted decoding hidden video.
-  func suspend() {
-    isSuspended = true
-    for pane in panes {
-      pane.player.pause()
+  func synchronizeExpandedSleep() {
+    if expandedPane?.model.isSleeping == true {
+      for pane in panes where pane.id != expandedPaneID && !pane.model.isUserPaused && !pane.model.isSleeping {
+        sleepSuspendedPaneIDs.insert(pane.id)
+        pane.player.pause()
+      }
+      UIApplication.shared.isIdleTimerDisabled = false
+    } else {
+      for pane in panes where sleepSuspendedPaneIDs.contains(pane.id) {
+        pane.presentation.reloadID = UUID()
+      }
+      sleepSuspendedPaneIDs.removeAll()
+      UIApplication.shared.isIdleTimerDisabled = true
     }
   }
 
-  /// Resume playback after a suspend, restoring each pane's audible/mute state.
-  func resume() {
-    isSuspended = false
-    for pane in panes {
-      pane.player.isMuted = !pane.isAudible
-      pane.player.play()
-    }
-  }
-
-  /// AVPlayer can remain parked on a stale live playlist after tvOS backgrounds
-  /// the wall. Re-resolve every pane (not just a newly spotlighted pane) and
-  /// replace each item on its existing player so playback resumes at live.
-  func reloadAfterForeground() {
-    isSuspended = false
-    for pane in panes {
-      load(pane, forceRefresh: true)
-    }
-  }
-
-  /// Stop everything and release the player items. Call on disappear.
   func teardown() {
-    isSuspended = true
-    for pane in panes {
-      pane.resolveTask?.cancel()
-      pane.resolveTask = nil
-      pane.player.pause()
-      pane.player.replaceCurrentItem(with: nil)
+    transitionID = UUID()
+    isTransitioning = false
+    sleepSuspendedPaneIDs.removeAll()
+    for pane in panes { pane.stop() }
+  }
+}
+
+enum MultiviewGeometry {
+  static func frames(ids: [String], size: CGSize, layout: MultiviewLayout,
+                     primary: String?, expanded: String?) -> [String: CGRect] {
+    guard !ids.isEmpty, size.width > 0, size.height > 0 else { return [:] }
+    let gap: CGFloat = 16
+    var frames: [String: CGRect] = [:]
+    if layout == .spotlight {
+      let selected = ids.first(where: { $0 == primary }) ?? ids[0]
+      let others = ids.filter { $0 != selected }
+      let height: CGFloat = others.isEmpty ? 0 : min(169, size.height / 4)
+      frames[selected] = CGRect(x: 0, y: 0, width: size.width,
+        height: size.height - (others.isEmpty ? 0 : height + gap))
+      if !others.isEmpty {
+        let width = min(300, (size.width - gap * CGFloat(others.count - 1)) / CGFloat(others.count))
+        for (index, id) in others.enumerated() {
+          frames[id] = CGRect(x: CGFloat(index) * (width + gap), y: size.height - height, width: width, height: height)
+        }
+      }
+    } else if ids.count == 1 {
+      frames[ids[0]] = CGRect(origin: .zero, size: size)
+    } else if ids.count == 3 {
+      let width = (size.width - gap) / 2
+      let height = (size.height - gap) / 2
+      frames[ids[0]] = CGRect(x: 0, y: 0, width: width, height: size.height)
+      for index in 1..<3 {
+        frames[ids[index]] = CGRect(x: width + gap, y: CGFloat(index - 1) * (height + gap),
+                                   width: width, height: height)
+      }
+    } else {
+      let columns = ids.count > 4 ? 3 : 2
+      let rows = ids.count <= 2 ? 1 : 2
+      let width = (size.width - gap * CGFloat(columns - 1)) / CGFloat(columns)
+      let height = (size.height - gap * CGFloat(rows - 1)) / CGFloat(rows)
+      for (index, id) in ids.enumerated() {
+        frames[id] = CGRect(x: CGFloat(index % columns) * (width + gap),
+          y: CGFloat(index / columns) * (height + gap), width: width, height: height)
+      }
     }
+    if let expanded, ids.contains(expanded) { frames[expanded] = CGRect(origin: .zero, size: size) }
+    return frames
   }
 }

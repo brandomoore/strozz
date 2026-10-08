@@ -20,6 +20,8 @@ final class TwitchAuthSession {
     var refreshToken: String?
 
     var isAuthenticating = false
+    var isRestoringConnection = false
+    @ObservationIgnored var signInAttempt = UUID()
     var activationCode: String?
     var verificationURI: String?
     var verificationURIComplete: String?
@@ -30,13 +32,30 @@ final class TwitchAuthSession {
     @ObservationIgnored var sessionGeneration = UUID()
     @ObservationIgnored private var didRestore = false
 
-    let userDefaults: UserDefaults = {
+    let userDefaults: UserDefaults
+    @ObservationIgnored let secureService: String
+    @ObservationIgnored let saveTopShelf: @MainActor (TopShelfCredentials?) throws -> Void
+    @ObservationIgnored let loadAuthData: NetworkClient.DataLoader
+
+    init(
+        userDefaults: UserDefaults? = nil,
+        secureService: String = TwitchAuthSession.credentialService,
+        saveTopShelf: @escaping @MainActor (TopShelfCredentials?) throws -> Void = TopShelfCredentialStore.save,
+        loadAuthData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) }
+    ) {
+        self.userDefaults = userDefaults ?? Self.sharedDefaults()
+        self.secureService = secureService
+        self.saveTopShelf = saveTopShelf
+        self.loadAuthData = loadAuthData
+    }
+
+    private static func sharedDefaults() -> UserDefaults {
         guard let suite = UserDefaults(suiteName: TopShelf.appGroupID) else {
             return .standard
         }
         TwitchAuthSession.migrateLegacyAuthIfNeeded(into: suite)
         return suite
-    }()
+    }
     var pollTask: Task<Void, Never>?
     var broadcasterIDCache: [String: String] = [:]
     /// Coalesces concurrent token refreshes into a single in-flight request.
@@ -135,7 +154,7 @@ final class TwitchAuthSession {
                 try useCredential(credential)
                 if credential.cloudOwner != nil {
                     isAuthenticated = false
-                    try TopShelfCredentialStore.save(nil)
+                    try saveTopShelf(nil)
                 }
                 return
             }
@@ -178,6 +197,7 @@ final class TwitchAuthSession {
     }
 
     func signOut() {
+        cancelSignIn()
         cloudSync?.signedOutLocally()
         sessionGeneration = UUID()
         refreshInFlight?.cancel()
@@ -222,6 +242,7 @@ final class TwitchAuthSession {
     }
 
     func clearStoredAuthState() {
+        cancelSignIn()
         sessionGeneration = UUID()
         pollTask?.cancel()
         pollTask = nil

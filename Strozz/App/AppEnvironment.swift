@@ -20,6 +20,10 @@ import Foundation
 @MainActor
 @Observable
 final class AppEnvironment {
+  #if DEBUG
+  /// Hardware integration tests reuse the real scene instead of starting a second auth coordinator.
+  static weak var playbackTestEnvironment: AppEnvironment?
+  #endif
   /// Twitch account / OAuth session.
   let auth = TwitchAuthSession()
   let watchRewards = TwitchWatchRewardsSession()

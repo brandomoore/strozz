@@ -5,6 +5,7 @@ struct MobileChatView: View {
   let channel: String
   @Environment(\.themePalette) private var palette
   @Environment(TwitchAuthSession.self) private var auth
+  @Environment(TwitchAccountSync.self) private var sync: TwitchAccountSync?
   @State private var showAccount = false
 
   var body: some View {
@@ -18,7 +19,9 @@ struct MobileChatView: View {
       MobileChatTimeline(messages: service.messages, emoteURLs: service.emoteURLs,
                          badgeURLs: service.badgeURLs, cheermotes: service.cheermotes)
       Divider()
-      if auth.isAuthenticated {
+      if sync?.isRestoringAccount == true {
+        TwitchAccountLoadingView().padding(12)
+      } else if auth.isAuthenticated {
         MobileChatComposer(channel: channel)
       } else {
         Button("Sign in to chat") { showAccount = true }.padding(12)

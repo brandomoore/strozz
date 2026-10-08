@@ -28,6 +28,7 @@ extension PlayerView {
         .focusable(scrubberFocusable)
         .focused($focus, equals: .rewindScrubber)
         .accessibilityLabel(rewindReadout.isVOD ? "Timeline" : "Live timeline")
+        .accessibilityIdentifier("player-live-timeline")
         .accessibilityValue(rewindAccessibilityValue)
         .accessibilityHint("Swipe up or down to seek ten seconds")
         .accessibilityAdjustableAction { direction in
@@ -144,6 +145,7 @@ extension PlayerView {
           onMenuDismissed: {
             isQualityMenuPresented = false
             focusRecoveryTask?.cancel()
+            guard !isMultiviewCompact, showControls else { return }
             // If selecting a (short) sleep timer already surfaced the
             // still-watching banner or the sleeping overlay, don't yank focus
             // back to the quality button — let those own it.
@@ -177,6 +179,8 @@ extension PlayerView {
           onToggleRewind: { streamRewindEnabled.toggle() },
           viewerCountEnabled: showViewerCount,
           onToggleViewerCount: { showViewerCount.toggle() },
+          streamDurationEnabled: showStreamDuration,
+          onToggleStreamDuration: { showStreamDuration.toggle() },
           captionsSupported: CaptionController.isSupported,
           captionsEnabled: captionsEnabled,
           onToggleCaptions: { captionsEnabled.toggle() },
@@ -270,6 +274,7 @@ extension PlayerView {
             .accessibilityLabel(showChat ? "Hide Chat" : "Show Chat")
         }
         .focusRemoved(controlButtonRemoved(.chatToggle))
+        .accessibilityIdentifier("player-chat-toggle")
         .focused($focus, equals: .chatToggle)
         .onMoveCommand { direction in
           switch direction {
@@ -309,6 +314,10 @@ extension PlayerView {
     // on the intended button (set via `pendingControlFocus`) instead of tvOS
     // auto-picking the leftmost control. Dormant when focus is sent into chat.
     .defaultFocus($focus, pendingControlFocus)
+    .onAppear {
+      guard model.multiviewContext?.isExpanded == true else { return }
+      requestMultiviewFocus(pendingControlFocus)
+    }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.leading, 48)

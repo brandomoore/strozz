@@ -131,6 +131,52 @@ final class PlaybackAudioSessionTests: XCTestCase {
     XCTAssertEqual(activations, 1, "An interruption must not undo a deliberate pause")
   }
 
+  func testForegroundRechecksUnendedInterruptionWithoutUndoingUserPause() {
+    for paused in [false, true] {
+      let model = PlayerModel()
+      model.player.isMuted = true
+      model.isUserPaused = paused
+      model.backgroundedAt = Date().addingTimeInterval(-600)
+      model.audioInterrupted = true
+      var activations = 0
+      model.activateAudioSession = { activations += 1 }
+      let view = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: model)
+      defer {
+        model.channelMetadataTask?.cancel()
+        view.stopLatencyMonitor()
+        view.stopPlaybackWatchdog()
+        model.player.pause()
+      }
+      view.handleReturnToForeground()
+      XCTAssertFalse(model.audioInterrupted)
+      XCTAssertNil(model.backgroundedAt)
+      XCTAssertEqual(model.isUserPaused, paused)
+      XCTAssertEqual(activations, paused ? 0 : 1)
+    }
+  }
+
+  func testForegroundActivationFailureIsVisibleAndActiveInterruptionIsNotIgnored() {
+    let model = PlayerModel()
+    model.player.isMuted = true
+    model.audioInterrupted = true
+    let view = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: model)
+    defer {
+      model.channelMetadataTask?.cancel()
+      view.stopLatencyMonitor()
+      view.stopPlaybackWatchdog()
+      model.player.pause()
+    }
+    view.handleReturnToForeground()
+    XCTAssertTrue(model.audioInterrupted, "An active interruption still requires normal ended/user handling")
+    model.backgroundedAt = Date().addingTimeInterval(-60)
+    model.activateAudioSession = { throw NSError(domain: "AudioFixture", code: 1) }
+    view.handleReturnToForeground()
+    XCTAssertFalse(model.audioInterrupted)
+    XCTAssertTrue(model.audioSessionActivationFailed)
+    XCTAssertNotNil(model.errorMessage)
+    XCTAssertEqual(model.player.rate, 0)
+  }
+
   func testMediaServiceLossDefersRecoveryUntilResetAndCoalescesDuplicates() async throws {
     try await withNative { model, view in
       let oldPlayer = model.player
