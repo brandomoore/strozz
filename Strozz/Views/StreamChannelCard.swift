@@ -207,25 +207,22 @@ struct StreamChannelCard: View {
         Text(channel.displayName)
           .font(.subheadline.weight(.semibold))
           .foregroundStyle(usesLiftFocusedText ? palette.liftPrimaryText : Color.primary)
-          .lineLimit(1)
-          .minimumScaleFactor(0.7)
+          .lineLimit(1, reservesSpace: true)
 
         Text(channel.title.isEmpty ? "No title" : channel.title)
           .font(.footnote)
           .foregroundStyle(usesLiftFocusedText ? palette.liftSecondaryText : Color.secondary)
           .lineLimit(
             presentation == .poster ? 1 : 2,
-            reservesSpace: presentation == .framed
+            reservesSpace: true
           )
-          .minimumScaleFactor(0.8)
           .frame(maxWidth: .infinity, alignment: .leading)
 
         if showsGameName || presentation == .poster {
           Text(channel.gameName.isEmpty ? " " : channel.gameName)
             .font(.caption2)
             .foregroundStyle(usesLiftFocusedText ? palette.liftSecondaryText : Color.secondary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
+            .lineLimit(1, reservesSpace: true)
             .opacity(channel.gameName.isEmpty ? 0 : 1)
         }
       }

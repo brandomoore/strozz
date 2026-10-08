@@ -4,6 +4,54 @@ import XCTest
 
 @MainActor
 final class MobileHomeLayoutTests: XCTestCase {
+  func testSkeletonCardsReserveLoadedGeometryAtPhoneAndTabletWidths() {
+    for width in [300.0, 356, 480] {
+      for typeSize in [DynamicTypeSize.large, .accessibility2] {
+        for theme in [AppTheme.system, .light, .dark, .oled] {
+          let palette = theme.palette(systemColorScheme: .light)
+          let skeleton = UIHostingController(rootView:
+            MobileChannelCard(channel: LoadingSkeleton.channels[0])
+              .modifier(LoadingSkeletonStyle())
+              .environment(\.dynamicTypeSize, typeSize).environment(\.themePalette, palette))
+          let loaded = UIHostingController(rootView:
+            MobileChannelCard(channel: channel("Streamer"))
+              .environment(\.dynamicTypeSize, typeSize).environment(\.themePalette, palette))
+          let proposal = CGSize(width: width, height: UIView.layoutFittingExpandedSize.height)
+          XCTAssertEqual(skeleton.sizeThatFits(in: proposal).height, loaded.sizeThatFits(in: proposal).height, accuracy: 1)
+        }
+      }
+    }
+  }
+
+  func testShortcutSectionDoesNotMoveFeedForPartialOrEmptyResults() {
+    for count in [0, 1, 3, 6] {
+      let proposal = CGSize(width: 356, height: UIView.layoutFittingExpandedSize.height)
+      let loading = UIHostingController(rootView:
+        MobileFollowedShortcuts(channels: [], onSelect: { _ in }, onSeeAll: {}, isLoading: true))
+      let loaded = UIHostingController(rootView:
+        MobileFollowedShortcuts(channels: Array(LoadingSkeleton.channels.prefix(count)),
+                                onSelect: { _ in }, onSeeAll: {}))
+      XCTAssertEqual(loading.sizeThatFits(in: proposal).height, loaded.sizeThatFits(in: proposal).height, accuracy: 1)
+    }
+  }
+
+  func testCategoryAndFollowingSkeletonsReserveMetadataLines() {
+    let proposal = CGSize(width: 356, height: UIView.layoutFittingExpandedSize.height)
+    let loading = UIHostingController(rootView: MobileFollowingRow(channel: LoadingSkeleton.channels[0]))
+    for live in [false, true] {
+      let loaded = UIHostingController(rootView: MobileFollowingRow(channel: channel("Streamer", live: live)))
+      XCTAssertEqual(loading.sizeThatFits(in: proposal).height, loaded.sizeThatFits(in: proposal).height, accuracy: 1)
+    }
+    let categoryProposal = CGSize(width: 110, height: UIView.layoutFittingExpandedSize.height)
+    let categoryLoading = UIHostingController(rootView: MobileCategoryCard(category: LoadingSkeleton.categories[0]))
+    for viewers in [nil, 1200] as [Int?] {
+      let category = TwitchCategory(id: "test", name: "Game", boxArtURL: nil, viewerCount: viewers)
+      let loaded = UIHostingController(rootView: MobileCategoryCard(category: category))
+      XCTAssertEqual(categoryLoading.sizeThatFits(in: categoryProposal).height,
+                     loaded.sizeThatFits(in: categoryProposal).height, accuracy: 1)
+    }
+  }
+
   private func channel(_ name: String, category: String = "Just Chatting", live: Bool = true) -> FollowedChannel {
     FollowedChannel(id: name, login: name.lowercased(), displayName: name,
                     title: "A live stream with a longer title", gameName: category, viewerCount: 7500,

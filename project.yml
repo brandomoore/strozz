@@ -8,7 +8,7 @@ options:
   createIntermediateGroups: true
 settings:
   base:
-    MARKETING_VERSION: "0.40.0"
+    MARKETING_VERSION: "0.41.0"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "6.0"
     GENERATE_INFOPLIST_FILE: NO
@@ -88,6 +88,7 @@ targets:
           - "CachedAsyncImage.swift"
           - "Theme.swift"
           - "CardMetrics.swift"
+          - "LoadingSkeleton.swift"
           - "TopShelfStore.swift"
           - "TopShelfCredentialStore.swift"
           - "CredentialKeychain.swift"

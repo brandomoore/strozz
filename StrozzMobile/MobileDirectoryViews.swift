@@ -5,6 +5,7 @@ struct MobileBrowseView: View {
   @State private var service = BrowseService()
   @State private var search = SearchService()
   @State private var query = ""
+  @State private var hasLoadedCategories = false
 
   var body: some View {
     ScrollView {
@@ -13,8 +14,8 @@ struct MobileBrowseView: View {
           if let error = service.categoryErrorMessage {
             MobileStatusView(message: error) { Task { await service.loadCategories() } }
           }
-          MobileCategoryGrid(categories: service.categories, onSelect: onSelect)
-          if service.isLoadingCategories { ProgressView("Loading categories") }
+          MobileCategoryGrid(categories: service.categories, onSelect: onSelect,
+                             isLoading: service.isLoadingCategories || !hasLoadedCategories)
         } else {
           MobileSearchResults(service: search, onSelect: onSelect) {
             Task { await search.search(query) }
@@ -33,7 +34,10 @@ struct MobileBrowseView: View {
       do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
       await search.search(query)
     }
-    .task { if service.categories.isEmpty { await service.loadCategories() } }
+    .task {
+      if service.categories.isEmpty { await service.loadCategories() }
+      hasLoadedCategories = true
+    }
     .refreshable {
       if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         await service.loadCategories()
@@ -140,6 +144,7 @@ struct MobileCategoryStreamsView: View {
   let category: TwitchCategory
   let onSelect: (FollowedChannel) -> Void
   @State private var service = BrowseService()
+  @State private var hasLoaded = false
 
   var body: some View {
     ScrollView {
@@ -147,17 +152,16 @@ struct MobileCategoryStreamsView: View {
         if let error = service.streamsErrorMessage {
           MobileStatusView(message: error) { Task { await service.loadStreams(for: category) } }
         }
-        MobileChannelGrid(channels: service.categoryStreams, onSelect: onSelect)
-        if service.isLoadingStreams {
-          ProgressView("Loading streams")
-        } else if service.categoryStreams.isEmpty && service.streamsErrorMessage == nil {
+        MobileChannelGrid(channels: service.categoryStreams, onSelect: onSelect,
+                          isLoading: service.isLoadingStreams || !hasLoaded)
+        if hasLoaded && !service.isLoadingStreams && service.categoryStreams.isEmpty && service.streamsErrorMessage == nil {
           Text("No live streams in this category right now.").foregroundStyle(.secondary)
         }
       }
       .padding()
     }
     .navigationTitle(category.name)
-    .task { await service.loadStreams(for: category) }
+    .task { await service.loadStreams(for: category); hasLoaded = true }
     .refreshable { await service.loadStreams(for: category) }
   }
 }
@@ -165,6 +169,7 @@ struct MobileCategoryStreamsView: View {
 struct MobileCategoryGrid: View {
   let categories: [TwitchCategory]
   let onSelect: (FollowedChannel) -> Void
+  var isLoading = false
   @Environment(\.horizontalSizeClass) private var sizeClass
   @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -174,27 +179,46 @@ struct MobileCategoryGrid: View {
               count: typeSize.isAccessibilitySize ? 2 : 3)
       : [GridItem(.adaptive(minimum: 140, maximum: 200), spacing: 12, alignment: .top)]
     LazyVGrid(columns: columns, alignment: .leading, spacing: 18) {
+      if categories.isEmpty && isLoading {
+        ForEach(LoadingSkeleton.categories) { category in
+          MobileCategoryCard(category: category)
+            .modifier(LoadingSkeletonStyle())
+        }
+      }
       ForEach(categories) { category in
         NavigationLink {
           MobileCategoryStreamsView(category: category, onSelect: onSelect)
         } label: {
-          VStack(alignment: .leading, spacing: 5) {
-            CachedAsyncImage(url: category.boxArtURL) { image in
-              image.resizable().scaledToFill()
-            } placeholder: { Rectangle().fill(.quaternary) }
-            .aspectRatio(3 / 4, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            Text(category.name).font(.subheadline.weight(.semibold)).lineLimit(2)
-            if let count = category.viewerCount {
-              Text(count, format: .number.notation(.compactName))
-                .font(.caption).foregroundStyle(.secondary)
-                .accessibilityLabel("\(count) viewers")
-            }
-          }
+          MobileCategoryCard(category: category)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("category-\(category.id)")
       }
+    }
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(categories.isEmpty && isLoading ? Text("Loading categories") : Text(""))
+  }
+}
+
+struct MobileCategoryCard: View {
+  let category: TwitchCategory
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 5) {
+      Rectangle().fill(.quaternary)
+        .aspectRatio(3 / 4, contentMode: .fit)
+        .overlay {
+          CachedAsyncImage(url: category.boxArtURL) { image in
+            image.resizable().scaledToFill()
+          } placeholder: { Color.clear }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+      Text(category.name).font(.subheadline.weight(.semibold)).lineLimit(2, reservesSpace: true)
+      Text(category.viewerCount ?? 0, format: .number.notation(.compactName))
+        .font(.caption).foregroundStyle(.secondary)
+        .opacity(category.viewerCount == nil ? 0 : 1)
+        .accessibilityLabel("\(category.viewerCount ?? 0) viewers")
+        .accessibilityHidden(category.viewerCount == nil)
     }
   }
 }
@@ -203,9 +227,16 @@ struct MobileChannelGrid: View {
   let channels: [FollowedChannel]
   let onSelect: (FollowedChannel) -> Void
   var preview: MobileHomePreview? = nil
+  var isLoading = false
 
   var body: some View {
     LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 20, alignment: .top)], spacing: 24) {
+      if channels.isEmpty && isLoading {
+        ForEach(LoadingSkeleton.channels.prefix(6)) { channel in
+          MobileChannelCard(channel: channel)
+            .modifier(LoadingSkeletonStyle())
+        }
+      }
       ForEach(channels, id: \.channelKey) { channel in
         Button { onSelect(channel) } label: {
           MobileChannelCard(channel: channel, preview: preview)
@@ -216,6 +247,8 @@ struct MobileChannelGrid: View {
         .accessibilityHint(channel.isLive ? "Watch live stream" : "Channel is offline")
       }
     }
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(channels.isEmpty && isLoading ? Text("Loading streams") : Text(""))
   }
 }
 
@@ -233,8 +266,8 @@ struct MobileChannelCard: View {
         } placeholder: { Circle().fill(.quaternary) }
         .frame(width: 40, height: 40).clipShape(Circle())
         VStack(alignment: .leading, spacing: 3) {
-          Text(channel.displayName).font(.headline)
-          Text(channel.title).font(.subheadline).lineLimit(2)
+          Text(channel.displayName).font(.headline).lineLimit(1, reservesSpace: true)
+          Text(channel.title).font(.subheadline).lineLimit(2, reservesSpace: true)
           Text(channel.gameName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
         Spacer(minLength: 0)
@@ -257,13 +290,15 @@ struct MobileStreamArtwork: View {
   @Environment(\.themePalette) private var palette
 
   var body: some View {
-    LiveThumbnail(url: thumbnailURL) { image in
-      image.resizable().scaledToFill()
-    } placeholder: {
-      Rectangle().fill(palette.cardOpaqueSurface)
-        .overlay { Icon(glyph: .broadcast, size: 28).foregroundStyle(.secondary) }
-    }
+    Rectangle().fill(palette.cardOpaqueSurface)
     .aspectRatio(16 / 9, contentMode: .fit)
+    .overlay {
+      LiveThumbnail(url: thumbnailURL) { image in
+        image.resizable().scaledToFill()
+      } placeholder: {
+        Icon(glyph: .broadcast, size: 28).foregroundStyle(.secondary)
+      }
+    }
     .clipShape(RoundedRectangle(cornerRadius: 12))
     .accessibilityIdentifier("artwork-\(channelKey)")
     .overlay {

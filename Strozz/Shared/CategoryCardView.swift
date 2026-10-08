@@ -78,16 +78,14 @@ struct CategoryCardView: View {
         .foregroundStyle(usesLiftFocusedText ? palette.liftPrimaryText : Color.primary)
         .lineLimit(
           presentation == .poster ? 1 : 2,
-          reservesSpace: presentation == .framed
+          reservesSpace: true
         )
-        .minimumScaleFactor(0.8)
 
       if let viewers = category.viewerCount {
         Text("\(viewers) watching")
           .font(.caption2)
           .foregroundStyle(usesLiftFocusedText ? palette.liftSecondaryText : Color.secondary)
-          .lineLimit(1)
-          .minimumScaleFactor(0.7)
+          .lineLimit(1, reservesSpace: true)
       } else {
         Text(" ")
           .font(.caption2)

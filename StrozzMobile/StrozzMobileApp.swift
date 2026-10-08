@@ -17,21 +17,33 @@ struct StrozzMobileApp: App {
 
   var body: some Scene {
     WindowGroup {
-      MobileRootView(accountID: auth.userID ?? "anonymous")
-        .id(auth.userID ?? "anonymous")
-        .environment(auth)
-        .environment(theme)
-        .environment(rewards)
-        .environment(accountSync)
-        .preferredColorScheme(theme.theme.preferredColorScheme)
-        .task {
-          await accountSync.start(auth: auth, rewards: rewards)
-        }
-        .onChange(of: auth.userID) { _, userID in rewards.accountChanged(to: userID) }
-        #if DEBUG
-        .task { await TwitchCloudProbe.runIfRequested() }
-        #endif
+      #if DEBUG
+      if ProcessInfo.processInfo.environment["STROZZ_LAYOUT_FIXTURE"] == "chat" {
+        MobileChatLayoutFixture()
+      } else {
+        appContent
+      }
+      #else
+      appContent
+      #endif
     }
+  }
+
+  private var appContent: some View {
+    MobileRootView(accountID: auth.userID ?? "anonymous")
+      .id(auth.userID ?? "anonymous")
+      .environment(auth)
+      .environment(theme)
+      .environment(rewards)
+      .environment(accountSync)
+      .preferredColorScheme(theme.theme.preferredColorScheme)
+      .task {
+        await accountSync.start(auth: auth, rewards: rewards)
+      }
+      .onChange(of: auth.userID) { _, userID in rewards.accountChanged(to: userID) }
+      #if DEBUG
+      .task { await TwitchCloudProbe.runIfRequested() }
+      #endif
   }
 }
 
