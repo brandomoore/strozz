@@ -27,6 +27,9 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   identify standard playback after fallback; selection is not proof of activation.
 - The native engine now indexes both H.264/AAC MPEG-TS and CMAF. TS parts are
   packet-aligned, retain PAT/PMT initialization, and use measured PES timestamps.
+  Non-terminal TS cut points wait at least 382.5ms: 85% of the advertised 450ms
+  part target. Cutting at 380ms produced invalid parts on 50fps feeds and caused
+  AVPlayer playlist rejection (`CoreMediaErrorDomain -12642`).
   Both formats serve short, bounded media chunks through an app-owned
   **127.0.0.1-only** listener. This avoids an observed AVPlayer/CDN range mismatch
   on large source segments (`-12939`, cached bytes starting at zero instead of the

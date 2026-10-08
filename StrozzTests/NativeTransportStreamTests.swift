@@ -92,4 +92,22 @@ final class NativeTransportStreamTests: XCTestCase {
     }
     XCTAssertThrowsError(try value.finish(expectedDuration: 2))
   }
+
+  func testFiftyFPSNonterminalPartsMeetAdvertisedMinimumDuration() throws {
+    var value = try parser()
+    var ranges: [NativeTransportStream.Range] = []
+    for frame in 0..<100 {
+      if let range = try value.append(video(frame: frame, clock: UInt64(frame * 1800), idr: frame == 0)) {
+        ranges.append(range)
+      }
+    }
+    ranges.append(try value.finish(expectedDuration: 2))
+    XCTAssertEqual(ranges.reduce(0) { $0 + $1.length }, value.byteCount)
+    XCTAssertEqual(ranges.reduce(0) { $0 + $1.duration }, 2, accuracy: 0.00001)
+    for range in ranges.dropFirst().dropLast() {
+      XCTAssertGreaterThanOrEqual(range.duration, 0.85 * 0.45,
+        "AVPlayer rejects non-independent, non-terminal parts shorter than 85% of PART-TARGET")
+    }
+    XCTAssertTrue(ranges.allSatisfy { $0.duration <= 0.45 })
+  }
 }
