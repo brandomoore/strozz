@@ -3,6 +3,7 @@ import SwiftUI
 struct MobileWatchRewardsSettings: View {
   @Environment(TwitchAuthSession.self) private var auth
   @Environment(TwitchWatchRewardsSession.self) private var rewards
+  @Environment(TwitchAccountSync.self) private var sync
   @Environment(\.openURL) private var openURL
   @State private var disconnecting = false
   @State private var lastOpenedCode: String?
@@ -10,7 +11,9 @@ struct MobileWatchRewardsSettings: View {
 
   var body: some View {
     Section {
-      if let credential = rewards.credential {
+      if sync.isRestoringAccount {
+        TwitchAccountLoadingView()
+      } else if let credential = rewards.credential {
         Text("Connected as \(credential.login)")
         Toggle("Collect watch bonuses", isOn: Binding(
           get: { rewards.autoClaimBonuses }, set: { rewards.autoClaimBonuses = $0 }))

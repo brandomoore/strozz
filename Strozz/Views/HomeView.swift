@@ -524,7 +524,9 @@ struct HomeView: View {
             homePath: $homePath,
             focusedItemID: $focusedItemID
           )
-          HomeAuthBanner(onSignIn: { showSignIn = true })
+          HomeAuthBanner(isAuthenticated: auth.isAuthenticated,
+            isRestoringAccount: environment.accountSync.isRestoringAccount,
+            onSignIn: { showSignIn = true })
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(.horizontal, AppLayout.horizontalPadding)

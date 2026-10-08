@@ -1,5 +1,13 @@
 import SwiftUI
 
+struct TwitchAccountLoadingView: View {
+  var body: some View {
+    ProgressView("Loading your account...")
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .accessibilityIdentifier("twitch-account-restoring")
+  }
+}
+
 struct TwitchICloudSyncControls: View {
   let sync: TwitchAccountSync
   @State private var confirmReplace = false
@@ -17,7 +25,7 @@ struct TwitchICloudSyncControls: View {
           Task { await sync.synchronize() }
         }
         .buttonStyle(.bordered)
-        .disabled(sync.isBusy)
+        .disabled(sync.isBusy || sync.isRestoringAccount)
       }
       if sync.hasAccountConflict {
         Button("Use the account saved in iCloud") {
@@ -28,7 +36,7 @@ struct TwitchICloudSyncControls: View {
           .disabled(sync.isBusy)
       }
       Button("Sign out everywhere", role: .destructive) { confirmSignOut = true }
-        .disabled(sync.isBusy)
+        .disabled(sync.isBusy || sync.isRestoringAccount)
       if sync.isBusy { ProgressView("Syncing account") }
     }
     .confirmationDialog("Replace the Twitch connection on your other devices?", isPresented: $confirmReplace) {

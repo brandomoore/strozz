@@ -7,6 +7,50 @@ import XCTest
 
 @MainActor
 final class TwitchAutomaticSignInTests: XCTestCase {
+  func testFirstFrameAndSlowSavedAccountRestoreNeverLookSignedOut() async throws {
+    let fixture = try Fixture()
+    defer { fixture.stop() }
+    try await fixture.saveCloudAccount()
+    try fixture.auth.persistCredential(fixture.credential())
+    XCTAssertTrue(fixture.sync.isRestoringAccount, "The first frame precedes every startup task")
+    XCTAssertFalse(fixture.sync.shouldOfferInitialSignIn)
+    await fixture.database.holdOwner()
+    let startup = Task { await fixture.start() }
+    for _ in 0..<100 {
+      if fixture.sync.isBusy { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    XCTAssertEqual(fixture.auth.userID, "fixture", "A cached account is not a known signed-out state")
+    XCTAssertFalse(fixture.auth.isAuthenticated, "Cloud ownership is still being checked")
+    for _ in 0..<10 {
+      XCTAssertTrue(fixture.sync.isRestoringAccount)
+      XCTAssertFalse(fixture.sync.shouldOfferInitialSignIn)
+      await Task.yield()
+    }
+    await fixture.database.releaseOwner()
+    await startup.value
+    XCTAssertFalse(fixture.sync.isRestoringAccount)
+    XCTAssertTrue(fixture.auth.isAuthenticated)
+    XCTAssertFalse(fixture.sync.shouldOfferInitialSignIn)
+  }
+
+  func testMissingAndUnavailableAccountsEndThePlaceholderWithoutHidingErrors() async throws {
+    let missing = try Fixture()
+    defer { missing.stop() }
+    XCTAssertTrue(missing.sync.isRestoringAccount)
+    await missing.start()
+    XCTAssertFalse(missing.sync.isRestoringAccount)
+    XCTAssertTrue(missing.sync.shouldOfferInitialSignIn)
+
+    let unavailable = try Fixture()
+    defer { unavailable.stop() }
+    await unavailable.database.setUnavailable()
+    await unavailable.start()
+    XCTAssertFalse(unavailable.sync.isRestoringAccount)
+    XCTAssertNotNil(unavailable.sync.errorMessage)
+    XCTAssertFalse(unavailable.sync.shouldOfferInitialSignIn)
+  }
+
   func testSavedCloudAccountRestoresBeforeInitialSignInIsOffered() async throws {
     let fixture = try Fixture()
     defer { fixture.stop() }
@@ -64,6 +108,7 @@ final class TwitchAutomaticSignInTests: XCTestCase {
     let sync = TwitchAccountSync(database: fixture.database, defaults: fixture.defaults,
       storagePrefix: fixture.prefix)
     defer { sync.stop() }
+    XCTAssertFalse(sync.isRestoringAccount, "An explicit local sign-out is already known on the first frame")
     try await fixture.saveCloudAccount()
     await sync.start(auth: fixture.auth, rewards: fixture.rewards)
     XCTAssertFalse(fixture.auth.isAuthenticated)

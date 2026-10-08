@@ -17,7 +17,9 @@ struct MobileAccountView: View {
     @Bindable var theme = theme
     Form {
       Section {
-        if auth.isAuthenticated {
+        if sync.isRestoringAccount {
+          TwitchAccountLoadingView()
+        } else if auth.isAuthenticated {
           MobileTwitchIdentityRow(name: auth.userDisplayName ?? auth.userLogin ?? "Twitch",
                                  imageURL: auth.profileImageURL)
           Button("Sign out", role: .destructive) { showLocalSignOut = true }
@@ -36,7 +38,7 @@ struct MobileAccountView: View {
 
       Section {
         HStack {
-          Text(auth.isAuthenticated ? "Sign-in sharing" : "Connect from another device")
+          Text(sync.isRestoringAccount || auth.isAuthenticated ? "Sign-in sharing" : "Connect from another device")
           Spacer()
           if sync.isBusy { ProgressView().accessibilityLabel("Syncing account") }
         }
@@ -47,7 +49,7 @@ struct MobileAccountView: View {
           Button("Sync now") {
             Task { await sync.synchronize() }
           }
-          .disabled(sync.isBusy)
+          .disabled(sync.isBusy || sync.isRestoringAccount)
           .accessibilityIdentifier("account-sync")
         }
         NavigationLink("Manage connected account") { MobileConnectedAccountView() }

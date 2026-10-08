@@ -147,7 +147,10 @@ extension PlayerView {
         ChatSyncSendIndicator(deadline: deadline, total: chatSyncSendDelay)
       }
 
-      if auth.isAuthenticated {
+      if environment.accountSync.isRestoringAccount {
+        TwitchAccountLoadingView()
+          .padding(.vertical, 12)
+      } else if auth.isAuthenticated {
         HStack(spacing: 16) {
           Button {
             chatInputActivationToken &+= 1

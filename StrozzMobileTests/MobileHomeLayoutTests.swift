@@ -104,4 +104,26 @@ final class MobileHomeLayoutTests: XCTestCase {
       XCTAssertGreaterThan(controller.view.bounds.width, 0)
     }
   }
+
+  func testRestoringFollowingUsesNeutralPlaceholder() async throws {
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    defer { window.rootViewController = previous }
+    let content = MobileFollowingContent(authenticated: false, isRestoringAccount: true,
+      channels: [], isLoading: false, errorMessage: nil, filtered: false,
+      onAccount: { XCTFail("Account restoration must not offer sign-in") }, onRetry: {}, onSelect: { _ in })
+      .padding()
+    let controller = UIHostingController(rootView: content)
+    window.rootViewController = controller
+    controller.view.layoutIfNeeded()
+    try await Task.sleep(for: .milliseconds(100))
+    let image = UIGraphicsImageRenderer(bounds: controller.view.bounds).image { _ in
+      controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true)
+    }
+    let attachment = XCTAttachment(image: image)
+    attachment.name = "Following account restoration"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+  }
 }

@@ -93,6 +93,11 @@ final class TwitchAccountSync {
       && errorMessage == nil && !hasAccountConflict && auth?.isAuthenticated == false
   }
 
+  var isRestoringAccount: Bool {
+    // False authentication before the first startup task means unknown, not signed out.
+    (!hasCompletedInitialSync && !isSignedOutLocally) || auth?.isRestoringConnection == true
+  }
+
   /// A user-selected Sign in first adopts a saved connection. Automatic sync
   /// never clears the local sign-out choice or replaces a different account.
   func restoreBeforeSignIn() async -> Bool {

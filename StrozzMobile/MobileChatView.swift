@@ -6,6 +6,7 @@ struct MobileChatView: View {
   @Environment(\.themePalette) private var palette
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(TwitchAuthSession.self) private var auth
+  @Environment(TwitchAccountSync.self) private var sync: TwitchAccountSync?
   @State private var followChat = true
   @State private var showAccount = false
   @ScaledMetric(relativeTo: .body) private var textSize = 16
@@ -60,7 +61,9 @@ struct MobileChatView: View {
         }
       }
       Divider()
-      if auth.isAuthenticated {
+      if sync?.isRestoringAccount == true {
+        TwitchAccountLoadingView().padding(12)
+      } else if auth.isAuthenticated {
         MobileChatComposer(channel: channel)
       } else {
         Button("Sign in to chat") { showAccount = true }.padding(12)

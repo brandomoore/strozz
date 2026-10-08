@@ -252,6 +252,10 @@ Apple TV using the same Apple Account. The connection is fetched on launch and
 checked periodically while the app is running. Startup restores local state and
 finishes the first iCloud check before offering a new Twitch approval, so the
 sign-in screen cannot race and block automatic restoration. **Sign in** also
+stays out of Home, account settings, Following, rewards, and chat while that
+initial account check is pending; these surfaces show a neutral loading state
+instead of briefly suggesting that a returning viewer must sign in again.
+An explicit local sign-out still shows its sign-in action normally. **Sign in**
 checks for a saved connection first; there is no separate routine "Use iCloud
 connection" step. If iCloud is unavailable, an explicit **Sign in with Twitch
 instead** action still allows local sign-in. Different Twitch accounts on the
