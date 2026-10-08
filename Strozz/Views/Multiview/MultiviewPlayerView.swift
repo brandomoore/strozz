@@ -337,15 +337,9 @@ struct MultiviewPlayerView: View {
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         if controller.expandedPaneID == nil {
-          Button {
+          MultiviewPaneButton {
             if pane.hasError { controller.load(pane) } else { escalate(pane) }
-          } label: {
-            Color.clear
-              .frame(maxWidth: .infinity, maxHeight: .infinity)
-              .contentShape(Rectangle())
           }
-          .buttonStyle(.plain)
-          .focusEffectDisabled()
           .focused($focus, equals: .pane(pane.id))
           .contextMenu { paneMenu(pane) }
           .accessibilityIdentifier("multiview-pane-\(pane.id)")
@@ -476,6 +470,22 @@ private enum MultiviewFocusTarget: Hashable {
   case layoutButton
   case addButton
   case closeButton
+}
+
+struct MultiviewPaneButton: View {
+  var action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Color.clear
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+    }
+    // tvOS's plain style still paints a focus platter over a clear label.
+    // The tile supplies its own outline; this hit target must stay transparent.
+    .buttonStyle(PlayerSurfaceButtonStyle())
+    .focusEffectDisabled()
+  }
 }
 
 /// A single video tile with focus highlight, status overlays, an auto-hiding

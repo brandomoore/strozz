@@ -239,7 +239,7 @@ extension PlayerView {
             .accessibilityHidden(true)
           )
       }
-      .buttonStyle(ChatInputButtonStyle())
+      .buttonStyle(PlayerSurfaceButtonStyle())
       .focusEffectDisabled()
       .focused($focus, equals: .youtubeMergeURL)
       .frame(maxWidth: .infinity)
@@ -303,7 +303,7 @@ extension PlayerView {
             .accessibilityHidden(true)
           )
       }
-      .buttonStyle(ChatInputButtonStyle())
+      .buttonStyle(PlayerSurfaceButtonStyle())
       .focusEffectDisabled()
       .focused($focus, equals: .kickMergeURL)
       .frame(maxWidth: .infinity)
@@ -553,7 +553,7 @@ extension PlayerView {
                 .accessibilityHidden(true)
               )
           }
-          .buttonStyle(ChatInputButtonStyle())
+          .buttonStyle(PlayerSurfaceButtonStyle())
           .focusEffectDisabled()
           .focused($focus, equals: .chatHighlightKeywords)
           .frame(maxWidth: .infinity)

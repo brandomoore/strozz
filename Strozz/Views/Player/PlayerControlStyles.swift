@@ -307,10 +307,10 @@ struct ControlButtonsHeightKey: PreferenceKey {
   }
 }
 
-/// A completely passthrough button style for the chat input surface.
+/// A completely passthrough button style for player surfaces with their own chrome.
 /// Suppresses all platform button visuals (hover, scale, ring) so only
-/// the SwiftUI glass shell controls the appearance.
-struct ChatInputButtonStyle: ButtonStyle {
+/// the surface's content controls the appearance.
+struct PlayerSurfaceButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
   }
@@ -362,4 +362,3 @@ struct ChatGlassFieldStyle: ViewModifier {
     }
   }
 }
-

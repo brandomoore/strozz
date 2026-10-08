@@ -1108,6 +1108,14 @@ normal control navigation, the native quality menu, Back, and reactivation of
 the same returned pane rather than relying on accessibility-container focus
 flags alone.
 
+`MultiviewFocusRenderingTests` hosts the actual pane hit target over a known
+four-color picture, gives its native Button focus, and checks the picture's
+pixels across all four themes with transparency enabled/disabled. The pane uses
+the shared content-only player button style: tvOS's `.plain` style can still
+paint an opaque focus platter even with `.focusEffectDisabled()`. The separate
+tile border remains the focus indicator. Decoded-frame continuity alone cannot
+detect UI that obscures the video.
+
 TV and mobile card previews share `NativeLivePreview`, including native startup,
 bounded source refresh/fallback, video readiness, and teardown. Previews remain
 muted and cannot initiate external playback.
