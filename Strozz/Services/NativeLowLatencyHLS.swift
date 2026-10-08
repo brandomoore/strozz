@@ -185,6 +185,15 @@ actor NativeHLSOrigin {
   func enableRequestDiagnostics() { capturesRequests = true }
   func requestDiagnostics() -> [[String: String]] { recentRequests }
 
+  private func recordConnection(_ values: [String: String], index: Int, sequence: Int) {
+    guard capturesRequests else { return }
+    recentRequests.append(values.merging([
+      "path": "/connection/\(index)/\(sequence)", "end": Date().ISO8601Format(),
+      "seconds": "0", "served": "true",
+    ]) { _, next in next })
+    if recentRequests.count > 512 { recentRequests.removeFirst(recentRequests.count - 512) }
+  }
+
   private func recordRequest(_ path: String, started: Date, served: Bool, query: [URLQueryItem] = [],
                              bytes: Int? = nil) {
     guard capturesRequests else { return }
@@ -587,6 +596,8 @@ actor NativeHLSOrigin {
   }
 
   private func run(_ index: Int, startingAt requestedSequence: Int? = nil) async {
+    let reader = NativeHLSChunkReader()
+    defer { reader.stop() }
     do {
       guard let url = sources[index]?.url else { return }
       var next: Int? = sources[index]?.segments.last.map { $0.sequence + 1 }
@@ -665,16 +676,18 @@ actor NativeHLSOrigin {
         }
         sources[index]?.segments.append(Segment(sequence: entry.sequence, url: entry.url, date: date,
           initialization: entry.initialization, discontinuity: period, tags: entry.tags))
-        let reader = NativeHLSChunkReader()
         #if DEBUG
+        let chunks = reader.stream(request(entry.url)) { [weak self] values in
+          Task { await self?.recordConnection(values, index: index, sequence: entry.sequence) }
+        }
         let readStarted = Date()
         var readCompleted = false
         defer {
           recordRequest("/upstream/\(index)/\(entry.sequence)", started: readStarted, served: readCompleted)
         }
-        #endif
+        #else
         let chunks = reader.stream(request(entry.url))
-        defer { reader.stop() }
+        #endif
         sources[index]?.indexingPrefetch = entry.duration == nil
           || (!manifest.hasPrefetch && entry.sequence == manifest.entries.last?.sequence)
         var buffer = Data()

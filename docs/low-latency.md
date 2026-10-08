@@ -65,6 +65,13 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   menu reports the change. TV keeps this override local to the current stream;
   it does not overwrite the viewer's saved Auto/fixed-quality preference.
   Choosing a quality manually clears the override.
+- Upstream media uses one reusable HTTP session per active rendition, rather
+  than a new TCP/TLS connection for every segment. Cancellation and completion
+  callbacks are fenced to their own task; stopping the reader is terminal.
+  A GronkhTV comparison observed zero reused connections in 30 baseline samples
+  versus 29/29 reused warm connections after the change, removing repeated
+  roughly 90ms connection setup without changing the latency target. This
+  eliminates avoidable setup work, not arbitrary upstream delivery delays.
 - When native activation fails, its row disappears for that channel and the
   checkmark moves to the actual fallback mode. The old **Auto · Low Latency**
   label refers to the original prefetch engine, not native partial playback.
@@ -1190,6 +1197,13 @@ incomplete. A narrowed Shroud retry then confirmed the channel offline rather
 than reproducing its format event. The original GronkhTV CoreMedia error and Shroud format fallback
 have not been isolated to reproducible input. There is no all-streams,
 long-duration "rock solid" claim.
+
+Reusable upstream sessions subsequently passed 41 TV checks and 31 mobile
+checks, including live playback and cancellation isolation. All five reader
+lifecycle regressions passed, including overlapping-request rejection. A longer
+GronkhTV run recorded no stall/retry event over approximately 17 minutes before
+host CPU pressure stopped the lane during return-from-background coverage.
+That run is incomplete; its xQc portion never started.
 
 ## Diagnostics overlay (how to gather data)
 
