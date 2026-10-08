@@ -58,7 +58,7 @@ final class MultiviewContinuityLiveTests: XCTestCase {
     let logins = names.split(separator: ",").map(String.init)
     guard (2...4).contains(logins.count) else { return XCTFail("Select two to four live sources") }
     guard let holdSeconds = Int(settings["STROZZ_MULTIVIEW_HOLD_SECONDS"] ?? "5"),
-      (5...120).contains(holdSeconds) else { return XCTFail("Expanded hold must be between 5 and 120 seconds") }
+      (5...300).contains(holdSeconds) else { return XCTFail("Expanded hold must be between 5 and 300 seconds") }
     let channels = logins.map { login in
       FollowedChannel(id: login, login: login, displayName: login, title: "", gameName: "",
         viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true)
@@ -135,10 +135,43 @@ final class MultiviewContinuityLiveTests: XCTestCase {
       XCTAssertTrue(controller.panes.filter { $0 !== selected }.allSatisfy { $0.qualityTier == .thumbnail })
       attach(host, name: "Expanded normal player \(selected.channel.login)")
       let hiddenClocks = controller.panes.map { $0.player.currentTime().seconds }
-      for _ in 0..<holdSeconds {
+      var previousHeight = selected.player.currentItem?.presentationSize.height ?? 0
+      var qualityChanges = 0
+      var freshFrames = 0
+      let highest = selected.model.playback?.qualities.filter { !$0.isAudioOnly }
+        .compactMap { PlayerView.verticalResolution(from: $0.name) }.max()
+      var reachedHighestAt: Int?
+      var dropsAfterHighest = 0
+      for second in 0..<holdSeconds {
         try await Task.sleep(for: .seconds(1))
         try assertIdentity(controller, host: host, players: players, items: items,
           surfaces: surfacesByPlayer, audiblePaneID: audiblePaneID)
+        let item = items[selectedIndex]
+        let height = item.presentationSize.height
+        if second >= 15, height > 0, previousHeight > 0, height != previousHeight { qualityChanges += 1 }
+        if let highest {
+          if height >= CGFloat(highest), reachedHighestAt == nil { reachedHighestAt = second }
+          if second >= 15, reachedHighestAt != nil, height < previousHeight { dropsAfterHighest += 1 }
+        }
+        previousHeight = height
+        if output.hasNewPixelBuffer(forItemTime: item.currentTime()),
+          output.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) != nil {
+          freshFrames += 1
+        }
+        transitions.append(["channel": selected.channel.login, "phase": "expanded", "second": String(second),
+          "height": String(Double(height)), "clock": String(item.currentTime().seconds),
+          "peak_bitrate": String(item.preferredPeakBitRate), "fresh_frames": String(freshFrames),
+          "settled_quality_changes": String(qualityChanges),
+          "reached_highest_at": reachedHighestAt.map(String.init) ?? "not_yet",
+          "drops_after_highest": String(dropsAfterHighest)])
+      }
+      XCTAssertGreaterThanOrEqual(freshFrames, Int(ceil(Double(holdSeconds) * 0.98)),
+        "Expanded Auto must keep delivering video, not merely preserve its player")
+      if holdSeconds >= 60, highest != nil {
+        // A monotonic startup upgrade is not oscillation. Require prompt full
+        // quality and reject every subsequent drop in this unthrottled check.
+        XCTAssertLessThanOrEqual(reachedHighestAt ?? holdSeconds, 30, "Expanded Auto must reach full quality promptly")
+        XCTAssertEqual(dropsAfterHighest, 0, "Expanded Auto must not cycle away from sustained full quality")
       }
       for hidden in controller.panes where hidden !== selected {
         let index = try XCTUnwrap(controller.panes.firstIndex(where: { $0 === hidden }))

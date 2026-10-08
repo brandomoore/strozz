@@ -6,6 +6,169 @@ import XCTest
 #endif
 
 final class NativeRenditionReportTests: XCTestCase {
+  func testPlaylistProbesDoNotExtendAnUnusedMediaDownloadLifetime() async throws {
+    let root = URL(string: "https://example.test/current.m3u8")!
+    let old = Date(timeIntervalSince1970: 1000)
+    let origin = NativeHLSOrigin(root: root, headers: [:], history: 30,
+      loadData: { _ in XCTFail("Seeded playlists must not fetch upstream"); throw URLError(.badURL) }) { _ in
+      XCTFail("A metadata-only request must not fail playback")
+    }
+    let part = NativeHLSOrigin.Part(offset: 0, length: 188, duration: 0.4, independent: true)
+    let segments = (0..<12).map { number in
+      NativeHLSOrigin.Segment(sequence: number, url: root,
+        date: old.addingTimeInterval(Double(number * 2)), discontinuity: 0, tags: [],
+        parts: Array(repeating: part, count: 5), complete: true)
+    }
+    _ = try await origin.renderForTesting(segments, otherRenditions: [
+      1: .init(url: root, segments: segments, task: Task {}, lastMediaRequest: old, reachedLiveEdge: true)
+    ], readyToServe: true)
+    _ = try await origin.response(URL(string: "strozz-native-ll://fixture/media/1.m3u8")!)
+    let probed = await origin.timelineDiagnostics()
+    XCTAssertEqual(probed.first(where: { $0["rendition"] == "1" })?["last_media_request"], "1000.0")
+    _ = try await origin.response(URL(string: "strozz-native-ll://fixture/part/1/11/0.mp4")!)
+    let consumed = await origin.timelineDiagnostics()
+    let mediaTime = try XCTUnwrap(consumed.first(where: { $0["rendition"] == "1" })?["last_media_request"])
+    XCTAssertGreaterThan(try XCTUnwrap(Double(mediaTime)), old.timeIntervalSince1970)
+    await origin.stop()
+  }
+
+  func testMasterPreparationCoalescesAndDiscoversOneTargetForAllRenditions() async throws {
+    let fixture = MasterTargetFixture()
+    let origin = NativeHLSOrigin(root: URL(string: "https://example.test/master.m3u8")!,
+      headers: [:], history: 30, loadData: { try await fixture.load($0) }) { _ in
+      XCTFail("Valid mixed target durations must be normalized before playback")
+    }
+    let requests = (0..<5).map { _ in
+      Task { try await origin.response(URL(string: "strozz-native-ll://fixture/root.m3u8")!) }
+    }
+    for request in requests {
+      guard case .playlist(let data) = try await request.value else { return XCTFail("Expected master") }
+      XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("media/1.m3u8"))
+    }
+    let target = await origin.advertisedTargetDuration
+    XCTAssertEqual(target, 6)
+    let counts = await fixture.requests
+    XCTAssertEqual(counts, ["master.m3u8": 1, "high.m3u8": 1, "low.m3u8": 1])
+    await origin.stop()
+  }
+
+  func testAllRenditionsAdvertiseCommonTargetWithoutChangingPartHoldBack() async throws {
+    let url = URL(string: "https://example.test/segment.ts")!
+    let part = NativeHLSOrigin.Part(offset: 0, length: 188, duration: 0.4, independent: true)
+    let segments = (0..<12).map { number in
+      NativeHLSOrigin.Segment(sequence: number, url: url,
+        date: Date(timeIntervalSince1970: Double(1000 + number * 2)), discontinuity: 0, tags: [],
+        parts: Array(repeating: part, count: 5), complete: true)
+    }
+    let origin = NativeHLSOrigin(root: url, headers: [:], history: 30) { _ in }
+    let text = try await origin.renderForTesting(segments, target: 2,
+      otherRenditions: [1: .init(url: url, target: 6)])
+    XCTAssertTrue(text.contains("#EXT-X-TARGETDURATION:6"))
+    XCTAssertTrue(text.contains("PART-HOLD-BACK=1.5"))
+    XCTAssertTrue(text.contains("#EXT-X-PART-INF:PART-TARGET=0.45"))
+    await origin.stop()
+  }
+
+  func testColdIndexerRetainsTheTimelineSeenBeforeSelection() async throws {
+    let root = URL(string: "https://example.test/current.m3u8")!
+    let map = URL(string: "https://example.test/init.mp4")!
+    let earlier = (0..<20).map { number in
+      NativeHLSOrigin.Segment(sequence: number, url: root,
+        date: Date(timeIntervalSince1970: Double(1000 + number * 2)),
+        initialization: map, discontinuity: 0, tags: [], complete: true, declaredDuration: 2)
+    }
+    let manifest = """
+      #EXTM3U
+      #EXT-X-TARGETDURATION:2
+      #EXT-X-MEDIA-SEQUENCE:20
+      #EXT-X-MAP:URI="init.mp4"
+      #EXT-X-PROGRAM-DATE-TIME:1970-01-01T00:17:20.000Z
+      """ + "\n" + (20..<31).map { "#EXTINF:2,\n\($0).mp4" }.joined(separator: "\n")
+    let origin = NativeHLSOrigin(root: root, headers: [:], history: 1800, loadData: { request in
+      let url = try XCTUnwrap(request.url)
+      if url == map {
+        // Keep startup before media transfer so this test performs no networking.
+        try await Task.sleep(for: .seconds(60))
+        throw URLError(.timedOut)
+      }
+      return (Data(manifest.utf8),
+        try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)))
+    }) { _ in XCTFail("Cancelling a cold indexer must not fail playback") }
+    _ = try await origin.renderForTesting(earlier, otherRenditions: [
+      1: .init(url: URL(string: "https://example.test/unused.m3u8")!, reportedSegments: earlier)
+    ], readyToServe: true)
+    let request = Task {
+      try await origin.response(URL(string: "strozz-native-ll://fixture/media/1.m3u8")!)
+    }
+    var firstSequence: String?
+    for _ in 0..<100 {
+      let timeline = await origin.timelineDiagnostics()
+      firstSequence = timeline.first(where: { $0["rendition"] == "1" })?["sequence"]
+      if firstSequence != nil { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    XCTAssertEqual(firstSequence, "0", "Selecting a new rendition must not move its timeline origin to 20")
+    request.cancel()
+    await origin.stop()
+    do { _ = try await request.value }
+    catch { XCTAssertTrue(error is CancellationError) }
+  }
+
+  func testColdRenditionMetadataPreservesEarlierTimelineWithoutRetainingMedia() {
+    let url = URL(string: "https://example.test/live.m3u8")!
+    let part = NativeHLSOrigin.Part(offset: 0, length: 188, duration: 2,
+      independent: true, media: Data(repeating: 0, count: 188))
+    let earlier = (0..<30).map { sequence in
+      NativeHLSOrigin.Segment(sequence: sequence, url: url,
+        date: Date(timeIntervalSince1970: Double(sequence * 2)), discontinuity: 0, tags: [],
+        parts: [part], complete: true)
+    }
+    let later = (20..<60).map { sequence in
+      NativeHLSOrigin.Segment(sequence: sequence, url: url,
+        date: Date(timeIntervalSince1970: Double(sequence * 2)), discontinuity: 0, tags: [],
+        complete: true, declaredDuration: 2)
+    }
+    let metadata = NativeHLSOrigin.retainedMetadata(earlier + later, history: 1800)
+    XCTAssertEqual(metadata.map(\.sequence), Array(0..<60))
+    XCTAssertEqual(metadata.first?.date, earlier.first?.date)
+    XCTAssertTrue(metadata.allSatisfy { $0.parts.isEmpty && $0.duration == 2 })
+    let bounded = NativeHLSOrigin.retainedMetadata(metadata, history: 12)
+    XCTAssertEqual(bounded.map(\.sequence), Array(54..<60))
+    let interrupted = NativeHLSOrigin.retainedMetadata(Array(metadata.prefix(20)) + Array(metadata.suffix(10)),
+      history: 1800)
+    XCTAssertEqual(interrupted.map(\.sequence), Array(50..<60),
+      "A missing metadata window must not renumber later media as if no segments were missed")
+  }
+
+  func testRestartedRenditionDoesNotServeItsOldEdgeAsCurrentLive() async throws {
+    let fixture = RenditionReportFixture()
+    let root = URL(string: "https://example.test/current.m3u8")!
+    let origin = NativeHLSOrigin(root: root, headers: [:], history: 30,
+      loadData: { try await fixture.load($0) }) { _ in XCTFail("Stopping must not fail playback") }
+    defer { Task { await fixture.release(); await origin.stop() } }
+    let part = NativeHLSOrigin.Part(offset: 0, length: 188, duration: 0.4, independent: true)
+    let segments = (0..<12).map { number in
+      NativeHLSOrigin.Segment(sequence: number, url: root,
+        date: Date(timeIntervalSince1970: Double(1000 + number * 2)), discontinuity: 0, tags: [],
+        parts: Array(repeating: part, count: 5), complete: true)
+    }
+    _ = try await origin.renderForTesting(segments, otherRenditions: [
+      1: .init(url: URL(string: "https://example.test/unused.m3u8")!, segments: segments,
+        reachedLiveEdge: true)
+    ], readyToServe: true)
+    let stale = expectation(description: "A dormant rendition's old edge is not current live")
+    stale.isInverted = true
+    let request = Task {
+      _ = try await origin.response(URL(string: "strozz-native-ll://fixture/media/1.m3u8")!)
+      stale.fulfill()
+    }
+    await fulfillment(of: [stale], timeout: 0.2)
+    request.cancel()
+    do { try await request.value }
+    catch { XCTAssertTrue(error is CancellationError) }
+    await origin.stop()
+  }
+
   func testColdRenditionServesRequestedCachedPartsBeforeReachingLiveEdge() async throws {
     let origin = try await makeColdOrigin()
     let available = expectation(description: "A quality switch must not wait for unrelated future media")
@@ -170,6 +333,37 @@ final class NativeRenditionReportTests: XCTestCase {
       1: .init(url: URL(string: "https://example.test/unused.m3u8")!, reportedCompleteSequence: previousSequence)
     ], readyToServe: true)
     return origin
+  }
+}
+
+private actor MasterTargetFixture {
+  private(set) var requests: [String: Int] = [:]
+
+  func load(_ request: URLRequest) async throws -> (Data, URLResponse) {
+    let url = try XCTUnwrap(request.url)
+    requests[url.lastPathComponent, default: 0] += 1
+    try await Task.sleep(for: .milliseconds(20))
+    let text: String
+    if url.lastPathComponent == "master.m3u8" {
+      text = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:BANDWIDTH=8000000,RESOLUTION=1920x1080,CODECS="avc1.64002A,mp4a.40.2"
+        high.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360,CODECS="avc1.4D401F,mp4a.40.2"
+        low.m3u8
+        """
+    } else {
+      text = """
+        #EXTM3U
+        #EXT-X-TARGETDURATION:\(url.lastPathComponent == "low.m3u8" ? 6 : 2)
+        #EXT-X-MEDIA-SEQUENCE:1
+        #EXT-X-PROGRAM-DATE-TIME:2026-10-08T19:00:00.000Z
+        #EXTINF:2.0,
+        1.ts
+        """
+    }
+    return (Data(text.utf8),
+      try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)))
   }
 }
 

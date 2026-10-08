@@ -1099,7 +1099,7 @@ identities of every AVPlayer, AVPlayerItem, and AVKit rendering controller as
 well as advancing video samples during the transition. Hidden panes stay live
 with lower adaptive quality preferences; attachments record their actual
 resolution and encoded-media cache use, since preferences are not hard limits.
-`STROZZ_MULTIVIEW_HOLD_SECONDS` can extend the expanded hold from 5 to 120 seconds.
+`STROZZ_MULTIVIEW_HOLD_SECONDS` can extend the expanded hold from 5 to 300 seconds.
 The separate, explicit physical check accepts only channels in the on-device
 live Following list and keeps its first stream as the sole audible pane.
 Remote interaction tests use the separate `StrozzUI` scheme with
@@ -1141,6 +1141,90 @@ and disappearance together with the controls.
 TV and mobile card previews share `NativeLivePreview`, including native startup,
 bounded source refresh/fallback, video readiness, and teardown. Previews remain
 muted and cannot initiate external playback.
+
+### Adaptive rendition timeline regressions
+
+An October 8 Kyle direct/native crossover reproduced a native-only downshift
+freeze: direct HLS rendered all 165 post-startup samples, while native rendered
+116 (117 on repeat). The playhead stayed near 72 seconds while the new
+rendition's buffered range restarted near 30 seconds. Media kept arriving
+quickly, but its rebased timeline did not reach the playhead for about 43 seconds.
+
+The native origin now retains completed-segment metadata from the existing
+optional rendition-report requests. A cold rendition keeps the earlier playlist
+prefix instead of taking only the newest upstream sliding window, without
+downloading or decoding unused video. Retention follows the existing history
+and count bounds, drops media payloads, and never bridges a missing sequence
+window. Restarting an inactive indexer clears its obsolete `reachedLiveEdge`
+flag so an initial reload cannot immediately return its old edge as current
+live. Active playlists still never wait on optional report work; hold-back and
+forward-buffer targets are unchanged.
+
+Before publishing an adaptive master, a coalesced initial manifest pass now
+establishes one stable maximum target duration across its video renditions.
+This follows rule 8.2 of Apple's
+[HLS authoring specification](https://developer.apple.com/documentation/http-live-streaming/hls-authoring-specification-for-apple-devices).
+Previously, Source and transcodes could advertise different targets (for
+example 2 and 6 seconds). The initial metadata also supplies their timeline
+prefixes. Initial playlist coverage, partial-segment retention, and media-cache
+retention use the common advertised duration; this does not change
+`PART-HOLD-BACK` or AVPlayer's forward-buffer preference. Initial preparation
+must complete before the master is exposed, while subsequent optional report
+refreshes remain off the active request path.
+
+Unused rendition indexers now expire based on actual media demand, not
+playlist probes. The existing eight-second grace period is unchanged, but
+AVPlayer's metadata polling can no longer keep an obsolete rendition downloading
+and indexing indefinitely alongside the displayed one. Diagnostics record
+standalone/grid/expanded presentation, the requested bitrate/resolution budget,
+and opt-in per-rendition timeline state without retaining signed URLs.
+
+Two deterministic regressions reproduce both defects with the old behavior:
+the cold indexer's first sequence incorrectly moves from 0 to 20, and the
+dormant indexer immediately serves its stale edge. Both pass with the correction.
+Kyle's corrected live crossover rendered 165/165 post-startup samples with at
+most about one second of source-age variation, rather than hiding a timeline
+rebase behind advancing frames.
+
+The simulator-only
+`NativeSourceDecodingLiveTests/testOptInAdaptiveRenditionTransitions` accepts
+`STROZZ_ADAPTIVE_SWITCH_COMPARISON=1` and `STROZZ_DECODE_CHANNEL`. It compares
+180 seconds each of direct/native playback sequentially and muted, changes
+the same item's rendition preferences at 45/90/135 seconds, and requires real
+resolution changes, fresh frames, and stable playback-date mapping.
+`STROZZ_ADAPTIVE_SWITCH_NATIVE_ONLY=1` narrows a previously established failure.
+`testOptInGridToExpandedAutoStaysAtSustainableQuality` with
+`STROZZ_AUTO_EXPANSION_COMPARISON=1` separately releases the grid budget after
+30 seconds and checks for repeated quality oscillation over 240 seconds.
+Long multiview holds also check selected-pane frames and settled quality changes,
+not only object identity and hidden-player clocks. Stability requires reaching
+the stream's highest advertised resolution within 30 seconds, then no further
+quality drops in the unthrottled run. A monotonic startup promotion is not
+counted as oscillation. The earlier failing captured run still violates this
+requirement (Buddha reached 1080p at 37 seconds); the corrected longer capture
+reached it at 23 seconds with no later drops.
+
+These checks have limits. Buddha's single-decoder expansion passed with both the
+old and corrected timeline behavior, so it did not reproduce the physical TV's
+roughly six-second quality cycling. The corrected real-player two-pane test on
+tvOS 26.5 passed 90-second expanded holds, frame/quality checks, and retained
+player/item/surface identity. On tvOS 27 Simulator, a hidden 360p pane instead
+needed Source decode recovery, breaking item continuity, followed by a crash in
+CoreMedia's logging path. AnthonyZ low-rendition decoding failed with both direct
+and native AVPlayer on that runtime; that is not a test of twitch.tv and does
+not explain away the user's website-versus-app comparison. Physical Auto
+oscillation remains a separate symptom to verify, not a claimed universal cure.
+The final four-pane 180-second holds retained every player/item/surface and
+recorded 180/180 fresh samples for both expanded streams. Buddha held 1080p
+after its initial promotion; Blau held 1080p throughout. The original runner
+marked that capture failed because its old assertion counted four startup
+quality changes, including promotions; the original failed bundle is retained.
+The replacement assertions check the actual high-quality deadline and
+subsequent downshifts against those recorded samples. Forced low-rendition
+AnthonyZ checks still fail on tvOS 26.5 as well as 27, including direct
+AVPlayer comparison; neither common target duration nor an experimental TS
+initialization override eliminated that failure. The TS override and a
+diagnostic-output-rebinding experiment were discarded, not shipped.
 
 `NativeStreamMatrixLiveTests` is an opt-in, simulator-only test for comparing
 real live sources without taking over a physical Apple TV. Set

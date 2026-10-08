@@ -15,6 +15,16 @@ extension PlayerView {
       "quality": preferredQuality,
       "playback_profile": livePlaybackProfile.rawValue,
     ]
+    if let context = model.multiviewContext {
+      attributes["presentation"] = context.isExpanded ? "expanded" : "multiview"
+      attributes["quality_budget"] = switch context.qualityTier {
+      case .source: "source"
+      case .grid: "grid"
+      case .thumbnail: "thumbnail"
+      }
+    } else {
+      attributes["presentation"] = "standalone"
+    }
     if (player.currentItem?.presentationSize.width ?? 0) > 0, let resolvedQualityName {
       attributes["resolved_quality"] = resolvedQualityName
     }
@@ -113,6 +123,9 @@ extension PlayerView {
     snapshot.metrics["preferred_forward_buffer_seconds"] =
       player.currentItem?.preferredForwardBufferDuration ?? 0
     if let item = player.currentItem {
+      snapshot.metrics["preferred_peak_bitrate_bps"] = item.preferredPeakBitRate
+      snapshot.metrics["preferred_maximum_width"] = item.preferredMaximumResolution.width
+      snapshot.metrics["preferred_maximum_height"] = item.preferredMaximumResolution.height
       let offset = item.configuredTimeOffsetFromLive.seconds
       if offset.isFinite { snapshot.metrics["configured_live_offset_seconds"] = offset }
       let recommended = item.recommendedTimeOffsetFromLive.seconds
