@@ -1062,6 +1062,56 @@ These are hypotheses. Do not treat them as fact until the Diagnostics overlay
   alongside the discontinuities. Watch the overlay `Predict:` score across an ad
   to verify it stays under 3.0.
 
+## Bounded multi-source lifecycle checks
+
+`NativeStreamMatrixLiveTests` is an opt-in, simulator-only test for comparing
+real live sources without taking over a physical Apple TV. Set
+`STROZZ_STREAM_MATRIX=1` and `STROZZ_MATRIX_CHANNELS` to one to ten comma-separated
+live logins in the test-runner environment. Sources run sequentially with one
+muted playback instance, not ten simultaneous decoders.
+
+Each source must produce decoded video in AVKit, sustain three minutes of
+playback, return through simulated background/interruption handlers without an
+interruption-ended notification, play another 45 seconds, and preserve a
+deliberately paused position across a second return. Per-source JSON attachments
+retain quality, buffer, source-age,
+prefetch/hold-back, frame progress, and recovery timing. A failed source remains
+a failure while later sources still get exercised; completion is not a claim
+that every assertion passed. Offline sources, native fallback, player errors,
+item replacements, and startup timeouts have distinct failure labels, with
+terminal source state retained in the attachment. They are not silently
+substituted with another broadcaster. These in-process lifecycle checks do not
+prove behavior during actual OS suspension or audible output.
+
+Use a currently live mix of MPEG-TS and CMAF, with and without upstream prefetch.
+A broadcaster's language or name is not evidence of their ingest region or
+the CDN route chosen for this client. Keep compilation jobs limited, watch host
+CPU/thermal/memory pressure, and stop only the owned test lane and simulator if
+the machine comes under pressure. Do not interpret a resource-aborted run or
+advancing clock without video frames as passing playback.
+
+### October 7, 2026 simulator sample
+
+On the tvOS 27 simulator, Squeex, ESLCS, Elxokas, Burn, Gaules, Kamet0, and xQc
+completed the measured scenarios: each returned 180/180 steady and 45/45 resumed
+decoded-frame samples, zero waiting samples, no sub-480p collapse, and paused
+restoration error below one millisecond. Gaules adapted between 720p and 1080p;
+this is not evidence that Auto should lock to a resolution.
+
+Shroud fell back with `NativeHLSError.unsupported` about 97 seconds after opening.
+The narrower retry found the channel offline, confirmed by the live-status
+lookup, so it could not reproduce or clear the original format failure. The
+specific unsupported input remains unidentified. The original eight-source run
+was interrupted during xQc when its resource-monitor command timed out; xQc
+completed in the subsequent two-source run. Both aggregate XCTest runs remain
+failed, rather than being presented as a clean eight-source pass.
+
+Only one muted simulator decoder ran at a time, with two compiler jobs.
+Memory pressure remained normal; the completed retry's lowest sampled CPU idle
+was 17.81%. The owned simulator was shut down afterward. No physical TV was
+manipulated. This bounded sample does not establish long-session reliability,
+mobile UI parity, or a fix for active playback waiting after its buffer refills.
+
 ## Diagnostics overlay (how to gather data)
 
 Player → open chat settings (`slider.horizontal.3`) → **Playback**. Turn on the
