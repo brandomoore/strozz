@@ -54,3 +54,26 @@ struct HomeRailScrollView<Content: View>: View {
     .padding(.vertical, style.railClearanceOffset)
   }
 }
+
+struct HomeStreamRailPlaceholder: View {
+  let rail: ChannelRailMetrics
+  let style: HomeRailStyle
+  let isLoading: Bool
+  let emptyMessage: LocalizedStringKey
+
+  var body: some View {
+    HomeRailScrollView(rail: rail, style: style) {
+      ForEach(LoadingSkeleton.channels) { channel in
+        StreamChannelCard(channel: channel, isFocused: false,
+                          layout: style.cardLayout(for: rail), showsGameName: true)
+          .modifier(LoadingSkeletonStyle())
+      }
+    }
+    .opacity(isLoading ? 1 : 0)
+    .overlay(alignment: .leading) {
+      if !isLoading { Text(emptyMessage).foregroundStyle(.secondary) }
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(isLoading ? Text("Loading streams") : Text(emptyMessage))
+  }
+}

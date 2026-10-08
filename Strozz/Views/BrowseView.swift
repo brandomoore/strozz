@@ -8,17 +8,20 @@ struct BrowseView: View {
 
   @State private var service = BrowseService()
   @State private var path: [TwitchCategory] = []
+  @State private var hasLoaded = false
 
   var body: some View {
     NavigationStack(path: $path) {
       BrowseCategoriesView(
         service: service,
+        isLoading: service.isLoadingCategories || !hasLoaded,
         onSelectCategory: { path.append($0) }
       )
       .task {
         if service.categories.isEmpty {
           await service.loadCategories()
         }
+        hasLoaded = true
       }
       .navigationDestination(for: TwitchCategory.self) { category in
         CategoryStreamsView(
@@ -35,6 +38,7 @@ struct BrowseView: View {
 
 private struct BrowseCategoriesView: View {
   let service: BrowseService
+  let isLoading: Bool
   let onSelectCategory: (TwitchCategory) -> Void
 
   @FocusState private var focusedID: String?
@@ -70,6 +74,12 @@ private struct BrowseCategoriesView: View {
         }
 
         LazyVGrid(columns: columns, spacing: 28) {
+          if service.categories.isEmpty && isLoading {
+            ForEach(LoadingSkeleton.categories) { category in
+              CategoryCardView(category: category, isFocused: false)
+                .modifier(LoadingSkeletonStyle())
+            }
+          }
           ForEach(service.categories) { category in
             let isFocused = focusedID == category.id
             CategoryCardView(
@@ -113,6 +123,7 @@ struct CategoryStreamsView: View {
   @Environment(PlaybackReturnRefreshCoordinator.self) private var playbackReturnRefresh
 
   @State private var service: BrowseService
+  @State private var hasLoaded = false
   @FocusState private var focusedStreamID: String?
 
   @AppStorage(StreamCardSize.storageKey) private var streamCardSizeRaw = StreamCardSize.fallback.rawValue
@@ -190,7 +201,7 @@ struct CategoryStreamsView: View {
               .foregroundStyle(.orange)
           }
 
-          if !service.isLoadingStreams && service.categoryStreams.isEmpty
+          if hasLoaded && !service.isLoadingStreams && service.categoryStreams.isEmpty
             && service.streamsErrorMessage == nil
           {
             Text("No live streams found for \(category.name) right now.")
@@ -199,6 +210,12 @@ struct CategoryStreamsView: View {
               .padding(.top, 8)
           } else {
             LazyVGrid(columns: columns, spacing: cardSpacing) {
+              if service.categoryStreams.isEmpty && (service.isLoadingStreams || !hasLoaded) {
+                ForEach(LoadingSkeleton.channels) { channel in
+                  StreamChannelCard(channel: channel, isFocused: false)
+                    .modifier(LoadingSkeletonStyle())
+                }
+              }
               ForEach(service.categoryStreams, id: \.channelKey) { channel in
                 let isFocused = focusedStreamID == channel.channelKey
                 StreamChannelCard(
@@ -239,6 +256,7 @@ struct CategoryStreamsView: View {
     .toolbar(.hidden, for: .tabBar)
     .task(id: category.id) {
       await service.loadStreams(for: category)
+      hasLoaded = true
     }
     .onChange(of: service.categoryStreams) { previous, streams in
       if previous.isEmpty, focusedStreamID == nil, let first = streams.first {

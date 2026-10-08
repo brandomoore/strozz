@@ -59,23 +59,25 @@ struct HomeFollowingSection: View {
           .foregroundStyle(.orange)
       }
 
-      HomeRailScrollView(rail: rail, style: style) {
-        ForEach(channels, id: \.channelKey) { channel in
-          HomeRailStreamCard(
-            channel: channel,
-            itemID: "following-\(channel.channelKey)",
-            layout: style.cardLayout(for: rail),
-            onWatch: onWatch,
-            onGoToChannel: onGoToChannel,
-            onTap: { onWatch(channel) },
-            focusedItemID: $focusedItemID
-          )
-        }
-      }
-
       if channels.isEmpty {
-        Text(follows.isUsingDemoData ? "No trending channels are available right now." : "No followed channels are available yet.")
-          .foregroundStyle(.secondary)
+        HomeStreamRailPlaceholder(rail: rail, style: style,
+          isLoading: follows.isLoading || follows.lastUpdatedAt == nil,
+          emptyMessage: follows.isUsingDemoData
+            ? "No trending channels are available right now." : "No followed channels are available yet.")
+      } else {
+        HomeRailScrollView(rail: rail, style: style) {
+          ForEach(channels, id: \.channelKey) { channel in
+            HomeRailStreamCard(
+              channel: channel,
+              itemID: "following-\(channel.channelKey)",
+              layout: style.cardLayout(for: rail),
+              onWatch: onWatch,
+              onGoToChannel: onGoToChannel,
+              onTap: { onWatch(channel) },
+              focusedItemID: $focusedItemID
+            )
+          }
+        }
       }
     }
   }

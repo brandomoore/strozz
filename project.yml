@@ -88,6 +88,7 @@ targets:
           - "CachedAsyncImage.swift"
           - "Theme.swift"
           - "CardMetrics.swift"
+          - "LoadingSkeleton.swift"
           - "TopShelfStore.swift"
           - "TopShelfCredentialStore.swift"
           - "CredentialKeychain.swift"

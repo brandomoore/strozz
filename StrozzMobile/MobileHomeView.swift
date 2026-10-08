@@ -55,11 +55,11 @@ struct MobileHomeView: View {
   @State private var categoryStreams = BrowseService()
   @State private var follows = FollowedChannelsService()
   @State private var followsAccountID: String?
-  @State private var personalized = PersonalizedRecommendationsService()
   @State private var affinity = StreamerAffinityService()
-  @State private var watchedChannels: [FollowedChannel] = []
+  @State private var personalChannels: [FollowedChannel] = []
   @State private var selectedVideo: MobileVODSelection?
   @State private var personalRefreshID = UUID()
+  @State private var personalLoading = true
 
   private var shouldPreview: Bool { previewsEnabled && feed == .live && selectedVideo == nil }
   private var liveCategoryID: String? { feed == .live ? category?.id : nil }
@@ -76,11 +76,9 @@ struct MobileHomeView: View {
   }
   private var homeChannels: [FollowedChannel] {
     guard personalFeed else { return category == nil ? recommendations.channels : categoryStreams.categoryStreams }
-    return MobileHomeFeed.homeChannels(
-      follows: MobileHomeFeed.visibleFollows(follows.channels, authenticated: auth.isAuthenticated,
-                                           isDemo: follows.isUsingDemoData, category: nil),
-      watched: watchedChannels, recommendations: personalized.channels,
-      history: history.entries, category: category)
+    return personalChannels.filter { channel in
+      category.map { channel.gameName.localizedCaseInsensitiveCompare($0.name) == .orderedSame } ?? true
+    }
   }
 
   var body: some View {
@@ -100,7 +98,9 @@ struct MobileHomeView: View {
                 MobileFollowingContent(
                   authenticated: auth.isAuthenticated,
                   channels: MobileHomeFeed.directory(follows.directory, authenticated: auth.isAuthenticated, category: category),
-                  isLoading: follows.isLoadingDirectory, errorMessage: follows.directoryErrorMessage,
+                  isLoading: follows.isLoadingDirectory
+                    || (follows.directoryLoadedAt == nil && follows.directoryErrorMessage == nil),
+                  errorMessage: follows.directoryErrorMessage,
                   filtered: category != nil, onAccount: onAccount,
                   onRetry: { Task { await follows.loadDirectory(using: auth, force: true) } },
                   onSelect: onSelect, onProfile: onProfile, resumeEntries: vodProgress.entries,
@@ -111,9 +111,10 @@ struct MobileHomeView: View {
                   MobileContinueWatchingSection(entries: Array(vodProgress.entries.prefix(4))) { selectedVideo = $0 }
                     .padding(.horizontal)
                 }
-                if !visibleFollows.isEmpty {
+                if auth.isAuthenticated {
                   MobileFollowedShortcuts(channels: visibleFollows, onSelect: onSelect,
-                                         onSeeAll: { feed = .following })
+                                         onSeeAll: { feed = .following },
+                                         isLoading: follows.isLoading || follows.lastUpdatedAt == nil)
                     .padding(.horizontal)
                 }
                 Text(personalFeed ? "For you" : "Popular live channels")
@@ -124,8 +125,10 @@ struct MobileHomeView: View {
                 }
                 MobileLiveFeedContent(
                   channels: homeChannels,
-                  isLoading: personalFeed ? (follows.isLoading || personalized.isLoading)
-                    : (category == nil ? recommendations.isLoading : categoryStreams.isLoadingStreams),
+                  isLoading: personalFeed ? (personalLoading || (auth.isAuthenticated
+                    && (follows.isLoading || follows.lastUpdatedAt == nil)))
+                    : (category == nil ? recommendations.isLoading || recommendations.lastUpdatedAt == nil
+                      : categoryStreams.isLoadingStreams),
                   errorMessage: personalFeed ? nil
                     : (category == nil ? recommendations.errorMessage : categoryStreams.streamsErrorMessage),
                   preview: preview, onSelect: onSelect, onRetry: { Task { await refreshLive() } })
@@ -198,8 +201,8 @@ struct MobileHomeView: View {
     let refreshID = UUID()
     personalRefreshID = refreshID
     let service = PersonalizedRecommendationsService()
-    personalized = service
-    watchedChannels = []
+    personalLoading = true
+    defer { if refreshID == personalRefreshID { personalLoading = false } }
     guard personalFeed else { return }
     let logins = history.entries.sorted { ($0.watchCount, $0.lastWatchedAt) > ($1.watchCount, $1.lastWatchedAt) }
       .prefix(20).map(\.login)
@@ -214,7 +217,10 @@ struct MobileHomeView: View {
       history: history, affinity: affinity.map)
     let loaded = await watched
     guard !Task.isCancelled, refreshID == personalRefreshID else { return }
-    watchedChannels = loaded
+    personalChannels = MobileHomeFeed.homeChannels(
+      follows: MobileHomeFeed.visibleFollows(follows.channels, authenticated: auth.isAuthenticated,
+        isDemo: follows.isUsingDemoData, category: nil),
+      watched: loaded, recommendations: service.channels, history: history.entries, category: nil)
   }
 }
 
@@ -301,10 +307,8 @@ struct MobileLiveFeedContent: View {
   var body: some View {
     VStack(spacing: 16) {
       if let errorMessage { MobileStatusView(message: errorMessage, retry: onRetry) }
-      MobileChannelGrid(channels: channels, onSelect: onSelect, preview: preview)
-      if isLoading {
-        ProgressView("Loading streams").frame(maxWidth: .infinity)
-      } else if channels.isEmpty && errorMessage == nil {
+      MobileChannelGrid(channels: channels, onSelect: onSelect, preview: preview, isLoading: isLoading)
+      if !isLoading && channels.isEmpty && errorMessage == nil {
         Text("No live streams in this category right now.").foregroundStyle(.secondary)
       }
     }
@@ -315,6 +319,7 @@ struct MobileFollowedShortcuts: View {
   let channels: [FollowedChannel]
   let onSelect: (FollowedChannel) -> Void
   let onSeeAll: () -> Void
+  var isLoading = false
   @Environment(\.dynamicTypeSize) private var typeSize
 
   var body: some View {
@@ -331,7 +336,19 @@ struct MobileFollowedShortcuts: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("follow-shortcut-\(channel.channelKey)")
         }
+        ForEach(LoadingSkeleton.channels.prefix(max(0, 6 - channels.count))) { channel in
+          MobileFollowedShortcut(channel: channel)
+            .modifier(LoadingSkeletonStyle())
+            .opacity(channels.isEmpty && isLoading ? 1 : 0)
+        }
       }
+      .overlay {
+        if channels.isEmpty && !isLoading {
+          Text("No followed channels are live right now.").foregroundStyle(.secondary)
+        }
+      }
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel(channels.isEmpty && isLoading ? Text("Loading follows") : Text(""))
     }
   }
 }
@@ -390,6 +407,12 @@ struct MobileFollowingContent: View {
       LazyVStack(alignment: .leading, spacing: 18) {
         Text("All followed channels").font(.headline).accessibilityAddTraits(.isHeader)
         if let errorMessage { MobileStatusView(message: errorMessage, retry: onRetry) }
+        if channels.isEmpty && isLoading {
+          ForEach(LoadingSkeleton.channels) { channel in
+            MobileFollowingRow(channel: channel)
+              .modifier(LoadingSkeletonStyle())
+          }
+        }
         ForEach(channels, id: \.channelKey) { channel in
           Button { onSelect(channel) } label: { MobileFollowingRow(channel: channel) }
             .buttonStyle(.plain)
@@ -402,13 +425,13 @@ struct MobileFollowingContent: View {
               }
             }
         }
-        if isLoading {
-          ProgressView("Loading follows").frame(maxWidth: .infinity)
-        } else if channels.isEmpty && errorMessage == nil {
+        if !isLoading && channels.isEmpty && errorMessage == nil {
           Text(filtered ? "No followed channels in this category." : "You are not following any channels yet.")
             .foregroundStyle(.secondary)
         }
       }
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel(channels.isEmpty && isLoading ? Text("Loading follows") : Text(""))
     }
   }
 }
@@ -428,8 +451,11 @@ struct MobileFollowingRow: View {
         .frame(width: typeSize.isAccessibilitySize ? nil : 116)
       VStack(alignment: .leading, spacing: 3) {
         Text(channel.displayName).font(.headline).lineLimit(1)
-        if channel.isLive { Text(channel.title).font(.subheadline).lineLimit(2) }
-        else { Text("Offline · Profile and past broadcasts").font(.subheadline).foregroundStyle(.secondary) }
+        if channel.isLive { Text(channel.title).font(.subheadline).lineLimit(2, reservesSpace: true) }
+        else {
+          Text("Offline · Profile and past broadcasts").font(.subheadline).foregroundStyle(.secondary)
+            .lineLimit(2, reservesSpace: true)
+        }
         Text(channel.gameName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
       }
       .frame(maxWidth: .infinity, alignment: .leading)

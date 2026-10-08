@@ -78,6 +78,9 @@ The feature list below describes the Apple TV app. See
 
 - **Home built around your follows.** See the channels you follow that are live
   now, plus recommendations.
+- **Stable loading rows.** Home and Browse use card-sized skeletons while their
+  first results load. Existing cards stay visible during refresh, and Home's
+  horizontal rails keep their space even when a result is empty.
 - **Recommendations you control.** Optional personalized picks built from
   on-device watch history and your followed categories — or anonymous trending
   when you're signed out or have it turned off.
@@ -156,6 +159,12 @@ The category rail scrolls to the screen edges, and the feed draws behind the
 floating tab bar while leaving enough end-of-feed clearance to reach the last card.
 For you / Following pins below the status bar as you scroll; the Strozz heading and
 category filters scroll away.
+
+Mobile loading placeholders use the same artwork and reserved text-line sizes as
+the loaded cards. Live-followed shortcuts reserve three compact rows, so arriving
+follows do not push the feed down. Chat wraps long names and links within the pane;
+scroll up to read earlier messages, then tap **Jump to present** in the bar above
+the composer to resume following live chat. The bar does not cover messages.
 
 Past broadcasts use native on-demand controls with seeking. **Continue watching**
 on Home and channel profiles resumes saved progress; finished broadcasts leave
