@@ -1106,7 +1106,10 @@ Remote interaction tests use the separate `StrozzUI` scheme with
 `STROZZ_MULTIVIEW_UI_TESTS=1` and selected `STROZZ_MATRIX_CHANNELS`. They verify
 normal control navigation, the native quality menu, Back, and reactivation of
 the same returned pane rather than relying on accessibility-container focus
-flags alone.
+flags alone. The remote regression starts from the second pane so a fallback
+to the first tile cannot accidentally pass. The wall's native focus scope
+prefers the remembered tile as buttons re-enter during collapse, before the
+animation-completion focus request.
 
 `MultiviewFocusRenderingTests` hosts the actual pane hit target over a known
 four-color picture, gives its native Button focus, and checks the picture's

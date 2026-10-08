@@ -29,6 +29,7 @@ struct MultiviewPlayerView: View {
   @State private var watchTracker = TwitchWatchTracker()
   @State private var controller: MultiviewController
   @FocusState private var focus: MultiviewFocusTarget?
+  @Namespace private var paneFocusScope
   /// Drives the auto-hiding focused-pane metadata: true right after any focus
   /// change or remote interaction, then fades out so the video wall stays clean.
   @State private var chromeVisible = true
@@ -85,6 +86,7 @@ struct MultiviewPlayerView: View {
       MultiviewVideoStage(controller: controller) { pane in
         paneView(pane, style: pane.qualityTier == .thumbnail ? .compact : .full)
       }
+      .focusScope(paneFocusScope)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .ignoresSafeArea()
       .disabled(showingControls)
@@ -341,6 +343,8 @@ struct MultiviewPlayerView: View {
             if pane.hasError { controller.load(pane) } else { escalate(pane) }
           }
           .focused($focus, equals: .pane(pane.id))
+          // Tile buttons re-enter focus before the collapse animation completes.
+          .prefersDefaultFocus(pane.id == (lastPaneID ?? controller.panes.first?.id), in: paneFocusScope)
           .contextMenu { paneMenu(pane) }
           .accessibilityIdentifier("multiview-pane-\(pane.id)")
           .accessibilityLabel(pane.channel.displayName)

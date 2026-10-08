@@ -6,7 +6,7 @@ final class MultiviewNavigationTests: XCTestCase {
     let settings = ProcessInfo.processInfo.environment
     guard settings["STROZZ_MULTIVIEW_UI_TESTS"] == "1",
       let channels = settings["STROZZ_MATRIX_CHANNELS"],
-      let first = channels.split(separator: ",").first else {
+      let selected = channels.split(separator: ",").dropFirst().first else {
       throw XCTSkip("Explicitly select live multiview channels for the remote navigation check.")
     }
     continueAfterFailure = false
@@ -16,13 +16,16 @@ final class MultiviewNavigationTests: XCTestCase {
     app.launchArguments = ["-hasPromptedFirstLaunchSignIn", "YES"]
     app.launch()
     defer { app.terminate() }
-    let pane = app.buttons["multiview-pane-\(first)"].firstMatch
+    let pane = app.buttons["multiview-pane-\(selected)"].firstMatch
     XCTAssertTrue(pane.waitForExistence(timeout: 30))
     expectation(for: NSPredicate(format: "value == %@", "Live"), evaluatedWith: pane)
     waitForExpectations(timeout: 45)
+    XCUIRemote.shared.press(.right)
+    expectation(for: NSPredicate(format: "hasFocus == true"), evaluatedWith: pane)
+    waitForExpectations(timeout: 5)
     capture(app, name: "Remote native multiview")
     XCUIRemote.shared.press(.select)
-    let expanded = app.descendants(matching: .any).matching(identifier: "expanded-stream-\(first)").firstMatch
+    let expanded = app.descendants(matching: .any).matching(identifier: "expanded-stream-\(selected)").firstMatch
     XCTAssertTrue(expanded.waitForExistence(timeout: 5))
     expectation(for: NSPredicate(format: "value == %@", "Live"), evaluatedWith: expanded)
     waitForExpectations(timeout: 5)
@@ -51,6 +54,8 @@ final class MultiviewNavigationTests: XCTestCase {
     XCUIRemote.shared.press(.menu)
     XCTAssertTrue(pane.waitForExistence(timeout: 5))
     expectation(for: NSPredicate(format: "value == %@", "Live"), evaluatedWith: pane)
+    waitForExpectations(timeout: 5)
+    expectation(for: NSPredicate(format: "hasFocus == true"), evaluatedWith: pane)
     waitForExpectations(timeout: 5)
     capture(app, name: "Remote returned multiview")
     XCUIRemote.shared.press(.select)
