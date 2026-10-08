@@ -294,7 +294,9 @@ extension PlayerView {
         logDiagnosticsEvent("video frozen (clock running) -> reload")
       }
       videoDecodeFrozenSince = nil
-      triggerRecoveryIfAllowed(reason: "video decode freeze")
+      if !recoverUndecodableVideo() {
+        triggerRecoveryIfAllowed(reason: "video decode freeze")
+      }
     }
   }
 
@@ -303,6 +305,8 @@ extension PlayerView {
     chat.configureChatSync(enabled: false, delaySeconds: 0)
     model.nativeRecovery = NativePlaybackRecovery()
     model.nativeFallbackReason = nil
+    model.decodeRecoveryQualityID = nil
+    model.triedDecodeRecovery = false
     diagStallCount = 0
     diagJumpCount = 0
     diagReloadCount = 0

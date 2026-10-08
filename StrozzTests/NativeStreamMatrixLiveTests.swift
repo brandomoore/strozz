@@ -32,6 +32,12 @@ final class NativeStreamMatrixLiveTests: XCTestCase {
       throw XCTSkip("Enable STROZZ_STREAM_MATRIX and select STROZZ_MATRIX_CHANNELS for bounded, sequential live checks.")
     }
     let channels = names.split(separator: ",").map(String.init)
+    let steadySeconds = Int(configuration["STROZZ_MATRIX_STEADY_SECONDS"] ?? "180")
+    let resumedSeconds = Int(configuration["STROZZ_MATRIX_RESUMED_SECONDS"] ?? "45")
+    guard let steadySeconds, (180...1800).contains(steadySeconds),
+      let resumedSeconds, (45...900).contains(resumedSeconds) else {
+      return XCTFail("Steady playback must be 180...1800 seconds and resumed playback 45...900 seconds")
+    }
     guard !channels.isEmpty, channels.count <= 10,
       channels.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") } })
     else { return XCTFail("Provide one to ten Twitch channel logins") }
@@ -41,7 +47,7 @@ final class NativeStreamMatrixLiveTests: XCTestCase {
         return XCTFail("Host thermal pressure ended the matrix; remaining sources were not tested")
       }
       do {
-        try await check(channel)
+        try await check(channel, steadySeconds: steadySeconds, resumedSeconds: resumedSeconds)
       } catch is CancellationError {
         throw CancellationError()
       } catch let error as MatrixFailure {
@@ -56,7 +62,7 @@ final class NativeStreamMatrixLiveTests: XCTestCase {
     #endif
   }
 
-  private func check(_ channel: String) async throws {
+  private func check(_ channel: String, steadySeconds: Int, resumedSeconds: Int) async throws {
     let run = try XCTUnwrap(testRun)
     let initialFailures = run.failureCount
     let environment = AppEnvironment()
@@ -74,6 +80,7 @@ final class NativeStreamMatrixLiveTests: XCTestCase {
     var samples: [[String: String]] = []
     var phase = "startup"
     var outcome = "incomplete"
+    let metrics = NativePlaybackMetricCapture()
     window.rootViewController = host
     defer {
       window.rootViewController = previous
@@ -92,6 +99,7 @@ final class NativeStreamMatrixLiveTests: XCTestCase {
         "native_fallback": model.nativeFallbackReason ?? "none",
         "player_error": String(model.errorMessage != nil)])
       do {
+        add(try metrics.attachment(name: "Stream requests \(channel)"))
         let data = try JSONSerialization.data(withJSONObject: samples, options: [.prettyPrinted, .sortedKeys])
         let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
         attachment.name = "Stream matrix \(channel)"
@@ -100,11 +108,11 @@ final class NativeStreamMatrixLiveTests: XCTestCase {
       } catch { XCTFail("Could not record \(channel) matrix evidence") }
     }
     let began = Date()
-    try await ready(model, host: host)
+    try await ready(model, host: host, metrics: metrics)
     samples.append(["phase": phase, "startup_seconds": String(Date().timeIntervalSince(began))])
 
     phase = "steady"
-    try await observe(model, channel: channel, seconds: 180, phase: phase, samples: &samples)
+    try await observe(model, channel: channel, seconds: steadySeconds, phase: phase, samples: &samples)
     let beforeReturn = model.player
     let beforeSurface = try XCTUnwrap(videoController(in: host))
     phase = "background"
@@ -119,13 +127,13 @@ final class NativeStreamMatrixLiveTests: XCTestCase {
     let resumed = Date()
     view.handleReturnToForeground()
     await model.nativeRefreshTask?.value
-    try await ready(model, host: host)
+    try await ready(model, host: host, metrics: metrics)
     XCTAssertFalse(model.player === beforeReturn, channel)
     XCTAssertNil(beforeReturn.currentItem, channel)
     XCTAssertFalse(try XCTUnwrap(videoController(in: host)) === beforeSurface, channel)
     XCTAssertFalse(model.audioInterrupted, channel)
     samples.append(["phase": phase, "recovery_seconds": String(Date().timeIntervalSince(resumed))])
-    try await observe(model, channel: channel, seconds: 45, phase: phase, samples: &samples)
+    try await observe(model, channel: channel, seconds: resumedSeconds, phase: phase, samples: &samples)
 
     phase = "paused_return"
     view.toggleRewindPlayPause()
@@ -151,9 +159,12 @@ final class NativeStreamMatrixLiveTests: XCTestCase {
     outcome = run.failureCount == initialFailures ? "passed" : "failed"
   }
 
-  private func ready(_ model: PlayerModel, host: UIViewController) async throws {
+  private func ready(_ model: PlayerModel, host: UIViewController,
+                     metrics: NativePlaybackMetricCapture? = nil) async throws {
     for _ in 0..<300 {
       try Task.checkCancellation()
+      metrics?.attach(model.player.currentItem)
+      await model.nativeHLS?.origin.enableRequestDiagnostics()
       if model.isOffline { throw MatrixFailure.offline }
       if model.nativeFallbackReason != nil { throw MatrixFailure.nativeFallback }
       if model.errorMessage != nil { throw MatrixFailure.playerError }
@@ -168,6 +179,7 @@ final class NativeStreamMatrixLiveTests: XCTestCase {
   private func observe(_ model: PlayerModel, channel: String, seconds: Int, phase: String,
                        samples: inout [[String: String]]) async throws {
     let item = try XCTUnwrap(model.player.currentItem)
+    let origin = model.nativeHLS?.origin
     let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [:])
     item.add(output)
     defer { item.remove(output) }
@@ -176,6 +188,7 @@ final class NativeStreamMatrixLiveTests: XCTestCase {
     var waiting = 0
     var severeDownshift = 0
     var lastClock = item.currentTime().seconds
+    var lastFrameTime = CMTime.invalid
     let highest = model.playback?.qualities.filter { !$0.isAudioOnly }.max { $0.bitrate < $1.bitrate }
     let bestHeight = highest.flatMap { PlayerView.verticalResolution(from: $0.name) } ?? 0
     for second in 0..<seconds {
@@ -183,8 +196,19 @@ final class NativeStreamMatrixLiveTests: XCTestCase {
       let clock = item.currentTime().seconds
       if clock.isFinite, clock > lastClock + 0.05 { advancing += 1 }
       lastClock = clock
-      if output.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) != nil { frames += 1 }
-      if model.player.timeControlStatus == .waitingToPlayAtSpecifiedRate { waiting += 1 }
+      var frameTime = CMTime.invalid
+      if output.hasNewPixelBuffer(forItemTime: item.currentTime()),
+        output.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: &frameTime) != nil,
+        frameTime.isNumeric, !lastFrameTime.isNumeric || frameTime > lastFrameTime {
+        frames += 1
+        lastFrameTime = frameTime
+      }
+      if model.player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
+        waiting += 1
+        if waiting == 1, let origin {
+          add(try await NativePlaybackMetricCapture.originAttachment(origin, name: "\(channel) \(phase) first wait"))
+        }
+      }
       let height = item.presentationSize.height
       if second >= 15, bestHeight >= 720, height > 0, height < 480 { severeDownshift += 1 }
       if second.isMultiple(of: 5) {
@@ -202,12 +226,26 @@ final class NativeStreamMatrixLiveTests: XCTestCase {
         if let prefetch = source?.hasPrefetch { sample["prefetch"] = String(prefetch) }
         if let holdBack = source?.holdBack { sample["hold_back"] = String(holdBack) }
         if let refresh = source?.reportRefreshSeconds { sample["report_refresh_seconds"] = String(refresh) }
+        if let discontinuities = source?.inferredDiscontinuities {
+          sample["inferred_discontinuities"] = String(discontinuities)
+        }
         samples.append(sample)
       }
-      if model.isOffline { throw MatrixFailure.offline }
-      if model.nativeFallbackReason != nil { throw MatrixFailure.nativeFallback }
-      if model.errorMessage != nil { throw MatrixFailure.playerError }
-      if item !== model.player.currentItem { throw MatrixFailure.playerReplaced }
+      let failure: MatrixFailure?
+      if model.isOffline { failure = .offline }
+      else if model.nativeFallbackReason != nil { failure = .nativeFallback }
+      else if model.errorMessage != nil { failure = .playerError }
+      else if item !== model.player.currentItem { failure = .playerReplaced }
+      else { failure = nil }
+      if let failure {
+        if let origin {
+          add(try await NativePlaybackMetricCapture.originAttachment(origin, name: "\(channel) \(phase) failure"))
+        }
+        throw failure
+      }
+    }
+    if let origin {
+      add(try await NativePlaybackMetricCapture.originAttachment(origin, name: "\(channel) \(phase) end"))
     }
     samples.append(["phase": phase, "samples": String(seconds), "advancing": String(advancing),
       "fresh_frames": String(frames), "waiting_samples": String(waiting),

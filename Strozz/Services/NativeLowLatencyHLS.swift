@@ -178,6 +178,38 @@ actor NativeHLSOrigin {
   private var inFlightRequests = 0
   private var requestDrainWaiters: [CheckedContinuation<Void, Never>] = []
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "native-hls")
+  #if DEBUG
+  private var capturesRequests = false
+  private var recentRequests: [[String: String]] = []
+
+  func enableRequestDiagnostics() { capturesRequests = true }
+  func requestDiagnostics() -> [[String: String]] { recentRequests }
+
+  private func recordRequest(_ path: String, started: Date, served: Bool, query: [URLQueryItem] = [],
+                             bytes: Int? = nil) {
+    guard capturesRequests else { return }
+    let fields = path.split(separator: "/")
+    let index = path == "/root.m3u8" ? 0 : fields.dropFirst().first?.split(separator: ".").first.flatMap { Int($0) }
+    let source = index.flatMap { sources[$0] }
+    let tail = source?.publishedSegments.last
+    var row = ["path": path, "start": started.ISO8601Format(), "end": Date().ISO8601Format(),
+      "started_epoch": String(started.timeIntervalSince1970), "ended_epoch": String(Date().timeIntervalSince1970),
+      "seconds": String(Date().timeIntervalSince(started)), "served": String(served),
+      "last_active": String(lastActive)]
+    if let bytes { row["bytes"] = String(bytes) }
+    if let source { row["prefetch"] = String(source.indexingPrefetch) }
+    if let tail {
+      row["published_sequence"] = String(tail.sequence)
+      row["published_parts"] = String(tail.parts.count)
+      row["complete"] = String(tail.complete)
+    }
+    for name in ["_HLS_msn", "_HLS_part"] {
+      if let value = query.first(where: { $0.name == name })?.value, Int(value) != nil { row[name] = value }
+    }
+    recentRequests.append(row)
+    if recentRequests.count > 512 { recentRequests.removeFirst(recentRequests.count - 512) }
+  }
+  #endif
 
   init(root: URL, headers: [String: String], history: Double, loadData: DataLoader? = nil,
        failure: @escaping @Sendable (NativeHLSError) -> Void) {
@@ -207,13 +239,14 @@ actor NativeHLSOrigin {
   }
 
   func snapshot() -> (parts: Int, renditions: Int, edgeAge: Double?, holdBack: Double?, hasPrefetch: Bool?,
-                     forwardBuffer: Double?, reportRefreshSeconds: Double?, reportRefreshMaxSeconds: Double?) {
+                     forwardBuffer: Double?, reportRefreshSeconds: Double?, reportRefreshMaxSeconds: Double?,
+                     inferredDiscontinuities: Int) {
     let source = sources[lastActive]
     let tail = source?.segments.last
     return (publishedParts, sources.count,
       tail.map { Date().timeIntervalSince($0.date.addingTimeInterval($0.duration)) },
       source?.liveHoldBack, source?.hasPrefetch, source?.forwardBuffer,
-      reportRefreshSeconds, reportRefreshMaxSeconds)
+      reportRefreshSeconds, reportRefreshMaxSeconds, source?.inferredDiscontinuities ?? 0)
   }
 
   func liveTargetDate() -> Date? {
@@ -246,6 +279,11 @@ actor NativeHLSOrigin {
   }
 
   private func media(_ path: String) async -> Data? {
+    #if DEBUG
+    let started = Date()
+    var servedBytes: Int?
+    defer { recordRequest(path, started: started, served: servedBytes != nil, bytes: servedBytes) }
+    #endif
     let fields = path.split(separator: "/")
     guard fields.count == 4, fields[0] == "part", let index = Int(fields[1]),
       let sequence = Int(fields[2]), let name = fields[3].split(separator: ".").first,
@@ -256,7 +294,12 @@ actor NativeHLSOrigin {
     let deadline = Date().addingTimeInterval(4)
     while !stopped, error == nil, !Task.isCancelled {
       if let segment = sources[index]?.segments.first(where: { $0.sequence == sequence }) {
-        if segment.parts.indices.contains(number) { return segment.parts[number].media }
+        if segment.parts.indices.contains(number) {
+          #if DEBUG
+          servedBytes = segment.parts[number].media?.count
+          #endif
+          return segment.parts[number].media
+        }
         if segment.complete { return nil }
       }
       if Date() >= deadline { return nil }
@@ -385,13 +428,26 @@ actor NativeHLSOrigin {
   }
 
   func response(_ url: URL) async throws -> Response {
+    #if DEBUG
+    let started = Date()
+    var served = false
+    defer {
+      recordRequest(url.path, started: started, served: served,
+        query: URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? [])
+    }
+    #endif
     do {
       try Task.checkCancellation()
       guard !stopped else { throw CancellationError() }
       try await prepare()
       guard !stopped else { throw CancellationError() }
       if let error { throw error }
-      if url.path == "/root.m3u8", let master, !master.isEmpty { return .playlist(Data(master.utf8)) }
+      if url.path == "/root.m3u8", let master, !master.isEmpty {
+        #if DEBUG
+        served = true
+        #endif
+        return .playlist(Data(master.utf8))
+      }
       let components = url.path.split(separator: "/").map(String.init)
       let index = url.path == "/root.m3u8" ? 0 : Int(components.dropFirst().first?.split(separator: ".").first ?? "")
       guard let index, sources[index] != nil else { throw NativeHLSError.invalidMedia }
@@ -419,16 +475,27 @@ actor NativeHLSOrigin {
           number >= 0, let segment = source.segments.first(where: { $0.sequence == sequence }),
           segment.parts.indices.contains(number) {
           let part = segment.parts[number]
+          #if DEBUG
+          served = true
+          #endif
           return .redirect(segment.url, part.offset, part.length)
         }
         if components.first != "part",
-          source.reachedLiveEdge,
+          // A blocking reload identifies the client's playback position. Do not
+          // hold its cached parts behind a cold rendition's catch-up to live.
+          (source.reachedLiveEdge || msn != nil),
           published.contains(where: { !$0.parts.isEmpty }),
           published.filter(\.complete).reduce(0, { $0 + $1.duration }) >= Double(source.target * 3),
           let tail = published.last {
           let ready = source.ended || msn == nil || tail.sequence > msn! ||
             (tail.sequence == msn! && (part.map { tail.parts.count > $0 } ?? tail.complete))
-          if ready || Date() >= deadline { return .playlist(try playlist(index, base: url)) }
+          if ready || Date() >= deadline {
+            let data = try playlist(index, base: url)
+            #if DEBUG
+            served = true
+            #endif
+            return .playlist(data)
+          }
         }
         if Date() >= deadline {
           if components.first == "part" {
@@ -599,6 +666,13 @@ actor NativeHLSOrigin {
         sources[index]?.segments.append(Segment(sequence: entry.sequence, url: entry.url, date: date,
           initialization: entry.initialization, discontinuity: period, tags: entry.tags))
         let reader = NativeHLSChunkReader()
+        #if DEBUG
+        let readStarted = Date()
+        var readCompleted = false
+        defer {
+          recordRequest("/upstream/\(index)/\(entry.sequence)", started: readStarted, served: readCompleted)
+        }
+        #endif
         let chunks = reader.stream(request(entry.url))
         defer { reader.stop() }
         sources[index]?.indexingPrefetch = entry.duration == nil
@@ -726,6 +800,9 @@ actor NativeHLSOrigin {
           sources[index] = source
         }
         next = expected + 1
+        #if DEBUG
+        readCompleted = true
+        #endif
       }
       sources[index]?.task = nil
     } catch {
@@ -744,5 +821,11 @@ actor NativeHLSOrigin {
     cachedMediaBytes += part.media?.count ?? 0
     sources[index] = source
     publishedParts += 1
+    #if DEBUG
+    if capturesRequests {
+      recordRequest("/produced/\(index)/\(source.segments[last].sequence)/\(source.segments[last].parts.count - 1)",
+        started: Date(), served: true, bytes: part.media?.count)
+    }
+    #endif
   }
 }

@@ -6,6 +6,64 @@ import XCTest
 #endif
 
 final class NativeRenditionReportTests: XCTestCase {
+  func testColdRenditionServesRequestedCachedPartsBeforeReachingLiveEdge() async throws {
+    let origin = try await makeColdOrigin()
+    let available = expectation(description: "A quality switch must not wait for unrelated future media")
+    let request = Task {
+      let response = try await origin.response(
+        URL(string: "strozz-native-ll://fixture/media/1.m3u8?_HLS_msn=11&_HLS_part=0")!)
+      available.fulfill()
+      return response
+    }
+    await fulfillment(of: [available], timeout: 0.3)
+    request.cancel()
+    do {
+      guard case .playlist(let data) = try await request.value else { return XCTFail("Expected cached playlist") }
+      XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("#EXT-X-PART:"))
+    } catch {
+      XCTAssertTrue(error is CancellationError, "Only cleanup cancellation is expected after a failed deadline")
+    }
+    await origin.stop()
+  }
+
+  func testColdRenditionStillWaitsForInitialLiveEdgeAndUnpublishedParts() async throws {
+    for suffix in ["", "?_HLS_msn=11&_HLS_part=4"] {
+      let origin = try await makeColdOrigin()
+      let unavailable = expectation(description: "Startup and an unreleased part must still wait")
+      unavailable.isInverted = true
+      let request = Task {
+        _ = try await origin.response(URL(string: "strozz-native-ll://fixture/media/1.m3u8\(suffix)")!)
+        unavailable.fulfill()
+      }
+      await fulfillment(of: [unavailable], timeout: 0.2)
+      request.cancel()
+      do {
+        try await request.value
+      } catch {
+        XCTAssertTrue(error is CancellationError)
+      }
+      await origin.stop()
+    }
+  }
+
+  private func makeColdOrigin() async throws -> NativeHLSOrigin {
+    let root = URL(string: "https://example.test/current.m3u8")!
+    let origin = NativeHLSOrigin(root: root, headers: [:], history: 30,
+      loadData: { _ in XCTFail("Seeded cache must not need networking"); throw URLError(.badURL) }) { _ in
+      XCTFail("Cancelling a cached request must not fail the engine")
+    }
+    let part = NativeHLSOrigin.Part(offset: 0, length: 188, duration: 0.4, independent: true)
+    let segments = (0..<12).map { number in
+      NativeHLSOrigin.Segment(sequence: number, url: root,
+        date: Date(timeIntervalSince1970: Double(1000 + number * 2)), discontinuity: 0, tags: [],
+        parts: Array(repeating: part, count: 5), complete: true)
+    }
+    _ = try await origin.renderForTesting(segments, otherRenditions: [
+      1: .init(url: root, segments: segments, task: Task {}, reachedLiveEdge: false)
+    ], readyToServe: true)
+    return origin
+  }
+
   func testSlowUnusedRenditionCannotHoldAnAlreadyAvailablePlaylist() async throws {
     let fixture = RenditionReportFixture()
     let origin = try await makeOrigin(fixture: fixture)

@@ -61,11 +61,30 @@ extension PlayerView {
   }
 
   var qualityEngineStatus: String? {
-    guard livePlaybackProfile == .nativeLowLatency, !isUsingAltSource else { return nil }
-    if let reason = model.nativeFallbackReason { return "Standard playback · \(reason)" }
-    if model.nativeNeedsRefresh { return "Reconnecting Native LL-HLS" }
-    if model.isUsingNativeHLS { return model.nativeParts > 0 ? "Native LL-HLS" : "Preparing Native LL-HLS" }
-    return "Standard playback"
+    guard !isUsingAltSource else { return nil }
+    let notice = playback?.qualities.first(where: { $0.id == model.decodeRecoveryQualityID })
+      .map { "A video rendition could not be decoded. Using \($0.name) instead." }
+    guard livePlaybackProfile == .nativeLowLatency else { return notice }
+    let status: String
+    if let reason = model.nativeFallbackReason { status = "Standard playback · \(reason)" }
+    else if model.nativeNeedsRefresh { status = "Reconnecting Native LL-HLS" }
+    else if model.isUsingNativeHLS { status = model.nativeParts > 0 ? "Native LL-HLS" : "Preparing Native LL-HLS" }
+    else { status = "Standard playback" }
+    return notice.map { "\(status) · \($0)" } ?? status
+  }
+
+  func recoverUndecodableVideo() -> Bool {
+    guard !isVOD, !isUsingAltSource, !isAudioOnlyActive, !player.isExternalPlaybackActive,
+      !model.triedDecodeRecovery,
+      let playback,
+      let source = StreamQuality.decodeRecoveryQuality(in: playback.qualities,
+        selectedID: playback.qualities.first(where: { $0.name == preferredQuality })?.id) else { return false }
+    model.triedDecodeRecovery = true
+    model.decodeRecoveryQualityID = source.id
+    recordPlaybackEvent("video_decode_quality_recovery", level: .warning,
+      attributes: ["quality": source.name])
+    switchToSourceIfNeeded(source.url)
+    return true
   }
 
   /// Text shown on the player's quality button: the selected variant (e.g.
@@ -166,6 +185,7 @@ extension PlayerView {
 
   func selectQuality(at index: Int) {
     guard qualityOptions.indices.contains(index) else { return }
+    model.triedDecodeRecovery = false
     let option = qualityOptions[index]
     let previousQuality = preferredQuality
     let previousProfile = livePlaybackProfile.rawValue

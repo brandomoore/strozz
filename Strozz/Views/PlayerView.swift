@@ -64,7 +64,18 @@ struct PlayerView: View {
   /// from the same public live snapshot the Home cards use (followed channels
   /// carry the streamer's YouTube channel ID; the snapshot holds its live count).
   @Environment(AppEnvironment.self) var environment
-  @AppStorage(PersistenceKey.preferredQuality) var preferredQuality = "Auto"
+  @AppStorage(PersistenceKey.preferredQuality) var storedPreferredQuality = "Auto"
+  // Decode recovery is local to this stream, not a new saved quality preference.
+  var preferredQuality: String {
+    get {
+      playback?.qualities.first(where: { $0.id == model.decodeRecoveryQualityID })?.name
+        ?? storedPreferredQuality
+    }
+    nonmutating set {
+      model.decodeRecoveryQualityID = nil
+      storedPreferredQuality = newValue
+    }
+  }
   /// Latency-vs-quality profile for the adaptive ("Auto") stream, surfaced as the
   /// two Auto rows in the quality picker. Stored as the enum raw value; read it
   /// through `livePlaybackProfile`.

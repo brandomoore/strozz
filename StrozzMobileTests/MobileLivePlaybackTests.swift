@@ -92,7 +92,8 @@ final class MobileLivePlaybackTests: XCTestCase {
       if second == 30 { item.preferredPeakBitRate = 0 }
       let clock = model.player.currentTime()
       if clock.seconds > previous + 0.1 { advancing += 1 }
-      if output.copyPixelBuffer(forItemTime: clock, itemTimeForDisplay: nil) != nil { frames += 1 }
+      if output.hasNewPixelBuffer(forItemTime: clock),
+        output.copyPixelBuffer(forItemTime: clock, itemTimeForDisplay: nil) != nil { frames += 1 }
       previous = clock.seconds
     }
     XCTAssertNil(model.errorMessage)
@@ -111,7 +112,8 @@ final class MobileLivePlaybackTests: XCTestCase {
     var fixedFrames = 0
     for _ in 0..<20 {
       try await Task.sleep(for: .seconds(1))
-      if fixedOutput.copyPixelBuffer(forItemTime: fixedItem.currentTime(), itemTimeForDisplay: nil) != nil {
+      if fixedOutput.hasNewPixelBuffer(forItemTime: fixedItem.currentTime()),
+        fixedOutput.copyPixelBuffer(forItemTime: fixedItem.currentTime(), itemTimeForDisplay: nil) != nil {
         fixedFrames += 1
       }
     }

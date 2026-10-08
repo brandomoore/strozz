@@ -46,6 +46,25 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   still permits a visible legacy fallback. Native drift is corrected by gentle
   rate adjustment rather than seeks; automatic seek-on-rebuffer is disabled
   once the initial native live start is established.
+- A quality-switch blocking reload can return its already-indexed parts before
+  that cold rendition catches up to the live edge. Initial tune-in still waits
+  for live content; unpublished parts still block. A reproduced xQc stall
+  exposed a 2.33-second unnecessary wait while the requested rendition's cached
+  parts were available.
+- When native playback stops advancing but its contiguous forward buffer has
+  refilled to at least the configured buffer preference (minimum three seconds),
+  TV and mobile request one same-item resume at normal speed. This does not seek
+  or increase target latency. A stale `isPlaybackLikelyToKeepUp=false` does not
+  suppress the attempt; no clock progress within five seconds escalates through
+  the existing native retry budget. Pause, suspension, startup, seeking, and
+  external playback remain excluded. A resume request is not proof of recovery:
+  subsequent clock and video samples are required.
+- If the clock advances but a video rendition never decodes, TV and mobile
+  make one explicit recovery attempt using the highest-bitrate video rendition.
+  Native playback stays native, audio-only tracks are excluded, and the quality
+  menu reports the change. TV keeps this override local to the current stream;
+  it does not overwrite the viewer's saved Auto/fixed-quality preference.
+  Choosing a quality manually clears the override.
 - When native activation fails, its row disappears for that channel and the
   checkmark moves to the actual fallback mode. The old **Auto · Low Latency**
   label refers to the original prefetch engine, not native partial playback.
@@ -1072,6 +1091,11 @@ real live sources without taking over a physical Apple TV. Set
 `STROZZ_STREAM_MATRIX=1` and `STROZZ_MATRIX_CHANNELS` to one to ten comma-separated
 live logins in the test-runner environment. Sources run sequentially with one
 muted playback instance, not ten simultaneous decoders.
+For longer soaks, `STROZZ_MATRIX_STEADY_SECONDS` accepts 180–1800 seconds and
+`STROZZ_MATRIX_RESUMED_SECONDS` accepts 45–900 seconds. Increase the XCTest and
+outer supervisor deadlines to cover every selected source, including startup
+and position restoration, rather than interpreting a truncated run as a failure
+of the player.
 
 Each source must produce decoded video in AVKit, sustain three minutes of
 playback, return through simulated background/interruption handlers without an
@@ -1085,6 +1109,19 @@ item replacements, and startup timeouts have distinct failure labels, with
 terminal source state retained in the attachment. They are not silently
 substituted with another broadcaster. These in-process lifecycle checks do not
 prove behavior during actual OS suspension or audible output.
+Frame checks require a new pixel buffer with an advancing presentation timestamp,
+not just a non-null buffer. Separate request attachments retain redacted AVPlayer
+errors and resource timing; opt-in Debug origin traces capture generated local
+playlist/part requests around a stall, without storing signed upstream URLs.
+
+`NativeSourceDecodingLiveTests` compares direct Twitch HLS with the native engine
+sequentially on the same simulator. Enable `STROZZ_DECODE_COMPARISON=1`, select
+`STROZZ_DECODE_CHANNEL`, and optionally set `STROZZ_DECODE_QUALITY` to `Source`
+or an available quality name. Both modes must render verified frames; an
+advancing clock with a blank AVKit surface fails the comparison.
+Physical comparison is a separate opt-in test, requires explicit channel and
+quality selection, and stays muted unless `STROZZ_PHYSICAL_TEST_AUDIO=audible`.
+Run it only with the viewer's permission: it takes over the app surface.
 
 Use a currently live mix of MPEG-TS and CMAF, with and without upstream prefetch.
 A broadcaster's language or name is not evidence of their ingest region or
@@ -1092,6 +1129,10 @@ the CDN route chosen for this client. Keep compilation jobs limited, watch host
 CPU/thermal/memory pressure, and stop only the owned test lane and simulator if
 the machine comes under pressure. Do not interpret a resource-aborted run or
 advancing clock without video frames as passing playback.
+Limit both Xcode build jobs and Swift-driver jobs; `-jobs 2` alone does not
+necessarily bound the Swift compiler's workers. A guarded run may be incomplete
+even when memory pressure stays normal, because sustained CPU saturation is
+also a reason to stop.
 
 ### October 7, 2026 simulator sample
 

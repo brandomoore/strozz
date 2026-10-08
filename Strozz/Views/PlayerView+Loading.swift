@@ -767,6 +767,7 @@ extension PlayerView {
   }
 
   func resetPlaybackHealth() {
+    model.nativeBufferedStallRecovery = NativeBufferedStallRecovery()
     model.offlineProbeTask?.cancel()
     model.offlineProbeTask = nil
     mon.resetPlaybackHealth()
@@ -1026,7 +1027,32 @@ extension PlayerView {
       checkVideoDecodeFreeze(item: item, clockAdvanced: advanced)
     }
 
+    guard item === player.currentItem else { return }
     lastObservedPlaybackTimeSeconds = currentSeconds
+
+    let bufferedRecovery = model.nativeBufferedStallRecovery.observe(
+      clock: currentSeconds, uptime: ProcessInfo.processInfo.systemUptime, buffer: bufferAheadSeconds(item),
+      minimumBuffer: item.preferredForwardBufferDuration,
+      waiting: player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+      allowed: model.isUsingNativeHLS && model.nativeStartupComplete && !model.nativeNeedsRefresh
+        && item.status == .readyToPlay && !player.isExternalPlaybackActive
+        && !model.playbackTelemetry.isSeekPending)
+    switch bufferedRecovery {
+    case .resume:
+      cancelNativeCatchUp(reason: "buffered_resume")
+      recordPlaybackEvent("native_buffered_resume_requested", level: .warning,
+        metrics: ["buffer_ahead_seconds": bufferAheadSeconds(item) ?? 0])
+      player.playImmediately(atRate: 1)
+      return
+    case .awaitingProgress:
+      return
+    case .restart:
+      recordPlaybackEvent("native_buffered_resume_timed_out", level: .warning)
+      recoverNativeHLS(.timeout)
+      return
+    case .none:
+      break
+    }
 
     // Live-edge drift recovery. While following live, AVPlayer can involuntarily
     // rewind the playhead far back inside a large (DVR) seekable window to refill
