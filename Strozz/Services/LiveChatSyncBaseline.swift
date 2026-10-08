@@ -53,6 +53,7 @@ struct LiveChatSyncBaseline {
   }
 
   private(set) var extraDelay: Double?
+  private(set) var liveEdgeDelay: Double?
   private(set) var normalDelay: Double?
   private(set) var reference: Reference = .unavailable
   private(set) var nativeCushion: Double?
@@ -75,12 +76,13 @@ struct LiveChatSyncBaseline {
     continuity = PlaybackDateContinuity()
     calibration.removeAll()
     extraDelay = nil
+    liveEdgeDelay = nil
     reference = .unavailable
   }
 
   mutating func observe(
     context: String, itemID: UUID, playbackDate: Date?, playbackTime: Double,
-    liveTarget: Date?, canCalibrate: Bool, now: Date,
+    liveTarget: Date?, liveEdge: Date? = nil, canCalibrate: Bool, now: Date,
     uptime: TimeInterval
   ) {
     if self.context != context {
@@ -113,6 +115,7 @@ struct LiveChatSyncBaseline {
         previousDate: previous.date, previousClock: previous.clock, date: playbackDate, clock: playbackTime) {
         calibration.removeAll()
         extraDelay = nil
+        liveEdgeDelay = nil
         reference = .unavailable
         return
       }
@@ -120,6 +123,10 @@ struct LiveChatSyncBaseline {
         && clockAdvance >= elapsed * 0.8 && clockAdvance <= elapsed * 1.2
     }
     defer { previous = sample }
+    liveEdgeDelay = liveEdge.flatMap { edge in
+      let delay = edge.timeIntervalSince(playbackDate)
+      return delay.isFinite ? max(0, delay) : nil
+    }
 
     if canCalibrate, progressing, nativeGap.map({ (-0.75...2).contains($0) }) ?? true {
       if calibration.last.map({ ($0.nativeGap == nil) != (nativeGap == nil) }) == true {

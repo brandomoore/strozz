@@ -251,16 +251,13 @@ struct PlayerTitleHeader: View {
                   HStack(spacing: 8) {
                     brandLogo(for: entry.platform)
                     Text(entry.count.formatted(.number))
-                      .font(.footnote)
-                      .fontWeight(.semibold)
-                      .foregroundStyle(foreground)
-                      .monospacedDigit()
                       .contentTransition(.numericText())
                   }
                   .accessibilityElement(children: .ignore)
                   .accessibilityLabel(
                     "\(entry.count.formatted(.number)) watching on \(entry.platform.accessibilityName)"
                   )
+                  .accessibilityIdentifier("player-viewers-\(entry.platform.rawValue)")
                 }
               }
             }
@@ -271,16 +268,16 @@ struct PlayerTitleHeader: View {
                   .fill(latency.color)
                   .frame(width: 8, height: 8)
                 Text(latency.label)
-                  .font(.caption)
-                  .fontWeight(.semibold)
-                  .foregroundStyle(foreground)
               }
+              .accessibilityElement(children: .combine)
+              .accessibilityLabel("Latency from live: \(latency.label)")
+              .accessibilityIdentifier("player-latency")
             }
             BroadcastUptimeView(startedAt: streamStartedAt, iconSize: 24)
-              .font(.footnote)
-              .fontWeight(.semibold)
-              .foregroundStyle(foreground)
           }
+          .font(.footnote.weight(.semibold))
+          .monospacedDigit()
+          .foregroundStyle(foreground)
           .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 1)
           .animation(.easeInOut(duration: 0.25), value: counts)
         }

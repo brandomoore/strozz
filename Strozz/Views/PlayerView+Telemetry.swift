@@ -146,6 +146,8 @@ extension PlayerView {
     snapshot.flags["native_startup_complete"] = model.nativeStartupComplete
     snapshot.flags["playback_date_mapping_valid"] = wallClockLowConfidenceStreak < wallClockUnavailableSamples
     snapshot.flags["native_catch_up_active"] = model.nativeCatchUp.isActive
+    snapshot.flags["latency_readout_enabled"] = showLatencyBadge
+    snapshot.metrics["native_live_edge_delay_seconds"] = model.chatSyncBaseline.liveEdgeDelay
     snapshot.metrics["native_catch_up_rate"] = Double(model.nativeCatchUp.rate)
     snapshot.metrics["native_catch_up_excess_seconds"] = model.nativeCatchUp.extraDelay
     snapshot.counters["native_parts_indexed"] = model.nativeParts

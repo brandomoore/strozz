@@ -23,8 +23,8 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   Explicit legacy profiles and Audio Only keep their existing standard paths.
 - Native mode is independent of the legacy Diagnostics **Prefetch Proxy**
   kill-switch. Its fallback honors that legacy kill-switch, just like the legacy
-  profiles themselves. The selected native row and latency badge explicitly
-  identify standard playback after fallback; selection is not proof of activation.
+  profiles themselves. The quality menu and diagnostics explicitly identify
+  standard playback after fallback; selection is not proof of activation.
 - The native engine now indexes both H.264/AAC MPEG-TS and CMAF. TS parts are
   packet-aligned, retain PAT/PMT initialization, and use measured PES timestamps.
   Non-terminal TS cut points wait at least 382.5ms: 85% of the advertised 450ms
@@ -1127,6 +1127,16 @@ Overlay, and Glass at 460- and 820-point chat widths. Enable
 area: separate child overrides let chat and controls disagree about the right
 edge on direct entry. Side chat reserves video space; floating chat reserves
 control space without shrinking the underlying video.
+
+The TV header's viewer counts, numeric latency, and uptime inherit one
+`.footnote.weight(.semibold)` style with monospaced digits. The numeric latency
+is the difference between the native published live edge and the displayed
+media date, including the normal live cushion; it is not the chat-sync
+extra-delay estimate (which deliberately removes that cushion). Unknown or
+discontinuous date mappings clear the value until verified again. The existing
+readout toggle and control show/hide behavior are unchanged. The direct-entry
+UI regression checks numeric content, matching text heights, chat clearance,
+and disappearance together with the controls.
 
 TV and mobile card previews share `NativeLivePreview`, including native startup,
 bounded source refresh/fallback, video readiness, and teardown. Previews remain

@@ -427,10 +427,14 @@ Source-only feed or decode-recovery override can exceed the requested thumbnail
 budget. The selected pane, player item, and AVKit surface are retained; a normal
 layout transition does not create an extra decoder.
 
-The native live indicator measures extra delay relative to the source's
-available live position, matching mobile's Live/Behind behavior. Raw media
-timestamps can include broadcaster/Twitch delay or clock offset, so their age
-is retained in Diagnostics rather than presented as proven player lag.
+The TV latency readout shows numeric seconds behind the available live edge
+(for example, **3.18s**), including the normal playback cushion rather than
+replacing small values with "Live." It shares the viewer-count and uptime font
+size and weight, respects the existing **Latency Readout** toggle, and hides
+with the playback controls. Native measurements compare dates on the same
+source clock; raw timestamp age can include upstream delay or clock offset and
+remains in Diagnostics. Mobile's separate Live/Behind transport status is
+unchanged.
 
 Chat's timed read pause releases its frozen snapshot when the countdown ends;
 collapsing chat or changing channels also resets scrolling state. The live list

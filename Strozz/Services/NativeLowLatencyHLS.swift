@@ -262,12 +262,21 @@ actor NativeHLSOrigin {
     Self.liveTargetDate(in: sources, active: lastActive)
   }
 
+  func liveEdgeDate() -> Date? {
+    Self.liveEdgeDate(in: sources, active: lastActive)
+  }
+
   static func liveTargetDate(in sources: [Int: Rendition], active: Int) -> Date? {
+    guard let source = sources[active], let edge = liveEdgeDate(in: sources, active: active) else { return nil }
+    return edge.addingTimeInterval(-source.liveHoldBack)
+  }
+
+  static func liveEdgeDate(in sources: [Int: Rendition], active: Int) -> Date? {
     // A faster inactive rendition is not evidence that the displayed rendition
     // is behind. Use the source whose media AVPlayer is actually requesting.
     guard let source = sources[active], source.reachedLiveEdge,
       let last = source.publishedSegments.last(where: { $0.duration > 0 }) else { return nil }
-    return last.date.addingTimeInterval(last.duration - source.liveHoldBack)
+    return last.date.addingTimeInterval(last.duration)
   }
 
   func renderForTesting(_ segments: [Segment], ended: Bool = false,

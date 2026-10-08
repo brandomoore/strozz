@@ -645,13 +645,8 @@ extension PlayerView {
       return "Waiting for playback"
     }
     if model.isUsingNativeHLS {
-      switch model.nativeLivePosition.state {
-      case .checking: return String(localized: "Checking live")
-      case .live: return String(localized: "Live")
-      case .behind(let seconds):
-        return String(localized: "~\(formatLatencySeconds(seconds)) behind available live")
-      case .paused: return String(localized: "Paused")
-      }
+      guard let seconds = model.chatSyncBaseline.liveEdgeDelay else { return String(localized: "Checking live") }
+      return formatLatencySeconds(seconds)
     }
     guard let seconds = measuredLatencySeconds else {
       return "Latency unavailable"
@@ -659,20 +654,13 @@ extension PlayerView {
     if isLatencyWarmingUp {
       return "Estimating latency…"
     }
-    let delay = "~\(formatLatencySeconds(seconds)) behind live"
-    if livePlaybackProfile == .nativeLowLatency, !model.isUsingNativeHLS, !isUsingAltSource {
-      return "Standard playback · \(delay)"
-    }
-    return delay
+    return formatLatencySeconds(seconds)
   }
 
   func formatLatencySeconds(_ seconds: Double) -> String {
     let clamped = max(0, seconds)
-    if clamped < 10 {
-      let tenths = (clamped * 10).rounded() / 10
-      return "\(tenths)s"
-    }
-    return "\(Int(clamped.rounded()))s"
+    let number = clamped.formatted(.number.precision(.fractionLength(clamped < 10 ? 2 : 0)))
+    return String(localized: "\(number)s")
   }
 
   func configurePlayerForLive() {
