@@ -304,6 +304,12 @@ struct HomeView: View {
     .animation(.motionAware(.easeOut(duration: 0.25), reduceMotion: reduceMotion), value: goLive.pending)
     #if DEBUG && targetEnvironment(simulator)
     .task {
+      guard let login = ProcessInfo.processInfo.environment["STROZZ_PLAYER_UI_CHANNEL"],
+        !login.isEmpty, login.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") })
+      else { return }
+      openDeepLinkedChannelIfNeeded(login)
+    }
+    .task {
       guard !didLaunchMultiviewUITest,
         let input = ProcessInfo.processInfo.environment["STROZZ_MULTIVIEW_UI_CHANNELS"] else { return }
       let names = input.split(separator: ",").map(String.init)

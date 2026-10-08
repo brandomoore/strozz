@@ -44,7 +44,8 @@ extension PlayerView {
     ZStack(alignment: .bottom) {
       VideoSurface(player: player)
         .id(ObjectIdentifier(player))
-        .ignoresSafeArea()
+        .accessibilityIdentifier("player-video-surface")
+        .accessibilityValue(isLoading ? "Loading" : "Ready")
         // Shared loading surface: the stream's frame behind the channel's
         // avatar, name, and a native spinner. Anchored as an overlay on the
         // video so it tracks the *exact* video frame in every chat layout — the

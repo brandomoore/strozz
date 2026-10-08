@@ -80,6 +80,8 @@ extension PlayerView {
     }
     .frame(width: chatWidth)
     .modifier(GlassChatPaneStyle(enabled: isGlass))
+    .accessibilityElement(children: .contain)
+    .accessibilityIdentifier("player-chat-pane")
     // Prevent the glass container from showing a focus glow when interactive
     // elements inside (e.g. the chat input) receive focus.
     .focusEffectDisabled()

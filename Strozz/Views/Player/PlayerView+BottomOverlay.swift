@@ -28,6 +28,7 @@ extension PlayerView {
         .focusable(scrubberFocusable)
         .focused($focus, equals: .rewindScrubber)
         .accessibilityLabel(rewindReadout.isVOD ? "Timeline" : "Live timeline")
+        .accessibilityIdentifier("player-live-timeline")
         .accessibilityValue(rewindAccessibilityValue)
         .accessibilityHint("Swipe up or down to seek ten seconds")
         .accessibilityAdjustableAction { direction in
@@ -273,6 +274,7 @@ extension PlayerView {
             .accessibilityLabel(showChat ? "Hide Chat" : "Show Chat")
         }
         .focusRemoved(controlButtonRemoved(.chatToggle))
+        .accessibilityIdentifier("player-chat-toggle")
         .focused($focus, equals: .chatToggle)
         .onMoveCommand { direction in
           switch direction {

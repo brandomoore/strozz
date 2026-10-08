@@ -1119,6 +1119,15 @@ paint an opaque focus platter even with `.focusEffectDisabled()`. The separate
 tile border remains the focus indicator. Decoded-frame continuity alone cannot
 detect UI that obscures the video.
 
+`PlayerChatLayoutTests` uses direct stream entry (not multiview expansion) and
+checks the real video, chat, timeline, and collapse-button frames in Side,
+Overlay, and Glass at 460- and 820-point chat widths. Enable
+`STROZZ_PLAYER_LAYOUT_TESTS=1` with a live `STROZZ_MATRIX_CHANNELS` login in the
+`StrozzUI` scheme. Only the shared video/chat container ignores the screen safe
+area: separate child overrides let chat and controls disagree about the right
+edge on direct entry. Side chat reserves video space; floating chat reserves
+control space without shrinking the underlying video.
+
 TV and mobile card previews share `NativeLivePreview`, including native startup,
 bounded source refresh/fallback, video readiness, and teardown. Previews remain
 muted and cannot initiate external playback.

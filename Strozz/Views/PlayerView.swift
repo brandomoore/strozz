@@ -833,14 +833,13 @@ struct PlayerView: View {
         videoColumn
           .frame(maxWidth: .infinity, maxHeight: .infinity)
           .padding(.trailing, !isMultiviewCompact && showChat && !chatLayoutMode.isOverlay ? chatWidth : 0)
-          .ignoresSafeArea()
 
         if showChat && !isMultiviewCompact {
           chatPane
-            .ignoresSafeArea()
             .transition(.move(edge: .trailing))
         }
       }
+      .ignoresSafeArea()
 
       if showRaidEvents, let raid = chat.pendingRaid, shouldShowIncomingRaid(raid) {
         raidBanner(raid)
