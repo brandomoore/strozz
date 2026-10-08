@@ -4,12 +4,8 @@ struct MobileChatView: View {
   let service: ChatService
   let channel: String
   @Environment(\.themePalette) private var palette
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(TwitchAuthSession.self) private var auth
-  @State private var followChat = true
   @State private var showAccount = false
-  @ScaledMetric(relativeTo: .body) private var textSize = 16
-  @ScaledMetric(relativeTo: .body) private var emoteSize = 26
 
   var body: some View {
     VStack(spacing: 0) {
@@ -19,46 +15,8 @@ struct MobileChatView: View {
         if !service.isConnected { Text("Connecting...").font(.caption).foregroundStyle(.secondary) }
       }
       .padding(12)
-      ScrollViewReader { proxy in
-        ScrollView {
-          LazyVStack(alignment: .leading, spacing: 8) {
-            ForEach(service.messages) { message in
-              VStack(alignment: .leading, spacing: 4) {
-                if let notice = message.systemMessage {
-                  Text(notice).font(.caption.bold()).foregroundStyle(.secondary)
-                }
-                RichChatLineView(
-                  message: message,
-                  nameColor: (message.colorHex.flatMap { Color(twitchHex: $0) } ?? palette.chatSidePrimaryText)
-                    .chatReadable(onSurface: palette.chatSideSurface, minRatio: 4.5),
-                  globalEmoteURLs: service.emoteURLs, badgeURLs: service.badgeURLs,
-                  cheermotes: service.cheermotes, textSize: textSize, emoteSize: emoteSize,
-                  animatedEmotes: !reduceMotion, bodyColorOverride: palette.chatSidePrimaryText)
-              }
-              .id(message.id)
-            }
-            Color.clear.frame(height: 1).id("chat-bottom")
-              .onScrollVisibilityChange { visible in if visible { followChat = true } }
-          }
-          .padding(.horizontal, 12)
-        }
-        .defaultScrollAnchor(.bottom)
-        .onScrollPhaseChange { _, phase in
-          if phase == .interacting { followChat = false }
-        }
-        .onChange(of: service.messages.last?.id) { _, _ in
-          if followChat { proxy.scrollTo("chat-bottom", anchor: .bottom) }
-        }
-        .overlay(alignment: .bottom) {
-          if !followChat {
-            Button("Latest messages") {
-              followChat = true
-              proxy.scrollTo("chat-bottom", anchor: .bottom)
-            }
-            .buttonStyle(.borderedProminent).padding(8)
-          }
-        }
-      }
+      MobileChatTimeline(messages: service.messages, emoteURLs: service.emoteURLs,
+                         badgeURLs: service.badgeURLs, cheermotes: service.cheermotes)
       Divider()
       if auth.isAuthenticated {
         MobileChatComposer(channel: channel)
@@ -74,6 +32,135 @@ struct MobileChatView: View {
           .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showAccount = false } } }
       }
     }
+  }
+}
+
+@MainActor
+@Observable
+final class MobileChatScrollState {
+  var position = ScrollPosition(edge: .bottom)
+  private(set) var followsLatest = true
+  private var isUserScrolling = false
+  private var isAtBottom = true
+
+  func phaseChanged(_ phase: ScrollPhase) {
+    if phase == .interacting {
+      isUserScrolling = true
+      followsLatest = false
+    } else if phase == .idle && isUserScrolling {
+      isUserScrolling = false
+      followsLatest = isAtBottom
+    }
+  }
+
+  func geometryChanged(distanceFromBottom: CGFloat, sizeChanged: Bool) {
+    isAtBottom = distanceFromBottom <= 8
+    if sizeChanged && !isAtBottom && followsLatest && !isUserScrolling { jumpToPresent() }
+  }
+
+  func messagesChanged() {
+    if followsLatest && !isUserScrolling { position.scrollTo(edge: .bottom) }
+  }
+
+  func jumpToPresent() {
+    isUserScrolling = false
+    followsLatest = true
+    position.scrollTo(edge: .bottom)
+  }
+}
+
+struct MobileChatTimeline: View {
+  let messages: [ChatMessage]
+  var emoteURLs: [String: URL] = [:]
+  var badgeURLs: [String: URL] = [:]
+  var cheermotes: [Cheermote] = []
+  @State var scroll = MobileChatScrollState()
+  @Environment(\.themePalette) private var palette
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @ScaledMetric(relativeTo: .body) private var textSize = 16
+  @ScaledMetric(relativeTo: .body) private var emoteSize = 26
+
+  private struct Geometry: Equatable {
+    let contentSize: CGSize
+    let viewportSize: CGSize
+    let bottomInset: CGFloat
+    let distanceFromBottom: CGFloat
+  }
+
+  var body: some View {
+    @Bindable var scroll = scroll
+    ScrollView {
+      // Chat has bounded history. Exact row heights avoid lazy height estimates
+      // drifting or looping when long messages wrap, emotes load, or history trims.
+      VStack(alignment: .leading, spacing: 8) {
+        ForEach(messages) { message in
+          VStack(alignment: .leading, spacing: 4) {
+            if let notice = message.systemMessage {
+              Text(notice).font(.caption.bold()).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            RichChatLineView(
+              message: message,
+              nameColor: (message.colorHex.flatMap { Color(twitchHex: $0) } ?? palette.chatSidePrimaryText)
+                .chatReadable(onSurface: palette.chatSideSurface, minRatio: 4.5),
+              globalEmoteURLs: emoteURLs, badgeURLs: badgeURLs, cheermotes: cheermotes,
+              textSize: textSize, emoteSize: emoteSize, animatedEmotes: !reduceMotion,
+              bodyColorOverride: palette.chatSidePrimaryText, wrapsOversizedTokens: true)
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .accessibilityElement(children: .contain)
+          .accessibilityIdentifier(message.id == messages.last?.id ? "mobile-chat-latest-message" : "mobile-chat-message")
+        }
+      }
+      .padding(12)
+    }
+    .defaultScrollAnchor(.bottom)
+    .scrollPosition($scroll.position)
+    .scrollDismissesKeyboard(.interactively)
+    .onScrollPhaseChange { _, phase in scroll.phaseChanged(phase) }
+    .onScrollGeometryChange(for: Geometry.self) { geometry in
+      Geometry(contentSize: geometry.contentSize, viewportSize: geometry.containerSize,
+               bottomInset: geometry.contentInsets.bottom,
+               distanceFromBottom: geometry.contentSize.height + geometry.contentInsets.bottom
+                 - geometry.contentOffset.y - geometry.containerSize.height)
+    } action: { old, new in
+      scroll.geometryChanged(distanceFromBottom: new.distanceFromBottom,
+        sizeChanged: old.contentSize != new.contentSize || old.viewportSize != new.viewportSize
+          || old.bottomInset != new.bottomInset)
+    }
+    .onChange(of: messages.last?.id) { _, _ in scroll.messagesChanged() }
+    .accessibilityIdentifier("mobile-chat-timeline")
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      MobileChatFollowBar(scroll: scroll)
+    }
+  }
+}
+
+private struct MobileChatFollowBar: View {
+  let scroll: MobileChatScrollState
+  @Environment(\.themePalette) private var palette
+
+  var body: some View {
+    ZStack {
+      // Keep the scroll inset unchanged when a jump switches back to live mode.
+      Text("Jump to present").font(.subheadline.weight(.semibold))
+        .frame(maxWidth: .infinity, minHeight: 44)
+        .hidden()
+      if scroll.followsLatest {
+        Text("Live chat").font(.subheadline).foregroundStyle(.secondary)
+      } else {
+        Button(action: scroll.jumpToPresent) {
+          Text("Jump to present").font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(palette.chatSidePrimaryText)
+        .accessibilityIdentifier("mobile-chat-jump-to-present")
+      }
+    }
+    .background(palette.chatSideSurface)
+    .overlay(alignment: .top) { Divider() }
   }
 }
 

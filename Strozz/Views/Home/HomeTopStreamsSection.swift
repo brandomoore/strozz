@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The Home tab's "Top streams" rail — the most-viewed live channels after the
 /// language filter and "Not interested" removals. `channels` is the memoized
-/// `topStreams` list owned by `HomeView`; the rail hides when it's empty.
+/// `topStreams` list owned by `HomeView`.
 struct HomeTopStreamsSection: View {
   let channels: [FollowedChannel]
   let rail: ChannelRailMetrics
@@ -16,21 +16,26 @@ struct HomeTopStreamsSection: View {
   private var recommendations: RecommendationsService { environment.recommendations }
 
   var body: some View {
-    if !channels.isEmpty {
-      VStack(alignment: .leading, spacing: 2) {
-        HStack {
-          Text("Top streams")
-            .font(.system(size: 32, weight: .bold))
-            .accessibilityAddTraits(.isHeader)
+    VStack(alignment: .leading, spacing: 2) {
+      HStack {
+        Text("Top streams")
+          .font(.system(size: 32, weight: .bold))
+          .accessibilityAddTraits(.isHeader)
 
-          if recommendations.isLoading {
-            ProgressView()
-              .scaleEffect(0.85)
-          }
-
-          Spacer()
+        if recommendations.isLoading {
+          ProgressView()
+            .scaleEffect(0.85)
         }
 
+        Spacer()
+      }
+
+      if channels.isEmpty {
+        HomeStreamRailPlaceholder(
+          rail: rail, style: style,
+          isLoading: recommendations.isLoading || recommendations.lastUpdatedAt == nil,
+          emptyMessage: "No top streams are available right now.")
+      } else {
         HomeRailScrollView(rail: rail, style: style) {
           ForEach(channels, id: \.channelKey) { channel in
             HomeRailStreamCard(

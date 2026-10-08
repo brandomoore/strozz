@@ -29,6 +29,8 @@ struct RichChatLineView: View {
     var showPlatformBadges: Bool = ChatAppearance.defaultShowPlatformBadges
     /// Overrides the default white body color (used by the light side-chat).
     var bodyColorOverride: Color? = nil
+    /// Mobile panes can be narrower than a URL or username, especially with Dynamic Type.
+    var wrapsOversizedTokens: Bool = false
 
     /// VoiceOver state. The combined spoken label is only built when VoiceOver is
     /// actually running — otherwise computing it (segment walk + string split/join)
@@ -100,7 +102,7 @@ struct RichChatLineView: View {
     }
 
     var body: some View {
-        ChatFlowLayout(itemSpacing: 0, rowSpacing: rowSpacing) {
+        ChatFlowLayout(itemSpacing: 0, rowSpacing: rowSpacing, wrapsOversizedTokens: wrapsOversizedTokens) {
             if shouldShowSourceBadge {
                 sourceBadgeView
                     .padding(.trailing, 4)
@@ -280,11 +282,13 @@ struct RichChatLineView: View {
                 .tracking(letterSpacing)
                 .foregroundStyle(bodyColor)
         case .emote(let name, let url):
-            EmoteView(name: name, url: url, fallbackColor: bodyColor, fallbackFontSize: bodyFontSize, emoteHeight: emoteHeight, animated: animatedEmotes)
+            EmoteView(name: name, url: url, fallbackColor: bodyColor, fallbackFontSize: bodyFontSize,
+                      emoteHeight: emoteHeight, animated: animatedEmotes, constrainsWidth: wrapsOversizedTokens)
         case .cheer(let amount, let url, let colorHex):
             let color = Color(twitchHex: colorHex) ?? .gray
             HStack(spacing: 1) {
-                EmoteView(name: "", url: url, fallbackColor: color, fallbackFontSize: bodyFontSize, emoteHeight: emoteHeight, animated: animatedEmotes)
+                EmoteView(name: "", url: url, fallbackColor: color, fallbackFontSize: bodyFontSize,
+                          emoteHeight: emoteHeight, animated: animatedEmotes, constrainsWidth: wrapsOversizedTokens)
                 Text("\(amount)")
                     .font(fontStyle.font(size: bodyFontSize, weight: .bold))
                     .tracking(letterSpacing)
@@ -354,6 +358,7 @@ private struct EmoteView: View {
     let emoteHeight: CGFloat
     /// When false, render the emote's first frame statically (no animation).
     var animated: Bool = true
+    var constrainsWidth: Bool = false
 
     @State private var loadFailed = false
 
@@ -377,7 +382,7 @@ private struct EmoteView: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(height: emoteHeight)
-                    .fixedSize(horizontal: true, vertical: false)
+                    .fixedSize(horizontal: !constrainsWidth, vertical: false)
             } else {
                 // Static path: WebImage's `isAnimating` defaults to `true`, so we
                 // must explicitly pin it off to hold the first frame. Animated
@@ -396,7 +401,7 @@ private struct EmoteView: View {
                     }
                 }
                 .frame(height: emoteHeight)
-                .fixedSize(horizontal: true, vertical: false)
+                .fixedSize(horizontal: !constrainsWidth, vertical: false)
             }
         }
     }
@@ -405,6 +410,7 @@ private struct EmoteView: View {
 struct ChatFlowLayout: Layout {
     var itemSpacing: CGFloat = 0
     var rowSpacing: CGFloat = 0
+    var wrapsOversizedTokens = false
 
     // Measuring every subview is the per-line layout cost. SwiftUI runs
     // sizeThatFits then placeSubviews in the same pass, so measure once in
@@ -412,16 +418,23 @@ struct ChatFlowLayout: Layout {
     // instead of re-measuring every subview a second time. placeSubviews
     // re-measures only if the cache is missing/stale (e.g. an emote finished
     // loading and changed its intrinsic size), which keeps wrapping correct.
-    func makeCache(subviews: Subviews) -> [CGSize] { [] }
-
-    func updateCache(_ cache: inout [CGSize], subviews: Subviews) {
-        cache.removeAll(keepingCapacity: true)
+    struct Cache {
+        var width: CGFloat?
+        var sizes: [CGSize] = []
     }
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout [CGSize]) -> CGSize {
-        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
-        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
-        cache = sizes
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        cache.width = nil
+        cache.sizes.removeAll(keepingCapacity: true)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        let maxWidth = proposal.width ?? (wrapsOversizedTokens ? .infinity : .greatestFiniteMagnitude)
+        let sizes = measure(subviews, maxWidth: maxWidth)
+        cache.width = maxWidth
+        cache.sizes = sizes
         var x: CGFloat = 0
         var y: CGFloat = 0
         var rowHeight: CGFloat = 0
@@ -440,13 +453,14 @@ struct ChatFlowLayout: Layout {
         return CGSize(width: maxWidth.isFinite ? maxWidth : x, height: y + rowHeight)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout [CGSize]) {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
         // Group subviews into rows first so each row's height is known before we
         // place its items. Items are then centered on the row's vertical midline
         // instead of pinned to the top — keeping emotes, badges and the YouTube
         // glyph aligned with the text even when a typeface (e.g. OpenDyslexic) or
         // a very large size gives the text line box extra height below the glyphs.
-        let sizes = cache.count == subviews.count ? cache : subviews.map { $0.sizeThatFits(.unspecified) }
+        let sizes = cache.sizes.count == subviews.count && (!wrapsOversizedTokens || cache.width == bounds.width)
+            ? cache.sizes : measure(subviews, maxWidth: bounds.width)
         var rows: [[(subview: LayoutSubview, size: CGSize)]] = []
         var currentRow: [(subview: LayoutSubview, size: CGSize)] = []
         var x: CGFloat = 0
@@ -484,6 +498,16 @@ struct ChatFlowLayout: Layout {
             }
 
             y += rowHeight + rowSpacing
+        }
+    }
+
+    private func measure(_ subviews: Subviews, maxWidth: CGFloat) -> [CGSize] {
+        subviews.map { subview in
+            let ideal = subview.sizeThatFits(.unspecified)
+            guard wrapsOversizedTokens, maxWidth.isFinite, maxWidth > 0, ideal.width > maxWidth else {
+                return ideal
+            }
+            return subview.sizeThatFits(ProposedViewSize(width: maxWidth, height: nil))
         }
     }
 }
