@@ -44,6 +44,7 @@ enum PersistenceKey {
   static let icloudAccountSignedOut = "icloudAccountSignedOut"
   static func mobileWatchHistory(accountID: String) -> String { "mobile.watchHistory.\(accountID)" }
   static func mobileVODProgress(accountID: String) -> String { "mobile.vodProgress.\(accountID)" }
+  static func mobileLiveFollowedCount(accountID: String) -> String { "mobile.liveFollowedCount.\(accountID)" }
 
   // MARK: Go-live toasts (standard suite)
 

@@ -163,10 +163,14 @@ For you / Following pins below the status bar as you scroll; the Strozz heading 
 category filters scroll away.
 
 Mobile loading placeholders use the same artwork and reserved text-line sizes as
-the loaded cards. Live-followed shortcuts reserve three compact rows starting
-during account restoration, before sign-in and follow loading finish, so arriving
-follows do not push the feed down. The section is omitted once the account is
-confirmed signed out. Chat wraps long names and links within the pane;
+the loaded cards. Live-followed shortcuts remember the last successful live count
+per account (up to six) and reserve that many skeleton cards while loading.
+An unknown account starts with six placeholders. Loaded results show only live
+channels, without unused rows; no live channels produces a compact empty message.
+Changes in row count resize smoothly, unless Reduce Motion is enabled. Cached
+counts are not changed by category filters or failed requests, and this adds no
+requests, polling, or loading animation timers. The section is omitted once the
+account is confirmed signed out. Chat wraps long names and links within the pane;
 scroll up to read earlier messages, then tap the floating **Jump to present**
 button to resume following live chat. It disappears at the live edge without
 reserving an empty status row or changing the chat viewport.
