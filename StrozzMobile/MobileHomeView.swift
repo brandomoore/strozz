@@ -38,6 +38,32 @@ enum MobileHomeFeed: Hashable {
   }
 }
 
+enum MobileFollowedShortcutCount {
+  static let limit = 6
+
+  static func cached(for accountID: String?, defaults: UserDefaults = .standard) -> Int {
+    guard let accountID,
+          let count = defaults.object(forKey: PersistenceKey.mobileLiveFollowedCount(accountID: accountID)) as? Int
+    else { return limit }
+    return min(limit, max(0, count))
+  }
+
+  static func remember(_ channels: [FollowedChannel], for accountID: String?, isDemo: Bool,
+                       errorMessage: String?, defaults: UserDefaults = .standard) -> Int? {
+    guard let accountID, !isDemo, errorMessage == nil else { return nil }
+    let count = channels.lazy.filter(\.isLive).prefix(limit).count
+    let key = PersistenceKey.mobileLiveFollowedCount(accountID: accountID)
+    if defaults.object(forKey: key) as? Int != count { defaults.set(count, forKey: key) }
+    return count
+  }
+
+  static func rows(visibleCount: Int, isLoading: Bool, cachedCount: Int, accessibilitySize: Bool) -> Int {
+    let count = visibleCount == 0 && isLoading ? cachedCount : visibleCount
+    let columns = accessibilitySize ? 1 : 2
+    return (min(limit, max(0, count)) + columns - 1) / columns
+  }
+}
+
 struct MobileHomeView: View {
   let preview: MobileHomePreview
   let previewsEnabled: Bool
@@ -48,6 +74,8 @@ struct MobileHomeView: View {
   @Environment(TwitchAuthSession.self) private var auth
   @Environment(TwitchAccountSync.self) private var sync
   @Environment(\.themePalette) private var palette
+  @Environment(\.dynamicTypeSize) private var typeSize
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(MobileVODProgressStore.self) private var vodProgress
   @Environment(PlaybackReturnRefreshCoordinator.self) private var returnRefresh: PlaybackReturnRefreshCoordinator?
   @AppStorage(RecommendationPreferences.enabledDefaultsKey) private var personalizedEnabled = true
@@ -57,6 +85,7 @@ struct MobileHomeView: View {
   @State private var categoryStreams = BrowseService()
   @State private var follows = FollowedChannelsService()
   @State private var followsAccountID: String?
+  @State private var followedSkeletonCount = MobileFollowedShortcutCount.limit
   @State private var affinity = StreamerAffinityService()
   @State private var personalChannels: [FollowedChannel] = []
   @State private var selectedVideo: MobileVODSelection?
@@ -77,6 +106,9 @@ struct MobileHomeView: View {
     MobileHomeFeed.visibleFollows(follows.channels, authenticated: auth.isAuthenticated,
                                  isDemo: follows.isUsingDemoData, category: category)
   }
+  private var shortcutsLoading: Bool {
+    sync.isRestoringAccount || (follows.lastUpdatedAt == nil && follows.errorMessage == nil)
+  }
   private var homeChannels: [FollowedChannel] {
     guard personalFeed else { return category == nil ? recommendations.channels : categoryStreams.categoryStreams }
     return personalChannels.filter { channel in
@@ -85,6 +117,10 @@ struct MobileHomeView: View {
   }
 
   var body: some View {
+    let shortcutChannels = visibleFollows
+    let shortcutRows = MobileFollowedShortcutCount.rows(
+      visibleCount: shortcutChannels.count, isLoading: shortcutsLoading,
+      cachedCount: followedSkeletonCount, accessibilitySize: typeSize.isAccessibilitySize)
     GeometryReader { viewport in
       ScrollViewReader { proxy in
         ScrollView {
@@ -115,12 +151,13 @@ struct MobileHomeView: View {
                   MobileContinueWatchingSection(entries: Array(vodProgress.entries.prefix(4))) { selectedVideo = $0 }
                     .padding(.horizontal)
                 }
-                if auth.isAuthenticated {
-                  MobileFollowedShortcuts(channels: visibleFollows, onSelect: onSelect,
-                                         onSeeAll: { feed = .following },
-                                         isLoading: follows.isLoading || follows.lastUpdatedAt == nil)
-                    .padding(.horizontal)
-                }
+                MobileFollowedShortcuts(channels: shortcutChannels, onSelect: onSelect,
+                                       onSeeAll: { feed = .following },
+                                       isLoading: shortcutsLoading,
+                                       authenticated: auth.isAuthenticated,
+                                       isRestoringAccount: sync.isRestoringAccount,
+                                       skeletonCount: followedSkeletonCount)
+                  .padding(.horizontal)
                 Text(personalFeed ? "For you" : "Popular live channels")
                   .font(.title3.bold()).accessibilityAddTraits(.isHeader).padding(.horizontal)
                 if personalFeed, let error = follows.errorMessage {
@@ -144,6 +181,7 @@ struct MobileHomeView: View {
                 .background(palette.backgroundColors.last ?? palette.cardOpaqueSurface)
             }
           }
+          .animation(reduceMotion || feed != .live ? nil : .easeInOut(duration: 0.22), value: shortcutRows)
           .padding(.top, 8)
           .padding(.bottom)
           .coordinateSpace(name: "mobile-home-content")
@@ -173,6 +211,17 @@ struct MobileHomeView: View {
     .onDisappear { preview.stop() }
     .background(palette.backgroundColors.last ?? palette.cardOpaqueSurface)
     .toolbar(.hidden, for: .navigationBar)
+    .onChange(of: auth.userID, initial: true) { _, accountID in
+      followedSkeletonCount = MobileFollowedShortcutCount.cached(for: accountID)
+    }
+    .onChange(of: follows.lastUpdatedAt) { _, updatedAt in
+      guard updatedAt != nil, auth.isAuthenticated, followsAccountID == auth.userID,
+            let count = MobileFollowedShortcutCount.remember(
+              follows.channels, for: followsAccountID, isDemo: follows.isUsingDemoData,
+              errorMessage: follows.errorMessage)
+      else { return }
+      followedSkeletonCount = count
+    }
     .task { if recommendations.lastUpdatedAt == nil { await recommendations.refresh() } }
     .task(id: returnRefresh?.thumbnailRevision) {
       guard hasAppeared else { hasAppeared = true; return }
@@ -339,35 +388,51 @@ struct MobileFollowedShortcuts: View {
   let onSelect: (FollowedChannel) -> Void
   let onSeeAll: () -> Void
   var isLoading = false
+  var authenticated = true
+  var isRestoringAccount = false
+  var skeletonCount = MobileFollowedShortcutCount.limit
   @Environment(\.dynamicTypeSize) private var typeSize
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack {
-        Text("Live followed channels").font(.subheadline.bold()).accessibilityAddTraits(.isHeader)
-        Spacer()
-        Button("See all", action: onSeeAll).font(.subheadline)
-      }
-      LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8),
-                               count: typeSize.isAccessibilitySize ? 1 : 2), spacing: 8) {
-        ForEach(Array(channels.prefix(6)), id: \.channelKey) { channel in
-          Button { onSelect(channel) } label: { MobileFollowedShortcut(channel: channel) }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("follow-shortcut-\(channel.channelKey)")
+    let visible = authenticated ? channels : []
+    let loading = isLoading || isRestoringAccount
+    if authenticated || isRestoringAccount {
+      VStack(alignment: .leading, spacing: 10) {
+        HStack {
+          Text("Live followed channels").font(.subheadline.bold()).accessibilityAddTraits(.isHeader)
+          Spacer()
+          Button("See all", action: onSeeAll).font(.subheadline)
+            .disabled(isRestoringAccount)
         }
-        ForEach(LoadingSkeleton.channels.prefix(max(0, 6 - channels.count))) { channel in
-          MobileFollowedShortcut(channel: channel)
-            .modifier(LoadingSkeletonStyle())
-            .opacity(channels.isEmpty && isLoading ? 1 : 0)
+        Group {
+          if visible.isEmpty && (!loading || skeletonCount == 0) {
+            ZStack(alignment: .leading) {
+              Text("No followed channels are live right now.")
+                .opacity(loading ? 0 : 1).accessibilityHidden(loading)
+              if loading { Text("Loading follows") }
+            }
+            .font(.subheadline).foregroundStyle(.secondary)
+            .frame(minHeight: 44, alignment: .leading)
+          } else {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8),
+                                     count: typeSize.isAccessibilitySize ? 1 : 2), spacing: 8) {
+              ForEach(Array(visible.prefix(MobileFollowedShortcutCount.limit)), id: \.channelKey) { channel in
+                Button { onSelect(channel) } label: { MobileFollowedShortcut(channel: channel) }
+                  .buttonStyle(.plain)
+                  .accessibilityIdentifier("follow-shortcut-\(channel.channelKey)")
+              }
+              if visible.isEmpty && loading {
+                ForEach(LoadingSkeleton.channels.prefix(min(MobileFollowedShortcutCount.limit, max(0, skeletonCount)))) { channel in
+                  MobileFollowedShortcut(channel: channel)
+                    .modifier(LoadingSkeletonStyle())
+                }
+              }
+            }
+          }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(visible.isEmpty && loading ? Text("Loading follows") : Text(""))
       }
-      .overlay {
-        if channels.isEmpty && !isLoading {
-          Text("No followed channels are live right now.").foregroundStyle(.secondary)
-        }
-      }
-      .accessibilityElement(children: .contain)
-      .accessibilityLabel(channels.isEmpty && isLoading ? Text("Loading follows") : Text(""))
     }
   }
 }
@@ -383,8 +448,9 @@ struct MobileFollowedShortcut: View {
       } placeholder: { Circle().fill(.quaternary) }
       .frame(width: 30, height: 30).clipShape(Circle())
       VStack(alignment: .leading, spacing: 2) {
-        Text(channel.displayName).font(.subheadline.weight(.semibold)).lineLimit(1)
-        Text(channel.gameName).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        Text(channel.displayName).font(.subheadline.weight(.semibold)).lineLimit(1, reservesSpace: true)
+        Text(channel.gameName.isEmpty ? " " : channel.gameName)
+          .font(.caption2).foregroundStyle(.secondary).lineLimit(1, reservesSpace: true)
       }
       Spacer(minLength: 0)
       if let count = channel.viewerCount {

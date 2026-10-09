@@ -133,37 +133,26 @@ struct MobileChatTimeline: View {
     }
     .onChange(of: messages.last?.id) { _, _ in scroll.messagesChanged() }
     .accessibilityIdentifier("mobile-chat-timeline")
-    .safeAreaInset(edge: .bottom, spacing: 0) {
-      MobileChatFollowBar(scroll: scroll)
+    .overlay(alignment: .bottom) {
+      // A conditional scroll inset can reenter layout during a jump.
+      MobileChatJumpButton(scroll: scroll)
+        .padding(12)
     }
   }
 }
 
-private struct MobileChatFollowBar: View {
+private struct MobileChatJumpButton: View {
   let scroll: MobileChatScrollState
-  @Environment(\.themePalette) private var palette
 
   var body: some View {
-    ZStack {
-      // Keep the scroll inset unchanged when a jump switches back to live mode.
-      Text("Jump to present").font(.subheadline.weight(.semibold))
-        .frame(maxWidth: .infinity, minHeight: 44)
-        .hidden()
-      if scroll.followsLatest {
-        Text("Live chat").font(.subheadline).foregroundStyle(.secondary)
-      } else {
-        Button(action: scroll.jumpToPresent) {
-          Text("Jump to present").font(.subheadline.weight(.semibold))
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(palette.chatSidePrimaryText)
+    if !scroll.followsLatest {
+      Button("Jump to present", action: scroll.jumpToPresent)
+        .font(.subheadline.weight(.semibold))
+        .buttonStyle(.borderedProminent)
+        .buttonBorderShape(.capsule)
+        .controlSize(.large)
         .accessibilityIdentifier("mobile-chat-jump-to-present")
-      }
     }
-    .background(palette.chatSideSurface)
-    .overlay(alignment: .top) { Divider() }
   }
 }
 

@@ -12,14 +12,22 @@ final class MobileChatTests: XCTestCase {
     let latest = app.descendants(matching: .any).matching(identifier: "mobile-chat-latest-message").firstMatch
     XCTAssertTrue(latest.waitForExistence(timeout: 5))
     let jump = app.buttons["mobile-chat-jump-to-present"]
+    XCTAssertFalse(jump.exists)
+    XCTAssertFalse(app.staticTexts["Live chat"].exists)
+    let viewport = timeline.frame
     for _ in 0..<3 { timeline.swipeDown() }
     XCTAssertTrue(jump.waitForExistence(timeout: 5))
     XCTAssertTrue(jump.isHittable)
     XCTAssertGreaterThanOrEqual(jump.frame.height, 44)
+    XCTAssertEqual(timeline.frame, viewport)
     jump.tap()
     expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: jump)
     waitForExpectations(timeout: 5)
     XCTAssertTrue(latest.isHittable)
+    XCTAssertFalse(app.staticTexts["Live chat"].exists)
+    XCTAssertEqual(timeline.frame, viewport)
+    XCTAssertLessThanOrEqual(timeline.frame.maxY - latest.frame.maxY, 16,
+                            "There must be no blank status row below the latest message")
     app.buttons["Resize chat"].tap()
     XCTAssertTrue(latest.isHittable)
     let field = app.textFields["Send a message"]

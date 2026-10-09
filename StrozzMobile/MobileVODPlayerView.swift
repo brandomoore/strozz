@@ -7,6 +7,7 @@ struct MobileVODPlayerView: View {
   @Environment(MobileVODProgressStore.self) private var progress
   @Environment(\.dismiss) private var dismiss
   @Environment(\.scenePhase) private var scenePhase
+  @Environment(MobilePlaybackSession.self) private var livePlayback
   @State private var player = AVPlayer()
   @State private var isLoading = true
   @State private var errorMessage: String?
@@ -33,7 +34,10 @@ struct MobileVODPlayerView: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
     }
-    .task(id: attempt) { await load() }
+    .task(id: attempt) {
+      livePlayback.close()
+      await load()
+    }
     .onChange(of: scenePhase, initial: true) { _, phase in
       if phase == .background {
         backgrounded = true
