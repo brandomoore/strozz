@@ -29,6 +29,78 @@ final class MobilePictureInPictureTests: XCTestCase {
     }
   }
 
+  func testMiniPlayerDragAndPinchStayWithinBounds() {
+    for (size, isPhone) in [(CGSize(width: 390, height: 750), true),
+                            (.init(width: 800, height: 350), true),
+                            (.init(width: 1024, height: 1300), false),
+                            (.init(width: 320, height: 600), false),
+                            (.init(width: 160, height: 120), false)] {
+      let bounds = MobileMiniPlayerLayout.bounds(in: size, isPhone: isPhone)
+      let start = MobileMiniPlayerLayout.frame(in: size, isPhone: isPhone)
+      for scale: CGFloat in [0.01, 0.8, 1, 1.5, 100] {
+        for delta in [CGSize(width: -2000, height: -2000), .zero, .init(width: 2000, height: 2000)] {
+          let moved = MobileMiniPlayerLayout.applying(
+            .init(translation: delta, magnification: scale), to: start, in: size, isPhone: isPhone)
+          XCTAssertGreaterThanOrEqual(moved.minX, bounds.minX - 0.001)
+          XCTAssertGreaterThanOrEqual(moved.minY, bounds.minY - 0.001)
+          XCTAssertLessThanOrEqual(moved.maxX, bounds.maxX + 0.001)
+          XCTAssertLessThanOrEqual(moved.maxY, bounds.maxY + 0.001)
+          XCTAssertEqual(moved.width / moved.height, 16 / 9, accuracy: 0.001)
+          XCTAssertGreaterThanOrEqual(moved.width, min(160, min(bounds.width, bounds.height * 16 / 9)))
+          let placement = MobileMiniPlayerLayout.placement(
+            for: moved, in: size, isPhone: isPhone, previous: .init())
+          let restored = MobileMiniPlayerLayout.frame(in: size, isPhone: isPhone, placement: placement)
+          XCTAssertEqual(restored.minX, moved.minX, accuracy: 0.001)
+          XCTAssertEqual(restored.minY, moved.minY, accuracy: 0.001)
+          XCTAssertEqual(restored.width, moved.width, accuracy: 0.001)
+        }
+      }
+    }
+  }
+
+  func testMiniPlayerDefaultPlacementKeepsExistingBottomClearance() {
+    let phoneSize = CGSize(width: 390, height: 750)
+    let phone = MobileMiniPlayerLayout.frame(in: phoneSize, isPhone: true)
+    XCTAssertEqual(phone.width, 240)
+    XCTAssertEqual(phone.maxX, phoneSize.width - 12)
+    XCTAssertEqual(phone.maxY, phoneSize.height - 64)
+    let tabletSize = CGSize(width: 1024, height: 1300)
+    let tablet = MobileMiniPlayerLayout.frame(in: tabletSize, isPhone: false)
+    XCTAssertEqual(tablet.width, 320)
+    XCTAssertEqual(tablet.maxX, tabletSize.width - 12)
+    XCTAssertEqual(tablet.maxY, tabletSize.height - 12)
+  }
+
+  func testMiniPlayerResizesAtPinchAnchorAndRetainsPlacementAcrossRotation() {
+    let size = CGSize(width: 1024, height: 1300)
+    let start = CGRect(x: 300, y: 300, width: 320, height: 180)
+    let anchor = UnitPoint(x: 0.25, y: 0.75)
+    let moved = MobileMiniPlayerLayout.applying(
+      .init(translation: .init(width: 20, height: 30), magnification: 1.5, anchor: anchor),
+      to: start, in: size, isPhone: false)
+    XCTAssertEqual(moved.width, 480)
+    XCTAssertEqual(moved.minX + moved.width * anchor.x, start.minX + start.width * anchor.x + 20)
+    XCTAssertEqual(moved.minY + moved.height * anchor.y, start.minY + start.height * anchor.y + 30)
+    let placement = MobileMiniPlayerLayout.placement(for: moved, in: size, isPhone: false, previous: .init())
+    let rotatedSize = CGSize(width: 750, height: 320)
+    let rotated = MobileMiniPlayerLayout.frame(in: rotatedSize, isPhone: false, placement: placement)
+    XCTAssertTrue(CGRect(origin: .zero, size: rotatedSize).contains(rotated))
+    XCTAssertEqual(MobileMiniPlayerLayout.frame(in: size, isPhone: false, placement: placement), moved)
+  }
+
+  func testCombinedManipulationRetainsItsInitialAnchorAndCompletedComponents() {
+    var manipulation = MobileMiniPlayerLayout.Manipulation()
+    manipulation.update(translation: .init(width: 20, height: 30), magnification: nil, anchor: nil)
+    manipulation.update(translation: nil, magnification: 1.3, anchor: .init(x: 0.25, y: 0.75))
+    manipulation.update(translation: nil, magnification: 1.5, anchor: .center)
+    XCTAssertEqual(manipulation.translation, CGSize(width: 20, height: 30))
+    XCTAssertEqual(manipulation.magnification, 1.5)
+    XCTAssertEqual(manipulation.anchor, UnitPoint(x: 0.25, y: 0.75))
+    manipulation.update(translation: .init(width: 40, height: 50), magnification: nil, anchor: nil)
+    XCTAssertEqual(manipulation.magnification, 1.5)
+    XCTAssertEqual(manipulation.anchor, UnitPoint(x: 0.25, y: 0.75))
+  }
+
   func testMinimizeAndExpandNeverStartNativePiPOrReplaceTheSource() {
     let session = makeSession()
     session.select(channel("first"))

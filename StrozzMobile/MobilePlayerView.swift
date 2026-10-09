@@ -11,12 +11,64 @@ enum MobilePlayerLayout: Equatable {
 }
 
 enum MobileMiniPlayerLayout {
-  static func frame(in size: CGSize, isPhone: Bool) -> CGRect {
-    let width = min(isPhone ? 240 : 320, max(0, size.width - 24))
-    let height = min(width * 9 / 16, max(0, size.height - 24))
+  struct Placement {
+    var width: CGFloat?
+    var horizontal: CGFloat = 1
+    var vertical: CGFloat = 1
+  }
+
+  struct Manipulation {
+    var translation: CGSize = .zero
+    var magnification: CGFloat = 1
+    var anchor: UnitPoint?
+
+    mutating func update(translation: CGSize?, magnification: CGFloat?, anchor: UnitPoint?) {
+      if let translation { self.translation = translation }
+      if let magnification { self.magnification = magnification }
+      // SwiftUI reprojects startAnchor as the view moves; retain its initial position.
+      if self.anchor == nil { self.anchor = anchor }
+    }
+  }
+
+  static func bounds(in size: CGSize, isPhone: Bool) -> CGRect {
     let bottom: CGFloat = isPhone && size.height > size.width ? 64 : 12
-    return CGRect(x: max(12, size.width - width - 12),
-                  y: max(12, size.height - height - bottom), width: width, height: height)
+    return CGRect(x: min(12, size.width / 2), y: min(12, size.height / 2),
+                  width: max(0, size.width - 24), height: max(0, size.height - bottom - 12))
+  }
+
+  static func frame(in size: CGSize, isPhone: Bool, placement: Placement = .init()) -> CGRect {
+    let bounds = bounds(in: size, isPhone: isPhone)
+    let width = fittedWidth(placement.width ?? (isPhone ? 240 : 320), in: bounds)
+    let height = width * 9 / 16
+    return CGRect(x: bounds.minX + (bounds.width - width) * placement.horizontal,
+                  y: bounds.minY + (bounds.height - height) * placement.vertical,
+                  width: width, height: height)
+  }
+
+  static func applying(_ manipulation: Manipulation, to frame: CGRect, in size: CGSize, isPhone: Bool) -> CGRect {
+    let bounds = bounds(in: size, isPhone: isPhone)
+    let width = fittedWidth(frame.width * manipulation.magnification, in: bounds)
+    let height = width * 9 / 16
+    let anchor = manipulation.anchor ?? .center
+    let x = frame.minX + manipulation.translation.width + (frame.width - width) * anchor.x
+    let y = frame.minY + manipulation.translation.height + (frame.height - height) * anchor.y
+    return CGRect(x: min(max(x, bounds.minX), bounds.maxX - width),
+                  y: min(max(y, bounds.minY), bounds.maxY - height), width: width, height: height)
+  }
+
+  static func placement(for frame: CGRect, in size: CGSize, isPhone: Bool, previous: Placement) -> Placement {
+    let bounds = bounds(in: size, isPhone: isPhone)
+    return Placement(
+      width: frame.width,
+      horizontal: bounds.width > frame.width
+        ? min(1, max(0, (frame.minX - bounds.minX) / (bounds.width - frame.width))) : previous.horizontal,
+      vertical: bounds.height > frame.height
+        ? min(1, max(0, (frame.minY - bounds.minY) / (bounds.height - frame.height))) : previous.vertical)
+  }
+
+  private static func fittedWidth(_ width: CGFloat, in bounds: CGRect) -> CGFloat {
+    let maximum = min(bounds.width, bounds.height * 16 / 9)
+    return min(maximum, max(min(160, maximum), width))
   }
 
   static func interpolate(from start: CGRect, to end: CGRect, progress: CGFloat) -> CGRect {
@@ -36,6 +88,8 @@ struct MobilePlayerView: View {
   @State private var windowScene: UIWindowScene?
   @State private var rotationError: String?
   @State private var collapseProgress: CGFloat = 0
+  @State private var miniPlayerPlacement = MobileMiniPlayerLayout.Placement()
+  @GestureState private var miniPlayerManipulation = MobileMiniPlayerLayout.Manipulation()
   @Environment(\.themePalette) private var palette
   @Environment(\.verticalSizeClass) private var verticalSizeClass
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -55,7 +109,10 @@ struct MobilePlayerView: View {
       let expanded = CGRect(x: 0, y: 0, width: videoWidth, height: videoHeight)
       let expandedWindowFrame = expanded.offsetBy(
         dx: geometry.frame(in: .global).minX, dy: geometry.frame(in: .global).minY)
-      let compact = MobileMiniPlayerLayout.frame(in: geometry.size, isPhone: isPhone)
+      let restingCompact = MobileMiniPlayerLayout.frame(
+        in: geometry.size, isPhone: isPhone, placement: miniPlayerPlacement)
+      let compact = MobileMiniPlayerLayout.applying(
+        miniPlayerManipulation, to: restingCompact, in: geometry.size, isPhone: isPhone)
       let progress = session.isExpanded ? collapseProgress : 1
       let videoFrame = MobileMiniPlayerLayout.interpolate(from: expanded, to: compact, progress: progress)
       ZStack(alignment: .topLeading) {
@@ -117,6 +174,9 @@ struct MobilePlayerView: View {
               .strokeBorder(palette.chromeOnOpaque.opacity(progress * 0.2), lineWidth: 1)
               .allowsHitTesting(false)
           }
+          .simultaneousGesture(
+            miniPlayerGesture(from: restingCompact, in: geometry.size, isPhone: isPhone),
+            including: session.isExpanded ? .subviews : .all)
           .position(x: videoFrame.midX, y: videoFrame.midY)
       }
       .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.9), value: session.isExpanded)
@@ -132,6 +192,23 @@ struct MobilePlayerView: View {
     )) {
       Button("OK") { rotationError = nil }
     } message: { Text(rotationError ?? "") }
+  }
+
+  private func miniPlayerGesture(from frame: CGRect, in size: CGSize, isPhone: Bool) -> some Gesture {
+    DragGesture(minimumDistance: 8, coordinateSpace: .global)
+      .simultaneously(with: MagnifyGesture())
+      .updating($miniPlayerManipulation) { value, state, _ in
+        state.update(translation: value.first?.translation, magnification: value.second?.magnification,
+                     anchor: value.second?.startAnchor)
+      }
+      .onEnded { value in
+        var manipulation = miniPlayerManipulation
+        manipulation.update(translation: value.first?.translation, magnification: value.second?.magnification,
+                            anchor: value.second?.startAnchor)
+        let moved = MobileMiniPlayerLayout.applying(manipulation, to: frame, in: size, isPhone: isPhone)
+        miniPlayerPlacement = MobileMiniPlayerLayout.placement(
+          for: moved, in: size, isPhone: isPhone, previous: miniPlayerPlacement)
+      }
   }
 
   private func updateCollapseDrag(_ translation: CGSize, distance: CGFloat) {
@@ -237,6 +314,7 @@ struct MobileVideoView: View {
         .accessibilityLabel(isMinimized ? "Expand player"
           : controlsVisible ? "Hide playback controls" : "Show playback controls")
         .accessibilityAddTraits(.isButton)
+        .accessibilityHint(isMinimized ? Text("Drag to move. Pinch to resize.") : Text(""))
         .accessibilityHidden(voiceOver && !isMinimized)
         .accessibilityIdentifier(isMinimized ? "mobile-expand-player" : "mobile-controls-toggle")
       if model.presentationState == .loading {
@@ -297,7 +375,8 @@ struct MobileVideoView: View {
     }
     .simultaneousGesture(DragGesture(minimumDistance: 12, coordinateSpace: .global)
       .onChanged { onCollapseDragChanged($0.translation) }
-      .onEnded { onCollapseDragEnded($0.translation) })
+      .onEnded { onCollapseDragEnded($0.translation) },
+      including: isMinimized ? .subviews : .all)
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: controlsVisible)
     .onChange(of: isMinimized) { _, _ in
       controlsVisible = true

@@ -55,6 +55,60 @@ final class MobilePictureInPictureTests: XCTestCase {
     XCTAssertTrue(app.buttons[second].isHittable)
   }
 
+  func testMiniPlayerCanBeDraggedResizedAndExpandedWithoutLosingPlacement() throws {
+    try requireLiveTests()
+    let app = launch()
+    defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
+    let stream = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'stream-'")).firstMatch
+    XCTAssertTrue(stream.waitForExistence(timeout: 45))
+    stream.tap()
+    waitForVideo(app)
+    collapseWithChevron(app)
+    let mini = app.buttons["mobile-expand-player"]
+    let original = mini.frame
+    drag(mini, by: CGVector(dx: -60, dy: -180))
+    XCTAssertTrue(mini.exists, "Dragging must not expand or close the player")
+    XCTAssertEqual(mini.frame.minX, original.minX - 60, accuracy: 2)
+    XCTAssertEqual(mini.frame.minY, original.minY - 180, accuracy: 2)
+    XCTAssertEqual(mini.frame.width, original.width, accuracy: 1)
+    mini.pinch(withScale: 1.3, velocity: 0.8)
+    // XCTest's synthesized scale differs from recognizer magnification, even on a fixed-size view.
+    // Unit tests verify exact scaling; here require real resizing and an on-screen result.
+    XCTAssertGreaterThan(mini.frame.width, original.width + 30)
+    XCTAssertTrue(app.frame.contains(mini.frame))
+    let larger = mini.frame
+    mini.pinch(withScale: 0.8, velocity: -0.8)
+    XCTAssertLessThan(mini.frame.width, larger.width - 20)
+    let customized = mini.frame
+    XCTAssertEqual(customized.width / customized.height, 16 / 9, accuracy: 0.02)
+    app.buttons["Browse"].firstMatch.tap()
+    XCTAssertEqual(mini.frame, customized)
+    mini.tap()
+    waitForVideo(app)
+    collapseWithChevron(app)
+    XCTAssertEqual(mini.frame.minX, customized.minX, accuracy: 2)
+    XCTAssertEqual(mini.frame.minY, customized.minY, accuracy: 2)
+    XCTAssertEqual(mini.frame.width, customized.width, accuracy: 2)
+    XCUIDevice.shared.orientation = .landscapeLeft
+    XCTAssertTrue(app.frame.contains(mini.frame))
+    XCUIDevice.shared.orientation = .portrait
+    XCTAssertEqual(mini.frame.minY, customized.minY, accuracy: 2)
+    XCTAssertEqual(mini.frame.width, customized.width, accuracy: 2)
+    app.buttons["mobile-mini-play-pause"].tap()
+    XCTAssertEqual(app.buttons["mobile-mini-play-pause"].label, "Play")
+    app.buttons["mobile-mini-play-pause"].tap()
+    XCTAssertEqual(app.buttons["mobile-mini-play-pause"].label, "Pause")
+    capture("Moved and resized in-app player")
+    app.buttons["Close player"].tap()
+    XCTAssertFalse(mini.exists)
+  }
+
+  private func drag(_ element: XCUIElement, by delta: CGVector) {
+    let start = element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
+    start.press(forDuration: 0.05, thenDragTo: start.withOffset(delta),
+                withVelocity: .slow, thenHoldForDuration: 0)
+  }
+
   func testLeavingAppUsesNativePiPAndReturningRestoresTheMiniPlayer() throws {
     try requireLiveTests()
     guard ProcessInfo.processInfo.environment["STROZZ_MOBILE_NATIVE_PIP_TESTS"] == "1" else {
@@ -67,6 +121,10 @@ final class MobilePictureInPictureTests: XCTestCase {
     stream.tap()
     waitForVideo(app)
     collapseWithChevron(app)
+    let mini = app.buttons["mobile-expand-player"]
+    drag(mini, by: CGVector(dx: -60, dy: -180))
+    mini.pinch(withScale: 1.25, velocity: 0.8)
+    let customized = mini.frame
     XCUIDevice.shared.press(.home)
     let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
     settings.activate()
@@ -80,6 +138,9 @@ final class MobilePictureInPictureTests: XCTestCase {
     expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.otherElements["PIPUIView"])
     waitForExpectations(timeout: 12)
     XCTAssertFalse(app.alerts["Picture in Picture"].exists)
+    XCTAssertEqual(mini.frame.minX, customized.minX, accuracy: 2)
+    XCTAssertEqual(mini.frame.minY, customized.minY, accuracy: 2)
+    XCTAssertEqual(mini.frame.width, customized.width, accuracy: 2)
     app.buttons["mobile-expand-player"].tap()
     waitForVideo(app)
     capture("Expanded player after native handoff")
@@ -99,6 +160,10 @@ final class MobilePictureInPictureTests: XCTestCase {
     let surface = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
     let expandedFrame = surface.frame
     collapseWithChevron(app)
+    let mini = app.buttons["mobile-expand-player"]
+    drag(mini, by: CGVector(dx: -60, dy: -180))
+    mini.pinch(withScale: 1.25, velocity: 0.8)
+    let customized = mini.frame
     XCUIDevice.shared.press(.home)
     let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
     settings.activate()
@@ -120,6 +185,10 @@ final class MobilePictureInPictureTests: XCTestCase {
     XCTAssertEqual(surface.frame.minY, expandedFrame.minY, accuracy: 1)
     waitForVideo(app)
     capture("Direct expanded destination from native restore")
+    collapseWithChevron(app)
+    XCTAssertEqual(mini.frame.minX, customized.minX, accuracy: 2)
+    XCTAssertEqual(mini.frame.minY, customized.minY, accuracy: 2)
+    XCTAssertEqual(mini.frame.width, customized.width, accuracy: 2)
   }
 
   private func requireLiveTests() throws {

@@ -174,6 +174,9 @@ Strozz's in-app mini-player and return to the page you opened the stream from.
 The same video surface follows your pull smoothly; a short pull springs back, and
 Reduce Motion skips the resizing animation. Tap the mini-player to expand it, use
 its pause or close controls, or select another stream or broadcast to replace it.
+Drag the mini-player with one finger to move it, or pinch to resize it. It keeps
+the video's proportions and stays within the available screen area. Its placement
+is retained when expanding and minimizing the same stream or returning from native PiP.
 Home previews stay paused while a live stream is playing.
 
 When you leave Strozz, supported video playback switches to native iOS Picture in
