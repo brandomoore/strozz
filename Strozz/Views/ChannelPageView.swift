@@ -20,6 +20,7 @@ struct ChannelPageView: View {
   @State private var profile: ChannelProfile?
   @State private var isLoadingProfile = true
   @State private var profileFailed = false
+  @State private var refreshFailed = false
 
   @State private var content: ChannelContent?
   @State private var isLoadingContent = true
@@ -31,6 +32,9 @@ struct ChannelPageView: View {
   /// Namespace for default-focus anchoring in this page's focus scope.
   @Namespace private var focusNamespace
   @State private var didSetInitialFocus = false
+  @State private var returnRefresh = PlaybackReturnRefreshCoordinator()
+  @State private var loadedLogin: String?
+  @State private var loadID = UUID()
 
   /// Measured height of the identity hero card, so it can straddle the banner's
   /// bottom edge by exactly 50% regardless of its dynamic content.
@@ -105,6 +109,11 @@ struct ChannelPageView: View {
         ScrollView(.vertical, showsIndicators: false) {
           VStack(alignment: .leading, spacing: 30) {
             if isPrimaryContentReady {
+              if refreshFailed, profile != nil || content != nil {
+                Text("Couldn't refresh all channel details. Please try again.")
+                  .font(.footnote)
+                  .foregroundStyle(.secondary)
+              }
               heroCard
               liveOrLastCard
               clipsRow
@@ -125,20 +134,22 @@ struct ChannelPageView: View {
         .scrollClipDisabled()
       }
     }
+    .environment(returnRefresh)
     .onExitCommand { dismiss() }
     .onChange(of: defaultFocusID) { _, _ in
       applyInitialFocusIfNeeded()
     }
     .task(id: target.id) {
-      didSetInitialFocus = false
-      focusedID = nil
       await loadAll()
       applyInitialFocusIfNeeded()
     }
-    .fullScreenCover(item: $onDemandItem) { item in
+    .fullScreenCover(item: $onDemandItem, onDismiss: {
+      returnRefresh.playerDidDismiss { await loadAll() }
+    }) { item in
       OnDemandPlayerView(item: item, channelLogin: profile?.login ?? target.login)
         .environment(\.themePalette, palette)
     }
+    .onDisappear { returnRefresh.cancelRefresh() }
   }
 
   // MARK: - Banner
@@ -680,21 +691,31 @@ struct ChannelPageView: View {
   // MARK: - Loading
 
   private func loadAll() async {
-    isLoadingProfile = true
+    let request = UUID()
+    loadID = request
+    if loadedLogin != target.login {
+      loadedLogin = target.login
+      profile = nil
+      content = nil
+      recommendations = []
+      didSetInitialFocus = false
+      focusedID = nil
+    }
+    isLoadingProfile = profile == nil
     profileFailed = false
-    isLoadingContent = true
-    isLoadingRecs = true
-    profile = nil
-    content = nil
-    recommendations = []
+    refreshFailed = false
+    isLoadingContent = content == nil
+    isLoadingRecs = recommendations.isEmpty
 
     async let profileTask = ChannelProfileService.fetch(login: target.login)
     async let contentTask = ChannelContentService.load(login: target.login)
 
     let (loadedProfile, loadedContent) = await (profileTask, contentTask)
-    profile = loadedProfile
+    guard !Task.isCancelled, request == loadID else { return }
+    if let loadedProfile { profile = loadedProfile }
     profileFailed = loadedProfile == nil
-    content = loadedContent
+    refreshFailed = loadedProfile == nil || loadedContent == nil
+    if let loadedContent { content = loadedContent }
     isLoadingProfile = false
     isLoadingContent = false
     applyInitialFocusIfNeeded()
@@ -704,8 +725,10 @@ struct ChannelPageView: View {
       // Let the page become interactive before kicking off the heavy multi-seed
       // recommendation pass, so first focus/render isn't competing with scoring.
       await Task.yield()
-      recommendations = await SimilarChannelsEngine.recommend(using: signals)
-    } else {
+      let loadedRecommendations = await SimilarChannelsEngine.recommend(using: signals)
+      guard !Task.isCancelled, request == loadID else { return }
+      recommendations = loadedRecommendations
+    } else if loadedContent != nil {
       recommendations = []
     }
     isLoadingRecs = false

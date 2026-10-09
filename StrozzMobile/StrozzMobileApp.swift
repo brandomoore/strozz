@@ -65,6 +65,15 @@ struct MobileRootView: View {
   @State private var vodProgress: MobileVODProgressStore
   @State private var homeProfile: FollowedChannel?
   @State private var browseProfile: FollowedChannel?
+  @State private var returnRefresh = PlaybackReturnRefreshCoordinator()
+
+  private enum PlayerVisibility {
+    case closed, expanded, miniPlayer
+  }
+
+  private var playerVisibility: PlayerVisibility {
+    playback.channel == nil ? .closed : (playback.isExpanded ? .expanded : .miniPlayer)
+  }
 
   init(accountID: String = "anonymous") {
     _history = State(initialValue: WatchHistoryService(storageKey: PersistenceKey.mobileWatchHistory(accountID: accountID)))
@@ -105,6 +114,19 @@ struct MobileRootView: View {
     .environment(\.themePalette, palette)
     .environment(history)
     .environment(vodProgress)
+    .environment(returnRefresh)
+    .onChange(of: playerVisibility) { previous, current in
+      if previous == .expanded && current != .expanded
+        || previous == .miniPlayer && current == .closed {
+        returnRefresh.refreshThumbnails()
+      }
+    }
+    .onChange(of: homeProfile) { previous, current in
+      if previous != nil, current == nil { returnRefresh.refreshThumbnails() }
+    }
+    .onChange(of: browseProfile) { previous, current in
+      if previous != nil, current == nil { returnRefresh.refreshThumbnails() }
+    }
     .onDisappear { preview.stop() }
     .onChange(of: scenePhase, initial: true) { _, phase in playback.sceneChanged(phase) }
     .task(id: playback.channel?.channelKey) { await playback.trackWatch(auth: auth, rewards: rewards) }

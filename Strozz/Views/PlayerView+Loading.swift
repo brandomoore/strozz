@@ -7,6 +7,11 @@ extension PlayerView {
   // MARK: - Loading
 
   func loadInitialSource(reason: String = "initial") async {
+    model.audioTakeoverTask?.cancel()
+    model.audioTakeoverTask = nil
+    model.startupAudioClaimUntil = nil
+    model.startupAudioClaimUsed = false
+    model.audioInterrupted = false
     let login = activeChannel
     let sessionID = model.playbackTelemetry.sessionID
     let generation = model.altRecovery.generation
@@ -144,7 +149,7 @@ extension PlayerView {
         if model.audioSessionActivationFailed { return }
 
         let started = await waitForPlaybackStart()
-        if model.audioSessionActivationFailed { return }
+        if model.audioSessionActivationFailed || model.audioInterrupted { return }
         guard telemetrySessionID == model.playbackTelemetry.sessionID,
           loadingChannel == activeChannel, sourceGeneration == model.altRecovery.generation else { return }
         if !started {
@@ -260,6 +265,7 @@ extension PlayerView {
       if model.audioSessionActivationFailed { return false }
       if model.audioInterrupted || model.mediaServicesUnavailable {
         guard !Task.isCancelled else { return false }
+        if model.audioInterrupted, model.audioTakeoverTask == nil { return false }
         deadline = Date().addingTimeInterval(startupPlaybackTimeoutSeconds)
         do { try await Task.sleep(for: .milliseconds(50)) } catch { return false }
         continue
@@ -677,6 +683,9 @@ extension PlayerView {
     guard !isUserPaused, !isScrubbing, !isSleeping, backgroundedAt == nil,
       channelPageTarget == nil, preparePlaybackAudio(reason: "play") else { return }
     didRequestPlayback = true
+    if isLoading, model.startupAudioClaimUntil == nil, !model.startupAudioClaimUsed {
+      model.startupAudioClaimUntil = Date().addingTimeInterval(8)
+    }
     recordPlaybackEvent(
       "play_requested",
       attributes: ["start_policy": "native_buffering"],
@@ -800,6 +809,7 @@ extension PlayerView {
     // activation will either restore audio or surface an error; user pause stays intact.
     if model.audioInterrupted {
       model.audioInterrupted = false
+      errorMessage = nil
       recordPlaybackEvent("audio_interruption_rechecked_on_foreground")
     }
     model.channelMetadataTask?.cancel()

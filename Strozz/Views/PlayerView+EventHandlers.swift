@@ -84,7 +84,7 @@ extension PlayerView {
   /// Player start/stop lifecycle: initial VOD/live load, appear/disappear
   /// setup and teardown, and stall / end-of-stream recovery.
   func playbackLifecycleHandlers(_ content: some View) -> some View {
-    content
+    let lifecycle = content
     .task(id: isMultiviewCompact) {
       guard !isMultiviewCompact else { return }
       await monitorWatchRewards()
@@ -124,6 +124,17 @@ extension PlayerView {
       setIdleTimer(disabled: true)
       if !isMultiviewCompact { trackpad.start() }
     }
+    #if DEBUG && targetEnvironment(simulator)
+    .onChange(of: model.nativeStartupComplete) { _, complete in
+      guard complete, !didInjectAudioInterruption,
+        ProcessInfo.processInfo.environment["STROZZ_UI_AUDIO_INTERRUPTION"] == "1" else { return }
+      didInjectAudioInterruption = true
+      NotificationCenter.default.post(name: AVAudioSession.interruptionNotification,
+        object: AVAudioSession.sharedInstance(), userInfo: [
+          AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue
+        ])
+    }
+    #endif
     .onChange(of: isMultiviewCompact) { _, _ in updateMultiviewPresentation() }
     .onChange(of: model.multiviewContext?.focusRequest) { _, _ in
       guard !isMultiviewCompact else { return }
@@ -131,6 +142,8 @@ extension PlayerView {
       requestMultiviewFocus(showControls ? lastControlFocus : .video)
     }
     .onChange(of: model.multiviewContext?.qualityTier) { _, _ in applyMultiviewBudget() }
+
+    let audio = lifecycle
     .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.mediaServicesWereLostNotification)
       .receive(on: RunLoop.main)) { _ in
       handleMediaServicesLost()
@@ -143,6 +156,10 @@ extension PlayerView {
       .receive(on: RunLoop.main)) { notification in
       handleAudioInterruption(notification)
     }
+    .onReceive(NotificationCenter.default.publisher(for: PlaybackAudioSession.audiblePlayerActivated)
+      .receive(on: RunLoop.main)) { _ in
+      resumeMutedPaneAfterAudioActivation()
+    }
     .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
       .receive(on: RunLoop.main)) { notification in
       recordPlaybackEvent("audio_route_changed", counters: [
@@ -150,6 +167,8 @@ extension PlayerView {
       ])
       recordPlaybackTelemetrySnapshot()
     }
+
+    return audio
     .onReceive(player.publisher(for: \.timeControlStatus).receive(on: RunLoop.main)) { _ in
       updateWatchRewards()
       // Read the current item/status rather than a queued notification's value,
@@ -280,6 +299,8 @@ extension PlayerView {
       probeOfflineIfStreamEnded()
     }
     .onDisappear {
+      model.audioTakeoverTask?.cancel()
+      model.audioTakeoverTask = nil
       cancelNativeStartup()
       model.channelMetadataTask?.cancel()
       model.channelMetadataTask = nil
@@ -335,7 +356,7 @@ extension PlayerView {
   }
 
   func handlePlayerMoveCommand(_ direction: MoveCommandDirection) {
-    guard !isMultiviewCompact, !showRewards, !isQualityMenuPresented else { return }
+    guard !isMultiviewCompact, !showRewards, !isQualityMenuPresented, errorMessage == nil else { return }
     // While actively scrolling with the chrome hidden, route every directional
     // input through the scroll handler (and swallow horizontal) so a stray
     // swipe can't surface the chrome and bump you out of the scroll.
@@ -429,7 +450,7 @@ extension PlayerView {
   func focusManagementHandler(_ content: some View) -> some View {
     content
     .onChange(of: focus) { oldFocus, newFocus in
-      guard !isMultiviewCompact, !showRewards else { return }
+      guard !isMultiviewCompact, !showRewards, errorMessage == nil else { return }
       // Disarm the chat-input hop the moment focus is back on a control button, so
       // the composer drops out of the engine again and a plain swipe can't reach it.
       if isControlRowButton(newFocus), chatInputArmed {

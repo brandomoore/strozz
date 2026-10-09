@@ -9,6 +9,7 @@ struct SearchView: View {
   @State private var service = SearchService()
   @State private var query = ""
   @State private var path: [TwitchCategory] = []
+  @Environment(PlaybackReturnRefreshCoordinator.self) private var playbackReturnRefresh
 
   var body: some View {
     NavigationStack(path: $path) {
@@ -27,12 +28,16 @@ struct SearchView: View {
         )
       }
     }
-    .task(id: query) {
+    .task(id: "\(path.isEmpty)|\(query)") {
+      guard path.isEmpty else { return }
       // Debounce keystrokes from the on-screen keyboard before hitting the API.
       let pending = query
       try? await Task.sleep(for: .milliseconds(350))
       guard !Task.isCancelled, pending == query else { return }
-      await service.search(pending)
+      await service.search(pending,
+        preservingResultsOnFailure: service.query == pending.trimmingCharacters(in: .whitespacesAndNewlines))
+      guard !Task.isCancelled else { return }
+      playbackReturnRefresh.refreshThumbnails()
     }
   }
 }

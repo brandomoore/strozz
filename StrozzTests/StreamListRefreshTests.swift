@@ -6,6 +6,48 @@ import XCTest
 final class StreamListRefreshTests: XCTestCase {
   private let category = TwitchCategory(id: "game", name: "Game", boxArtURL: nil, viewerCount: nil)
 
+  func testBrowseCategoriesPreserveCardsAndRejectSupersededRefresh() async {
+    let started = (0..<3).map { expectation(description: "Categories \($0)") }
+    let loader = ListResponseLoader(started: started)
+    let service = BrowseService(loadData: { try await loader.load($0) })
+    let initial = Task { await service.loadCategories() }
+    await fulfillment(of: [started[0]], timeout: 2)
+    loader.succeed(0, json: categoriesJSON(viewers: 10))
+    await initial.value
+    let old = Task { await service.loadCategories() }
+    await fulfillment(of: [started[1]], timeout: 2)
+    XCTAssertEqual(service.categories.first?.viewerCount, 10)
+    let fresh = Task { await service.loadCategories() }
+    await fulfillment(of: [started[2]], timeout: 2)
+    loader.succeed(1, json: categoriesJSON(viewers: 20))
+    await old.value
+    XCTAssertEqual(service.categories.first?.viewerCount, 10)
+    XCTAssertTrue(service.isLoadingCategories)
+    loader.succeed(2, json: categoriesJSON(viewers: 30))
+    await fresh.value
+    XCTAssertEqual(service.categories.first?.viewerCount, 30)
+    XCTAssertEqual(service.categories.first?.id, "game")
+    XCTAssertFalse(service.isLoadingCategories)
+  }
+
+  func testCancelledBrowseCategoryRefreshCannotPublishLateResults() async {
+    let started = [expectation(description: "Categories")]
+    let loader = ListResponseLoader(started: started)
+    let service = BrowseService(loadData: { try await loader.load($0) })
+    let task = Task { await service.loadCategories() }
+    await fulfillment(of: started, timeout: 2)
+    task.cancel()
+    loader.succeed(0, json: categoriesJSON(viewers: 99))
+    await task.value
+    XCTAssertTrue(service.categories.isEmpty)
+    XCTAssertFalse(service.isLoadingCategories)
+    XCTAssertNil(service.categoryErrorMessage)
+  }
+
+  private func categoriesJSON(viewers: Int) -> String {
+    #"{"data":{"games":{"edges":[{"node":{"id":"game","name":"Game","viewersCount":\#(viewers)}}]}}}"#
+  }
+
   func testCategoryRefreshKeepsCardsAndRejectsOlderSameCategoryResponse() async {
     let started = (0..<3).map { expectation(description: "Request \($0)") }
     let loader = ListResponseLoader(started: started)

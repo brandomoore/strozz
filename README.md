@@ -445,10 +445,20 @@ longer startup-health check, so it does not cover video that's already audible.
 The in-player stream title stays with the channel across source switches and
 playback retries; changing channels clears it before fetching the new metadata.
 
-Closing a live player refreshes the Home rails and the originating Following,
-category, or search list. Stream-card identity follows the streamer, not the
+Closing a live player or channel page refreshes the Home rails and the originating
+Following, category, or search list. Returning from a category also refreshes
+Browse/Search, and returning from a recording refreshes its channel page.
+Live thumbnails receive a new image request without replacing card identities.
+The same return-refresh behavior covers iPhone/iPad Home, Browse, categories,
+and channel profiles. Stream-card identity follows the streamer, not the
 broadcast ID or ranking, so tvOS can retain focus through live-status updates
 and reordering. Return refreshes do not force focus back to the first card.
+
+On Apple TV, selecting a stream requests exclusive playback audio. If another
+app interrupts that initial handoff, Strozz makes one bounded reactivation
+attempt; muted panes and deliberate pauses do not repeatedly claim audio.
+Later interruptions offer **Resume playback** (also available through the
+remote's Play/Pause button) instead of leaving an endless loading indicator.
 
 When you return to a stream, Strozz restarts its stall-detection window rather
 than counting time spent in the background as a freeze. An empty buffer or

@@ -142,7 +142,7 @@ struct FollowingDirectoryView: View {
     .navigationBarHidden(true)
     .toolbar(.hidden, for: .tabBar)
     .task {
-      await follows.loadDirectory(using: auth)
+      await follows.loadDirectory(using: auth, force: true)
     }
     .onChange(of: follows.directory) { previous, _ in
       if previous.isEmpty, focusedID == nil, let first = filteredChannels.first {

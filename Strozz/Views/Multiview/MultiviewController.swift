@@ -75,6 +75,8 @@ final class MultiviewPane: Identifiable {
   }
 
   func stop() {
+    model.audioTakeoverTask?.cancel()
+    model.audioTakeoverTask = nil
     model.isLoading = true
     model.nativeGeneration = UUID()
     model.nativeStartupTask?.cancel()

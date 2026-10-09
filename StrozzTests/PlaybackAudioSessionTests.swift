@@ -4,6 +4,137 @@ import XCTest
 
 @MainActor
 final class PlaybackAudioSessionTests: XCTestCase {
+  func testMutedMultiviewPaneResumesOnlyAfterAudibleOwnerReclaimsAudio() {
+    for paused in [false, true] {
+      let model = PlayerModel()
+      model.multiviewContext = MultiviewPlaybackContext()
+      model.player.isMuted = true
+      model.isUserPaused = paused
+      var activations = 0
+      model.activateAudioSession = { activations += 1 }
+      let view = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: model)
+      defer {
+        view.stopLatencyMonitor()
+        view.stopPlaybackWatchdog()
+        model.player.pause()
+      }
+      view.handleAudioInterruption(interruption(.began))
+      XCTAssertNil(model.audioTakeoverTask)
+      view.resumeMutedPaneAfterAudioActivation()
+      XCTAssertEqual(model.audioInterrupted, paused)
+      XCTAssertEqual(model.isUserPaused, paused)
+      XCTAssertTrue(model.player.isMuted)
+      XCTAssertEqual(activations, paused ? 0 : 1)
+    }
+  }
+
+  func testSelectedStreamReclaimsStartupAudioOnceWithoutChangingQualityOrVolume() async {
+    let model = PlayerModel()
+    model.player.volume = 0.35
+    var activations = 0
+    model.activateAudioSession = { activations += 1 }
+    let view = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: model)
+    defer {
+      model.audioTakeoverTask?.cancel()
+      view.stopLatencyMonitor()
+      view.stopPlaybackWatchdog()
+      model.player.pause()
+    }
+    view.startPlayback()
+    view.handleAudioInterruption(interruption(.began))
+    XCTAssertTrue(model.audioInterrupted)
+    XCTAssertNotNil(model.audioTakeoverTask)
+    await model.audioTakeoverTask?.value
+    XCTAssertEqual(activations, 2, "The explicit stream selection gets one audio takeover retry")
+    XCTAssertFalse(model.audioInterrupted)
+    XCTAssertFalse(model.isUserPaused)
+    XCTAssertEqual(model.player.volume, 0.35, accuracy: 0.001)
+
+    view.handleAudioInterruption(interruption(.began))
+    XCTAssertNil(model.audioTakeoverTask, "Do not fight another app in a reactivation loop")
+    XCTAssertFalse(model.isLoading, "An interruption must not leave an infinite loading spinner")
+    XCTAssertNotNil(model.errorMessage)
+    view.handlePlayerPlayPauseCommand()
+    XCTAssertFalse(model.audioInterrupted)
+    XCTAssertNil(model.errorMessage)
+    XCTAssertEqual(activations, 3, "A later explicit Play command can reclaim audio")
+  }
+
+  func testStartupTakeoverHonorsBackgroundPauseAndMutedPanes() async {
+    for state in ["background", "paused", "muted"] {
+      let model = PlayerModel()
+      var activations = 0
+      model.activateAudioSession = { activations += 1 }
+      let view = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: model)
+      defer {
+        model.audioTakeoverTask?.cancel()
+        view.stopLatencyMonitor()
+        view.stopPlaybackWatchdog()
+        model.player.pause()
+      }
+      view.startPlayback()
+      if state == "muted" { model.player.isMuted = true }
+      view.handleAudioInterruption(interruption(.began))
+      if state == "background" { model.backgroundedAt = Date() }
+      if state == "paused" { model.isUserPaused = true }
+      await model.audioTakeoverTask?.value
+      XCTAssertEqual(activations, 1, state)
+      XCTAssertTrue(model.audioInterrupted, state)
+    }
+  }
+
+  func testUnendedInterruptionReturnsFromStartupWaitRatherThanWaitingForever() async {
+    let model = PlayerModel()
+    model.isLoading = true
+    model.activateAudioSession = { XCTFail("No explicit startup claim exists") }
+    let view = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: model)
+    view.handleAudioInterruption(interruption(.began))
+    let started = await view.waitForPlaybackStart()
+    XCTAssertFalse(started)
+    XCTAssertFalse(model.isLoading)
+    XCTAssertNotNil(model.errorMessage)
+  }
+
+  func testChangedItemCannotBeResumedByOldTakeoverAndDoesNotLeaveLoadingStuck() async {
+    let model = PlayerModel()
+    var activations = 0
+    model.activateAudioSession = { activations += 1 }
+    let view = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: model)
+    defer {
+      model.audioTakeoverTask?.cancel()
+      model.player.pause()
+      model.player.replaceCurrentItem(with: nil)
+    }
+    view.startPlayback()
+    view.handleAudioInterruption(interruption(.began))
+    model.player.replaceCurrentItem(with: AVPlayerItem(url: URL(fileURLWithPath: "/nonexistent-audio-fixture")))
+    await model.audioTakeoverTask?.value
+    XCTAssertEqual(activations, 1)
+    XCTAssertTrue(model.audioInterrupted)
+    XCTAssertFalse(model.isLoading)
+    XCTAssertNotNil(model.errorMessage)
+  }
+
+  func testEndingInterruptionDuringSelectedStreamTakeoverKeepsTheSelectionIntent() {
+    let model = PlayerModel()
+    var activations = 0
+    model.activateAudioSession = { activations += 1 }
+    let view = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: model)
+    defer {
+      model.audioTakeoverTask?.cancel()
+      view.stopLatencyMonitor()
+      view.stopPlaybackWatchdog()
+      model.player.pause()
+    }
+    view.startPlayback()
+    view.handleAudioInterruption(interruption(.began))
+    view.handleAudioInterruption(interruption(.ended))
+    XCTAssertFalse(model.isUserPaused, "The explicit new selection owns this bounded takeover")
+    XCTAssertFalse(model.audioInterrupted)
+    XCTAssertNil(model.audioTakeoverTask)
+    XCTAssertEqual(activations, 2)
+  }
+
   func testOnlyTheMediaServicesResetErrorBypassesSourceRetryPolicy() {
     XCTAssertTrue(PlaybackAudioSession.isMediaServicesReset(
       NSError(domain: AVFoundationErrorDomain, code: AVError.mediaServicesWereReset.rawValue)))

@@ -15,6 +15,21 @@ final class PlaybackReturnRefreshTests: XCTestCase {
     XCTAssertNil(coordinator.inFlight)
   }
 
+  func testEveryReturnRefreshesThumbnailURLsWithoutChangingChannelIdentity() async throws {
+    let coordinator = PlaybackReturnRefreshCoordinator()
+    let channel = channel(id: "fixture", login: "example", title: "Live", viewers: 1)
+    let url = try XCTUnwrap(URL(string: "https://static-cdn.jtvnw.net/previews-ttv/live_user_example-640x360.jpg"))
+    let original = coordinator.thumbnailRevision
+    let before = LiveThumbnailPolicy.freshURL(from: url, renderedWidth: 320, scale: 1, token: original.uuidString)
+    coordinator.playerDidDismiss {}
+    await coordinator.inFlight?.value
+    let after = LiveThumbnailPolicy.freshURL(from: url, renderedWidth: 320, scale: 1,
+      token: coordinator.thumbnailRevision.uuidString)
+    XCTAssertNotEqual(before, after)
+    XCTAssertEqual(before?.path, after?.path)
+    XCTAssertEqual(channel.channelKey, "example", "Refresh must not require replacing focus/row identity")
+  }
+
   func testOriginWaitsForDismissalAndIsConsumedOnce() async {
     let coordinator = PlaybackReturnRefreshCoordinator()
     var calls: [String] = []
@@ -41,16 +56,15 @@ final class PlaybackReturnRefreshTests: XCTestCase {
     XCTAssertEqual(calls, ["search", "home"])
   }
 
-  func testClosingChannelPageWithoutPlayingDiscardsOrigin() async {
+  func testClosingChannelPageWithoutPlayingRefreshesOrigin() async {
     let coordinator = PlaybackReturnRefreshCoordinator()
     var calls: [String] = []
     coordinator.prepareOrigin { calls.append("search") }
-    coordinator.discardOrigin()
 
     coordinator.playerDidDismiss { calls.append("home") }
     await coordinator.inFlight?.value
 
-    XCTAssertEqual(calls, ["home"])
+    XCTAssertEqual(calls, ["search", "home"])
   }
 
   func testStartingPlayerPreservesChannelPageOrigin() async {

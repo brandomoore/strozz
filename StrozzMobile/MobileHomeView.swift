@@ -77,6 +77,7 @@ struct MobileHomeView: View {
   @Environment(\.dynamicTypeSize) private var typeSize
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(MobileVODProgressStore.self) private var vodProgress
+  @Environment(PlaybackReturnRefreshCoordinator.self) private var returnRefresh: PlaybackReturnRefreshCoordinator?
   @AppStorage(RecommendationPreferences.enabledDefaultsKey) private var personalizedEnabled = true
   @State private var feed = MobileHomeFeed.live
   @State private var category: TwitchCategory?
@@ -90,6 +91,7 @@ struct MobileHomeView: View {
   @State private var selectedVideo: MobileVODSelection?
   @State private var personalRefreshID = UUID()
   @State private var personalLoading = true
+  @State private var hasAppeared = false
 
   private var shouldPreview: Bool { previewsEnabled && feed == .live && selectedVideo == nil }
   private var liveCategoryID: String? { feed == .live ? category?.id : nil }
@@ -221,6 +223,10 @@ struct MobileHomeView: View {
       followedSkeletonCount = count
     }
     .task { if recommendations.lastUpdatedAt == nil { await recommendations.refresh() } }
+    .task(id: returnRefresh?.thumbnailRevision) {
+      guard hasAppeared else { hasAppeared = true; return }
+      await refreshAfterReturn()
+    }
     .task(id: liveCategoryID) {
       if feed == .live, !personalFeed, let category { await categoryStreams.loadStreams(for: category) }
     }
@@ -239,7 +245,18 @@ struct MobileHomeView: View {
       if feed == .following { await follows.loadDirectory(using: auth) }
     }
     .task(id: personalizationID) { await refreshPersonalized() }
-    .fullScreenCover(item: $selectedVideo) { MobileVODPlayerView(selection: $0) }
+    .fullScreenCover(item: $selectedVideo, onDismiss: {
+      returnRefresh?.refreshThumbnails()
+    }) { MobileVODPlayerView(selection: $0) }
+  }
+
+  private func refreshAfterReturn() async {
+    if auth.isAuthenticated {
+      await follows.refresh(using: auth)
+      if feed == .following { await follows.loadDirectory(using: auth, force: true) }
+    }
+    guard !Task.isCancelled else { return }
+    await refreshLive()
   }
 
   private func refreshLive() async {

@@ -166,6 +166,21 @@ activation instead of waiting forever for that missing notification. Explicit
 pause intent remains intact, and failed activation surfaces an error. Ordinary
 interruptions while already foregrounded still honor their resume permission.
 
+An October 9 physical-TV capture distinguished another startup case: several
+channels resolved quickly and buffered about four seconds, then an audio
+interruption paused playback while another Apple TV app was playing music.
+The startup wait previously reset its deadline indefinitely. A newly selected,
+audible stream now owns one reactivation attempt within its eight-second startup
+handoff window, delayed 350 ms to let the interruption settle. It reuses the
+player/source and never changes volume or quality. Backgrounding, an intentional
+pause, a changed item, or unavailable media services prevents that automatic
+retry. Later or repeated interruptions show an explicit Resume action and end
+the loading wait; they do not fight another app in an activation loop. This
+takeover policy is TV-specific; mobile phone-call/interruption handling remains
+unchanged. Deterministic checks cover resume permission, cancellation, manual
+pause, muted panes, and the previously unbounded startup wait. Actual cross-app
+audio takeover still requires observation on the physical TV.
+
 The same live-playback recovery contract also applies on iPhone/iPad.
 `PlaybackAudioSession` and `PlaybackPositionRestoration` are compiled into both
 targets instead of maintaining separate setup and date-seek implementations.
