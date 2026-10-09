@@ -64,6 +64,7 @@ targets:
           - "TwitchChannelRewards*.swift"
           - "PlaybackTelemetry*.swift"
           - "PlaybackAudioSession.swift"
+          - "PlaybackReturnRefreshCoordinator.swift"
           - "PlaybackPositionRestoration.swift"
           - "TwitchYouTubeAliasService.swift"
           - "YouTubeLiveSnapshotService.swift"

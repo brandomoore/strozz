@@ -4,11 +4,13 @@ struct MobileChannelProfileView: View {
   let channel: FollowedChannel
   let onLive: (FollowedChannel) -> Void
   @Environment(MobileVODProgressStore.self) private var progress
+  @Environment(PlaybackReturnRefreshCoordinator.self) private var returnRefresh: PlaybackReturnRefreshCoordinator?
   @State private var profile: ChannelProfile?
   @State private var content: ChannelContent?
   @State private var loading = true
   @State private var errorMessage: String?
   @State private var selectedVideo: MobileVODSelection?
+  @State private var refreshID = UUID()
 
   var body: some View {
     ScrollView {
@@ -42,20 +44,24 @@ struct MobileChannelProfileView: View {
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(.visible, for: .navigationBar)
     .accessibilityIdentifier("mobile-channel-profile")
-    .task(id: channel.channelKey) { await refresh() }
+    .task(id: "\(channel.channelKey)/\(returnRefresh?.thumbnailRevision.uuidString ?? "")") { await refresh() }
     .refreshable { await refresh() }
-    .fullScreenCover(item: $selectedVideo) { MobileVODPlayerView(selection: $0) }
+    .fullScreenCover(item: $selectedVideo, onDismiss: {
+      returnRefresh?.refreshThumbnails()
+    }) { MobileVODPlayerView(selection: $0) }
   }
 
   private func refresh() async {
-    loading = true
+    let request = UUID()
+    refreshID = request
+    loading = content == nil
     errorMessage = nil
     async let loadedProfile = ChannelProfileService.fetch(login: channel.login)
     async let loadedContent = ChannelContentService.load(login: channel.login)
     let (newProfile, newContent) = await (loadedProfile, loadedContent)
-    guard !Task.isCancelled else { return }
-    profile = newProfile
-    content = newContent
+    guard !Task.isCancelled, request == refreshID else { return }
+    if let newProfile { profile = newProfile }
+    if let newContent { content = newContent }
     if newProfile == nil || newContent == nil {
       errorMessage = "Could not load all channel details. Pull to refresh or try again."
     }

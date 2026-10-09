@@ -59,6 +59,7 @@ struct MobileRootView: View {
   @State private var vodProgress: MobileVODProgressStore
   @State private var homeProfile: FollowedChannel?
   @State private var browseProfile: FollowedChannel?
+  @State private var returnRefresh = PlaybackReturnRefreshCoordinator()
 
   init(accountID: String = "anonymous") {
     _history = State(initialValue: WatchHistoryService(storageKey: PersistenceKey.mobileWatchHistory(accountID: accountID)))
@@ -91,9 +92,19 @@ struct MobileRootView: View {
     .environment(\.themePalette, palette)
     .environment(history)
     .environment(vodProgress)
-    .fullScreenCover(item: $selectedChannel, onDismiss: { playbackModel.stop() }) { channel in
+    .environment(returnRefresh)
+    .fullScreenCover(item: $selectedChannel, onDismiss: {
+      playbackModel.stop()
+      returnRefresh.refreshThumbnails()
+    }) { channel in
       MobilePlayerView(channel: channel, model: playbackModel)
         .environment(\.themePalette, palette)
+    }
+    .onChange(of: homeProfile) { previous, current in
+      if previous != nil, current == nil { returnRefresh.refreshThumbnails() }
+    }
+    .onChange(of: browseProfile) { previous, current in
+      if previous != nil, current == nil { returnRefresh.refreshThumbnails() }
     }
     .onDisappear { preview.stop() }
   }

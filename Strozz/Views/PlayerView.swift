@@ -188,6 +188,9 @@ struct PlayerView: View {
   /// floating panel to its content and animate when the page/content changes.
   @State var chatSettingsContentHeight: CGFloat = 0
   @State var showControls = false
+  #if DEBUG && targetEnvironment(simulator)
+  @State var didInjectAudioInterruption = false
+  #endif
   // streamTitle / channelDisplayName / channelAvatarURL now live in PlayerModel.
   @State var channelPageTarget: ChannelPageTarget?
   /// When the user picks a "More like this" channel from the channel page, we
@@ -604,7 +607,7 @@ struct PlayerView: View {
   // its `focusTag`, and must be registered in that allow-list — otherwise tvOS
   // can't land focus on it and traps on a neighbor.
   enum Focusable: Hashable {
-    case video, streamInfo, quality, rewards, chatToggle, chatInput, errorBack
+    case video, streamInfo, quality, rewards, chatToggle, chatInput, errorBack, audioResume
     case offlineViewChannel, offlineTryAgain
     case chatSend
     /// VOD-only: invisible target inside the chat pane that holds focus while the

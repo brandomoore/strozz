@@ -13,6 +13,7 @@ final class BrowseService {
     private(set) var streamsErrorMessage: String?
     private var streamsCategoryID: String?
     private var streamsRequestID = UUID()
+    private var categoriesRequestID = UUID()
     private let loadData: NetworkClient.DataLoader
 
     init(loadData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) }) {
@@ -22,14 +23,19 @@ final class BrowseService {
     // MARK: - Public API
 
     func loadCategories() async {
+        let requestID = UUID()
+        categoriesRequestID = requestID
         isLoadingCategories = true
         categoryErrorMessage = nil
-        defer { isLoadingCategories = false }
+        defer { if categoriesRequestID == requestID { isLoadingCategories = false } }
 
         do {
-            categories = try await fetchTopCategories(limit: 40)
+            let loaded = try await fetchTopCategories(limit: 40)
+            guard !Task.isCancelled, categoriesRequestID == requestID else { return }
+            categories = loaded
             prewarmBoxArt(categories)
         } catch {
+            guard !Task.isCancelled, categoriesRequestID == requestID else { return }
             categoryErrorMessage = "Could not load categories."
         }
     }

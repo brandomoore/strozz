@@ -152,7 +152,7 @@ extension PlayerView {
       // Only expose the video focus target while controls are hidden.
       // Otherwise, left-edge movement from the control cluster can escape
       // into this invisible target and appear as lost focus.
-      if !showControls, !isOffline, !isMultiviewCompact {
+      if !showControls, !isOffline, errorMessage == nil, !isMultiviewCompact {
         Color.clear
           .frame(maxWidth: .infinity, maxHeight: .infinity)
           .contentShape(Rectangle())
@@ -167,15 +167,23 @@ extension PlayerView {
         offlineState
       } else if let errorMessage, !isMultiviewCompact {
         VStack(spacing: 24) {
-          Text("Couldn't play \(activeChannel)")
-            .font(.title2).bold()
+          if model.audioInterrupted {
+            Text("Playback interrupted").font(.title2).bold()
+          } else {
+            Text("Couldn't play \(activeChannel)").font(.title2).bold()
+          }
           Text(errorMessage)
             .foregroundStyle(.secondary)
+          if model.audioInterrupted {
+            Button("Resume playback") { resumeAfterAudioInterruption() }
+              .focused($focus, equals: .audioResume)
+          }
           Button("Back") { closePlayer() }
             .focused($focus, equals: .errorBack)
         }
         .padding(40)
         .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 24))
+        .defaultFocus($focus, model.audioInterrupted ? .audioResume : .errorBack)
       } else if showControls && !isMultiviewCompact {
         bottomOverlay
       }
@@ -193,6 +201,11 @@ extension PlayerView {
   }
 
   func handlePlayerPlayPauseCommand() {
+    if !isMultiviewCompact, model.audioInterrupted {
+      isUserPaused = false
+      resumeAfterAudioInterruption()
+      return
+    }
     guard !isMultiviewCompact, rewindAvailable, errorMessage == nil, !isOffline, !isLoading else { return }
     toggleRewindPlayPause()
   }

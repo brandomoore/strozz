@@ -6,6 +6,7 @@ struct MobileBrowseView: View {
   @State private var search = SearchService()
   @State private var query = ""
   @State private var hasLoadedCategories = false
+  @Environment(PlaybackReturnRefreshCoordinator.self) private var returnRefresh: PlaybackReturnRefreshCoordinator?
 
   var body: some View {
     ScrollView {
@@ -29,14 +30,20 @@ struct MobileBrowseView: View {
                 prompt: "Channels and categories")
     .scrollDismissesKeyboard(.interactively)
     .task(id: query) {
+      let pending = query.trimmingCharacters(in: .whitespacesAndNewlines)
+      if search.query == pending, search.hasResults { return }
       search.clear()
-      guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+      guard !pending.isEmpty else { return }
       do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
-      await search.search(query)
+      await search.search(pending)
     }
-    .task {
-      if service.categories.isEmpty { await service.loadCategories() }
+    .task(id: returnRefresh?.thumbnailRevision) {
+      await service.loadCategories()
+      guard !Task.isCancelled else { return }
       hasLoadedCategories = true
+      if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        await search.search(query, preservingResultsOnFailure: true)
+      }
     }
     .refreshable {
       if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -145,6 +152,7 @@ struct MobileCategoryStreamsView: View {
   let onSelect: (FollowedChannel) -> Void
   @State private var service = BrowseService()
   @State private var hasLoaded = false
+  @Environment(PlaybackReturnRefreshCoordinator.self) private var returnRefresh: PlaybackReturnRefreshCoordinator?
 
   var body: some View {
     ScrollView {
@@ -161,7 +169,10 @@ struct MobileCategoryStreamsView: View {
       .padding()
     }
     .navigationTitle(category.name)
-    .task { await service.loadStreams(for: category); hasLoaded = true }
+    .task(id: returnRefresh?.thumbnailRevision) {
+      await service.loadStreams(for: category)
+      if !Task.isCancelled { hasLoaded = true }
+    }
     .refreshable { await service.loadStreams(for: category) }
   }
 }

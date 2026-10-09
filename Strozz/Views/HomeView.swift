@@ -394,8 +394,14 @@ struct HomeView: View {
         await refreshHomeSections(force: false)
       }
     }
-    .onChange(of: homePath) { _, _ in promptGoLiveSetupIfNeeded() }
-    .onChange(of: showingFollowingDirectory) { _, _ in promptGoLiveSetupIfNeeded() }
+    .onChange(of: homePath) { previous, current in
+      if current.count < previous.count { handlePlayerDismissal() }
+      promptGoLiveSetupIfNeeded()
+    }
+    .onChange(of: showingFollowingDirectory) { _, showing in
+      if !showing { handlePlayerDismissal() }
+      promptGoLiveSetupIfNeeded()
+    }
     .onChange(of: deepLinkRouter.pendingChannelLogin) { _, login in
       openDeepLinkedChannelIfNeeded(login)
     }
@@ -421,7 +427,7 @@ struct HomeView: View {
         .environment(\.themePalette, resolvedPalette)
     }
     .fullScreenCover(item: $channelPageTarget, onDismiss: {
-      if pendingWatchChannel == nil { playbackReturnRefresh.discardOrigin() }
+      if pendingWatchChannel == nil { handlePlayerDismissal() }
       presentPendingWatchIfNeeded()
       promptGoLiveSetupIfNeeded()
     }) { target in

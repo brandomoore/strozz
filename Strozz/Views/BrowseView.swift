@@ -9,6 +9,7 @@ struct BrowseView: View {
   @State private var service = BrowseService()
   @State private var path: [TwitchCategory] = []
   @State private var hasLoaded = false
+  @Environment(PlaybackReturnRefreshCoordinator.self) private var playbackReturnRefresh
 
   var body: some View {
     NavigationStack(path: $path) {
@@ -17,18 +18,19 @@ struct BrowseView: View {
         isLoading: service.isLoadingCategories || !hasLoaded,
         onSelectCategory: { path.append($0) }
       )
-      .task {
-        if service.categories.isEmpty {
-          await service.loadCategories()
-        }
-        hasLoaded = true
-      }
       .navigationDestination(for: TwitchCategory.self) { category in
         CategoryStreamsView(
           category: category,
           selectedChannel: $selectedChannel,
           channelPageTarget: $channelPageTarget
         )
+      }
+      .task(id: path.isEmpty) {
+        guard path.isEmpty else { return }
+        await service.loadCategories()
+        guard !Task.isCancelled else { return }
+        hasLoaded = true
+        playbackReturnRefresh.refreshThumbnails()
       }
     }
   }

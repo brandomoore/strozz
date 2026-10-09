@@ -2,6 +2,41 @@ import XCTest
 
 @MainActor
 final class PlayerChatLayoutTests: XCTestCase {
+  func testOptInInterruptedPlayerOffersFocusableResumeInsteadOfLoadingForever() throws {
+    let settings = ProcessInfo.processInfo.environment
+    guard settings["STROZZ_PLAYER_LAYOUT_TESTS"] == "1",
+      let channel = settings["STROZZ_MATRIX_CHANNELS"]?.split(separator: ",").first else {
+      throw XCTSkip("Select a live channel and enable STROZZ_PLAYER_LAYOUT_TESTS.")
+    }
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_PLAYER_UI_CHANNEL"] = String(channel)
+    app.launchEnvironment["STROZZ_UI_AUDIO_INTERRUPTION"] = "1"
+    app.launchEnvironment["STROZZ_MUTE_PLAYBACK"] = "1"
+    app.launchArguments = ["-hasPromptedFirstLaunchSignIn", "YES"]
+    app.launch()
+    defer { app.terminate() }
+    let resume = app.buttons["Resume playback"].firstMatch
+    XCTAssertTrue(resume.waitForExistence(timeout: 45))
+    expectation(for: NSPredicate(format: "hasFocus == true"), evaluatedWith: resume)
+    waitForExpectations(timeout: 5)
+    XCUIRemote.shared.press(.down)
+    XCTAssertTrue(app.buttons["Back"].firstMatch.hasFocus)
+    XCUIRemote.shared.press(.up)
+    XCTAssertTrue(resume.hasFocus)
+    XCUIRemote.shared.press(.select)
+    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: resume)
+    waitForExpectations(timeout: 10)
+    XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "player-video-focus")
+      .firstMatch.waitForExistence(timeout: 10))
+    XCUIRemote.shared.press(.up)
+    XCTAssertTrue(app.buttons["player-quality-menu"].firstMatch.waitForExistence(timeout: 5))
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.name = "Resumed stream after audio interruption"
+    screenshot.lifetime = .keepAlways
+    add(screenshot)
+  }
+
   func testOptInDirectEntryKeepsChatClearOfVideoAndControls() throws {
     let settings = ProcessInfo.processInfo.environment
     guard settings["STROZZ_PLAYER_LAYOUT_TESTS"] == "1",

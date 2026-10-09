@@ -146,6 +146,7 @@ struct LiveThumbnail<Content: View, Placeholder: View>: View {
   private let placeholder: () -> Placeholder
 
   @Environment(\.displayScale) private var displayScale
+  @Environment(PlaybackReturnRefreshCoordinator.self) private var returnRefresh: PlaybackReturnRefreshCoordinator?
   @State private var cacheBustToken = UUID().uuidString
 
   init(
@@ -162,7 +163,8 @@ struct LiveThumbnail<Content: View, Placeholder: View>: View {
     GeometryReader { geo in
       AsyncImage(
         url: LiveThumbnailPolicy.freshURL(
-          from: url, renderedWidth: geo.size.width, scale: displayScale, token: cacheBustToken)
+          from: url, renderedWidth: geo.size.width, scale: displayScale,
+          token: cacheBustToken + (returnRefresh?.thumbnailRevision.uuidString ?? ""))
       ) { image in
         content(image)
       } placeholder: {

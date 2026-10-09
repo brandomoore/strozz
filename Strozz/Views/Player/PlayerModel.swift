@@ -44,6 +44,9 @@ final class PlayerModel {
   @ObservationIgnored var activateAudioSession: @MainActor () throws -> Void = PlaybackAudioSession.activate
   @ObservationIgnored var audioSessionActivationFailed = false
   @ObservationIgnored var audioInterrupted = false
+  @ObservationIgnored var startupAudioClaimUntil: Date?
+  @ObservationIgnored var startupAudioClaimUsed = false
+  @ObservationIgnored var audioTakeoverTask: Task<Void, Never>?
   @ObservationIgnored var mediaServicesUnavailable = false
   @ObservationIgnored var mediaServicesResetPending = false
 

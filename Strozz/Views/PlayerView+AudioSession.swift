@@ -11,6 +11,9 @@ extension PlayerView {
       if model.audioSessionActivationFailed { errorMessage = nil }
       model.audioSessionActivationFailed = false
       recordPlaybackEvent("audio_session_activated", attributes: ["reason": reason])
+      if !player.isMuted, player.volume > 0 {
+        NotificationCenter.default.post(name: PlaybackAudioSession.audiblePlayerActivated, object: player)
+      }
       return true
     } catch {
       model.audioSessionActivationFailed = true
@@ -29,6 +32,10 @@ extension PlayerView {
       let type = AVAudioSession.InterruptionType(rawValue: value) else { return }
     switch type {
     case .began:
+      guard !model.audioInterrupted else { return }
+      let reclaimStartup = isLoading && didRequestPlayback && !isUserPaused
+        && !model.startupAudioClaimUsed && (model.startupAudioClaimUntil.map { $0 > Date() } ?? false)
+        && !player.isMuted && player.volume > 0
       model.audioInterrupted = true
       cancelNativeStartup()
       cancelNativeCatchUp(reason: "audio_interruption")
@@ -36,18 +43,72 @@ extension PlayerView {
       resetPlaybackHealth()
       updateWatchRewards()
       recordPlaybackEvent("audio_interruption_began")
+      if reclaimStartup {
+        model.startupAudioClaimUsed = true
+        let item = player.currentItem
+        model.audioTakeoverTask = Task { @MainActor in
+          defer {
+            if !Task.isCancelled {
+              model.audioTakeoverTask = nil
+              if model.audioInterrupted, backgroundedAt == nil { showAudioInterruptionRecovery() }
+            }
+          }
+          do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+          guard !Task.isCancelled, model.audioInterrupted, item === player.currentItem,
+            !isUserPaused, backgroundedAt == nil, !isSleeping, channelPageTarget == nil,
+            !model.mediaServicesUnavailable else { return }
+          resumeAfterAudioInterruption()
+        }
+      } else {
+        showAudioInterruptionRecovery()
+      }
     case .ended:
+      let reclaimingSelection = model.audioTakeoverTask != nil
+      model.audioTakeoverTask?.cancel()
+      model.audioTakeoverTask = nil
       guard model.audioInterrupted else { return }
       model.audioInterrupted = false
+      errorMessage = nil
       let options = AVAudioSession.InterruptionOptions(
         rawValue: notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0)
-      if !options.contains(.shouldResume) { isUserPaused = true }
+      if !options.contains(.shouldResume), !reclaimingSelection {
+        isUserPaused = true
+        isLoading = false
+      }
       recordPlaybackEvent("audio_interruption_ended",
         flags: ["should_resume": options.contains(.shouldResume)])
       resumePlaybackAfterAbsence(restoreLive: false)
     @unknown default:
       recordPlaybackEvent("audio_interruption_unknown", level: .warning)
     }
+  }
+
+  private func showAudioInterruptionRecovery() {
+    isLoading = false
+    showChatSettings = false
+    showRewards = false
+    errorMessage = String(localized: "Playback was interrupted. Resume to use Strozz audio.")
+  }
+
+  func resumeMutedPaneAfterAudioActivation() {
+    guard model.multiviewContext != nil, player.isMuted, model.audioInterrupted,
+      !isUserPaused, !isSleeping, !model.mediaServicesUnavailable,
+      backgroundedAt == nil, channelPageTarget == nil else { return }
+    model.audioInterrupted = false
+    errorMessage = nil
+    recordPlaybackEvent("audio_interruption_reclaimed", attributes: ["reason": "audible_multiview_owner"])
+    resumePlaybackAfterAbsence(restoreLive: false)
+  }
+
+  func resumeAfterAudioInterruption() {
+    guard model.audioInterrupted, backgroundedAt == nil, !isSleeping,
+      !model.mediaServicesUnavailable, channelPageTarget == nil else { return }
+    isUserPaused = false
+    model.audioInterrupted = false
+    errorMessage = nil
+    recordPlaybackEvent("audio_interruption_reclaimed",
+      attributes: ["reason": model.audioTakeoverTask == nil ? "user_resume" : "selected_stream_startup"])
+    resumePlaybackAfterAbsence(restoreLive: false)
   }
 
   func handleMediaServicesLost() {
@@ -67,6 +128,8 @@ extension PlayerView {
   }
 
   private func invalidateMediaServicesPlayback() {
+    model.audioTakeoverTask?.cancel()
+    model.audioTakeoverTask = nil
     guard player.currentItem != nil || model.nativeNeedsRefresh else { return }
     model.mediaServicesResetPending = true
     cancelNativeStartup()
