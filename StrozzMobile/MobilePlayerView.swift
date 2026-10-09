@@ -73,14 +73,23 @@ enum MobileMiniPlayerLayout {
 
   static func released(_ manipulation: Manipulation, from frame: CGRect, velocity: CGSize,
                        in size: CGSize, isPhone: Bool, reduceMotion: Bool) -> CGRect {
-    var release = manipulation
     let speed = hypot(velocity.width, velocity.height)
-    if !reduceMotion, manipulation.anchor == nil, speed > 120 {
-      let distance = min((speed - 120) * 0.12, min(140, min(size.width, size.height) * 0.24))
-      release.translation.width += velocity.width / speed * distance
-      release.translation.height += velocity.height / speed * distance
+    guard !reduceMotion, manipulation.anchor == nil, speed > 120 else {
+      return applying(manipulation, to: frame, in: size, isPhone: isPhone)
     }
-    return applying(release, to: frame, in: size, isPhone: isPhone)
+    var release = manipulation
+    let distance = min((speed - 120) * 0.12, min(140, min(size.width, size.height) * 0.24))
+    release.translation.width += velocity.width / speed * distance
+    release.translation.height += velocity.height / speed * distance
+    var settled = applying(release, to: frame, in: size, isPhone: isPhone)
+    let travel = manipulation.translation
+    if abs(velocity.height) >= 1000, abs(velocity.height) >= abs(velocity.width) * 1.5,
+       abs(travel.height) >= 40, abs(travel.height) > abs(travel.width),
+       travel.height * velocity.height > 0 {
+      let bounds = bounds(in: size, isPhone: isPhone)
+      settled.origin.y = velocity.height < 0 ? bounds.minY : bounds.maxY - settled.height
+    }
+    return settled
   }
 
   private static func resistance(_ excess: CGFloat, limit: CGFloat) -> CGFloat {
@@ -412,7 +421,7 @@ struct MobileVideoView: View {
         .padding(6)
         .buttonStyle(.plain)
         .background {
-          MobilePlayerControlScrim(showsBottom: model.errorMessage != nil, showsCenter: false,
+          MobilePlayerControlScrim(hasBottomControls: model.errorMessage != nil,
                                    reduceTransparency: reduceTransparency)
         }
       } else if controlsVisible || held {

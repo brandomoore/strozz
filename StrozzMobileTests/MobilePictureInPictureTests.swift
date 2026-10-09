@@ -151,6 +151,58 @@ final class MobilePictureInPictureTests: XCTestCase {
     }
   }
 
+  func testDeliberateVerticalFlicksReachTheCorrespondingEdge() {
+    for (size, isPhone) in [(CGSize(width: 390, height: 750), true),
+                           (.init(width: 800, height: 350), true),
+                           (.init(width: 1024, height: 1300), false),
+                           (.init(width: 320, height: 600), false)] {
+      let bounds = MobileMiniPlayerLayout.bounds(in: size, isPhone: isPhone)
+      for vertical: CGFloat in [0, 0.5, 1] {
+        let frame = MobileMiniPlayerLayout.frame(
+          in: size, isPhone: isPhone, placement: .init(horizontal: 0.5, vertical: vertical))
+        for speed: CGFloat in [-2200, -1000, 1000, 2200] {
+          let drag = MobileMiniPlayerLayout.Manipulation(
+            translation: .init(width: 0, height: speed < 0 ? -40 : 40))
+          let settled = MobileMiniPlayerLayout.released(
+            drag, from: frame, velocity: .init(width: 0, height: speed),
+            in: size, isPhone: isPhone, reduceMotion: false)
+          XCTAssertEqual(settled.minY, speed < 0 ? bounds.minY : bounds.maxY - settled.height, accuracy: 0.001)
+          XCTAssertEqual(settled.minX, frame.minX, accuracy: 0.001)
+          XCTAssertEqual(settled.size, frame.size)
+          XCTAssertTrue(bounds.contains(settled))
+        }
+      }
+    }
+  }
+
+  func testEdgeFlickRequiresSpeedDistanceAndConsistentVerticalIntent() {
+    let size = CGSize(width: 1024, height: 1300)
+    let frame = CGRect(x: 350, y: 450, width: 320, height: 180)
+    for (translation, velocity) in [
+      (CGSize(width: 0, height: -80), CGSize(width: 0, height: -999)),
+      (.init(width: 0, height: -39), .init(width: 0, height: -1500)),
+      (.init(width: 100, height: -80), .init(width: 0, height: -1500)),
+      (.init(width: 0, height: -80), .init(width: 1000, height: -1200)),
+      (.init(width: 0, height: 80), .init(width: 0, height: -1500)),
+    ] {
+      let drag = MobileMiniPlayerLayout.Manipulation(translation: translation)
+      let held = MobileMiniPlayerLayout.applying(drag, to: frame, in: size, isPhone: false)
+      let settled = MobileMiniPlayerLayout.released(
+        drag, from: frame, velocity: velocity, in: size, isPhone: false, reduceMotion: false)
+      XCTAssertLessThanOrEqual(hypot(settled.minX - held.minX, settled.minY - held.minY), 140.001,
+                               "Ordinary releases must keep the short coast, not jump to an edge")
+    }
+    var drag = MobileMiniPlayerLayout.Manipulation(translation: .init(width: 0, height: -80))
+    let held = MobileMiniPlayerLayout.applying(drag, to: frame, in: size, isPhone: false)
+    XCTAssertEqual(MobileMiniPlayerLayout.released(
+      drag, from: frame, velocity: .init(width: 0, height: -1500),
+      in: size, isPhone: false, reduceMotion: true), held)
+    drag.anchor = .center
+    XCTAssertEqual(MobileMiniPlayerLayout.released(
+      drag, from: frame, velocity: .init(width: 0, height: -1500),
+      in: size, isPhone: false, reduceMotion: false), held)
+  }
+
   func testMinimizeAndExpandNeverStartNativePiPOrReplaceTheSource() {
     let session = makeSession()
     session.select(channel("first"))

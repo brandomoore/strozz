@@ -94,8 +94,7 @@ struct MobilePlayerControls: View {
     .buttonStyle(.plain)
     .padding(10)
     .background {
-      MobilePlayerControlScrim(showsBottom: model.presentationState == .ready,
-                               showsCenter: model.presentationState == .ready,
+      MobilePlayerControlScrim(hasBottomControls: model.presentationState == .ready,
                                reduceTransparency: reduceTransparency)
     }
   }
@@ -156,46 +155,18 @@ struct MobileControlSurface: ViewModifier {
 }
 
 struct MobilePlayerControlScrim: View {
-  let showsBottom: Bool
-  let showsCenter: Bool
+  let hasBottomControls: Bool
   let reduceTransparency: Bool
   @Environment(\.themePalette) private var palette
 
   var body: some View {
     let strength = reduceTransparency ? 1.25 : 1.0
-    GeometryReader { geometry in
-      ZStack {
-        LinearGradient(stops: [
-          .init(color: palette.videoControlScrim.opacity(0.62 * strength), location: 0),
-          .init(color: palette.videoControlScrim.opacity(0.54 * strength), location: 0.35),
-          .init(color: palette.videoControlScrim.opacity(0.16 * strength), location: 0.75),
-          .init(color: palette.videoControlScrim.opacity(0), location: 1),
-        ], startPoint: .top, endPoint: .bottom)
-        .frame(height: min(geometry.size.height, min(180, max(96, geometry.size.height * 0.38))))
-        .frame(maxHeight: .infinity, alignment: .top)
-
-        if showsBottom {
-          LinearGradient(stops: [
-            .init(color: palette.videoControlScrim.opacity(0.64 * strength), location: 0),
-            .init(color: palette.videoControlScrim.opacity(0.58 * strength), location: 0.5),
-            .init(color: palette.videoControlScrim.opacity(0.16 * strength), location: 0.82),
-            .init(color: palette.videoControlScrim.opacity(0), location: 1),
-          ], startPoint: .bottom, endPoint: .top)
-          .frame(height: min(geometry.size.height, min(220, max(140, geometry.size.height * 0.45))))
-          .frame(maxHeight: .infinity, alignment: .bottom)
-        }
-
-        if showsCenter {
-          RadialGradient(stops: [
-            .init(color: palette.videoControlScrim.opacity(0.5 * strength), location: 0),
-            .init(color: palette.videoControlScrim.opacity(0.46 * strength), location: 0.2),
-            .init(color: palette.videoControlScrim.opacity(0.12 * strength), location: 0.65),
-            .init(color: palette.videoControlScrim.opacity(0), location: 1),
-          ], center: .center, startRadius: 0,
-             endRadius: min(180, max(100, min(geometry.size.width, geometry.size.height) * 0.65)))
-        }
-      }
-    }
+    LinearGradient(stops: [
+      .init(color: palette.videoControlScrim.opacity(0.60 * strength), location: 0),
+      .init(color: palette.videoControlScrim.opacity(0.54 * strength), location: 0.45),
+      .init(color: palette.videoControlScrim.opacity(0.54 * strength), location: 0.55),
+      .init(color: palette.videoControlScrim.opacity((hasBottomControls ? 0.64 : 0.50) * strength), location: 1),
+    ], startPoint: .top, endPoint: .bottom)
     .allowsHitTesting(false)
     .accessibilityHidden(true)
   }

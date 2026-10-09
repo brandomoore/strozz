@@ -92,10 +92,19 @@ final class MobilePictureInPictureTests: XCTestCase {
     XCTAssertEqual(mini.frame.minY, customized.minY, accuracy: 2)
     XCTAssertEqual(mini.frame.width, customized.width, accuracy: 2)
     XCUIDevice.shared.orientation = .landscapeLeft
-    XCTAssertTrue(app.frame.contains(mini.frame))
+    expectation(for: NSPredicate { _, _ in
+      app.frame.width > app.frame.height && app.frame.contains(mini.frame)
+    }, evaluatedWith: app)
+    waitForExpectations(timeout: 5)
+    let rotated = settledFrame(mini)
+    XCTAssertTrue(app.frame.contains(rotated), "Rotated mini-player \(rotated) must fit inside \(app.frame)")
+    capture("Rotated mini-player")
     XCUIDevice.shared.orientation = .portrait
-    XCTAssertEqual(mini.frame.minY, customized.minY, accuracy: 2)
-    XCTAssertEqual(mini.frame.width, customized.width, accuracy: 2)
+    expectation(for: NSPredicate { _, _ in app.frame.width < app.frame.height }, evaluatedWith: app)
+    waitForExpectations(timeout: 5)
+    let restored = settledFrame(mini)
+    XCTAssertEqual(restored.minY, customized.minY, accuracy: 2)
+    XCTAssertEqual(restored.width, customized.width, accuracy: 2)
     app.buttons["mobile-mini-play-pause"].tap()
     XCTAssertEqual(app.buttons["mobile-mini-play-pause"].label, "Play")
     app.buttons["mobile-mini-play-pause"].tap()
@@ -111,7 +120,7 @@ final class MobilePictureInPictureTests: XCTestCase {
                 withVelocity: .slow, thenHoldForDuration: 0.15)
   }
 
-  func testQuickDragCoastsAndHeldReleaseStaysPrecise() throws {
+  func testVerticalFlicksReachEdgesWhileGentleReleasesStayControlled() throws {
     try requireLiveTests()
     let app = launch()
     defer { app.terminate() }
@@ -119,12 +128,30 @@ final class MobilePictureInPictureTests: XCTestCase {
     XCTAssertTrue(stream.waitForExistence(timeout: 45))
     stream.tap()
     waitForVideo(app)
+    let surface = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+    let topEdge = surface.frame.minY + 12
     collapseWithChevron(app)
     let mini = app.buttons["mobile-expand-player"]
-    let original = mini.frame
+    let original = settledFrame(mini)
+    func flick(_ distance: CGFloat, speed: CGFloat) {
+      let start = mini.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
+      start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance)),
+                  withVelocity: XCUIGestureVelocity(rawValue: speed), thenHoldForDuration: 0)
+    }
+    flick(-140, speed: 2000)
+    let top = settledFrame(mini)
+    XCTAssertEqual(top.minY, topEdge, accuracy: 2, "A deliberate upward flick should reach the top")
+    XCTAssertEqual(top.minX, original.minX, accuracy: 2)
+    XCTAssertEqual(top.size, original.size)
+    capture("Mini-player after an upward edge flick")
+    flick(140, speed: 2000)
+    let bottom = settledFrame(mini)
+    XCTAssertEqual(bottom.minY, original.minY, accuracy: 2, "A deliberate downward flick should reach the bottom")
+    XCTAssertEqual(bottom.minX, original.minX, accuracy: 2)
+    XCTAssertTrue(app.frame.contains(bottom))
     let start = mini.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
     start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -140)),
-                withVelocity: .fast, thenHoldForDuration: 0)
+                withVelocity: XCUIGestureVelocity(rawValue: 500), thenHoldForDuration: 0)
     XCTAssertTrue(mini.exists)
     let settled = settledFrame(mini)
     XCTAssertLessThan(settled.minY, original.minY - 150, "A quick release should coast beyond the finger's endpoint")
@@ -135,7 +162,7 @@ final class MobilePictureInPictureTests: XCTestCase {
     drag(mini, by: CGVector(dx: -30, dy: -40))
     XCTAssertEqual(mini.frame.minX, settled.minX - 30, accuracy: 2)
     XCTAssertEqual(mini.frame.minY, settled.minY - 40, accuracy: 2)
-    capture("Mini-player after a short glide and precise reposition")
+    capture("Mini-player after a gentle glide and precise reposition")
     mini.tap()
     waitForVideo(app)
   }

@@ -24,14 +24,16 @@ final class MobileLoadingPresentationTests: XCTestCase {
                          "Directory badges must retain their theme-aware surfaces")
   }
 
-  func testVideoScrimProvidesContrastOverWhiteWithoutWashingOutTheWholePicture() throws {
+  func testVideoScrimIsUniformWithGentleEdgeContrast() throws {
     for theme in AppTheme.allCases {
       for reduceTransparency in [false, true] {
         for size in [CGSize(width: 390, height: 220), .init(width: 844, height: 390),
-                     .init(width: 820, height: 500), .init(width: 240, height: 135)] {
-          let mini = size.width == 240
+                     .init(width: 820, height: 500), .init(width: 820, height: 1180),
+                     .init(width: 160, height: 90), .init(width: 240, height: 135),
+                     .init(width: 320, height: 180)] {
+          let mini = size.width <= 320
           let image = try render(
-            MobilePlayerControlScrim(showsBottom: !mini, showsCenter: !mini,
+            MobilePlayerControlScrim(hasBottomControls: !mini,
                                      reduceTransparency: reduceTransparency)
               .frame(width: size.width, height: size.height)
               .background(Color.white)
@@ -49,10 +51,25 @@ final class MobileLoadingPresentationTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(1.05 / (background + 0.05), 3,
                                        "Icon contrast: \(theme), \(size), reduced transparency \(reduceTransparency)")
           }
-          if size.width >= 820 {
-            XCTAssertGreaterThan(try luminance(image, x: 50, y: Int(size.height / 2)), 0.95,
-                                 "The broad fades should leave unoccupied video clear")
+          var rowLuminances: [Double] = []
+          for row in 0...10 {
+            let y = (image.height - 1) * row / 10
+            let middle = try luminance(image, x: image.width / 2, y: y)
+            for column in 0...4 {
+              // Allow one 8-bit shade of gradient dithering, not visible patches.
+              XCTAssertEqual(try luminance(image, x: (image.width - 1) * column / 4, y: y),
+                             middle, accuracy: 0.004, "No spotlight or horizontal brightness patches")
+            }
+            if let previous = rowLuminances.last {
+              XCTAssertLessThan(abs(middle - previous), 0.025, "The vertical fade must remain gradual")
+            }
+            rowLuminances.append(middle)
           }
+          let darkest = try XCTUnwrap(rowLuminances.min())
+          let lightest = try XCTUnwrap(rowLuminances.max())
+          XCTAssertLessThan(lightest - darkest, 0.10, "Only gentle edge darkening across the full picture")
+          XCTAssertGreaterThan(darkest, reduceTransparency ? 0.025 : 0.10,
+                               "The scrim must not obscure the video with an opaque fill")
         }
       }
     }
