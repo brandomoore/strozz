@@ -101,6 +101,56 @@ final class MobilePictureInPictureTests: XCTestCase {
     XCTAssertEqual(manipulation.anchor, UnitPoint(x: 0.25, y: 0.75))
   }
 
+  func testReleaseMomentumIsDirectionalBoundedAndDisabledForPreciseInteractions() {
+    let size = CGSize(width: 1024, height: 1300)
+    let frame = CGRect(x: 350, y: 450, width: 320, height: 180)
+    var drag = MobileMiniPlayerLayout.Manipulation(translation: .init(width: 20, height: -30))
+    let held = MobileMiniPlayerLayout.applying(drag, to: frame, in: size, isPhone: false)
+    func released(_ velocity: CGSize, reduceMotion: Bool = false) -> CGRect {
+      MobileMiniPlayerLayout.released(drag, from: frame, velocity: velocity,
+                                      in: size, isPhone: false, reduceMotion: reduceMotion)
+    }
+    XCTAssertEqual(released(.zero), held)
+    XCTAssertEqual(released(.init(width: 40, height: -40)), held)
+    let coast = released(.init(width: 300, height: -400))
+    XCTAssertEqual(coast.minX, held.minX + 27.36, accuracy: 0.001)
+    XCTAssertEqual(coast.minY, held.minY - 36.48, accuracy: 0.001)
+    XCTAssertEqual(coast.size, held.size)
+    let fling = released(.init(width: 30000, height: -40000))
+    XCTAssertEqual(hypot(fling.minX - held.minX, fling.minY - held.minY), 140, accuracy: 0.001)
+    XCTAssertEqual(released(.init(width: 300, height: -400), reduceMotion: true), held)
+    drag.anchor = .center
+    XCTAssertEqual(released(.init(width: 300, height: -400)), held, "Pinching must not accidentally fling the player")
+  }
+
+  func testElasticLimitsStayVisibleAndSettleBackInsideRestingBounds() {
+    for (size, isPhone) in [(CGSize(width: 390, height: 750), true),
+                           (.init(width: 800, height: 350), true),
+                           (.init(width: 1024, height: 1300), false),
+                           (.init(width: 160, height: 120), false)] {
+      let frame = MobileMiniPlayerLayout.frame(in: size, isPhone: isPhone)
+      let bounds = MobileMiniPlayerLayout.bounds(in: size, isPhone: isPhone)
+      for scale: CGFloat in [0.01, 1, 100] {
+        for delta in [CGSize(width: -2000, height: -2000), .zero, .init(width: 2000, height: 2000)] {
+          let gesture = MobileMiniPlayerLayout.Manipulation(translation: delta, magnification: scale)
+          let elastic = MobileMiniPlayerLayout.applying(gesture, to: frame, in: size, isPhone: isPhone, elastic: true)
+          XCTAssertTrue(CGRect(origin: .zero, size: size).contains(elastic))
+          XCTAssertEqual(elastic.width / elastic.height, 16 / 9, accuracy: 0.001)
+          let settled = MobileMiniPlayerLayout.released(
+            gesture, from: frame, velocity: .zero, in: size, isPhone: isPhone, reduceMotion: false)
+          XCTAssertGreaterThanOrEqual(settled.minX, bounds.minX - 0.001)
+          XCTAssertGreaterThanOrEqual(settled.minY, bounds.minY - 0.001)
+          XCTAssertLessThanOrEqual(settled.maxX, bounds.maxX + 0.001)
+          XCTAssertLessThanOrEqual(settled.maxY, bounds.maxY + 0.001)
+        }
+      }
+      let beyond = MobileMiniPlayerLayout.Manipulation(translation: .init(width: 100, height: 100))
+      let elastic = MobileMiniPlayerLayout.applying(beyond, to: frame, in: size, isPhone: isPhone, elastic: true)
+      XCTAssertGreaterThan(elastic.maxX, bounds.maxX)
+      XCTAssertLessThan(elastic.maxX, bounds.maxX + 8)
+    }
+  }
+
   func testMinimizeAndExpandNeverStartNativePiPOrReplaceTheSource() {
     let session = makeSession()
     session.select(channel("first"))
@@ -260,6 +310,36 @@ final class MobilePictureInPictureTests: XCTestCase {
                    "The displayed layer tree must have committed the top-aligned destination")
     XCTAssertEqual(renderedDestination.width, expandedFrame.width, accuracy: 1)
     session.didStopPictureInPicture()
+  }
+
+  func testGlidingSurfaceReportsItsDisplayedPositionForTheNextGesture() async throws {
+    let session = makeSession()
+    let channel = channel("fixture")
+    session.select(channel)
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    window.rootViewController = UIHostingController(rootView: MobilePlayerView(channel: channel, session: session)
+      .environment(TwitchAuthSession()))
+    defer { session.close(); window.rootViewController = previous }
+    let surface = session.videoController
+    try await waitUntil { surface.view.bounds.width > 320 }
+    session.collapse()
+    try await Task.sleep(for: .milliseconds(600))
+    let start = try XCTUnwrap(surface.presentedFrame)
+    let layer = surface.view.layer
+    let animation = CABasicAnimation(keyPath: "position.x")
+    animation.fromValue = layer.position.x - 100
+    animation.toValue = layer.position.x
+    animation.duration = 1
+    layer.add(animation, forKey: "test-glide")
+    defer { layer.removeAnimation(forKey: "test-glide") }
+    try await Task.sleep(for: .milliseconds(120))
+    let displayed = try XCTUnwrap(surface.presentedFrame)
+    let destination = surface.playerLayer.convert(surface.playerLayer.bounds, to: window.layer)
+    XCTAssertLessThan(displayed.minX, destination.minX - 20)
+    XCTAssertGreaterThan(displayed.minX, start.minX - 99)
+    XCTAssertEqual(displayed.width, start.width, accuracy: 1)
   }
 
   func testSelectingAnotherStreamStopsOldPlaybackBeforeReplacingNativePiP() {

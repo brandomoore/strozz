@@ -82,7 +82,9 @@ final class MobilePictureInPictureTests: XCTestCase {
     let customized = mini.frame
     XCTAssertEqual(customized.width / customized.height, 16 / 9, accuracy: 0.02)
     app.buttons["Browse"].firstMatch.tap()
-    XCTAssertEqual(mini.frame, customized)
+    XCTAssertEqual(mini.frame.minX, customized.minX, accuracy: 1)
+    XCTAssertEqual(mini.frame.minY, customized.minY, accuracy: 1)
+    XCTAssertEqual(mini.frame.width, customized.width, accuracy: 1)
     mini.tap()
     waitForVideo(app)
     collapseWithChevron(app)
@@ -106,7 +108,53 @@ final class MobilePictureInPictureTests: XCTestCase {
   private func drag(_ element: XCUIElement, by delta: CGVector) {
     let start = element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
     start.press(forDuration: 0.05, thenDragTo: start.withOffset(delta),
-                withVelocity: .slow, thenHoldForDuration: 0)
+                withVelocity: .slow, thenHoldForDuration: 0.15)
+  }
+
+  func testQuickDragCoastsAndHeldReleaseStaysPrecise() throws {
+    try requireLiveTests()
+    let app = launch()
+    defer { app.terminate() }
+    let stream = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'stream-'")).firstMatch
+    XCTAssertTrue(stream.waitForExistence(timeout: 45))
+    stream.tap()
+    waitForVideo(app)
+    collapseWithChevron(app)
+    let mini = app.buttons["mobile-expand-player"]
+    let original = mini.frame
+    let start = mini.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
+    start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -140)),
+                withVelocity: .fast, thenHoldForDuration: 0)
+    XCTAssertTrue(mini.exists)
+    let settled = settledFrame(mini)
+    XCTAssertLessThan(settled.minY, original.minY - 150, "A quick release should coast beyond the finger's endpoint")
+    XCTAssertGreaterThan(settled.minY, original.minY - 281, "Momentum should be short and bounded")
+    XCTAssertEqual(settled.width, original.width, accuracy: 0.5)
+    XCTAssertEqual(settled.height, original.height, accuracy: 0.5)
+    XCTAssertTrue(app.frame.contains(settled))
+    drag(mini, by: CGVector(dx: -30, dy: -40))
+    XCTAssertEqual(mini.frame.minX, settled.minX - 30, accuracy: 2)
+    XCTAssertEqual(mini.frame.minY, settled.minY - 40, accuracy: 2)
+    capture("Mini-player after a short glide and precise reposition")
+    mini.tap()
+    waitForVideo(app)
+  }
+
+  private func settledFrame(_ element: XCUIElement) -> CGRect {
+    var previous = CGRect.null
+    var unchangedSince = Date()
+    let settled = NSPredicate { _, _ in
+      let current = element.frame
+      if abs(current.minX - previous.minX) > 0.1 || abs(current.minY - previous.minY) > 0.1
+        || abs(current.width - previous.width) > 0.1 || abs(current.height - previous.height) > 0.1 {
+        previous = current
+        unchangedSince = Date()
+      }
+      return Date().timeIntervalSince(unchangedSince) >= 0.2
+    }
+    expectation(for: settled, evaluatedWith: element)
+    waitForExpectations(timeout: 5)
+    return element.frame
   }
 
   func testLeavingAppUsesNativePiPAndReturningRestoresTheMiniPlayer() throws {

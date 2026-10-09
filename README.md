@@ -177,6 +177,9 @@ its pause or close controls, or select another stream or broadcast to replace it
 Drag the mini-player with one finger to move it, or pinch to resize it. It keeps
 the video's proportions and stays within the available screen area. Its placement
 is retained when expanding and minimizing the same stream or returning from native PiP.
+Quick drags coast briefly on release; the edges and resize limits have gentle
+resistance and settle back smoothly. Grab it again to stop the glide.
+Reduce Motion keeps movement direct, without momentum or elastic settling.
 Home previews stay paused while a live stream is playing.
 
 When you leave Strozz, supported video playback switches to native iOS Picture in

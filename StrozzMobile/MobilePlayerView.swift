@@ -18,6 +18,7 @@ enum MobileMiniPlayerLayout {
   }
 
   struct Manipulation {
+    var startFrame: CGRect?
     var translation: CGSize = .zero
     var magnification: CGFloat = 1
     var anchor: UnitPoint?
@@ -45,15 +46,47 @@ enum MobileMiniPlayerLayout {
                   width: width, height: height)
   }
 
-  static func applying(_ manipulation: Manipulation, to frame: CGRect, in size: CGSize, isPhone: Bool) -> CGRect {
+  static let settlingAnimation = Animation.interpolatingSpring(
+    mass: 1, stiffness: 180, damping: 28, initialVelocity: 6)
+
+  static func applying(_ manipulation: Manipulation, to frame: CGRect, in size: CGSize, isPhone: Bool,
+                       elastic: Bool = false) -> CGRect {
     let bounds = bounds(in: size, isPhone: isPhone)
-    let width = fittedWidth(frame.width * manipulation.magnification, in: bounds)
+    let requestedWidth = frame.width * manipulation.magnification
+    let clampedWidth = fittedWidth(requestedWidth, in: bounds)
+    let width = clampedWidth + resistance(requestedWidth - clampedWidth, limit: elastic ? min(12, clampedWidth / 10) : 0)
     let height = width * 9 / 16
     let anchor = manipulation.anchor ?? .center
     let x = frame.minX + manipulation.translation.width + (frame.width - width) * anchor.x
     let y = frame.minY + manipulation.translation.height + (frame.height - height) * anchor.y
-    return CGRect(x: min(max(x, bounds.minX), bounds.maxX - width),
-                  y: min(max(y, bounds.minY), bounds.maxY - height), width: width, height: height)
+    let minX = min(bounds.minX, bounds.midX - width / 2)
+    let maxX = max(bounds.maxX - width, bounds.midX - width / 2)
+    let minY = min(bounds.minY, bounds.midY - height / 2)
+    let maxY = max(bounds.maxY - height, bounds.midY - height / 2)
+    let clampedX = min(max(x, minX), maxX)
+    let clampedY = min(max(y, minY), maxY)
+    return CGRect(
+      x: clampedX + resistance(x - clampedX, limit: elastic ? min(8, max(0, minX)) : 0),
+      y: clampedY + resistance(y - clampedY, limit: elastic ? min(8, max(0, minY)) : 0),
+      width: width, height: height)
+  }
+
+  static func released(_ manipulation: Manipulation, from frame: CGRect, velocity: CGSize,
+                       in size: CGSize, isPhone: Bool, reduceMotion: Bool) -> CGRect {
+    var release = manipulation
+    let speed = hypot(velocity.width, velocity.height)
+    if !reduceMotion, manipulation.anchor == nil, speed > 120 {
+      let distance = min((speed - 120) * 0.12, min(140, min(size.width, size.height) * 0.24))
+      release.translation.width += velocity.width / speed * distance
+      release.translation.height += velocity.height / speed * distance
+    }
+    return applying(release, to: frame, in: size, isPhone: isPhone)
+  }
+
+  private static func resistance(_ excess: CGFloat, limit: CGFloat) -> CGFloat {
+    guard limit > 0 else { return 0 }
+    let distance = abs(excess) * 0.35
+    return (excess < 0 ? -1 : 1) * limit * distance / (limit + distance)
   }
 
   static func placement(for frame: CGRect, in size: CGSize, isPhone: Bool, previous: Placement) -> Placement {
@@ -112,7 +145,9 @@ struct MobilePlayerView: View {
       let restingCompact = MobileMiniPlayerLayout.frame(
         in: geometry.size, isPhone: isPhone, placement: miniPlayerPlacement)
       let compact = MobileMiniPlayerLayout.applying(
-        miniPlayerManipulation, to: restingCompact, in: geometry.size, isPhone: isPhone)
+        miniPlayerManipulation, to: miniPlayerManipulation.startFrame ?? restingCompact,
+        in: geometry.size, isPhone: isPhone,
+        elastic: miniPlayerManipulation.startFrame != nil && !reduceMotion)
       let progress = session.isExpanded ? collapseProgress : 1
       let videoFrame = MobileMiniPlayerLayout.interpolate(from: expanded, to: compact, progress: progress)
       ZStack(alignment: .topLeading) {
@@ -171,13 +206,27 @@ struct MobilePlayerView: View {
           .clipShape(RoundedRectangle(cornerRadius: progress * 14))
           .overlay {
             RoundedRectangle(cornerRadius: progress * 14)
-              .strokeBorder(palette.chromeOnOpaque.opacity(progress * 0.2), lineWidth: 1)
+              .strokeBorder(palette.chromeOnOpaque.opacity(
+                progress * (miniPlayerManipulation.startFrame == nil ? 0.2 : 0.32)), lineWidth: 1)
               .allowsHitTesting(false)
           }
+          .background {
+            RoundedRectangle(cornerRadius: progress * 14)
+              .fill(palette.playerBackdrop)
+              .shadow(color: palette.playerBackdrop.opacity(0.28),
+                      radius: miniPlayerManipulation.startFrame == nil ? 8 : 18,
+                      y: miniPlayerManipulation.startFrame == nil ? 3 : 8)
+              .opacity(progress)
+              .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: miniPlayerManipulation.startFrame == nil)
+          }
           .simultaneousGesture(
-            miniPlayerGesture(from: restingCompact, in: geometry.size, isPhone: isPhone),
+            miniPlayerGesture(from: restingCompact, in: geometry.size, isPhone: isPhone,
+                              origin: geometry.frame(in: .global).origin),
             including: session.isExpanded ? .subviews : .all)
           .position(x: videoFrame.midX, y: videoFrame.midY)
+          .animation(
+            reduceMotion || miniPlayerManipulation.startFrame != nil ? nil : MobileMiniPlayerLayout.settlingAnimation,
+            value: miniPlayerManipulation.startFrame == nil)
       }
       .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.9), value: session.isExpanded)
       .onChange(of: session.isExpanded) { _, _ in collapseProgress = 0 }
@@ -194,10 +243,14 @@ struct MobilePlayerView: View {
     } message: { Text(rotationError ?? "") }
   }
 
-  private func miniPlayerGesture(from frame: CGRect, in size: CGSize, isPhone: Bool) -> some Gesture {
+  private func miniPlayerGesture(from frame: CGRect, in size: CGSize, isPhone: Bool, origin: CGPoint) -> some Gesture {
     DragGesture(minimumDistance: 8, coordinateSpace: .global)
       .simultaneously(with: MagnifyGesture())
       .updating($miniPlayerManipulation) { value, state, _ in
+        if state.startFrame == nil {
+          // Catch a gliding player where it is displayed, not at its animation's destination.
+          state.startFrame = session.videoController.presentedFrame?.offsetBy(dx: -origin.x, dy: -origin.y) ?? frame
+        }
         state.update(translation: value.first?.translation, magnification: value.second?.magnification,
                      anchor: value.second?.startAnchor)
       }
@@ -205,7 +258,9 @@ struct MobilePlayerView: View {
         var manipulation = miniPlayerManipulation
         manipulation.update(translation: value.first?.translation, magnification: value.second?.magnification,
                             anchor: value.second?.startAnchor)
-        let moved = MobileMiniPlayerLayout.applying(manipulation, to: frame, in: size, isPhone: isPhone)
+        let moved = MobileMiniPlayerLayout.released(
+          manipulation, from: manipulation.startFrame ?? frame, velocity: value.first?.velocity ?? .zero,
+          in: size, isPhone: isPhone, reduceMotion: reduceMotion)
         miniPlayerPlacement = MobileMiniPlayerLayout.placement(
           for: moved, in: size, isPhone: isPhone, previous: miniPlayerPlacement)
       }
@@ -423,6 +478,14 @@ final class MobileVideoController: UIViewController {
   var onReady: ((Bool, AVPlayer) -> Void)?
   var onAppear: (() -> Void)?
   private var observation: NSKeyValueObservation?
+
+  var presentedFrame: CGRect? {
+    guard let window = viewIfLoaded?.window else { return nil }
+    if let layer = playerLayer.presentation(), let windowLayer = window.layer.presentation() {
+      return layer.convert(layer.bounds, to: windowLayer)
+    }
+    return playerLayer.convert(playerLayer.bounds, to: window.layer)
+  }
 
   var player: AVPlayer? {
     get { playerLayer.player }
