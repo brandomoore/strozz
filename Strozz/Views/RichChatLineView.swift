@@ -31,6 +31,7 @@ struct RichChatLineView: View {
     var bodyColorOverride: Color? = nil
     /// Mobile panes can be narrower than a URL or username, especially with Dynamic Type.
     var wrapsOversizedTokens: Bool = false
+    var onInspectEmote: ((String, URL) -> Void)? = nil
 
     /// VoiceOver state. The combined spoken label is only built when VoiceOver is
     /// actually running — otherwise computing it (segment walk + string split/join)
@@ -119,17 +120,16 @@ struct RichChatLineView: View {
                 .font(fontStyle.font(size: nameFontSize, weight: .bold))
                 .tracking(letterSpacing)
                 .foregroundStyle(nameColor)
+                .accessibilityHidden(voiceOverEnabled && onInspectEmote != nil)
 
             ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                 segmentView(segment)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Collapse the whole line into one VoiceOver element so the couch
-        // experience reads "author, message" as a single utterance instead of
-        // stepping through every badge/emote image node (which otherwise speak
-        // raw emote URLs or surface empty, unlabeled image elements).
-        .accessibilityElement(children: .ignore)
+        // Keep the spoken message together; interactive mobile emotes remain
+        // individually reachable buttons within that message.
+        .accessibilityElement(children: onInspectEmote == nil ? .ignore : .contain)
         .accessibilityLabel(voiceOverEnabled ? accessibilityLabel : "")
     }
 
@@ -271,6 +271,7 @@ struct RichChatLineView: View {
             Color.clear
         }
         .frame(width: badgeSize, height: badgeSize)
+        .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -281,12 +282,23 @@ struct RichChatLineView: View {
                 .font(fontStyle.font(size: bodyFontSize))
                 .tracking(letterSpacing)
                 .foregroundStyle(bodyColor)
+                .accessibilityHidden(voiceOverEnabled && onInspectEmote != nil)
         case .emote(let name, let url):
-            EmoteView(name: name, url: url, fallbackColor: bodyColor, fallbackFontSize: bodyFontSize,
-                      emoteHeight: emoteHeight, animated: animatedEmotes, constrainsWidth: wrapsOversizedTokens)
+            if let onInspectEmote {
+                Button { onInspectEmote(name, url) } label: {
+                    emote(name: name, url: url)
+                }
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
+                .accessibilityLabel("View emote \(name)")
+                .accessibilityHint("Shows a larger preview")
+                .accessibilityIdentifier("chat-emote-\(name)")
+            } else {
+                emote(name: name, url: url)
+            }
         case .cheer(let amount, let url, let colorHex):
             let color = Color(twitchHex: colorHex) ?? .gray
-            HStack(spacing: 1) {
+            let content = HStack(spacing: 1) {
                 EmoteView(name: "", url: url, fallbackColor: color, fallbackFontSize: bodyFontSize,
                           emoteHeight: emoteHeight, animated: animatedEmotes, constrainsWidth: wrapsOversizedTokens)
                 Text("\(amount)")
@@ -294,7 +306,21 @@ struct RichChatLineView: View {
                     .tracking(letterSpacing)
                     .foregroundStyle(color)
             }
+            if let onInspectEmote {
+                Button { onInspectEmote(String(localized: "\(amount) bits"), url) } label: { content }
+                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
+                    .accessibilityLabel("View cheer of \(amount) bits")
+                    .accessibilityHint("Shows a larger preview")
+            } else {
+                content
+            }
         }
+    }
+
+    private func emote(name: String, url: URL) -> some View {
+        EmoteView(name: name, url: url, fallbackColor: bodyColor, fallbackFontSize: bodyFontSize,
+                  emoteHeight: emoteHeight, animated: animatedEmotes, constrainsWidth: wrapsOversizedTokens)
     }
 
     private var segments: [ChatLineSegment] {

@@ -131,6 +131,12 @@ emotes. Sign in through **Account > Sign in to Twitch**, open the Twitch link,
 approve the displayed code, then return to Strozz. Browsing, playback, and
 reading chat also work anonymously.
 
+Tap a chat emote on iPhone or iPad to open a larger preview with its name and,
+when recognized, its provider. Supported providers use higher-resolution artwork;
+if that image is unavailable, the sheet labels its fallback to the chat image
+and offers retry when loading fails. Animated previews respect Reduce Motion.
+Dismiss the sheet to return to chat without stopping playback.
+
 Selecting a fixed video quality retains the native engine when native playback
 is selected, on both TV and mobile. Explicit standard playback, Audio Only, and
 AirPlay retain their standard paths; a genuine unsupported-format fallback is

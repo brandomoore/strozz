@@ -21,6 +21,8 @@ struct StrozzMobileApp: App {
       #if DEBUG
       if ProcessInfo.processInfo.environment["STROZZ_LAYOUT_FIXTURE"] == "chat" {
         MobileChatLayoutFixture()
+      } else if ProcessInfo.processInfo.environment["STROZZ_LAYOUT_FIXTURE"] == "emotes" {
+        MobileEmoteInspectionFixture()
       } else {
         appContent
       }

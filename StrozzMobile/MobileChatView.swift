@@ -78,6 +78,7 @@ struct MobileChatTimeline: View {
   var badgeURLs: [String: URL] = [:]
   var cheermotes: [Cheermote] = []
   @State var scroll = MobileChatScrollState()
+  @State private var inspectedEmote: MobileChatEmote?
   @Environment(\.themePalette) private var palette
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @ScaledMetric(relativeTo: .body) private var textSize = 16
@@ -108,7 +109,10 @@ struct MobileChatTimeline: View {
                 .chatReadable(onSurface: palette.chatSideSurface, minRatio: 4.5),
               globalEmoteURLs: emoteURLs, badgeURLs: badgeURLs, cheermotes: cheermotes,
               textSize: textSize, emoteSize: emoteSize, animatedEmotes: !reduceMotion,
-              bodyColorOverride: palette.chatSidePrimaryText, wrapsOversizedTokens: true)
+              bodyColorOverride: palette.chatSidePrimaryText, wrapsOversizedTokens: true,
+              onInspectEmote: { name, url in
+                inspectedEmote = MobileChatEmote(name: name, url: url)
+              })
           }
           .frame(maxWidth: .infinity, alignment: .leading)
           .accessibilityElement(children: .contain)
@@ -137,6 +141,10 @@ struct MobileChatTimeline: View {
       // A conditional scroll inset can reenter layout during a jump.
       MobileChatJumpButton(scroll: scroll)
         .padding(12)
+    }
+    .sheet(item: $inspectedEmote) { emote in
+      MobileEmoteDetailView(emote: emote)
+        .environment(\.themePalette, palette)
     }
   }
 }
