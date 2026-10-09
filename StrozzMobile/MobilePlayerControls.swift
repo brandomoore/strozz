@@ -179,18 +179,16 @@ struct MobileMiniPlayerControlScrim: View {
 
   var body: some View {
     let strength = reduceTransparency ? 1.25 : 1.0
-    let stops: [Gradient.Stop] = [
-      .init(color: palette.videoControlScrim.opacity(0.64 * strength), location: 0),
-      .init(color: palette.videoControlScrim.opacity(0), location: 1),
-    ]
     GeometryReader { geometry in
-      let inset: CGFloat = 28
-      let x = inset / max(1, geometry.size.width)
-      let y = inset / max(1, geometry.size.height)
-      let radius = min(52, max(0, geometry.size.width / 2 - inset))
       ZStack {
-        RadialGradient(stops: stops, center: .init(x: x, y: y), startRadius: 0, endRadius: radius)
-        RadialGradient(stops: stops, center: .init(x: 1 - x, y: y), startRadius: 0, endRadius: radius)
+        LinearGradient(stops: [
+          .init(color: palette.videoControlScrim.opacity(0.66 * strength), location: 0),
+          .init(color: palette.videoControlScrim.opacity(0.60 * strength), location: 0.25),
+          .init(color: palette.videoControlScrim.opacity(0.40 * strength), location: 0.55),
+          .init(color: palette.videoControlScrim.opacity(0), location: 1),
+        ], startPoint: .top, endPoint: .bottom)
+        .frame(height: min(geometry.size.height, max(96, geometry.size.height * 0.5)))
+        .frame(maxHeight: .infinity, alignment: .top)
         if hasError {
           LinearGradient(stops: [
             .init(color: palette.videoControlScrim.opacity(0.64 * strength), location: 0),

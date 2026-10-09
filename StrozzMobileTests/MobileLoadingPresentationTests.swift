@@ -69,12 +69,17 @@ final class MobileLoadingPresentationTests: XCTestCase {
     }
   }
 
-  func testMiniPlayerScrimOnlyShadesControlCornersAndErrors() throws {
+  func testMiniPlayerScrimFadesGraduallyAcrossTheTop() throws {
+    let sizes: [(size: CGSize, fadeHeight: CGFloat)] = [
+      (.init(width: 136, height: 76.5), 76.5),
+      (.init(width: 160, height: 90), 90),
+      (.init(width: 240, height: 135), 96),
+      (.init(width: 320, height: 180), 96),
+      (.init(width: 640, height: 360), 180),
+    ]
     for theme in AppTheme.allCases {
       for reduceTransparency in [false, true] {
-        for size in [CGSize(width: 136, height: 76.5), .init(width: 160, height: 90),
-                     .init(width: 240, height: 135),
-                     .init(width: 320, height: 180), .init(width: 640, height: 360)] {
+        for (size, fadeHeight) in sizes {
           for hasError in [false, true] {
             let image = try render(
               MobileMiniPlayerControlScrim(hasError: hasError, reduceTransparency: reduceTransparency)
@@ -92,12 +97,22 @@ final class MobileLoadingPresentationTests: XCTestCase {
               let background = try luminance(image, x: image.width / 2, y: image.height - 20)
               XCTAssertGreaterThanOrEqual(1.05 / (background + 0.05), 4.5, "Mini-player error text contrast")
             } else {
-              for point in [CGPoint(x: size.width / 2, y: 12),
-                            CGPoint(x: size.width / 2, y: size.height / 2),
-                            CGPoint(x: 8, y: size.height - 4)] {
-                XCTAssertGreaterThan(try luminance(image, x: Int(point.x), y: Int(point.y)), 0.98,
-                                     "Unoccupied mini-player video must remain undimmed")
+              var previous = try luminance(image, x: image.width / 2, y: 0)
+              XCTAssertLessThan(previous, 0.12, "The fade must cover the whole top edge")
+              for y in 0..<image.height {
+                let middle = try luminance(image, x: image.width / 2, y: y)
+                for column in 0...4 {
+                  XCTAssertEqual(try luminance(image, x: (image.width - 1) * column / 4, y: y),
+                                 middle, accuracy: 0.009, "One full-width fade without circular patches")
+                }
+                XCTAssertGreaterThanOrEqual(middle + 0.009, previous, "The fade must lighten toward the bottom")
+                XCTAssertLessThan(abs(middle - previous), 0.04, "No abrupt cutoff, including on small cards")
+                if CGFloat(y) >= fadeHeight {
+                  XCTAssertGreaterThan(middle, 0.98, "Video below the fade must remain undimmed")
+                }
+                previous = middle
               }
+              XCTAssertGreaterThan(previous, 0.97, "Even the smallest card must fade back to clear video")
             }
           }
         }

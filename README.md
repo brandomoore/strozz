@@ -188,9 +188,10 @@ Grab it again to stop the glide.
 Reduce Motion keeps movement direct, without momentum or elastic settling.
 Player controls use white icons without individual backplates. The expanded
 player keeps one even, full-frame dark gradient with gentle extra edge shading.
-The mini-player uses small fades only at its button corners, leaving the rest of
-the picture clear; the fades disappear with the controls. Reduce Transparency
-strengthens the gradients without replacing the picture with an opaque panel.
+The mini-player uses one full-width fade over roughly the top half, extending
+farther down on smaller cards to keep the transition gradual. It disappears with
+the controls. Reduce Transparency strengthens the gradients without replacing
+the picture with an opaque panel.
 Home previews stay paused while a live stream is playing.
 
 When you leave Strozz, supported video playback switches to native iOS Picture in

@@ -191,7 +191,7 @@ final class MobilePictureInPictureTests: XCTestCase {
     XCTAssertTrue(pause.waitForExistence(timeout: 2))
     XCTAssertTrue(mini.exists, "The first tap reveals controls without expanding")
     XCTAssertEqual(mini.label, "Expand player")
-    capture("Mini-player with localized button fades")
+    capture("Mini-player with a gradual full-width top fade")
     mini.tap()
     XCTAssertFalse(mini.exists, "The next tap expands the player")
     waitForVideo(app)
