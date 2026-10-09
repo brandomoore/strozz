@@ -53,6 +53,8 @@ struct MobilePlayerView: View {
       let videoHeight = layout == .videoOnly ? geometry.size.height
         : min(videoWidth * 9 / 16, geometry.size.height * (layout == .sideBySide ? 0.75 : 0.42))
       let expanded = CGRect(x: 0, y: 0, width: videoWidth, height: videoHeight)
+      let expandedWindowFrame = expanded.offsetBy(
+        dx: geometry.frame(in: .global).minX, dy: geometry.frame(in: .global).minY)
       let compact = MobileMiniPlayerLayout.frame(in: geometry.size, isPhone: isPhone)
       let progress = session.isExpanded ? collapseProgress : 1
       let videoFrame = MobileMiniPlayerLayout.interpolate(from: expanded, to: compact, progress: progress)
@@ -98,10 +100,13 @@ struct MobilePlayerView: View {
           onCollapseDragEnded: endCollapseDrag,
           onFullscreen: { toggleFullscreen(exiting: layout == .videoOnly) },
           onScene: { windowScene = $0 },
-          onLayout: { [weak session] size in
+          onLayout: { [weak session] frame in
             guard let session else { return }
-            if session.isExpanded, abs(size.width - expanded.width) < 1,
-              abs(size.height - expanded.height) < 1 {
+            if session.isExpanded,
+              abs(frame.minX - expandedWindowFrame.minX) < 1,
+              abs(frame.minY - expandedWindowFrame.minY) < 1,
+              abs(frame.width - expandedWindowFrame.width) < 1,
+              abs(frame.height - expandedWindowFrame.height) < 1 {
               session.playerDidLayoutExpandedSurface()
             }
           })
@@ -192,7 +197,7 @@ struct MobileVideoView: View {
   let onCollapseDragEnded: (CGSize) -> Void
   let onFullscreen: () -> Void
   let onScene: (UIWindowScene) -> Void
-  let onLayout: (CGSize) -> Void
+  let onLayout: (CGRect) -> Void
   @Environment(\.themePalette) private var palette
   @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -317,7 +322,7 @@ struct MobileVideoView: View {
 struct MobilePlayerSurface: UIViewControllerRepresentable {
   let controller: MobileVideoController
   let onScene: (UIWindowScene) -> Void
-  let onLayout: (CGSize) -> Void
+  let onLayout: (CGRect) -> Void
 
   func makeUIViewController(context: Context) -> MobileVideoController {
     controller.onScene = onScene
@@ -335,7 +340,7 @@ final class MobileVideoController: UIViewController {
   // Share one layer between the animated in-app player and AVKit's native PiP.
   let playerLayer = AVPlayerLayer()
   var onScene: ((UIWindowScene) -> Void)?
-  var onLayout: ((CGSize) -> Void)?
+  var onLayout: ((CGRect) -> Void)?
   var onReady: ((Bool, AVPlayer) -> Void)?
   var onAppear: (() -> Void)?
   private var observation: NSKeyValueObservation?
@@ -368,9 +373,16 @@ final class MobileVideoController: UIViewController {
     super.viewDidLayoutSubviews()
     CATransaction.begin()
     CATransaction.setDisableActions(true)
+    // SwiftUI positions ancestors after this layout callback. AVKit needs the
+    // committed window-relative destination, not just the layer's new bounds.
+    CATransaction.setCompletionBlock { [weak self] in
+      Task { @MainActor [weak self] in
+        guard let self, let window = self.viewIfLoaded?.window else { return }
+        self.onLayout?(self.playerLayer.convert(self.playerLayer.bounds, to: window.layer))
+      }
+    }
     playerLayer.frame = view.bounds
     CATransaction.commit()
-    onLayout?(view.bounds.size)
   }
 
   override func viewDidAppear(_ animated: Bool) {

@@ -97,7 +97,7 @@ final class MobilePictureInPictureTests: XCTestCase {
     stream.tap()
     waitForVideo(app)
     let surface = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
-    let expandedSize = surface.frame.size
+    let expandedFrame = surface.frame
     collapseWithChevron(app)
     XCUIDevice.shared.press(.home)
     let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
@@ -114,8 +114,10 @@ final class MobilePictureInPictureTests: XCTestCase {
     expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: pip)
     waitForExpectations(timeout: 12)
     XCTAssertFalse(app.buttons["mobile-expand-player"].exists)
-    XCTAssertEqual(surface.frame.width, expandedSize.width, accuracy: 1)
-    XCTAssertEqual(surface.frame.height, expandedSize.height, accuracy: 1)
+    XCTAssertEqual(surface.frame.width, expandedFrame.width, accuracy: 1)
+    XCTAssertEqual(surface.frame.height, expandedFrame.height, accuracy: 1)
+    XCTAssertEqual(surface.frame.minX, expandedFrame.minX, accuracy: 1)
+    XCTAssertEqual(surface.frame.minY, expandedFrame.minY, accuracy: 1)
     waitForVideo(app)
     capture("Direct expanded destination from native restore")
   }

@@ -293,7 +293,7 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
       withTransaction(transaction) { isExpanded = true }
     }
     // AVKit samples the inline destination when completion runs. A mounted mini-player
-    // is not ready until SwiftUI has laid out the expanded source without another animation.
+    // is not ready until the expanded source's window-relative frame has committed.
     if videoController.viewIfLoaded?.window != nil { playerDidAppear() }
   }
 }

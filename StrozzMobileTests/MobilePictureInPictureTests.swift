@@ -161,20 +161,32 @@ final class MobilePictureInPictureTests: XCTestCase {
     defer { session.close(); window.rootViewController = previous }
     let surface = session.videoController
     try await waitUntil { surface.view.bounds.width > 320 }
-    let expandedSize = surface.view.bounds.size
+    let expandedFrame = surface.playerLayer.convert(surface.playerLayer.bounds, to: window.layer)
     session.collapse()
     let compactWidth: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? 240 : 320
     try await waitUntil { abs(surface.view.bounds.width - compactWidth) < 1 }
     session.didStartPictureInPicture()
-    var restoredSize: CGSize?
+    var restoredFrame: CGRect?
+    var renderedFrame: CGRect?
     session.restorePictureInPicture { restored in
       XCTAssertTrue(restored)
-      restoredSize = surface.playerLayer.bounds.size
+      restoredFrame = surface.playerLayer.convert(surface.playerLayer.bounds, to: window.layer)
+      if let layer = surface.playerLayer.presentation(), let windowLayer = window.layer.presentation() {
+        renderedFrame = layer.convert(layer.bounds, to: windowLayer)
+      }
     }
-    try await waitUntil { restoredSize != nil }
-    XCTAssertEqual(try XCTUnwrap(restoredSize).width, expandedSize.width, accuracy: 1,
+    try await waitUntil { restoredFrame != nil }
+    let destination = try XCTUnwrap(restoredFrame)
+    XCTAssertEqual(destination.width, expandedFrame.width, accuracy: 1,
                    "AVKit must never receive the mini-player as its restore destination")
-    XCTAssertEqual(try XCTUnwrap(restoredSize).height, expandedSize.height, accuracy: 1)
+    XCTAssertEqual(destination.height, expandedFrame.height, accuracy: 1)
+    XCTAssertEqual(destination.minX, expandedFrame.minX, accuracy: 1)
+    XCTAssertEqual(destination.minY, expandedFrame.minY, accuracy: 1,
+                   "The restoration destination must already be at the top, not centered")
+    let renderedDestination = try XCTUnwrap(renderedFrame)
+    XCTAssertEqual(renderedDestination.minY, expandedFrame.minY, accuracy: 1,
+                   "The displayed layer tree must have committed the top-aligned destination")
+    XCTAssertEqual(renderedDestination.width, expandedFrame.width, accuracy: 1)
     session.didStopPictureInPicture()
   }
 
