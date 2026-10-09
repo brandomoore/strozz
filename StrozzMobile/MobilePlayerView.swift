@@ -195,7 +195,8 @@ struct MobilePlayerView: View {
         // background PiP reparents or replaces the playing surface.
         MobileVideoView(
           model: model, channel: channel, hideChat: $hideChat, isFullscreen: layout == .videoOnly,
-          isMinimized: !session.isExpanded, videoController: session.videoController,
+          isMinimized: !session.isExpanded, isManipulating: miniPlayerManipulation.startFrame != nil,
+          videoController: session.videoController,
           onCollapse: session.collapse, onClose: session.close, onExpand: session.expand,
           onCollapseDragChanged: { updateCollapseDrag($0, distance: max(120, min(360, compact.midY))) },
           onCollapseDragEnded: endCollapseDrag,
@@ -330,6 +331,7 @@ struct MobileVideoView: View {
   @Binding var hideChat: Bool
   let isFullscreen: Bool
   let isMinimized: Bool
+  let isManipulating: Bool
   let videoController: MobileVideoController
   let onCollapse: () -> Void
   let onClose: () -> Void
@@ -356,7 +358,8 @@ struct MobileVideoView: View {
 
   var body: some View {
     let held = model.isPaused || model.presentationState != .ready
-      || voiceOver || showQuality || showShare || showRoutes
+      || voiceOver || showQuality || showShare || showRoutes || (isMinimized && isManipulating)
+    let showsControls = controlsVisible || held
     ZStack {
       palette.playerBackdrop
       MobilePlayerSurface(controller: videoController, onScene: onScene, onLayout: onLayout)
@@ -373,11 +376,11 @@ struct MobileVideoView: View {
       }
       Color.clear.contentShape(Rectangle())
         .onTapGesture {
-          if isMinimized { onExpand() }
+          if isMinimized && showsControls { onExpand() }
           else { controlsVisible.toggle(); interaction += 1 }
         }
-        .accessibilityLabel(isMinimized ? "Expand player"
-          : controlsVisible ? "Hide playback controls" : "Show playback controls")
+        .accessibilityLabel(isMinimized && showsControls ? "Expand player"
+          : showsControls ? "Hide playback controls" : "Show playback controls")
         .accessibilityAddTraits(.isButton)
         .accessibilityHint(isMinimized ? Text("Drag to move. Pinch to resize.") : Text(""))
         .accessibilityHidden(voiceOver && !isMinimized)
@@ -395,14 +398,18 @@ struct MobileVideoView: View {
         MobileStatusView(message: error) { model.retry() }
           .background(palette.chromeOpaqueSurface)
       }
-      if isMinimized {
+      if isMinimized && showsControls {
         VStack {
           HStack {
             Button(action: onClose) { Icon(glyph: .x, size: 18).frame(width: 44, height: 44) }
               .accessibilityLabel("Close player")
               .modifier(MobileControlSurface(isVideoOverlay: true))
             Spacer(minLength: 0)
-            Button(action: model.togglePlayPause) {
+            Button {
+              controlsVisible = true
+              interaction += 1
+              model.togglePlayPause()
+            } label: {
               Icon(glyph: model.isPaused ? .playerPlayFilled : .playerPauseFilled, size: 18)
                 .frame(width: 44, height: 44)
             }
@@ -421,10 +428,10 @@ struct MobileVideoView: View {
         .padding(6)
         .buttonStyle(.plain)
         .background {
-          MobilePlayerControlScrim(hasBottomControls: model.errorMessage != nil,
-                                   reduceTransparency: reduceTransparency)
+          MobileMiniPlayerControlScrim(hasError: model.errorMessage != nil,
+                                       reduceTransparency: reduceTransparency)
         }
-      } else if controlsVisible || held {
+      } else if !isMinimized && showsControls {
         MobilePlayerControls(
           model: model, viewerCount: channel.viewerCount, hideChat: $hideChat, isFullscreen: isFullscreen,
           onCollapse: onCollapse,
@@ -448,6 +455,11 @@ struct MobileVideoView: View {
       including: isMinimized ? .subviews : .all)
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: controlsVisible)
     .onChange(of: isMinimized) { _, _ in
+      controlsVisible = true
+      interaction += 1
+    }
+    .onChange(of: isManipulating) { _, _ in
+      guard isMinimized else { return }
       controlsVisible = true
       interaction += 1
     }

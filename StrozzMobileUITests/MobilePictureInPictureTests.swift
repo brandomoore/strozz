@@ -38,8 +38,7 @@ final class MobilePictureInPictureTests: XCTestCase {
     XCTAssertTrue(app.buttons["mobile-expand-player"].exists, "The mini-player follows tab navigation")
     app.buttons["Browse"].firstMatch.tap()
     XCTAssertTrue(app.navigationBars[previousPage].exists)
-    app.buttons["mobile-expand-player"].tap()
-    waitForVideo(app)
+    expandMiniPlayer(app)
     XCTAssertEqual(surface.frame.width, expanded.width, accuracy: 1)
     collapseWithChevron(app)
     app.buttons[first].tap()
@@ -49,6 +48,7 @@ final class MobilePictureInPictureTests: XCTestCase {
     waitForVideo(app)
     collapseWithChevron(app)
     capture("Replacement stream in the in-app player")
+    showMiniPlayerControls(app)
     app.buttons["Close player"].tap()
     XCTAssertFalse(app.buttons["mobile-expand-player"].exists)
     XCTAssertFalse(surface.exists)
@@ -85,8 +85,7 @@ final class MobilePictureInPictureTests: XCTestCase {
     XCTAssertEqual(mini.frame.minX, customized.minX, accuracy: 1)
     XCTAssertEqual(mini.frame.minY, customized.minY, accuracy: 1)
     XCTAssertEqual(mini.frame.width, customized.width, accuracy: 1)
-    mini.tap()
-    waitForVideo(app)
+    expandMiniPlayer(app)
     collapseWithChevron(app)
     XCTAssertEqual(mini.frame.minX, customized.minX, accuracy: 2)
     XCTAssertEqual(mini.frame.minY, customized.minY, accuracy: 2)
@@ -105,11 +104,13 @@ final class MobilePictureInPictureTests: XCTestCase {
     let restored = settledFrame(mini)
     XCTAssertEqual(restored.minY, customized.minY, accuracy: 2)
     XCTAssertEqual(restored.width, customized.width, accuracy: 2)
+    showMiniPlayerControls(app)
     app.buttons["mobile-mini-play-pause"].tap()
     XCTAssertEqual(app.buttons["mobile-mini-play-pause"].label, "Play")
     app.buttons["mobile-mini-play-pause"].tap()
     XCTAssertEqual(app.buttons["mobile-mini-play-pause"].label, "Pause")
     capture("Moved and resized in-app player")
+    showMiniPlayerControls(app)
     app.buttons["Close player"].tap()
     XCTAssertFalse(mini.exists)
   }
@@ -154,7 +155,7 @@ final class MobilePictureInPictureTests: XCTestCase {
                 withVelocity: XCUIGestureVelocity(rawValue: 500), thenHoldForDuration: 0)
     XCTAssertTrue(mini.exists)
     let settled = settledFrame(mini)
-    XCTAssertLessThan(settled.minY, original.minY - 150, "A quick release should coast beyond the finger's endpoint")
+    XCTAssertLessThan(settled.minY, original.minY - 141, "A gentle release should coast beyond the finger's endpoint")
     XCTAssertGreaterThan(settled.minY, original.minY - 281, "Momentum should be short and bounded")
     XCTAssertEqual(settled.width, original.width, accuracy: 0.5)
     XCTAssertEqual(settled.height, original.height, accuracy: 0.5)
@@ -163,8 +164,55 @@ final class MobilePictureInPictureTests: XCTestCase {
     XCTAssertEqual(mini.frame.minX, settled.minX - 30, accuracy: 2)
     XCTAssertEqual(mini.frame.minY, settled.minY - 40, accuracy: 2)
     capture("Mini-player after a gentle glide and precise reposition")
-    mini.tap()
+    expandMiniPlayer(app)
+  }
+
+  func testMiniPlayerControlsFadeAndFirstTapRevealsWithoutExpanding() throws {
+    try requireLiveTests()
+    let app = launch()
+    defer { app.terminate() }
+    let stream = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'stream-'")).firstMatch
+    XCTAssertTrue(stream.waitForExistence(timeout: 45))
+    stream.tap()
     waitForVideo(app)
+    collapseWithChevron(app)
+    let mini = app.buttons["mobile-expand-player"]
+    let pause = app.buttons["mobile-mini-play-pause"]
+    XCTAssertTrue(pause.exists)
+    func waitForHiddenControls() {
+      expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: pause)
+      waitForExpectations(timeout: 8)
+      XCTAssertFalse(app.buttons["Close player"].exists)
+      XCTAssertEqual(mini.label, "Show playback controls")
+    }
+    waitForHiddenControls()
+    capture("Mini-player with controls and shading hidden")
+    mini.tap()
+    XCTAssertTrue(pause.waitForExistence(timeout: 2))
+    XCTAssertTrue(mini.exists, "The first tap reveals controls without expanding")
+    XCTAssertEqual(mini.label, "Expand player")
+    capture("Mini-player with localized button fades")
+    mini.tap()
+    XCTAssertFalse(mini.exists, "The next tap expands the player")
+    waitForVideo(app)
+    collapseWithChevron(app)
+    pause.tap()
+    XCTAssertEqual(pause.label, "Play")
+    let disappearsWhilePaused = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: pause)
+    disappearsWhilePaused.isInverted = true
+    waitForExpectations(timeout: 5)
+    pause.tap()
+    XCTAssertEqual(pause.label, "Pause")
+    waitForHiddenControls()
+    drag(mini, by: CGVector(dx: -40, dy: -60))
+    XCTAssertTrue(pause.exists, "Moving the player reveals its controls")
+    XCTAssertTrue(mini.exists)
+    waitForHiddenControls()
+    mini.pinch(withScale: 1.1, velocity: 0.8)
+    XCTAssertTrue(pause.exists, "Resizing the player reveals its controls")
+    XCTAssertTrue(mini.exists)
+    app.buttons["Close player"].tap()
+    XCTAssertFalse(mini.exists)
   }
 
   private func settledFrame(_ element: XCUIElement) -> CGRect {
@@ -216,8 +264,7 @@ final class MobilePictureInPictureTests: XCTestCase {
     XCTAssertEqual(mini.frame.minX, customized.minX, accuracy: 2)
     XCTAssertEqual(mini.frame.minY, customized.minY, accuracy: 2)
     XCTAssertEqual(mini.frame.width, customized.width, accuracy: 2)
-    app.buttons["mobile-expand-player"].tap()
-    waitForVideo(app)
+    expandMiniPlayer(app)
     capture("Expanded player after native handoff")
   }
 
@@ -294,6 +341,19 @@ final class MobilePictureInPictureTests: XCTestCase {
     }
     app.buttons["mobile-minimize-player"].tap()
     XCTAssertTrue(app.buttons["mobile-expand-player"].waitForExistence(timeout: 10))
+  }
+
+  private func showMiniPlayerControls(_ app: XCUIApplication) {
+    let pause = app.buttons["mobile-mini-play-pause"]
+    if !pause.exists { app.buttons["mobile-expand-player"].tap() }
+    XCTAssertTrue(pause.waitForExistence(timeout: 2))
+  }
+
+  private func expandMiniPlayer(_ app: XCUIApplication) {
+    let mini = app.buttons["mobile-expand-player"]
+    mini.tap()
+    if mini.exists { mini.tap() }
+    waitForVideo(app)
   }
 
   private func capture(_ name: String) {

@@ -172,6 +172,41 @@ struct MobilePlayerControlScrim: View {
   }
 }
 
+struct MobileMiniPlayerControlScrim: View {
+  let hasError: Bool
+  let reduceTransparency: Bool
+  @Environment(\.themePalette) private var palette
+
+  var body: some View {
+    let strength = reduceTransparency ? 1.25 : 1.0
+    let stops: [Gradient.Stop] = [
+      .init(color: palette.videoControlScrim.opacity(0.64 * strength), location: 0),
+      .init(color: palette.videoControlScrim.opacity(0), location: 1),
+    ]
+    GeometryReader { geometry in
+      let inset: CGFloat = 28
+      let x = inset / max(1, geometry.size.width)
+      let y = inset / max(1, geometry.size.height)
+      let radius = min(52, max(0, geometry.size.width / 2 - inset))
+      ZStack {
+        RadialGradient(stops: stops, center: .init(x: x, y: y), startRadius: 0, endRadius: radius)
+        RadialGradient(stops: stops, center: .init(x: 1 - x, y: y), startRadius: 0, endRadius: radius)
+        if hasError {
+          LinearGradient(stops: [
+            .init(color: palette.videoControlScrim.opacity(0.64 * strength), location: 0),
+            .init(color: palette.videoControlScrim.opacity(0.58 * strength), location: 0.6),
+            .init(color: palette.videoControlScrim.opacity(0), location: 1),
+          ], startPoint: .bottom, endPoint: .top)
+          .frame(height: min(72, geometry.size.height))
+          .frame(maxHeight: .infinity, alignment: .bottom)
+        }
+      }
+    }
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
+  }
+}
+
 struct MobileQualitySheet: View {
   let model: MobilePlaybackModel
   @Environment(\.dismiss) private var dismiss

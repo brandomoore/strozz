@@ -28,24 +28,18 @@ final class MobileLoadingPresentationTests: XCTestCase {
     for theme in AppTheme.allCases {
       for reduceTransparency in [false, true] {
         for size in [CGSize(width: 390, height: 220), .init(width: 844, height: 390),
-                     .init(width: 820, height: 500), .init(width: 820, height: 1180),
-                     .init(width: 160, height: 90), .init(width: 240, height: 135),
-                     .init(width: 320, height: 180)] {
-          let mini = size.width <= 320
+                     .init(width: 820, height: 500), .init(width: 820, height: 1180)] {
           let image = try render(
-            MobilePlayerControlScrim(hasBottomControls: !mini,
+            MobilePlayerControlScrim(hasBottomControls: true,
                                      reduceTransparency: reduceTransparency)
               .frame(width: size.width, height: size.height)
               .background(Color.white)
               .environment(\.themePalette, theme.palette(systemColorScheme: .light)))
-          var iconCenters = [CGPoint(x: mini ? 28 : 32, y: mini ? 28 : 32),
-                             CGPoint(x: size.width - (mini ? 28 : 32), y: mini ? 28 : 32)]
-          if !mini {
-            iconCenters += [.init(x: size.width / 2, y: size.height / 2),
-                            .init(x: size.width - 32, y: size.height - 32)]
-            let liveLabel = try luminance(image, x: 40, y: Int(size.height) - 60)
-            XCTAssertGreaterThanOrEqual(1.05 / (liveLabel + 0.05), 4.5, "Live text contrast over white")
-          }
+          let iconCenters = [CGPoint(x: 32, y: 32), CGPoint(x: size.width - 32, y: 32),
+                             CGPoint(x: size.width / 2, y: size.height / 2),
+                             CGPoint(x: size.width - 32, y: size.height - 32)]
+          let liveLabel = try luminance(image, x: 40, y: Int(size.height) - 60)
+          XCTAssertGreaterThanOrEqual(1.05 / (liveLabel + 0.05), 4.5, "Live text contrast over white")
           for point in iconCenters {
             let background = try luminance(image, x: Int(point.x), y: Int(point.y))
             XCTAssertGreaterThanOrEqual(1.05 / (background + 0.05), 3,
@@ -75,6 +69,42 @@ final class MobileLoadingPresentationTests: XCTestCase {
     }
   }
 
+  func testMiniPlayerScrimOnlyShadesControlCornersAndErrors() throws {
+    for theme in AppTheme.allCases {
+      for reduceTransparency in [false, true] {
+        for size in [CGSize(width: 136, height: 76.5), .init(width: 160, height: 90),
+                     .init(width: 240, height: 135),
+                     .init(width: 320, height: 180), .init(width: 640, height: 360)] {
+          for hasError in [false, true] {
+            let image = try render(
+              MobileMiniPlayerControlScrim(hasError: hasError, reduceTransparency: reduceTransparency)
+                .frame(width: size.width, height: size.height)
+                .background(Color.white)
+                .environment(\.themePalette, theme.palette(systemColorScheme: .light)))
+            for x in [28, image.width - 28] {
+              for offset in [-9, 0, 9] {
+                let background = try luminance(image, x: x + offset, y: 28 + offset)
+                XCTAssertGreaterThanOrEqual(1.05 / (background + 0.05), 3,
+                  "Mini-player glyph extent: \(size), \(theme), opaque \(reduceTransparency), x \(x), offset \(offset)")
+              }
+            }
+            if hasError {
+              let background = try luminance(image, x: image.width / 2, y: image.height - 20)
+              XCTAssertGreaterThanOrEqual(1.05 / (background + 0.05), 4.5, "Mini-player error text contrast")
+            } else {
+              for point in [CGPoint(x: size.width / 2, y: 12),
+                            CGPoint(x: size.width / 2, y: size.height / 2),
+                            CGPoint(x: 8, y: size.height - 4)] {
+                XCTAssertGreaterThan(try luminance(image, x: Int(point.x), y: Int(point.y)), 0.98,
+                                     "Unoccupied mini-player video must remain undimmed")
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   func testMiniPlayerRendersAcrossThemes() async throws {
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     let window = try XCTUnwrap(scene.keyWindow)
@@ -89,7 +119,7 @@ final class MobileLoadingPresentationTests: XCTestCase {
       model.displayReady(true, for: model.player)
       let content = MobileVideoView(
         model: model, channel: channel, hideChat: .constant(false), isFullscreen: false,
-        isMinimized: true, videoController: MobileVideoController(), onCollapse: {},
+        isMinimized: true, isManipulating: false, videoController: MobileVideoController(), onCollapse: {},
         onClose: {}, onExpand: {}, onCollapseDragChanged: { _ in }, onCollapseDragEnded: { _ in },
         onFullscreen: {}, onScene: { _ in }, onLayout: { _ in })
         .frame(width: 240, height: 135)
@@ -117,7 +147,8 @@ final class MobileLoadingPresentationTests: XCTestCase {
       let palette = theme.palette(systemColorScheme: .light)
       let content = MobileVideoView(
         model: model, channel: channel, hideChat: .constant(false),
-        isFullscreen: false, isMinimized: false, videoController: MobileVideoController(), onCollapse: {},
+        isFullscreen: false, isMinimized: false, isManipulating: false,
+        videoController: MobileVideoController(), onCollapse: {},
         onClose: {}, onExpand: {}, onCollapseDragChanged: { _ in }, onCollapseDragEnded: { _ in },
         onFullscreen: {}, onScene: { _ in }, onLayout: { _ in }
       )
