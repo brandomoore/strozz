@@ -163,10 +163,50 @@ For you / Following pins below the status bar as you scroll; the Strozz heading 
 category filters scroll away.
 
 Mobile loading placeholders use the same artwork and reserved text-line sizes as
-the loaded cards. Live-followed shortcuts reserve three compact rows, so arriving
-follows do not push the feed down. Chat wraps long names and links within the pane;
-scroll up to read earlier messages, then tap **Jump to present** in the bar above
-the composer to resume following live chat. The bar does not cover messages.
+the loaded cards. Live-followed shortcuts remember the last successful live count
+per account (up to six) and reserve that many skeleton cards while loading.
+An unknown account starts with six placeholders. Loaded results show only live
+channels, without unused rows; no live channels produces a compact empty message.
+Changes in row count resize smoothly, unless Reduce Motion is enabled. Cached
+counts are not changed by category filters or failed requests, and this adds no
+requests, polling, or loading animation timers. The section is omitted once the
+account is confirmed signed out. Chat wraps long names and links within the pane;
+scroll up to read earlier messages, then tap the floating **Jump to present**
+button to resume following live chat. It disappears at the live edge without
+reserving an empty status row or changing the chat viewport.
+
+Swipe down anywhere over the live video, or tap its down chevron, to shrink it into
+Strozz's in-app mini-player and return to the page you opened the stream from.
+The same video surface follows your pull smoothly; a short pull springs back, and
+Reduce Motion skips the resizing animation. The mini-player's pause and close
+controls fade away after four seconds of playback. Tap once to reveal hidden
+controls, then tap the video again to expand it. Dragging or pinching also reveals
+the controls and restarts the timer. Controls stay available while paused,
+loading, showing an error, or using VoiceOver. Select another stream or broadcast
+to replace playback.
+Drag the mini-player with one finger to move it, or pinch to resize it. It keeps
+the video's proportions and stays within the available screen area. Its placement
+is retained when expanding and minimizing the same stream or returning from native PiP.
+Quick drags coast briefly on release; the edges and resize limits have gentle
+resistance and settle back smoothly. A deliberate fast upward or downward flick
+carries the mini-player to that edge; gentle releases keep a short, bounded glide.
+Grab it again to stop the glide.
+Reduce Motion keeps movement direct, without momentum or elastic settling.
+Player controls use white icons without individual backplates. The expanded
+player keeps one even, full-frame dark gradient with gentle extra edge shading.
+The mini-player uses one full-width fade over roughly the top half, extending
+farther down on smaller cards to keep the transition gradual. It disappears with
+the controls. Reduce Transparency strengthens the gradients without replacing
+the picture with an opaque panel.
+Home previews stay paused while a live stream is playing.
+
+When you leave Strozz, supported video playback switches to native iOS Picture in
+Picture. Returning to the app brings playback back to its previous expanded or
+mini-player layout; PiP's system restore control returns directly to the expanded
+player at the top of the page, without first landing in the mini-player.
+Closing native PiP stops playback. If native PiP cannot start, background playback
+is suspended and resumes when you return. In-app minimization still works when
+native PiP is unavailable, including audio-only playback.
 
 Past broadcasts use native on-demand controls with seeking. **Continue watching**
 on Home and channel profiles resumes saved progress; finished broadcasts leave

@@ -1,0 +1,571 @@
+import AVKit
+import SwiftUI
+import XCTest
+@testable import StrozzMobile
+
+@MainActor
+final class MobilePictureInPictureTests: XCTestCase {
+  func testDownwardGestureMustBeDeliberateAndVertical() {
+    XCTAssertTrue(MobilePlayerCollapseGesture.shouldCollapse(translation: .init(width: 0, height: 70)))
+    XCTAssertTrue(MobilePlayerCollapseGesture.shouldCollapse(translation: .init(width: -30, height: 90)))
+    for translation in [CGSize(width: 0, height: 69), .init(width: 100, height: 80),
+                        .init(width: 0, height: -120), .init(width: 150, height: 0)] {
+      XCTAssertFalse(MobilePlayerCollapseGesture.shouldCollapse(translation: translation))
+    }
+  }
+
+  func testMiniPlayerGeometryStaysInsidePhoneTabletAndSplitView() {
+    for size in [CGSize(width: 390, height: 750), .init(width: 800, height: 350),
+                 .init(width: 1024, height: 1300), .init(width: 320, height: 600)] {
+      let expanded = CGRect(origin: .zero, size: size)
+      let mini = MobileMiniPlayerLayout.frame(in: size, isPhone: size.width < 900)
+      XCTAssertTrue(expanded.contains(mini))
+      XCTAssertEqual(mini.width / mini.height, 16 / 9, accuracy: 0.001)
+      XCTAssertEqual(MobileMiniPlayerLayout.interpolate(from: expanded, to: mini, progress: 0), expanded)
+      XCTAssertEqual(MobileMiniPlayerLayout.interpolate(from: expanded, to: mini, progress: 1), mini)
+      let midway = MobileMiniPlayerLayout.interpolate(from: expanded, to: mini, progress: 0.5)
+      XCTAssertEqual(midway.width, (expanded.width + mini.width) / 2)
+      XCTAssertEqual(midway.midY, (expanded.midY + mini.midY) / 2)
+    }
+  }
+
+  func testMiniPlayerDragAndPinchStayWithinBounds() {
+    for (size, isPhone) in [(CGSize(width: 390, height: 750), true),
+                            (.init(width: 800, height: 350), true),
+                            (.init(width: 1024, height: 1300), false),
+                            (.init(width: 320, height: 600), false),
+                            (.init(width: 160, height: 120), false)] {
+      let bounds = MobileMiniPlayerLayout.bounds(in: size, isPhone: isPhone)
+      let start = MobileMiniPlayerLayout.frame(in: size, isPhone: isPhone)
+      for scale: CGFloat in [0.01, 0.8, 1, 1.5, 100] {
+        for delta in [CGSize(width: -2000, height: -2000), .zero, .init(width: 2000, height: 2000)] {
+          let moved = MobileMiniPlayerLayout.applying(
+            .init(translation: delta, magnification: scale), to: start, in: size, isPhone: isPhone)
+          XCTAssertGreaterThanOrEqual(moved.minX, bounds.minX - 0.001)
+          XCTAssertGreaterThanOrEqual(moved.minY, bounds.minY - 0.001)
+          XCTAssertLessThanOrEqual(moved.maxX, bounds.maxX + 0.001)
+          XCTAssertLessThanOrEqual(moved.maxY, bounds.maxY + 0.001)
+          XCTAssertEqual(moved.width / moved.height, 16 / 9, accuracy: 0.001)
+          XCTAssertGreaterThanOrEqual(moved.width, min(160, min(bounds.width, bounds.height * 16 / 9)))
+          let placement = MobileMiniPlayerLayout.placement(
+            for: moved, in: size, isPhone: isPhone, previous: .init())
+          let restored = MobileMiniPlayerLayout.frame(in: size, isPhone: isPhone, placement: placement)
+          XCTAssertEqual(restored.minX, moved.minX, accuracy: 0.001)
+          XCTAssertEqual(restored.minY, moved.minY, accuracy: 0.001)
+          XCTAssertEqual(restored.width, moved.width, accuracy: 0.001)
+        }
+      }
+    }
+  }
+
+  func testMiniPlayerDefaultPlacementKeepsExistingBottomClearance() {
+    let phoneSize = CGSize(width: 390, height: 750)
+    let phone = MobileMiniPlayerLayout.frame(in: phoneSize, isPhone: true)
+    XCTAssertEqual(phone.width, 240)
+    XCTAssertEqual(phone.maxX, phoneSize.width - 12)
+    XCTAssertEqual(phone.maxY, phoneSize.height - 64)
+    let tabletSize = CGSize(width: 1024, height: 1300)
+    let tablet = MobileMiniPlayerLayout.frame(in: tabletSize, isPhone: false)
+    XCTAssertEqual(tablet.width, 320)
+    XCTAssertEqual(tablet.maxX, tabletSize.width - 12)
+    XCTAssertEqual(tablet.maxY, tabletSize.height - 12)
+  }
+
+  func testMiniPlayerResizesAtPinchAnchorAndRetainsPlacementAcrossRotation() {
+    let size = CGSize(width: 1024, height: 1300)
+    let start = CGRect(x: 300, y: 300, width: 320, height: 180)
+    let anchor = UnitPoint(x: 0.25, y: 0.75)
+    let moved = MobileMiniPlayerLayout.applying(
+      .init(translation: .init(width: 20, height: 30), magnification: 1.5, anchor: anchor),
+      to: start, in: size, isPhone: false)
+    XCTAssertEqual(moved.width, 480)
+    XCTAssertEqual(moved.minX + moved.width * anchor.x, start.minX + start.width * anchor.x + 20)
+    XCTAssertEqual(moved.minY + moved.height * anchor.y, start.minY + start.height * anchor.y + 30)
+    let placement = MobileMiniPlayerLayout.placement(for: moved, in: size, isPhone: false, previous: .init())
+    let rotatedSize = CGSize(width: 750, height: 320)
+    let rotated = MobileMiniPlayerLayout.frame(in: rotatedSize, isPhone: false, placement: placement)
+    XCTAssertTrue(CGRect(origin: .zero, size: rotatedSize).contains(rotated))
+    XCTAssertEqual(MobileMiniPlayerLayout.frame(in: size, isPhone: false, placement: placement), moved)
+  }
+
+  func testCombinedManipulationRetainsItsInitialAnchorAndCompletedComponents() {
+    var manipulation = MobileMiniPlayerLayout.Manipulation()
+    manipulation.update(translation: .init(width: 20, height: 30), magnification: nil, anchor: nil)
+    manipulation.update(translation: nil, magnification: 1.3, anchor: .init(x: 0.25, y: 0.75))
+    manipulation.update(translation: nil, magnification: 1.5, anchor: .center)
+    XCTAssertEqual(manipulation.translation, CGSize(width: 20, height: 30))
+    XCTAssertEqual(manipulation.magnification, 1.5)
+    XCTAssertEqual(manipulation.anchor, UnitPoint(x: 0.25, y: 0.75))
+    manipulation.update(translation: .init(width: 40, height: 50), magnification: nil, anchor: nil)
+    XCTAssertEqual(manipulation.magnification, 1.5)
+    XCTAssertEqual(manipulation.anchor, UnitPoint(x: 0.25, y: 0.75))
+  }
+
+  func testReleaseMomentumIsDirectionalBoundedAndDisabledForPreciseInteractions() {
+    let size = CGSize(width: 1024, height: 1300)
+    let frame = CGRect(x: 350, y: 450, width: 320, height: 180)
+    var drag = MobileMiniPlayerLayout.Manipulation(translation: .init(width: 20, height: -30))
+    let held = MobileMiniPlayerLayout.applying(drag, to: frame, in: size, isPhone: false)
+    func released(_ velocity: CGSize, reduceMotion: Bool = false) -> CGRect {
+      MobileMiniPlayerLayout.released(drag, from: frame, velocity: velocity,
+                                      in: size, isPhone: false, reduceMotion: reduceMotion)
+    }
+    XCTAssertEqual(released(.zero), held)
+    XCTAssertEqual(released(.init(width: 40, height: -40)), held)
+    let coast = released(.init(width: 300, height: -400))
+    XCTAssertEqual(coast.minX, held.minX + 27.36, accuracy: 0.001)
+    XCTAssertEqual(coast.minY, held.minY - 36.48, accuracy: 0.001)
+    XCTAssertEqual(coast.size, held.size)
+    let fling = released(.init(width: 30000, height: -40000))
+    XCTAssertEqual(hypot(fling.minX - held.minX, fling.minY - held.minY), 140, accuracy: 0.001)
+    XCTAssertEqual(released(.init(width: 300, height: -400), reduceMotion: true), held)
+    drag.anchor = .center
+    XCTAssertEqual(released(.init(width: 300, height: -400)), held, "Pinching must not accidentally fling the player")
+  }
+
+  func testElasticLimitsStayVisibleAndSettleBackInsideRestingBounds() {
+    for (size, isPhone) in [(CGSize(width: 390, height: 750), true),
+                           (.init(width: 800, height: 350), true),
+                           (.init(width: 1024, height: 1300), false),
+                           (.init(width: 160, height: 120), false)] {
+      let frame = MobileMiniPlayerLayout.frame(in: size, isPhone: isPhone)
+      let bounds = MobileMiniPlayerLayout.bounds(in: size, isPhone: isPhone)
+      for scale: CGFloat in [0.01, 1, 100] {
+        for delta in [CGSize(width: -2000, height: -2000), .zero, .init(width: 2000, height: 2000)] {
+          let gesture = MobileMiniPlayerLayout.Manipulation(translation: delta, magnification: scale)
+          let elastic = MobileMiniPlayerLayout.applying(gesture, to: frame, in: size, isPhone: isPhone, elastic: true)
+          XCTAssertTrue(CGRect(origin: .zero, size: size).contains(elastic))
+          XCTAssertEqual(elastic.width / elastic.height, 16 / 9, accuracy: 0.001)
+          let settled = MobileMiniPlayerLayout.released(
+            gesture, from: frame, velocity: .zero, in: size, isPhone: isPhone, reduceMotion: false)
+          XCTAssertGreaterThanOrEqual(settled.minX, bounds.minX - 0.001)
+          XCTAssertGreaterThanOrEqual(settled.minY, bounds.minY - 0.001)
+          XCTAssertLessThanOrEqual(settled.maxX, bounds.maxX + 0.001)
+          XCTAssertLessThanOrEqual(settled.maxY, bounds.maxY + 0.001)
+        }
+      }
+      let beyond = MobileMiniPlayerLayout.Manipulation(translation: .init(width: 100, height: 100))
+      let elastic = MobileMiniPlayerLayout.applying(beyond, to: frame, in: size, isPhone: isPhone, elastic: true)
+      XCTAssertGreaterThan(elastic.maxX, bounds.maxX)
+      XCTAssertLessThan(elastic.maxX, bounds.maxX + 8)
+    }
+  }
+
+  func testDeliberateVerticalFlicksReachTheCorrespondingEdge() {
+    for (size, isPhone) in [(CGSize(width: 390, height: 750), true),
+                           (.init(width: 800, height: 350), true),
+                           (.init(width: 1024, height: 1300), false),
+                           (.init(width: 320, height: 600), false)] {
+      let bounds = MobileMiniPlayerLayout.bounds(in: size, isPhone: isPhone)
+      for vertical: CGFloat in [0, 0.5, 1] {
+        let frame = MobileMiniPlayerLayout.frame(
+          in: size, isPhone: isPhone, placement: .init(horizontal: 0.5, vertical: vertical))
+        for speed: CGFloat in [-2200, -1000, 1000, 2200] {
+          let drag = MobileMiniPlayerLayout.Manipulation(
+            translation: .init(width: 0, height: speed < 0 ? -40 : 40))
+          let settled = MobileMiniPlayerLayout.released(
+            drag, from: frame, velocity: .init(width: 0, height: speed),
+            in: size, isPhone: isPhone, reduceMotion: false)
+          XCTAssertEqual(settled.minY, speed < 0 ? bounds.minY : bounds.maxY - settled.height, accuracy: 0.001)
+          XCTAssertEqual(settled.minX, frame.minX, accuracy: 0.001)
+          XCTAssertEqual(settled.size, frame.size)
+          XCTAssertTrue(bounds.contains(settled))
+        }
+      }
+    }
+  }
+
+  func testEdgeFlickRequiresSpeedDistanceAndConsistentVerticalIntent() {
+    let size = CGSize(width: 1024, height: 1300)
+    let frame = CGRect(x: 350, y: 450, width: 320, height: 180)
+    for (translation, velocity) in [
+      (CGSize(width: 0, height: -80), CGSize(width: 0, height: -999)),
+      (.init(width: 0, height: -39), .init(width: 0, height: -1500)),
+      (.init(width: 100, height: -80), .init(width: 0, height: -1500)),
+      (.init(width: 0, height: -80), .init(width: 1000, height: -1200)),
+      (.init(width: 0, height: 80), .init(width: 0, height: -1500)),
+    ] {
+      let drag = MobileMiniPlayerLayout.Manipulation(translation: translation)
+      let held = MobileMiniPlayerLayout.applying(drag, to: frame, in: size, isPhone: false)
+      let settled = MobileMiniPlayerLayout.released(
+        drag, from: frame, velocity: velocity, in: size, isPhone: false, reduceMotion: false)
+      XCTAssertLessThanOrEqual(hypot(settled.minX - held.minX, settled.minY - held.minY), 140.001,
+                               "Ordinary releases must keep the short coast, not jump to an edge")
+    }
+    var drag = MobileMiniPlayerLayout.Manipulation(translation: .init(width: 0, height: -80))
+    let held = MobileMiniPlayerLayout.applying(drag, to: frame, in: size, isPhone: false)
+    XCTAssertEqual(MobileMiniPlayerLayout.released(
+      drag, from: frame, velocity: .init(width: 0, height: -1500),
+      in: size, isPhone: false, reduceMotion: true), held)
+    drag.anchor = .center
+    XCTAssertEqual(MobileMiniPlayerLayout.released(
+      drag, from: frame, velocity: .init(width: 0, height: -1500),
+      in: size, isPhone: false, reduceMotion: false), held)
+  }
+
+  func testMinimizeAndExpandNeverStartNativePiPOrReplaceTheSource() {
+    let session = makeSession()
+    session.select(channel("first"))
+    let model = session.model
+    let surface = session.videoController
+    for _ in 0..<3 {
+      session.collapse()
+      XCTAssertFalse(session.isExpanded)
+      XCTAssertEqual(session.pictureInPictureState, .inline)
+      XCTAssertTrue(model.isActive)
+      XCTAssertNil(session.errorMessage, "In-app minimization does not require native PiP capability")
+      session.expand()
+      XCTAssertTrue(session.isExpanded)
+      XCTAssertTrue(session.model === model)
+      XCTAssertTrue(session.videoController === surface)
+    }
+    session.close()
+  }
+
+  func testNativeBackgroundAndForegroundRetainThePreviousInAppLayout() async throws {
+    for minimized in [false, true] {
+      let session = makeSession()
+      session.select(channel("first"))
+      if minimized { session.collapse() }
+      let model = session.model
+      let surface = session.videoController
+      session.willStartPictureInPicture()
+      session.sceneChanged(.background)
+      session.didStartPictureInPicture()
+      XCTAssertTrue(session.keepsPlayingInBackground)
+      XCTAssertTrue(model.isActive)
+      XCTAssertEqual(session.isExpanded, !minimized)
+      session.sceneChanged(.active)
+      try await waitUntil { session.pictureInPictureState == .restoring }
+      XCTAssertEqual(session.pictureInPictureState, .restoring)
+      session.restorePictureInPicture { _ in }
+      session.playerDidAppear()
+      session.didStopPictureInPicture()
+      XCTAssertEqual(session.pictureInPictureState, .inline)
+      XCTAssertEqual(session.isExpanded, !minimized)
+      XCTAssertTrue(session.model === model)
+      XCTAssertTrue(session.videoController === surface)
+      XCTAssertTrue(model.isActive)
+      session.close()
+    }
+  }
+
+  func testQuickForegroundReturnDuringNativeStartStopsPiPAfterStart() async throws {
+    let session = makeSession()
+    session.select(channel("first"))
+    session.collapse()
+    session.willStartPictureInPicture()
+    session.sceneChanged(.background)
+    session.sceneChanged(.active)
+    session.didStartPictureInPicture()
+    try await waitUntil { session.pictureInPictureState == .restoring }
+    XCTAssertEqual(session.pictureInPictureState, .restoring)
+    session.didStopPictureInPicture()
+    XCTAssertFalse(session.isExpanded)
+    XCTAssertTrue(session.model.isActive)
+    session.close()
+  }
+
+  func testSystemRestoreExpandsTheSamePlayer() {
+    let session = makeSession()
+    session.select(channel("first"))
+    let model = session.model
+    session.collapse()
+    session.didStartPictureInPicture()
+    var restored: Bool?
+    session.restorePictureInPicture { restored = $0 }
+    XCTAssertTrue(session.isExpanded)
+    XCTAssertNil(restored, "An unmounted source must wait before completing AVKit restoration")
+    session.playerDidAppear()
+    XCTAssertNil(restored, "Mounting the compact source is not enough to restore full screen")
+    session.playerDidLayoutExpandedSurface()
+    XCTAssertEqual(restored, true)
+    session.didStopPictureInPicture()
+    XCTAssertTrue(session.model === model)
+    XCTAssertTrue(model.isActive)
+    session.close()
+  }
+
+  func testSystemRestoreRequestWinsOverForegroundAutoReturn() async throws {
+    let session = makeSession()
+    session.select(channel("first"))
+    session.collapse()
+    session.didStartPictureInPicture()
+    session.sceneChanged(.background)
+    session.sceneChanged(.active)
+    XCTAssertEqual(session.pictureInPictureState, .active)
+    var restored = false
+    session.restorePictureInPicture { restored = $0 }
+    XCTAssertTrue(session.isExpanded)
+    session.playerDidLayoutExpandedSurface()
+    XCTAssertTrue(restored)
+    session.didStopPictureInPicture()
+    try await Task.sleep(for: .milliseconds(400))
+    XCTAssertTrue(session.isExpanded)
+    XCTAssertEqual(session.pictureInPictureState, .inline)
+    XCTAssertTrue(session.model.isActive)
+    session.close()
+  }
+
+  func testReturningToBackgroundCancelsPendingInlineReturn() async throws {
+    let session = makeSession()
+    session.select(channel("first"))
+    session.collapse()
+    session.didStartPictureInPicture()
+    session.sceneChanged(.background)
+    session.sceneChanged(.active)
+    session.sceneChanged(.background)
+    try await Task.sleep(for: .milliseconds(400))
+    XCTAssertEqual(session.pictureInPictureState, .active)
+    XCTAssertFalse(session.isExpanded)
+    session.close()
+    session.didStopPictureInPicture()
+  }
+
+  func testSystemRestoreCompletesOnlyAfterTheExpandedSurfaceIsLaidOut() async throws {
+    let session = makeSession()
+    let channel = channel("fixture")
+    session.select(channel)
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    let host = UIHostingController(rootView: MobilePlayerView(channel: channel, session: session)
+      .environment(TwitchAuthSession()))
+    window.rootViewController = host
+    defer { session.close(); window.rootViewController = previous }
+    let surface = session.videoController
+    try await waitUntil { surface.view.bounds.width > 320 }
+    let expandedFrame = surface.playerLayer.convert(surface.playerLayer.bounds, to: window.layer)
+    session.collapse()
+    let compactWidth: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? 240 : 320
+    try await waitUntil { abs(surface.view.bounds.width - compactWidth) < 1 }
+    session.didStartPictureInPicture()
+    var restoredFrame: CGRect?
+    var renderedFrame: CGRect?
+    session.restorePictureInPicture { restored in
+      XCTAssertTrue(restored)
+      restoredFrame = surface.playerLayer.convert(surface.playerLayer.bounds, to: window.layer)
+      if let layer = surface.playerLayer.presentation(), let windowLayer = window.layer.presentation() {
+        renderedFrame = layer.convert(layer.bounds, to: windowLayer)
+      }
+    }
+    try await waitUntil { restoredFrame != nil }
+    let destination = try XCTUnwrap(restoredFrame)
+    XCTAssertEqual(destination.width, expandedFrame.width, accuracy: 1,
+                   "AVKit must never receive the mini-player as its restore destination")
+    XCTAssertEqual(destination.height, expandedFrame.height, accuracy: 1)
+    XCTAssertEqual(destination.minX, expandedFrame.minX, accuracy: 1)
+    XCTAssertEqual(destination.minY, expandedFrame.minY, accuracy: 1,
+                   "The restoration destination must already be at the top, not centered")
+    let renderedDestination = try XCTUnwrap(renderedFrame)
+    XCTAssertEqual(renderedDestination.minY, expandedFrame.minY, accuracy: 1,
+                   "The displayed layer tree must have committed the top-aligned destination")
+    XCTAssertEqual(renderedDestination.width, expandedFrame.width, accuracy: 1)
+    session.didStopPictureInPicture()
+  }
+
+  func testGlidingSurfaceReportsItsDisplayedPositionForTheNextGesture() async throws {
+    let session = makeSession()
+    let channel = channel("fixture")
+    session.select(channel)
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    window.rootViewController = UIHostingController(rootView: MobilePlayerView(channel: channel, session: session)
+      .environment(TwitchAuthSession()))
+    defer { session.close(); window.rootViewController = previous }
+    let surface = session.videoController
+    try await waitUntil { surface.view.bounds.width > 320 }
+    session.collapse()
+    try await Task.sleep(for: .milliseconds(600))
+    let start = try XCTUnwrap(surface.presentedFrame)
+    let layer = surface.view.layer
+    let animation = CABasicAnimation(keyPath: "position.x")
+    animation.fromValue = layer.position.x - 100
+    animation.toValue = layer.position.x
+    animation.duration = 1
+    layer.add(animation, forKey: "test-glide")
+    defer { layer.removeAnimation(forKey: "test-glide") }
+    try await Task.sleep(for: .milliseconds(120))
+    let displayed = try XCTUnwrap(surface.presentedFrame)
+    let destination = surface.playerLayer.convert(surface.playerLayer.bounds, to: window.layer)
+    XCTAssertLessThan(displayed.minX, destination.minX - 20)
+    XCTAssertGreaterThan(displayed.minX, start.minX - 99)
+    XCTAssertEqual(displayed.width, start.width, accuracy: 1)
+  }
+
+  func testSelectingAnotherStreamStopsOldPlaybackBeforeReplacingNativePiP() {
+    let session = makeSession()
+    session.select(channel("first"))
+    let old = session.model
+    session.didStartPictureInPicture()
+    session.select(channel("second"))
+    XCTAssertFalse(old.isActive)
+    XCTAssertEqual(session.channel?.login, "first")
+    XCTAssertEqual(session.pictureInPictureState, .stopping)
+    session.select(channel("third"))
+    session.didStopPictureInPicture()
+    XCTAssertEqual(session.channel?.login, "third", "The newest selection wins")
+    XCTAssertTrue(session.isExpanded)
+    XCTAssertFalse(session.model === old)
+    XCTAssertTrue(session.model.isActive)
+    session.close()
+  }
+
+  func testSelectingTheMinimizedStreamRestoresWithoutRestarting() {
+    let session = makeSession()
+    let channel = channel("first")
+    session.select(channel)
+    let model = session.model
+    session.collapse()
+    session.select(channel)
+    XCTAssertTrue(session.isExpanded)
+    XCTAssertTrue(session.model === model)
+    XCTAssertTrue(model.isActive)
+    session.collapse()
+    session.select(self.channel("second"))
+    XCTAssertFalse(model.isActive)
+    XCTAssertTrue(session.isExpanded)
+    XCTAssertEqual(session.channel?.login, "second")
+    session.close()
+  }
+
+  func testNativeCloseAndVODReplacementEndLivePlayback() {
+    for explicitClose in [false, true] {
+      let session = makeSession()
+      session.select(channel("first"))
+      let old = session.model
+      session.didStartPictureInPicture()
+      if explicitClose { session.close() }
+      session.didStopPictureInPicture()
+      XCTAssertNil(session.channel)
+      XCTAssertFalse(session.isExpanded)
+      XCTAssertFalse(old.isActive)
+      XCTAssertNil(session.videoController.player)
+    }
+  }
+
+  func testCloseDuringStartCannotResurrectPlayback() {
+    let session = makeSession()
+    session.select(channel("first"))
+    session.willStartPictureInPicture()
+    session.close()
+    XCTAssertFalse(session.model.isActive)
+    session.didStartPictureInPicture()
+    XCTAssertEqual(session.pictureInPictureState, .stopping)
+    session.didStopPictureInPicture()
+    XCTAssertNil(session.channel)
+    XCTAssertFalse(session.isExpanded)
+  }
+
+  func testStartFailureKeepsMiniPlayerAndReportsError() {
+    let session = makeSession()
+    session.select(channel("first"))
+    session.collapse()
+    session.willStartPictureInPicture()
+    session.sceneChanged(.background)
+    session.failedToStartPictureInPicture(URLError(.notConnectedToInternet))
+    XCTAssertEqual(session.pictureInPictureState, .inline)
+    XCTAssertFalse(session.isExpanded)
+    XCTAssertTrue(session.model.isActive)
+    XCTAssertNotNil(session.errorMessage)
+    session.sceneChanged(.active)
+    session.close()
+  }
+
+  func testReplacementDuringFailedStartStillStartsSelectedStream() {
+    let session = makeSession()
+    session.select(channel("first"))
+    session.willStartPictureInPicture()
+    session.select(channel("second"))
+    session.failedToStartPictureInPicture(URLError(.cancelled))
+    XCTAssertEqual(session.channel?.login, "second")
+    XCTAssertTrue(session.isExpanded)
+    session.close()
+  }
+
+  func testBackgroundAudioIsDeclaredForNativePiP() {
+    XCTAssertTrue((Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []).contains("audio"))
+  }
+
+  func testOptInMiniPlayerAndNativeHandoffKeepOnePlayingSurface() async throws {
+    guard ProcessInfo.processInfo.environment["STROZZ_MOBILE_PIP_LIVE_TESTS"] == "1" else {
+      throw XCTSkip("Set STROZZ_MOBILE_PIP_LIVE_TESTS=1 on a PiP-capable device.")
+    }
+    XCTAssertTrue(AVPictureInPictureController.isPictureInPictureSupported())
+    let browse = BrowseService()
+    await browse.loadCategories()
+    await browse.loadStreams(for: try XCTUnwrap(browse.categories.first))
+    let first = try XCTUnwrap(browse.categoryStreams.first)
+    let session = MobilePlaybackSession {
+      let model = MobilePlaybackModel(muted: true)
+      model.select(.native)
+      return model
+    }
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    let root = UIHostingController(rootView: MobileRootView()
+      .environment(session).environment(ThemeManager())
+      .environment(TwitchAuthSession()).environment(TwitchWatchRewardsSession())
+      .environment(TwitchAccountSync()).environment(\.scenePhase, .active))
+    window.rootViewController = root
+    defer { session.close(); window.rootViewController = previous }
+    root.view.layoutIfNeeded()
+    try await Task.sleep(for: .milliseconds(300))
+    session.select(first)
+    try await waitUntil { session.model.isReadyForDisplay && !session.model.isLoading }
+    let model = session.model
+    let surface = session.videoController
+    let expandedWidth = surface.view.bounds.width
+    session.collapse()
+    try await waitUntil { surface.view.bounds.width < expandedWidth - 100 }
+    XCTAssertEqual(session.pictureInPictureState, .inline)
+    XCTAssertNotNil(surface.view.window)
+    XCTAssertNil(root.presentedViewController)
+    let start = model.player.currentTime().seconds
+    try await Task.sleep(for: .seconds(3))
+    XCTAssertGreaterThan(model.player.currentTime().seconds - start, 1)
+    session.sceneChanged(.background)
+    try await waitUntil { session.pictureInPictureState == .active || session.errorMessage != nil }
+    XCTAssertNil(session.errorMessage)
+    XCTAssertEqual(session.pictureInPictureState, .active)
+    let nativeStart = model.player.currentTime().seconds
+    try await Task.sleep(for: .seconds(8))
+    XCTAssertGreaterThan(model.player.currentTime().seconds - nativeStart, 5)
+    session.sceneChanged(.active)
+    try await waitUntil { session.pictureInPictureState == .inline }
+    XCTAssertFalse(session.isExpanded)
+    XCTAssertTrue(session.model === model)
+    XCTAssertTrue(session.videoController === surface)
+    XCTAssertNotNil(surface.view.window)
+    session.expand()
+    try await waitUntil { abs(surface.view.bounds.width - expandedWidth) < 1 }
+    XCTAssertTrue(model.isReadyForDisplay)
+    XCTAssertTrue(model.requestsNativePlayback)
+    XCTAssertNil(model.errorMessage)
+  }
+
+  private func waitUntil(file: StaticString = #filePath, line: UInt = #line, _ condition: () -> Bool) async throws {
+    for _ in 0..<450 {
+      if condition() { return }
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    XCTFail("Timed out waiting for playback/PiP transition", file: file, line: line)
+    throw URLError(.timedOut)
+  }
+
+  private func makeSession() -> MobilePlaybackSession {
+    MobilePlaybackSession {
+      let model = MobilePlaybackModel(muted: true) { _ in throw URLError(.cancelled) }
+      model.activateAudioSession = {}
+      model.loadMetadata = { _ in nil }
+      return model
+    }
+  }
+
+  private func channel(_ login: String) -> FollowedChannel {
+    FollowedChannel(id: login, login: login, displayName: login, title: "Live stream",
+                    gameName: "", viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true)
+  }
+}

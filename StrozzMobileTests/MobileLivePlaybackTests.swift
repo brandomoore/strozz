@@ -18,15 +18,17 @@ final class MobileLivePlaybackTests: XCTestCase {
     let channel = try XCTUnwrap(search.channelResults.first { $0.login == login && $0.isLive })
     let model = MobilePlaybackModel(muted: true)
     model.select(.automatic)
+    let session = MobilePlaybackSession(makeModel: { model })
+    session.select(channel)
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     let window = try XCTUnwrap(scene.keyWindow)
     let previousController = window.rootViewController
     window.rootViewController = UIHostingController(rootView:
-      MobilePlayerView(channel: channel, model: model)
+      MobilePlayerView(channel: channel, session: session)
         .environment(TwitchAuthSession()).environment(ThemeManager()).environment(TwitchWatchRewardsSession()))
     defer {
       window.rootViewController = previousController
-      model.stop()
+      session.close()
     }
     try await waitForPlayback(model)
     for _ in 0..<100 {
@@ -79,7 +81,8 @@ final class MobileLivePlaybackTests: XCTestCase {
     XCTAssertEqual(model.player.volume, 0.35, accuracy: 0.001)
     XCTAssertEqual(AVAudioSession.sharedInstance().category, .playback)
     XCTAssertEqual(AVAudioSession.sharedInstance().mode, .moviePlayback)
-    XCTAssertFalse(try XCTUnwrap(videoController(in: window.rootViewController)) === originalSurface)
+    XCTAssertTrue(try XCTUnwrap(videoController(in: window.rootViewController)) === originalSurface,
+                  "The PiP source surface must survive player replacement")
     let item = try XCTUnwrap(model.player.currentItem)
     let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [:])
     item.add(output)
@@ -158,16 +161,16 @@ final class MobileLivePlaybackTests: XCTestCase {
   private func describe(_ controller: UIViewController?, model: MobilePlaybackModel) -> String {
     guard let controller else { return "No controller" }
     var text = "\(type(of: controller)) bounds=\(controller.view.bounds) window=\(controller.view.window != nil)\n"
-    if let video = controller as? AVPlayerViewController {
-      text += "samePlayer=\(video.player === model.player) ready=\(video.isReadyForDisplay) rate=\(video.player?.rate ?? -1) clock=\(video.player?.currentTime().seconds ?? -1) item=\(String(describing: video.player?.currentItem?.status)) presentation=\(String(describing: video.player?.currentItem?.presentationSize)) bitrate=\(video.player?.currentItem?.accessLog()?.events.last?.indicatedBitrate ?? -1)\n"
+    if let video = controller as? MobileVideoController {
+      text += "samePlayer=\(video.player === model.player) ready=\(video.playerLayer.isReadyForDisplay) rate=\(video.player?.rate ?? -1) clock=\(video.player?.currentTime().seconds ?? -1) item=\(String(describing: video.player?.currentItem?.status)) presentation=\(String(describing: video.player?.currentItem?.presentationSize)) bitrate=\(video.player?.currentItem?.accessLog()?.events.last?.indicatedBitrate ?? -1)\n"
     }
 
     return text + controller.children.map { describe($0, model: model) }.joined()
   }
 
-  private func videoController(in controller: UIViewController?) -> AVPlayerViewController? {
+  private func videoController(in controller: UIViewController?) -> MobileVideoController? {
     guard let controller else { return nil }
-    if let video = controller as? AVPlayerViewController { return video }
+    if let video = controller as? MobileVideoController { return video }
     return controller.children.lazy.compactMap { self.videoController(in: $0) }.first
   }
 

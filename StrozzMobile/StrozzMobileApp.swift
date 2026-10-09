@@ -8,6 +8,7 @@ struct StrozzMobileApp: App {
   @State private var theme = ThemeManager()
   @State private var rewards = TwitchWatchRewardsSession()
   @State private var accountSync = TwitchAccountSync()
+  @State private var playback = MobilePlaybackSession()
 
   init() {
     SDImageCodersManager.shared.addCoder(SDImageWebPCoder.shared)
@@ -36,11 +37,15 @@ struct StrozzMobileApp: App {
       .environment(theme)
       .environment(rewards)
       .environment(accountSync)
+      .environment(playback)
       .preferredColorScheme(theme.theme.preferredColorScheme)
       .task {
         await accountSync.start(auth: auth, rewards: rewards)
       }
-      .onChange(of: auth.userID) { _, userID in rewards.accountChanged(to: userID) }
+      .onChange(of: auth.userID) { _, userID in
+        playback.close()
+        rewards.accountChanged(to: userID)
+      }
       #if DEBUG
       .task { await TwitchCloudProbe.runIfRequested() }
       #endif
@@ -51,8 +56,9 @@ struct MobileRootView: View {
   @Environment(ThemeManager.self) private var theme
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.scenePhase) private var scenePhase
-  @State private var selectedChannel: FollowedChannel?
-  @State private var playbackModel = MobilePlaybackModel()
+  @Environment(MobilePlaybackSession.self) private var playback
+  @Environment(TwitchAuthSession.self) private var auth
+  @Environment(TwitchWatchRewardsSession.self) private var rewards
   @State private var preview = MobileHomePreview()
   @State private var tab = 0
   @State private var history: WatchHistoryService
@@ -67,7 +73,7 @@ struct MobileRootView: View {
 
   var body: some View {
     let palette = theme.theme.palette(systemColorScheme: colorScheme)
-    let previewsEnabled = tab == 0 && selectedChannel == nil && !playbackModel.isActive && scenePhase == .active
+    let previewsEnabled = tab == 0 && playback.channel == nil && scenePhase == .active
     TabView(selection: $tab) {
       NavigationStack {
         MobileHomeView(preview: preview, previewsEnabled: previewsEnabled, history: history,
@@ -88,14 +94,20 @@ struct MobileRootView: View {
         .tabItem { Label { Text("Account") } icon: { Image("tb-user-circle") } }
         .tag(2)
     }
+    .allowsHitTesting(!playback.isExpanded)
+    .accessibilityHidden(playback.isExpanded)
+    .overlay {
+      if let channel = playback.channel {
+        MobilePlayerView(channel: channel, session: playback)
+          .id(ObjectIdentifier(playback.model))
+      }
+    }
     .environment(\.themePalette, palette)
     .environment(history)
     .environment(vodProgress)
-    .fullScreenCover(item: $selectedChannel, onDismiss: { playbackModel.stop() }) { channel in
-      MobilePlayerView(channel: channel, model: playbackModel)
-        .environment(\.themePalette, palette)
-    }
     .onDisappear { preview.stop() }
+    .onChange(of: scenePhase, initial: true) { _, phase in playback.sceneChanged(phase) }
+    .task(id: playback.channel?.channelKey) { await playback.trackWatch(auth: auth, rewards: rewards) }
   }
 
   private func select(_ channel: FollowedChannel) {
@@ -105,8 +117,6 @@ struct MobileRootView: View {
       return
     }
     history.record(channel)
-    playbackModel.stop()
-    playbackModel = MobilePlaybackModel()
-    selectedChannel = channel
+    playback.select(channel)
   }
 }

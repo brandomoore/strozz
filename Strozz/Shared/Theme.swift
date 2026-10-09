@@ -208,6 +208,10 @@ struct ThemePalette: Equatable {
 
   var liveIndicator: Color { .red }
 
+  // Video content has no app theme; this pair stays legible over the contrast scrim.
+  var videoControlForeground: Color { .white }
+  var videoControlScrim: Color { .black }
+
   /// Tint painted *under* translucent chrome glass (and as the fill of
   /// translucent non-glass chrome boxes). Dark themes darken; Light lightens,
   /// so chrome reads light-but-translucent in Light mode. A no-op vs. the prior
