@@ -94,7 +94,8 @@ extension ChatView {
     let key = HighlightCacheKey(id: message.id, configSignature: Self.highlightConfigSignature(self))
     if let cached = Self.highlightCache[key] { return cached }
 
-    let result = Self.computeShouldHighlight(message, viewerLogin: viewerLogin, viewerDisplayName: viewerDisplayName, keywords: highlightKeywords)
+    let result = ChatHighlightRules.matches(message, viewerLogin: viewerLogin,
+      viewerDisplayName: viewerDisplayName, keywords: highlightKeywords)
 
     Self.highlightCache[key] = result
     Self.highlightCacheOrder.append(key)
@@ -106,27 +107,6 @@ extension ChatView {
       Self.highlightCacheOrder.removeFirst(overflow)
     }
     return result
-  }
-
-  private static func computeShouldHighlight(_ message: ChatMessage, viewerLogin: String?, viewerDisplayName: String?, keywords: [String]) -> Bool {
-    if let login = message.replyParentLogin,
-       let viewerLogin, !viewerLogin.isEmpty,
-       login == viewerLogin.lowercased() {
-      return true
-    }
-
-    let haystack = message.text.lowercased()
-
-    for name in [viewerLogin, viewerDisplayName] {
-      guard let name, !name.isEmpty else { continue }
-      if containsWord(name.lowercased(), in: haystack) { return true }
-    }
-
-    for keyword in keywords where haystack.contains(keyword) {
-      return true
-    }
-
-    return false
   }
 
   /// Stable signature of the inputs that change which lines highlight. Folded
@@ -147,29 +127,6 @@ extension ChatView {
   private static var highlightCache: [HighlightCacheKey: Bool] = [:]
   private static var highlightCacheOrder: [HighlightCacheKey] = []
   private static let highlightCacheLimit = 3000
-
-  /// Case-insensitive whole-token match for a username so "sam" doesn't fire on
-  /// "same". Both inputs are expected lowercased. A leading `@` (as in a mention
-  /// or reply prefix) counts as a boundary.
-  private static func containsWord(_ word: String, in text: String) -> Bool {
-    guard !word.isEmpty else { return false }
-    var searchRange = text.startIndex..<text.endIndex
-    while let found = text.range(of: word, range: searchRange) {
-      let beforeOK: Bool = {
-        guard found.lowerBound > text.startIndex else { return true }
-        let prev = text[text.index(before: found.lowerBound)]
-        return !(prev.isLetter || prev.isNumber || prev == "_")
-      }()
-      let afterOK: Bool = {
-        guard found.upperBound < text.endIndex else { return true }
-        let next = text[found.upperBound]
-        return !(next.isLetter || next.isNumber || next == "_")
-      }()
-      if beforeOK && afterOK { return true }
-      searchRange = found.upperBound..<text.endIndex
-    }
-    return false
-  }
 
   /// Wraps an ordinary chat line in the gold mention treatment using the shared
   /// rounded highlight card.

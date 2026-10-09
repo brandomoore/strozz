@@ -46,12 +46,13 @@ struct MobileEmoteDetailView: View {
   let emote: MobileChatEmote
   @Environment(\.dismiss) private var dismiss
   @Environment(\.themePalette) private var palette
+  @AppStorage(PersistenceKey.chatAnimatedEmotes) private var animatedEmotes = true
 
   var body: some View {
     NavigationStack {
       ScrollView {
         VStack(spacing: 20) {
-          MobileEmoteArtwork(emote: emote)
+          MobileEmoteArtwork(emote: emote, animated: animatedEmotes)
             .id(emote.id)
           Text(emote.name)
             .font(.title2.weight(.semibold))
@@ -88,6 +89,7 @@ struct MobileEmoteDetailView: View {
 
 private struct MobileEmoteArtwork: View {
   let emote: MobileChatEmote
+  let animated: Bool
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.themePalette) private var palette
   @State private var useOriginal = false
@@ -115,7 +117,7 @@ private struct MobileEmoteArtwork: View {
           }
           .multilineTextAlignment(.center)
         } else {
-          WebImage(url: url, isAnimating: .constant(!reduceMotion)) { image in
+          WebImage(url: url, isAnimating: .constant(animated && !reduceMotion)) { image in
             image.resizable().scaledToFit()
           } placeholder: {
             ProgressView("Loading emote")

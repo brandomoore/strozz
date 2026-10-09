@@ -23,6 +23,8 @@ struct StrozzMobileApp: App {
         MobileChatLayoutFixture()
       } else if ProcessInfo.processInfo.environment["STROZZ_LAYOUT_FIXTURE"] == "emotes" {
         MobileEmoteInspectionFixture()
+      } else if ProcessInfo.processInfo.environment["STROZZ_LAYOUT_FIXTURE"] == "composer" {
+        MobileChatComposerFixture()
       } else {
         appContent
       }

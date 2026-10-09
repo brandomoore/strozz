@@ -710,14 +710,7 @@ struct PlayerView: View {
   /// Normalized highlight keywords: split on commas/newlines, trimmed,
   /// lowercased, de-duplicated, empties dropped.
   var chatHighlightKeywordList: [String] {
-    var seen = Set<String>()
-    var out: [String] = []
-    for piece in chatHighlightKeywords.split(whereSeparator: { $0 == "," || $0 == "\n" }) {
-      let token = piece.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-      guard !token.isEmpty, seen.insert(token).inserted else { continue }
-      out.append(token)
-    }
-    return out
+    ChatHighlightRules.keywords(from: chatHighlightKeywords)
   }
 
   /// Resolved emote height: derived from the text size in Auto mode, otherwise

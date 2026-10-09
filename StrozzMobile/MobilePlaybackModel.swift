@@ -128,6 +128,7 @@ final class MobilePlaybackModel {
     refreshStreamMetadata()
     observeAudioSession()
     chat.connect(to: channel)
+    MobileChatSourcePreferences.apply(to: chat, channel: channel)
     load(position: Position(shouldPlay: true, date: nil))
   }
 
@@ -204,6 +205,7 @@ final class MobilePlaybackModel {
     suspendedPosition = nil
     interruptedPosition = nil
     chat.connect(to: channel)
+    MobileChatSourcePreferences.apply(to: chat, channel: channel)
     refreshStreamMetadata()
     load(position: position)
   }
@@ -632,6 +634,7 @@ final class MobilePlaybackModel {
       while !Task.isCancelled {
         do { try await Task.sleep(for: .seconds(1)) } catch { return }
         guard let self, isCurrent(request) else { return }
+        MobileChatSourcePreferences.apply(to: chat, channel: channel)
         guard player.currentItem === item else {
           fail(MobilePlaybackError.unavailable.localizedDescription)
           return

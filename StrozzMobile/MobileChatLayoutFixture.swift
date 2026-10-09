@@ -5,6 +5,7 @@ import SwiftUI
 struct MobileChatLayoutFixture: View {
   @State private var compact = false
   @State private var draft = ""
+  @State private var showSettings = false
   private let messages = (0..<200).compactMap { index in
     ChatMessage(ircLine: ":viewer!viewer@host PRIVMSG #example :Message \(index) "
       + (index.isMultiple(of: 7) ? String(repeating: "unbroken-link-", count: 25) : "reading chat"))
@@ -15,10 +16,71 @@ struct MobileChatLayoutFixture: View {
       Button("Resize chat") { compact.toggle() }.frame(minHeight: 44)
       MobileChatTimeline(messages: messages)
         .frame(maxHeight: compact ? 240 : .infinity)
-      TextField("Send a message", text: $draft).textFieldStyle(.roundedBorder).padding()
+      MobileChatComposerInput(text: $draft, sending: false, onSend: { draft = "" },
+        onSettings: { showSettings = true }, reduceTransparency: false)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
     .environment(\.themePalette, .light)
     .preferredColorScheme(.light)
+    .sheet(isPresented: $showSettings) {
+      NavigationStack {
+        MobileChatSettingsView()
+          .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showSettings = false } } }
+      }
+    }
+  }
+}
+
+struct MobileChatComposerFixture: View {
+  @State private var draft = ""
+  @State private var submitted = ""
+  @State private var theme = AppTheme.light
+  @State private var opaque = false
+  @State private var sending = false
+  @State private var showSettings = false
+  @State private var initialized = false
+  @State private var defaults = UserDefaults(suiteName: "StrozzMobileComposerFixture")!
+  private let messages = [
+    ChatMessage(username: "Viewer", colorHex: nil, badgeKeys: [], text: "A message for @viewer",
+      twitchEmoteURLs: [:])
+  ]
+
+  var body: some View {
+    let palette = theme.palette(systemColorScheme: .light)
+    VStack(spacing: 16) {
+      HStack {
+        Button("Change appearance") { theme = theme == .light ? .dark : .light }
+        Button("Reduce transparency") { opaque.toggle() }
+        Button("Sending") { sending.toggle() }
+      }
+      .font(.caption)
+      MobileChatTimeline(messages: messages, viewerLogin: "viewer")
+      Text(submitted).accessibilityIdentifier("composer-submitted")
+      MobileChatComposerInput(text: $draft, sending: sending, onSend: {
+        submitted = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = ""
+      }, onSettings: { showSettings = true }, reduceTransparency: opaque)
+      .padding(.horizontal, 12)
+      .padding(.bottom, 8)
+    }
+    .background(palette.chatSideSurface)
+    .environment(\.themePalette, palette)
+    .preferredColorScheme(theme.preferredColorScheme)
+    .defaultAppStorage(defaults)
+    .task {
+      guard !initialized else { return }
+      initialized = true
+      defaults.removePersistentDomain(forName: "StrozzMobileComposerFixture")
+    }
+    .sheet(isPresented: $showSettings) {
+      NavigationStack {
+        MobileChatSettingsView()
+          .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showSettings = false } } }
+      }
+      .defaultAppStorage(defaults)
+      .environment(\.themePalette, palette)
+    }
   }
 }
 

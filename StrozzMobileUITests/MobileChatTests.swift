@@ -71,7 +71,7 @@ final class MobileChatTests: XCTestCase {
                             "There must be no blank status row below the latest message")
     app.buttons["Resize chat"].tap()
     XCTAssertTrue(latest.isHittable)
-    let field = app.textFields["Send a message"]
+    let field = app.descendants(matching: .any).matching(identifier: "mobile-chat-composer-input").firstMatch
     field.tap()
     XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
     XCTAssertTrue(latest.isHittable)
@@ -80,6 +80,110 @@ final class MobileChatTests: XCTestCase {
     attachment.name = "Mobile chat live edge with keyboard"
     attachment.lifetime = .keepAlways
     add(attachment)
+  }
+
+  func testRoundedComposerMorphsSettingsAndSendsFromButtonAndKeyboard() {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "composer"
+    app.launch()
+    defer { app.terminate() }
+    let field = app.descendants(matching: .any).matching(identifier: "mobile-chat-composer-input").firstMatch
+    let send = app.buttons["mobile-chat-send"]
+    let settings = app.buttons["mobile-chat-settings"]
+    XCTAssertTrue(field.waitForExistence(timeout: 10))
+    XCTAssertGreaterThanOrEqual(settings.frame.width, 44)
+    XCTAssertGreaterThanOrEqual(settings.frame.height, 44)
+    XCTAssertFalse(send.exists)
+    let latest = app.descendants(matching: .any).matching(identifier: "mobile-chat-latest-message").firstMatch
+    let originalMessageHeight = latest.frame.height
+    let emptyScreenshot = XCTAttachment(screenshot: app.screenshot())
+    emptyScreenshot.name = "Rounded empty composer in light appearance"
+    emptyScreenshot.lifetime = .keepAlways
+    add(emptyScreenshot)
+    app.buttons["Reduce transparency"].tap()
+    let opaqueScreenshot = XCTAttachment(screenshot: app.screenshot())
+    opaqueScreenshot.name = "Rounded empty composer in opaque light appearance"
+    opaqueScreenshot.lifetime = .keepAlways
+    add(opaqueScreenshot)
+    app.buttons["Reduce transparency"].tap()
+    settings.tap()
+    XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "mobile-chat-settings-form")
+      .firstMatch.waitForExistence(timeout: 5))
+    let textSize = app.steppers["chat-setting-text-size"]
+    XCTAssertTrue(textSize.waitForExistence(timeout: 5))
+    let settingsScreenshot = XCTAttachment(screenshot: app.screenshot())
+    settingsScreenshot.name = "Mobile chat appearance settings"
+    settingsScreenshot.lifetime = .keepAlways
+    add(settingsScreenshot)
+    textSize.buttons["chat-setting-text-size-Increment"].tap()
+    XCTAssertTrue(textSize.label.contains("17"))
+    app.buttons["Done"].tap()
+    XCTAssertGreaterThan(latest.frame.height, originalMessageHeight, "Saved text size must affect rendered messages")
+    settings.tap()
+    XCTAssertTrue(textSize.waitForExistence(timeout: 5))
+    XCTAssertTrue(textSize.label.contains("17"), "Chat appearance must persist when reopening settings")
+    app.buttons["Done"].tap()
+    let initialHeight = field.frame.height
+    field.tap()
+    let message = String(repeating: "A longer chat message. ", count: 6).trimmingCharacters(in: .whitespaces)
+    field.typeText(message)
+    XCTAssertTrue(send.isEnabled)
+    XCTAssertFalse(settings.exists)
+    XCTAssertGreaterThan(field.frame.height, initialHeight)
+    XCTAssertEqual(field.value as? String, message)
+    app.buttons["Change appearance"].tap()
+    app.buttons["Reduce transparency"].tap()
+    XCTAssertEqual(field.value as? String, message)
+    XCTAssertTrue(send.isEnabled)
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.name = "Rounded multiline composer with opaque dark appearance"
+    screenshot.lifetime = .keepAlways
+    add(screenshot)
+    app.buttons["Sending"].tap()
+    XCTAssertFalse(field.isEnabled)
+    XCTAssertFalse(send.isEnabled)
+    app.buttons["Sending"].tap()
+    field.tap()
+    let keyboardSend = app.keyboards.buttons["Send"].firstMatch
+    XCTAssertTrue(keyboardSend.waitForExistence(timeout: 5))
+    keyboardSend.tap()
+    XCTAssertEqual(app.staticTexts["composer-submitted"].label, message)
+    XCTAssertTrue(settings.waitForExistence(timeout: 5))
+    XCTAssertFalse(send.exists)
+    field.tap()
+    field.typeText("   ")
+    XCTAssertTrue(settings.exists)
+    XCTAssertFalse(send.exists)
+    field.typeText("Button send")
+    send.tap()
+    XCTAssertEqual(app.staticTexts["composer-submitted"].label, "Button send")
+    XCTAssertTrue(settings.exists)
+  }
+
+  func testResetAppearancePreservesHighlightKeywords() {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "composer"
+    app.launch()
+    defer { app.terminate() }
+    let settings = app.buttons["mobile-chat-settings"]
+    XCTAssertTrue(settings.waitForExistence(timeout: 10))
+    settings.tap()
+    let form = app.descendants(matching: .any).matching(identifier: "mobile-chat-settings-form").firstMatch
+    XCTAssertTrue(form.waitForExistence(timeout: 5))
+    let keywords = app.descendants(matching: .any).matching(identifier: "chat-setting-keywords").firstMatch
+    for _ in 0..<5 where !keywords.isHittable { form.swipeUp() }
+    XCTAssertTrue(keywords.isHittable)
+    keywords.tap()
+    keywords.typeText("keep this keyword")
+    app.buttons["Done"].tap()
+    settings.tap()
+    let reset = app.buttons["Reset appearance"]
+    for _ in 0..<6 where !reset.isHittable { form.swipeUp() }
+    XCTAssertTrue(reset.isHittable)
+    reset.tap()
+    for _ in 0..<5 where !keywords.isHittable { form.swipeDown() }
+    XCTAssertEqual(keywords.value as? String, "keep this keyword")
+    app.buttons["Done"].tap()
   }
 
   private func assertSameFrame(_ actual: CGRect, _ expected: CGRect, file: StaticString = #filePath, line: UInt = #line) {

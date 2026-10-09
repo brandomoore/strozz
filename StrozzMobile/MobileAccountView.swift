@@ -68,6 +68,8 @@ struct MobileAccountView: View {
         }
         NavigationLink("Overlays") { MobileOverlaySettingsView() }
           .accessibilityIdentifier("account-overlays")
+        NavigationLink("Chat settings") { MobileChatSettingsView() }
+          .accessibilityIdentifier("account-chat-settings")
       }
       Section {
         Toggle("Sync chat to extra delay", isOn: $chatSync)

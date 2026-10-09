@@ -32,6 +32,7 @@ struct RichChatLineView: View {
     /// Mobile panes can be narrower than a URL or username, especially with Dynamic Type.
     var wrapsOversizedTokens: Bool = false
     var onInspectEmote: ((String, URL) -> Void)? = nil
+    var scalesCustomFont: Bool = true
 
     /// VoiceOver state. The combined spoken label is only built when VoiceOver is
     /// actually running — otherwise computing it (segment walk + string split/join)
@@ -117,7 +118,7 @@ struct RichChatLineView: View {
             }
 
             Text(message.isAction ? "\(message.username) " : "\(message.username): ")
-                .font(fontStyle.font(size: nameFontSize, weight: .bold))
+                .font(fontStyle.font(size: nameFontSize, weight: .bold, scalesCustomFont: scalesCustomFont))
                 .tracking(letterSpacing)
                 .foregroundStyle(nameColor)
                 .accessibilityHidden(voiceOverEnabled && onInspectEmote != nil)
@@ -279,7 +280,7 @@ struct RichChatLineView: View {
         switch segment {
         case .text(let text):
             Text(text)
-                .font(fontStyle.font(size: bodyFontSize))
+                .font(fontStyle.font(size: bodyFontSize, scalesCustomFont: scalesCustomFont))
                 .tracking(letterSpacing)
                 .foregroundStyle(bodyColor)
                 .accessibilityHidden(voiceOverEnabled && onInspectEmote != nil)
@@ -302,7 +303,7 @@ struct RichChatLineView: View {
                 EmoteView(name: "", url: url, fallbackColor: color, fallbackFontSize: bodyFontSize,
                           emoteHeight: emoteHeight, animated: animatedEmotes, constrainsWidth: wrapsOversizedTokens)
                 Text("\(amount)")
-                    .font(fontStyle.font(size: bodyFontSize, weight: .bold))
+                    .font(fontStyle.font(size: bodyFontSize, weight: .bold, scalesCustomFont: scalesCustomFont))
                     .tracking(letterSpacing)
                     .foregroundStyle(color)
             }

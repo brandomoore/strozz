@@ -134,8 +134,24 @@ reading chat also work anonymously.
 Tap a chat emote on iPhone or iPad to open a larger preview with its name and,
 when recognized, its provider. Supported providers use higher-resolution artwork;
 if that image is unavailable, the sheet labels its fallback to the chat image
-and offers retry when loading fails. Animated previews respect Reduce Motion.
+and offers retry when loading fails. Animated previews respect both the chat
+animation preference and Reduce Motion.
 Dismiss the sheet to return to chat without stopping playback.
+
+The rounded chat composer grows as you type. Its **…** button opens **Chat
+settings** when the draft is empty and becomes **Send** when there is text.
+The keyboard's Send key also sends; pasted multiline text remains supported.
+The composer follows the selected theme and uses an opaque surface with Reduce
+Transparency.
+
+Chat settings are also available from **Account** and when reading anonymously.
+Adjust mobile size presets, fonts, spacing, emote sizing and animation, badges,
+mention/reply/keyword highlights, and extra-delay chat sync. Existing mobile
+sizes remain the defaults; resetting appearance preserves saved keywords.
+Optional incoming YouTube and Kick chat are off until enabled. While watching
+a stream, edit its other channel handles or URLs and tap **Apply channel
+targets**; defaults use the Twitch handle, not automatic cross-platform account
+matching. Targets belong to the active stream session. Sending remains Twitch-only.
 
 Selecting a fixed video quality retains the native engine when native playback
 is selected, on both TV and mobile. Explicit standard playback, Audio Only, and
