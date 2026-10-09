@@ -169,6 +169,15 @@ scroll up to read earlier messages, then tap the floating **Jump to present**
 button to resume following live chat. It disappears at the live edge without
 reserving an empty status row or changing the chat viewport.
 
+Swipe down anywhere over the live video, or tap its down chevron, to continue in
+native iOS Picture in Picture and return to the page you opened the stream from.
+The player follows your pull and slides away as PiP starts; a short pull springs
+back, and Reduce Motion skips the exit movement.
+The same stream keeps playing over Strozz and other apps. Restore it using PiP's
+system control, close PiP to stop, or select another stream or broadcast to replace
+playback. Home previews stay paused while a stream is in PiP. If PiP is unavailable,
+the player stays open and explains why.
+
 Past broadcasts use native on-demand controls with seeking. **Continue watching**
 on Home and channel profiles resumes saved progress; finished broadcasts leave
 that list. Watch history and resume positions stay on this device, are separated

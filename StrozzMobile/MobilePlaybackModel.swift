@@ -60,6 +60,7 @@ final class MobilePlaybackModel {
   @ObservationIgnored private var mediaResetInProgress = false
   @ObservationIgnored private var needsFreshPlayer = false
   @ObservationIgnored var activateAudioSession: @MainActor () throws -> Void = PlaybackAudioSession.activate
+  @ObservationIgnored var onPlayerChanged: ((AVPlayer) -> Void)?
   @ObservationIgnored private var triedDecodeRecovery = false
   @ObservationIgnored private var nativeRecovery = NativePlaybackRecovery()
   @ObservationIgnored private let muteForTesting: Bool
@@ -272,6 +273,7 @@ final class MobilePlaybackModel {
     replacement.appliesMediaSelectionCriteriaAutomatically = previous.appliesMediaSelectionCriteriaAutomatically
     replacement.actionAtItemEnd = previous.actionAtItemEnd
     player = replacement
+    onPlayerChanged?(replacement)
   }
 
   private func observeAudioSession() {

@@ -6,6 +6,7 @@ struct MobilePlayerControls: View {
   let viewerCount: Int?
   @Binding var hideChat: Bool
   let isFullscreen: Bool
+  let onCollapse: () -> Void
   let onClose: () -> Void
   let onFullscreen: () -> Void
   let onQuality: () -> Void
@@ -17,8 +18,11 @@ struct MobilePlayerControls: View {
     ZStack {
       VStack {
         HStack(spacing: 8) {
-          Button(action: onClose) { Icon(glyph: .x, size: 22).frame(width: 44, height: 44) }
-            .accessibilityLabel("Close player")
+          Button(action: onCollapse) {
+            Icon(glyph: .chevronRight, size: 22).rotationEffect(.degrees(90)).frame(width: 44, height: 44)
+          }
+            .accessibilityLabel("Minimize to Picture in Picture")
+            .accessibilityIdentifier("mobile-minimize-player")
             .modifier(MobileControlSurface())
           Spacer(minLength: 0)
           if model.presentationState == .ready {
@@ -33,6 +37,9 @@ struct MobilePlayerControls: View {
               .accessibilityValue(model.qualityLabel)
               .modifier(MobileControlSurface())
           }
+          Button(action: onClose) { Icon(glyph: .x, size: 22).frame(width: 44, height: 44) }
+            .accessibilityLabel("Close player")
+            .modifier(MobileControlSurface())
         }
         Spacer(minLength: 12)
         if model.presentationState == .ready {

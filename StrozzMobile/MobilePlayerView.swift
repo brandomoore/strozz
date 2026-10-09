@@ -12,25 +12,19 @@ enum MobilePlayerLayout: Equatable {
 
 struct MobilePlayerView: View {
   let channel: FollowedChannel
-  @State private var model: MobilePlaybackModel
+  let session: MobilePlaybackSession
   @State private var hideChat = false
   @State private var fullscreen = false
   @State private var windowScene: UIWindowScene?
   @State private var rotationError: String?
-  @Environment(\.dismiss) private var dismiss
-  @Environment(\.scenePhase) private var scenePhase
+  @State private var collapseOffset: CGFloat = 0
+  @State private var isDeparting = false
   @Environment(\.themePalette) private var palette
   @Environment(\.verticalSizeClass) private var verticalSizeClass
-  @Environment(TwitchAuthSession.self) private var auth
-  @Environment(TwitchWatchRewardsSession.self) private var rewards
-  @State private var watchTracker = TwitchWatchTracker()
-
-  init(channel: FollowedChannel, model: MobilePlaybackModel = MobilePlaybackModel()) {
-    self.channel = channel
-    _model = State(initialValue: model)
-  }
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
+    let model = session.model
     GeometryReader { geometry in
       let layout = MobilePlayerLayout.resolve(
         size: CGSize(width: geometry.size.width, height: geometry.size.height + geometry.safeAreaInsets.bottom),
@@ -38,7 +32,10 @@ struct MobilePlayerView: View {
         phoneLandscape: verticalSizeClass == .compact)
       let video = MobileVideoView(
         model: model, channel: channel, hideChat: $hideChat, isFullscreen: layout == .videoOnly,
-        onClose: { dismiss() }, onFullscreen: { toggleFullscreen(exiting: layout == .videoOnly) },
+        videoController: session.videoController, onCollapse: session.collapse, onClose: session.close,
+        onCollapseDragChanged: updateCollapseDrag,
+        onCollapseDragEnded: endCollapseDrag,
+        onFullscreen: { toggleFullscreen(exiting: layout == .videoOnly) },
         onScene: { windowScene = $0 })
       VStack(spacing: 0) {
         if layout == .sideBySide {
@@ -46,7 +43,7 @@ struct MobilePlayerView: View {
             VStack(spacing: 0) {
               video
               MobileStreamDetails(channel: channel, model: model)
-              MobileWatchRewardsStatus(tracker: watchTracker)
+              MobileWatchRewardsStatus(tracker: session.watchTracker)
             }
             .frame(minWidth: 0, maxWidth: .infinity)
             Divider()
@@ -59,43 +56,60 @@ struct MobilePlayerView: View {
                    : min(geometry.size.width * 9 / 16, geometry.size.height * 0.42))
           if layout == .portrait {
             MobileStreamDetails(channel: channel, model: model)
-            MobileWatchRewardsStatus(tracker: watchTracker)
+            MobileWatchRewardsStatus(tracker: session.watchTracker)
             Divider()
             MobileChatView(service: model.chat, channel: channel.login)
           }
         }
       }
-    }
-    .background(palette.chatSideSurface)
-    .task { model.start(channel: channel.login) }
-    .task {
-      while !Task.isCancelled {
-        if auth.isAuthenticated, let userID = auth.userID, let item = model.player.currentItem {
-          watchTracker.update(.init(
-            target: .init(channel: channel.login, userID: userID, itemID: ObjectIdentifier(item)),
-            uptime: ProcessInfo.processInfo.systemUptime, playhead: item.currentTime().seconds,
-            rate: Double(model.player.rate),
-            ready: item.status == .readyToPlay && !model.isLoading && model.errorMessage == nil,
-            playing: model.player.timeControlStatus == .playing,
-            foreground: scenePhase == .active, visible: model.isActive,
-            userPaused: model.isPaused, muted: model.player.isMuted || model.player.volume == 0),
-            session: rewards)
-        } else { watchTracker.stop() }
-        do { try await Task.sleep(for: .seconds(1)) } catch { break }
+      .background(palette.chatSideSurface)
+      .offset(y: collapseOffset)
+      .onChange(of: session.pictureInPictureState) { _, state in
+        if state == .starting || state == .active {
+          guard !isDeparting else { return }
+          isDeparting = true
+          withAnimation(reduceMotion ? nil : .easeOut(duration: 0.3)) {
+            collapseOffset = reduceMotion ? 0
+              : geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom
+          } completion: {
+            if isDeparting { session.collapseAnimationCompleted() }
+          }
+        } else if state == .inline {
+          isDeparting = false
+          resetCollapseDrag()
+        }
       }
-      watchTracker.stop()
     }
-    .onDisappear { model.stop() }
-    .onChange(of: scenePhase) { _, phase in
-      if phase == .background { model.suspend() }
-      else if phase == .active { model.resume() }
-    }
-
+    .alert("Picture in Picture", isPresented: Binding(
+      get: { session.errorMessage != nil }, set: { if !$0 { session.errorMessage = nil } }
+    )) {
+      Button("OK") { session.errorMessage = nil }
+    } message: { Text(session.errorMessage ?? "") }
     .alert("Display rotation", isPresented: Binding(
       get: { rotationError != nil }, set: { if !$0 { rotationError = nil } }
     )) {
       Button("OK") { rotationError = nil }
     } message: { Text(rotationError ?? "") }
+  }
+
+  private func updateCollapseDrag(_ translation: CGSize) {
+    guard session.pictureInPictureState == .inline, !isDeparting else { return }
+    if translation.height > abs(translation.width) {
+      collapseOffset = max(0, translation.height)
+    }
+  }
+
+  private func endCollapseDrag(_ translation: CGSize) {
+    if MobilePlayerCollapseGesture.shouldCollapse(translation: translation) {
+      session.collapse()
+    }
+    if session.pictureInPictureState == .inline { resetCollapseDrag() }
+  }
+
+  private func resetCollapseDrag() {
+    withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85)) {
+      collapseOffset = 0
+    }
   }
 
   private func toggleFullscreen(exiting: Bool) {
@@ -135,7 +149,11 @@ struct MobileVideoView: View {
   let channel: FollowedChannel
   @Binding var hideChat: Bool
   let isFullscreen: Bool
+  let videoController: MobileVideoController
+  let onCollapse: () -> Void
   let onClose: () -> Void
+  let onCollapseDragChanged: (CGSize) -> Void
+  let onCollapseDragEnded: (CGSize) -> Void
   let onFullscreen: () -> Void
   let onScene: (UIWindowScene) -> Void
   @Environment(\.themePalette) private var palette
@@ -157,10 +175,8 @@ struct MobileVideoView: View {
       || voiceOver || showQuality || showShare || showRoutes
     ZStack {
       palette.playerBackdrop
-      MobilePlayerSurface(player: model.player, onScene: onScene) { ready, player in
-        model.displayReady(ready, for: player)
-      }
-        .id(ObjectIdentifier(model.player))
+      MobilePlayerSurface(controller: videoController, onScene: onScene)
+        .id(ObjectIdentifier(videoController))
         .opacity(model.isLoading ? 0 : 1)
         .accessibilityIdentifier("mobile-video-surface")
         .allowsHitTesting(false)
@@ -192,6 +208,7 @@ struct MobileVideoView: View {
       if controlsVisible || held {
         MobilePlayerControls(
           model: model, viewerCount: channel.viewerCount, hideChat: $hideChat, isFullscreen: isFullscreen,
+          onCollapse: onCollapse,
           onClose: onClose,
           onFullscreen: { interaction += 1; onFullscreen() },
           onQuality: { showQuality = true },
@@ -206,6 +223,9 @@ struct MobileVideoView: View {
           })
       }
     }
+    .simultaneousGesture(DragGesture(minimumDistance: 12, coordinateSpace: .global)
+      .onChanged { onCollapseDragChanged($0.translation) }
+      .onEnded { onCollapseDragEnded($0.translation) })
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: controlsVisible)
     .task(id: HideState(interaction: interaction, held: held)) {
       guard !held else { return }
@@ -224,60 +244,64 @@ struct MobileVideoView: View {
 }
 
 struct MobilePlayerSurface: UIViewControllerRepresentable {
-  let player: AVPlayer
+  let controller: MobileVideoController
   let onScene: (UIWindowScene) -> Void
-  let onReady: (Bool, AVPlayer) -> Void
-
-  func makeCoordinator() -> Coordinator { Coordinator(onReady: onReady) }
 
   func makeUIViewController(context: Context) -> MobileVideoController {
-    let controller = MobileVideoController()
     controller.onScene = onScene
-    controller.player = player
-    // Keep AVKit rendering, but use the same dedicated-control approach as tvOS.
-    controller.showsPlaybackControls = false
-    controller.view.isUserInteractionEnabled = false
-    controller.allowsPictureInPicturePlayback = false
-    context.coordinator.observe(controller)
     return controller
   }
 
   func updateUIViewController(_ controller: MobileVideoController, context: Context) {
-    context.coordinator.onReady = onReady
     controller.onScene = onScene
-    if controller.player !== player { controller.player = player }
+  }
+}
+
+final class MobileVideoController: UIViewController {
+  // AVPlayerViewController has no public API to start PiP from a custom gesture.
+  // Keep one player layer alive across presentation changes for AVKit's PiP controller.
+  let playerLayer = AVPlayerLayer()
+  var onScene: ((UIWindowScene) -> Void)?
+  var onReady: ((Bool, AVPlayer) -> Void)?
+  var onAppear: (() -> Void)?
+  private var observation: NSKeyValueObservation?
+
+  var player: AVPlayer? {
+    get { playerLayer.player }
+    set { playerLayer.player = newValue }
   }
 
-  static func dismantleUIViewController(_ controller: MobileVideoController, coordinator: Coordinator) {
-    // Layout transitions can replace the surface without ending the stream.
-    coordinator.observation = nil
-    controller.player = nil
-  }
-
-  final class MobileVideoController: AVPlayerViewController {
-    var onScene: ((UIWindowScene) -> Void)?
-
-    override func viewDidAppear(_ animated: Bool) {
-      super.viewDidAppear(animated)
-      if let scene = view.window?.windowScene { onScene?(scene) }
-    }
-  }
-
-  @MainActor
-  final class Coordinator {
-    var onReady: (Bool, AVPlayer) -> Void
-    var observation: NSKeyValueObservation?
-
-    init(onReady: @escaping (Bool, AVPlayer) -> Void) { self.onReady = onReady }
-
-    func observe(_ controller: AVPlayerViewController) {
-      observation = controller.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] controller, _ in
-        Task { @MainActor [weak self, weak controller] in
-          guard let controller, let player = controller.player else { return }
-          self?.onReady(controller.isReadyForDisplay, player)
-        }
+  init() {
+    super.init(nibName: nil, bundle: nil)
+    observation = playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] _, _ in
+      Task { @MainActor [weak self] in
+        guard let self, let player = self.player else { return }
+        self.onReady?(self.playerLayer.isReadyForDisplay, player)
       }
     }
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+
+  override func loadView() {
+    view = UIView()
+    view.isUserInteractionEnabled = false
+    view.layer.addSublayer(playerLayer)
+  }
+
+  override func viewDidLayoutSubviews() {
+    super.viewDidLayoutSubviews()
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    playerLayer.frame = view.bounds
+    CATransaction.commit()
+  }
+
+  override func viewDidAppear(_ animated: Bool) {
+    super.viewDidAppear(animated)
+    if let scene = view.window?.windowScene { onScene?(scene) }
+    onAppear?()
   }
 }
 

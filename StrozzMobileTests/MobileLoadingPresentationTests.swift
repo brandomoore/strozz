@@ -20,7 +20,9 @@ final class MobileLoadingPresentationTests: XCTestCase {
       let palette = theme.palette(systemColorScheme: .light)
       let content = MobileVideoView(
         model: model, channel: channel, hideChat: .constant(false),
-        isFullscreen: false, onClose: {}, onFullscreen: {}, onScene: { _ in }
+        isFullscreen: false, videoController: MobileVideoController(), onCollapse: {},
+        onClose: {}, onCollapseDragChanged: { _ in }, onCollapseDragEnded: { _ in },
+        onFullscreen: {}, onScene: { _ in }
       )
       .frame(height: UIDevice.current.userInterfaceIdiom == .pad ? 500 : 220)
       .environment(\.themePalette, palette)

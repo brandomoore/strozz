@@ -161,7 +161,9 @@ struct MobileCategoryStreamsView: View {
       .padding()
     }
     .navigationTitle(category.name)
-    .task { await service.loadStreams(for: category); hasLoaded = true }
+    .task {
+      if !hasLoaded { await service.loadStreams(for: category); hasLoaded = true }
+    }
     .refreshable { await service.loadStreams(for: category) }
   }
 }

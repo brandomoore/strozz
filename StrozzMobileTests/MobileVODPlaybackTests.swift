@@ -67,9 +67,11 @@ final class MobileVODPlaybackTests: XCTestCase {
     let selection: MobileVODSelection
     let progress: MobileVODProgressStore
     let lifecycle: VODTestScene
+    @State private var livePlayback = MobilePlaybackSession()
 
     var body: some View {
-      MobileVODPlayerView(selection: selection).environment(progress).environment(\.scenePhase, lifecycle.phase)
+      MobileVODPlayerView(selection: selection).environment(progress).environment(livePlayback)
+        .environment(\.scenePhase, lifecycle.phase)
     }
   }
 
