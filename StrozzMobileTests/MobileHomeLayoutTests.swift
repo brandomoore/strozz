@@ -24,15 +24,81 @@ final class MobileHomeLayoutTests: XCTestCase {
   }
 
   func testShortcutSectionDoesNotMoveFeedForPartialOrEmptyResults() {
-    for count in [0, 1, 3, 6] {
-      let proposal = CGSize(width: 356, height: UIView.layoutFittingExpandedSize.height)
-      let loading = UIHostingController(rootView:
-        MobileFollowedShortcuts(channels: [], onSelect: { _ in }, onSeeAll: {}, isLoading: true))
-      let loaded = UIHostingController(rootView:
-        MobileFollowedShortcuts(channels: Array(LoadingSkeleton.channels.prefix(count)),
-                                onSelect: { _ in }, onSeeAll: {}))
-      XCTAssertEqual(loading.sizeThatFits(in: proposal).height, loaded.sizeThatFits(in: proposal).height, accuracy: 1)
+    for width in [300.0, 356, 788] {
+      for typeSize in [DynamicTypeSize.large, .accessibility2] {
+        let proposal = CGSize(width: width, height: UIView.layoutFittingExpandedSize.height)
+        let restoring = UIHostingController(rootView:
+          MobileFollowedShortcuts(channels: [], onSelect: { _ in }, onSeeAll: {},
+                                  authenticated: false, isRestoringAccount: true)
+            .environment(\.dynamicTypeSize, typeSize))
+        let reservedHeight = restoring.sizeThatFits(in: proposal).height
+        XCTAssertGreaterThan(reservedHeight, 100)
+        for count in [0, 1, 3, 6] {
+          for category in ["Just Chatting", ""] {
+            let loaded = UIHostingController(rootView:
+              MobileFollowedShortcuts(channels: (0..<count).map { channel("Streamer \($0)", category: category) },
+                                      onSelect: { _ in }, onSeeAll: {})
+                .environment(\.dynamicTypeSize, typeSize))
+            XCTAssertEqual(reservedHeight, loaded.sizeThatFits(in: proposal).height, accuracy: 1,
+                           "Reserve all shortcut rows at \(width), \(typeSize), \(count) follows, category '\(category)'")
+          }
+        }
+      }
     }
+  }
+
+  func testRestoringAccountReservesShortcutSpaceBeforeAuthentication() async throws {
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    defer { window.rootViewController = previous }
+    var feedTop: CGFloat?
+    func content(authenticated: Bool, restoring: Bool, loading: Bool, channels: [FollowedChannel]) -> some View {
+      VStack(alignment: .leading, spacing: 16) {
+        MobileFollowedShortcuts(channels: channels, onSelect: { _ in }, onSeeAll: {},
+                                isLoading: loading, authenticated: authenticated, isRestoringAccount: restoring)
+          .padding(.horizontal)
+        Text("For you").font(.title3.bold())
+          .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("followed-reservation")).minY } action: {
+            feedTop = $0
+          }
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .coordinateSpace(name: "followed-reservation")
+      .environment(\.themePalette, .light)
+    }
+    let controller = UIHostingController(rootView:
+      content(authenticated: false, restoring: true, loading: false, channels: []))
+    window.rootViewController = controller
+    func layout() async throws {
+      controller.view.setNeedsLayout()
+      controller.view.layoutIfNeeded()
+      try await Task.sleep(for: .milliseconds(100))
+      controller.view.layoutIfNeeded()
+    }
+    try await layout()
+    let reservedTop = try XCTUnwrap(feedTop)
+    XCTAssertGreaterThan(reservedTop, 100, "Reserve the compact cards before authentication is known")
+    let image = UIGraphicsImageRenderer(bounds: controller.view.bounds).image { _ in
+      controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true)
+    }
+    let attachment = XCTAttachment(image: image)
+    attachment.name = "For you followed shortcuts during account restoration"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+
+    controller.rootView = content(authenticated: true, restoring: false, loading: true, channels: [])
+    try await layout()
+    XCTAssertEqual(try XCTUnwrap(feedTop), reservedTop, accuracy: 1)
+    for count in [0, 1, 3, 6] {
+      controller.rootView = content(authenticated: true, restoring: false, loading: false,
+        channels: (0..<count).map { channel("Streamer \($0)", category: "") })
+      try await layout()
+      XCTAssertEqual(try XCTUnwrap(feedTop), reservedTop, accuracy: 1, "Loaded follows must not move the feed")
+    }
+    controller.rootView = content(authenticated: false, restoring: false, loading: false, channels: [])
+    try await layout()
+    XCTAssertEqual(try XCTUnwrap(feedTop), 0, accuracy: 1, "Signed-out users must not retain an empty section")
   }
 
   func testCategoryAndFollowingSkeletonsReserveMetadataLines() {

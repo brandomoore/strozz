@@ -113,12 +113,12 @@ struct MobileHomeView: View {
                   MobileContinueWatchingSection(entries: Array(vodProgress.entries.prefix(4))) { selectedVideo = $0 }
                     .padding(.horizontal)
                 }
-                if auth.isAuthenticated {
-                  MobileFollowedShortcuts(channels: visibleFollows, onSelect: onSelect,
-                                         onSeeAll: { feed = .following },
-                                         isLoading: follows.isLoading || follows.lastUpdatedAt == nil)
-                    .padding(.horizontal)
-                }
+                MobileFollowedShortcuts(channels: visibleFollows, onSelect: onSelect,
+                                       onSeeAll: { feed = .following },
+                                       isLoading: follows.isLoading || follows.lastUpdatedAt == nil,
+                                       authenticated: auth.isAuthenticated,
+                                       isRestoringAccount: sync.isRestoringAccount)
+                  .padding(.horizontal)
                 Text(personalFeed ? "For you" : "Popular live channels")
                   .font(.title3.bold()).accessibilityAddTraits(.isHeader).padding(.horizontal)
                 if personalFeed, let error = follows.errorMessage {
@@ -322,35 +322,42 @@ struct MobileFollowedShortcuts: View {
   let onSelect: (FollowedChannel) -> Void
   let onSeeAll: () -> Void
   var isLoading = false
+  var authenticated = true
+  var isRestoringAccount = false
   @Environment(\.dynamicTypeSize) private var typeSize
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack {
-        Text("Live followed channels").font(.subheadline.bold()).accessibilityAddTraits(.isHeader)
-        Spacer()
-        Button("See all", action: onSeeAll).font(.subheadline)
-      }
-      LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8),
-                               count: typeSize.isAccessibilitySize ? 1 : 2), spacing: 8) {
-        ForEach(Array(channels.prefix(6)), id: \.channelKey) { channel in
-          Button { onSelect(channel) } label: { MobileFollowedShortcut(channel: channel) }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("follow-shortcut-\(channel.channelKey)")
+    let visible = authenticated ? channels : []
+    let loading = isLoading || isRestoringAccount
+    if authenticated || isRestoringAccount {
+      VStack(alignment: .leading, spacing: 10) {
+        HStack {
+          Text("Live followed channels").font(.subheadline.bold()).accessibilityAddTraits(.isHeader)
+          Spacer()
+          Button("See all", action: onSeeAll).font(.subheadline)
+            .disabled(isRestoringAccount)
         }
-        ForEach(LoadingSkeleton.channels.prefix(max(0, 6 - channels.count))) { channel in
-          MobileFollowedShortcut(channel: channel)
-            .modifier(LoadingSkeletonStyle())
-            .opacity(channels.isEmpty && isLoading ? 1 : 0)
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8),
+                                 count: typeSize.isAccessibilitySize ? 1 : 2), spacing: 8) {
+          ForEach(Array(visible.prefix(6)), id: \.channelKey) { channel in
+            Button { onSelect(channel) } label: { MobileFollowedShortcut(channel: channel) }
+              .buttonStyle(.plain)
+              .accessibilityIdentifier("follow-shortcut-\(channel.channelKey)")
+          }
+          ForEach(LoadingSkeleton.channels.prefix(max(0, 6 - visible.count))) { channel in
+            MobileFollowedShortcut(channel: channel)
+              .modifier(LoadingSkeletonStyle())
+              .opacity(visible.isEmpty && loading ? 1 : 0)
+          }
         }
-      }
-      .overlay {
-        if channels.isEmpty && !isLoading {
-          Text("No followed channels are live right now.").foregroundStyle(.secondary)
+        .overlay {
+          if visible.isEmpty && !loading {
+            Text("No followed channels are live right now.").foregroundStyle(.secondary)
+          }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(visible.isEmpty && loading ? Text("Loading follows") : Text(""))
       }
-      .accessibilityElement(children: .contain)
-      .accessibilityLabel(channels.isEmpty && isLoading ? Text("Loading follows") : Text(""))
     }
   }
 }
@@ -366,8 +373,9 @@ struct MobileFollowedShortcut: View {
       } placeholder: { Circle().fill(.quaternary) }
       .frame(width: 30, height: 30).clipShape(Circle())
       VStack(alignment: .leading, spacing: 2) {
-        Text(channel.displayName).font(.subheadline.weight(.semibold)).lineLimit(1)
-        Text(channel.gameName).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        Text(channel.displayName).font(.subheadline.weight(.semibold)).lineLimit(1, reservesSpace: true)
+        Text(channel.gameName.isEmpty ? " " : channel.gameName)
+          .font(.caption2).foregroundStyle(.secondary).lineLimit(1, reservesSpace: true)
       }
       Spacer(minLength: 0)
       if let count = channel.viewerCount {
