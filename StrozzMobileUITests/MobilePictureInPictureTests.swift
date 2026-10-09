@@ -85,6 +85,41 @@ final class MobilePictureInPictureTests: XCTestCase {
     capture("Expanded player after native handoff")
   }
 
+  func testNativeRestoreButtonReturnsDirectlyToExpandedPlayer() throws {
+    try requireLiveTests()
+    guard ProcessInfo.processInfo.environment["STROZZ_MOBILE_NATIVE_PIP_TESTS"] == "1" else {
+      throw XCTSkip("Run native restore on a PiP-capable destination.")
+    }
+    let app = launch()
+    defer { app.terminate() }
+    let stream = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'stream-'")).firstMatch
+    XCTAssertTrue(stream.waitForExistence(timeout: 45))
+    stream.tap()
+    waitForVideo(app)
+    let surface = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+    let expandedSize = surface.frame.size
+    collapseWithChevron(app)
+    XCUIDevice.shared.press(.home)
+    let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
+    settings.activate()
+    defer { settings.terminate() }
+    let pip = app.otherElements["PIPUIView"]
+    XCTAssertTrue(pip.waitForExistence(timeout: 12))
+    pip.tap()
+    let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+    capture("Native PiP restore controls")
+    let restore = springboard.buttons["Restore fullscreen"]
+    XCTAssertTrue(restore.waitForExistence(timeout: 5), springboard.debugDescription)
+    restore.tap()
+    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: pip)
+    waitForExpectations(timeout: 12)
+    XCTAssertFalse(app.buttons["mobile-expand-player"].exists)
+    XCTAssertEqual(surface.frame.width, expandedSize.width, accuracy: 1)
+    XCTAssertEqual(surface.frame.height, expandedSize.height, accuracy: 1)
+    waitForVideo(app)
+    capture("Direct expanded destination from native restore")
+  }
+
   private func requireLiveTests() throws {
     guard ProcessInfo.processInfo.environment["STROZZ_MOBILE_LIVE_TESTS"] == "1" else {
       throw XCTSkip("Set STROZZ_MOBILE_LIVE_TESTS=1 for live mini-player verification.")

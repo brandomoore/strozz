@@ -97,7 +97,14 @@ struct MobilePlayerView: View {
           onCollapseDragChanged: { updateCollapseDrag($0, distance: max(120, min(360, compact.midY))) },
           onCollapseDragEnded: endCollapseDrag,
           onFullscreen: { toggleFullscreen(exiting: layout == .videoOnly) },
-          onScene: { windowScene = $0 })
+          onScene: { windowScene = $0 },
+          onLayout: { [weak session] size in
+            guard let session else { return }
+            if session.isExpanded, abs(size.width - expanded.width) < 1,
+              abs(size.height - expanded.height) < 1 {
+              session.playerDidLayoutExpandedSurface()
+            }
+          })
           .frame(width: videoFrame.width, height: videoFrame.height)
           .clipShape(RoundedRectangle(cornerRadius: progress * 14))
           .overlay {
@@ -185,6 +192,7 @@ struct MobileVideoView: View {
   let onCollapseDragEnded: (CGSize) -> Void
   let onFullscreen: () -> Void
   let onScene: (UIWindowScene) -> Void
+  let onLayout: (CGSize) -> Void
   @Environment(\.themePalette) private var palette
   @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -204,7 +212,7 @@ struct MobileVideoView: View {
       || voiceOver || showQuality || showShare || showRoutes
     ZStack {
       palette.playerBackdrop
-      MobilePlayerSurface(controller: videoController, onScene: onScene)
+      MobilePlayerSurface(controller: videoController, onScene: onScene, onLayout: onLayout)
         .id(ObjectIdentifier(videoController))
         .opacity(model.isLoading ? 0 : 1)
         .accessibilityIdentifier("mobile-video-surface")
@@ -309,14 +317,17 @@ struct MobileVideoView: View {
 struct MobilePlayerSurface: UIViewControllerRepresentable {
   let controller: MobileVideoController
   let onScene: (UIWindowScene) -> Void
+  let onLayout: (CGSize) -> Void
 
   func makeUIViewController(context: Context) -> MobileVideoController {
     controller.onScene = onScene
+    controller.onLayout = onLayout
     return controller
   }
 
   func updateUIViewController(_ controller: MobileVideoController, context: Context) {
     controller.onScene = onScene
+    controller.onLayout = onLayout
   }
 }
 
@@ -324,6 +335,7 @@ final class MobileVideoController: UIViewController {
   // Share one layer between the animated in-app player and AVKit's native PiP.
   let playerLayer = AVPlayerLayer()
   var onScene: ((UIWindowScene) -> Void)?
+  var onLayout: ((CGSize) -> Void)?
   var onReady: ((Bool, AVPlayer) -> Void)?
   var onAppear: (() -> Void)?
   private var observation: NSKeyValueObservation?
@@ -358,6 +370,7 @@ final class MobileVideoController: UIViewController {
     CATransaction.setDisableActions(true)
     playerLayer.frame = view.bounds
     CATransaction.commit()
+    onLayout?(view.bounds.size)
   }
 
   override func viewDidAppear(_ animated: Bool) {

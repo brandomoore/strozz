@@ -48,7 +48,7 @@ final class MobilePictureInPictureTests: XCTestCase {
     session.close()
   }
 
-  func testNativeBackgroundAndForegroundRetainThePreviousInAppLayout() {
+  func testNativeBackgroundAndForegroundRetainThePreviousInAppLayout() async throws {
     for minimized in [false, true] {
       let session = makeSession()
       session.select(channel("first"))
@@ -62,6 +62,7 @@ final class MobilePictureInPictureTests: XCTestCase {
       XCTAssertTrue(model.isActive)
       XCTAssertEqual(session.isExpanded, !minimized)
       session.sceneChanged(.active)
+      try await waitUntil { session.pictureInPictureState == .restoring }
       XCTAssertEqual(session.pictureInPictureState, .restoring)
       session.restorePictureInPicture { _ in }
       session.playerDidAppear()
@@ -75,7 +76,7 @@ final class MobilePictureInPictureTests: XCTestCase {
     }
   }
 
-  func testQuickForegroundReturnDuringNativeStartStopsPiPAfterStart() {
+  func testQuickForegroundReturnDuringNativeStartStopsPiPAfterStart() async throws {
     let session = makeSession()
     session.select(channel("first"))
     session.collapse()
@@ -83,6 +84,7 @@ final class MobilePictureInPictureTests: XCTestCase {
     session.sceneChanged(.background)
     session.sceneChanged(.active)
     session.didStartPictureInPicture()
+    try await waitUntil { session.pictureInPictureState == .restoring }
     XCTAssertEqual(session.pictureInPictureState, .restoring)
     session.didStopPictureInPicture()
     XCTAssertFalse(session.isExpanded)
@@ -101,11 +103,79 @@ final class MobilePictureInPictureTests: XCTestCase {
     XCTAssertTrue(session.isExpanded)
     XCTAssertNil(restored, "An unmounted source must wait before completing AVKit restoration")
     session.playerDidAppear()
+    XCTAssertNil(restored, "Mounting the compact source is not enough to restore full screen")
+    session.playerDidLayoutExpandedSurface()
     XCTAssertEqual(restored, true)
     session.didStopPictureInPicture()
     XCTAssertTrue(session.model === model)
     XCTAssertTrue(model.isActive)
     session.close()
+  }
+
+  func testSystemRestoreRequestWinsOverForegroundAutoReturn() async throws {
+    let session = makeSession()
+    session.select(channel("first"))
+    session.collapse()
+    session.didStartPictureInPicture()
+    session.sceneChanged(.background)
+    session.sceneChanged(.active)
+    XCTAssertEqual(session.pictureInPictureState, .active)
+    var restored = false
+    session.restorePictureInPicture { restored = $0 }
+    XCTAssertTrue(session.isExpanded)
+    session.playerDidLayoutExpandedSurface()
+    XCTAssertTrue(restored)
+    session.didStopPictureInPicture()
+    try await Task.sleep(for: .milliseconds(400))
+    XCTAssertTrue(session.isExpanded)
+    XCTAssertEqual(session.pictureInPictureState, .inline)
+    XCTAssertTrue(session.model.isActive)
+    session.close()
+  }
+
+  func testReturningToBackgroundCancelsPendingInlineReturn() async throws {
+    let session = makeSession()
+    session.select(channel("first"))
+    session.collapse()
+    session.didStartPictureInPicture()
+    session.sceneChanged(.background)
+    session.sceneChanged(.active)
+    session.sceneChanged(.background)
+    try await Task.sleep(for: .milliseconds(400))
+    XCTAssertEqual(session.pictureInPictureState, .active)
+    XCTAssertFalse(session.isExpanded)
+    session.close()
+    session.didStopPictureInPicture()
+  }
+
+  func testSystemRestoreCompletesOnlyAfterTheExpandedSurfaceIsLaidOut() async throws {
+    let session = makeSession()
+    let channel = channel("fixture")
+    session.select(channel)
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    let host = UIHostingController(rootView: MobilePlayerView(channel: channel, session: session)
+      .environment(TwitchAuthSession()))
+    window.rootViewController = host
+    defer { session.close(); window.rootViewController = previous }
+    let surface = session.videoController
+    try await waitUntil { surface.view.bounds.width > 320 }
+    let expandedSize = surface.view.bounds.size
+    session.collapse()
+    let compactWidth: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? 240 : 320
+    try await waitUntil { abs(surface.view.bounds.width - compactWidth) < 1 }
+    session.didStartPictureInPicture()
+    var restoredSize: CGSize?
+    session.restorePictureInPicture { restored in
+      XCTAssertTrue(restored)
+      restoredSize = surface.playerLayer.bounds.size
+    }
+    try await waitUntil { restoredSize != nil }
+    XCTAssertEqual(try XCTUnwrap(restoredSize).width, expandedSize.width, accuracy: 1,
+                   "AVKit must never receive the mini-player as its restore destination")
+    XCTAssertEqual(try XCTUnwrap(restoredSize).height, expandedSize.height, accuracy: 1)
+    session.didStopPictureInPicture()
   }
 
   func testSelectingAnotherStreamStopsOldPlaybackBeforeReplacingNativePiP() {

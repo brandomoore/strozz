@@ -178,7 +178,8 @@ Home previews stay paused while a live stream is playing.
 
 When you leave Strozz, supported video playback switches to native iOS Picture in
 Picture. Returning to the app brings playback back to its previous expanded or
-mini-player layout; PiP's system restore control opens the expanded player.
+mini-player layout; PiP's system restore control returns directly to the expanded
+player, without first landing in the mini-player.
 Closing native PiP stops playback. If native PiP cannot start, background playback
 is suspended and resumes when you return. In-app minimization still works when
 native PiP is unavailable, including audio-only playback.

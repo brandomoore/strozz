@@ -21,7 +21,7 @@ final class MobileLoadingPresentationTests: XCTestCase {
         model: model, channel: channel, hideChat: .constant(false), isFullscreen: false,
         isMinimized: true, videoController: MobileVideoController(), onCollapse: {},
         onClose: {}, onExpand: {}, onCollapseDragChanged: { _ in }, onCollapseDragEnded: { _ in },
-        onFullscreen: {}, onScene: { _ in })
+        onFullscreen: {}, onScene: { _ in }, onLayout: { _ in })
         .frame(width: 240, height: 135)
         .environment(\.themePalette, theme.palette(systemColorScheme: .light))
         .preferredColorScheme(theme.preferredColorScheme)
@@ -49,7 +49,7 @@ final class MobileLoadingPresentationTests: XCTestCase {
         model: model, channel: channel, hideChat: .constant(false),
         isFullscreen: false, isMinimized: false, videoController: MobileVideoController(), onCollapse: {},
         onClose: {}, onExpand: {}, onCollapseDragChanged: { _ in }, onCollapseDragEnded: { _ in },
-        onFullscreen: {}, onScene: { _ in }
+        onFullscreen: {}, onScene: { _ in }, onLayout: { _ in }
       )
       .frame(height: UIDevice.current.userInterfaceIdiom == .pad ? 500 : 220)
       .environment(\.themePalette, palette)

@@ -21,7 +21,9 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
   @ObservationIgnored private var pendingChannel: FollowedChannel?
   @ObservationIgnored private var finishing = false
   @ObservationIgnored private var restoreCompletion: ((Bool) -> Void)?
+  @ObservationIgnored private var restoreNeedsExpandedLayout = false
   @ObservationIgnored private var returnToAppWhenStarted = false
+  @ObservationIgnored private var foregroundReturnTask: Task<Void, Never>?
   @ObservationIgnored private var phase = ScenePhase.active
   @ObservationIgnored private let makeModel: () -> MobilePlaybackModel
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "mobile-pip")
@@ -53,11 +55,14 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
   }
 
   private func finishCurrentPlayback() {
+    foregroundReturnTask?.cancel()
+    foregroundReturnTask = nil
     finishing = true
     model.stop()
     watchTracker.stop()
     restoreCompletion?(false)
     restoreCompletion = nil
+    restoreNeedsExpandedLayout = false
     returnToAppWhenStarted = false
     switch pictureInPictureState {
     case .starting:
@@ -145,20 +150,34 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
   }
 
   func playerDidAppear() {
-    guard pictureInPictureState == .restoring, !finishing else { return }
+    guard pictureInPictureState == .restoring, !finishing, !restoreNeedsExpandedLayout else { return }
     let completion = restoreCompletion
     restoreCompletion = nil
     completion?(true)
   }
 
+  func playerDidLayoutExpandedSurface() {
+    restoreNeedsExpandedLayout = false
+    playerDidAppear()
+  }
+
   func sceneChanged(_ phase: ScenePhase) {
+    foregroundReturnTask?.cancel()
+    foregroundReturnTask = nil
     self.phase = phase
     if phase == .background {
       returnToAppWhenStarted = false
       startBackgroundPictureInPicture()
     } else if phase == .active {
       model.resume()
-      returnFromNativePictureInPicture()
+      guard pictureInPictureState == .active || pictureInPictureState == .starting else { return }
+      // App activation arrives before AVKit's cross-process restore request. Give that
+      // request priority over automatically returning an ordinary app reopen to inline.
+      foregroundReturnTask = Task { @MainActor [weak self] in
+        do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+        guard let self, !Task.isCancelled, self.phase == .active else { return }
+        self.returnFromNativePictureInPicture()
+      }
     }
   }
 
@@ -233,6 +252,8 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
   }
 
   func didStopPictureInPicture() {
+    foregroundReturnTask?.cancel()
+    foregroundReturnTask = nil
     if pictureInPictureState == .restoring, !finishing {
       pictureInPictureState = .inline
       returnToAppWhenStarted = false
@@ -261,10 +282,18 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
       return
     }
     restoreCompletion = completionHandler
+    foregroundReturnTask?.cancel()
+    foregroundReturnTask = nil
     let returningToApp = pictureInPictureState == .restoring
     pictureInPictureState = .restoring
-    if !returningToApp { isExpanded = true }
-    // The same source stays mounted while compact and while native PiP is active.
+    restoreNeedsExpandedLayout = !returningToApp && !isExpanded
+    if !returningToApp {
+      var transaction = Transaction()
+      transaction.disablesAnimations = true
+      withTransaction(transaction) { isExpanded = true }
+    }
+    // AVKit samples the inline destination when completion runs. A mounted mini-player
+    // is not ready until SwiftUI has laid out the expanded source without another animation.
     if videoController.viewIfLoaded?.window != nil { playerDidAppear() }
   }
 }
