@@ -10,6 +10,24 @@ enum MobilePlayerLayout: Equatable {
   }
 }
 
+enum MobileMiniPlayerLayout {
+  static func frame(in size: CGSize, isPhone: Bool) -> CGRect {
+    let width = min(isPhone ? 240 : 320, max(0, size.width - 24))
+    let height = min(width * 9 / 16, max(0, size.height - 24))
+    let bottom: CGFloat = isPhone && size.height > size.width ? 64 : 12
+    return CGRect(x: max(12, size.width - width - 12),
+                  y: max(12, size.height - height - bottom), width: width, height: height)
+  }
+
+  static func interpolate(from start: CGRect, to end: CGRect, progress: CGFloat) -> CGRect {
+    let progress = min(1, max(0, progress))
+    return CGRect(x: start.minX + (end.minX - start.minX) * progress,
+                  y: start.minY + (end.minY - start.minY) * progress,
+                  width: start.width + (end.width - start.width) * progress,
+                  height: start.height + (end.height - start.height) * progress)
+  }
+}
+
 struct MobilePlayerView: View {
   let channel: FollowedChannel
   let session: MobilePlaybackSession
@@ -17,8 +35,7 @@ struct MobilePlayerView: View {
   @State private var fullscreen = false
   @State private var windowScene: UIWindowScene?
   @State private var rotationError: String?
-  @State private var collapseOffset: CGFloat = 0
-  @State private var isDeparting = false
+  @State private var collapseProgress: CGFloat = 0
   @Environment(\.themePalette) private var palette
   @Environment(\.verticalSizeClass) private var verticalSizeClass
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -26,59 +43,72 @@ struct MobilePlayerView: View {
   var body: some View {
     let model = session.model
     GeometryReader { geometry in
+      let isPhone = UIDevice.current.userInterfaceIdiom == .phone
       let layout = MobilePlayerLayout.resolve(
         size: CGSize(width: geometry.size.width, height: geometry.size.height + geometry.safeAreaInsets.bottom),
-        isPhone: UIDevice.current.userInterfaceIdiom == .phone, hideChat: hideChat || fullscreen,
+        isPhone: isPhone, hideChat: hideChat || fullscreen,
         phoneLandscape: verticalSizeClass == .compact)
-      let video = MobileVideoView(
-        model: model, channel: channel, hideChat: $hideChat, isFullscreen: layout == .videoOnly,
-        videoController: session.videoController, onCollapse: session.collapse, onClose: session.close,
-        onCollapseDragChanged: updateCollapseDrag,
-        onCollapseDragEnded: endCollapseDrag,
-        onFullscreen: { toggleFullscreen(exiting: layout == .videoOnly) },
-        onScene: { windowScene = $0 })
-      VStack(spacing: 0) {
+      let chatWidth = layout == .sideBySide ? min(380, geometry.size.width * 0.36) : 0
+      let videoWidth = geometry.size.width - chatWidth
+      let videoHeight = layout == .videoOnly ? geometry.size.height
+        : min(videoWidth * 9 / 16, geometry.size.height * (layout == .sideBySide ? 0.75 : 0.42))
+      let expanded = CGRect(x: 0, y: 0, width: videoWidth, height: videoHeight)
+      let compact = MobileMiniPlayerLayout.frame(in: geometry.size, isPhone: isPhone)
+      let progress = session.isExpanded ? collapseProgress : 1
+      let videoFrame = MobileMiniPlayerLayout.interpolate(from: expanded, to: compact, progress: progress)
+      ZStack(alignment: .topLeading) {
+        palette.chatSideSurface
+          .background(palette.playerBackdrop)
+          .ignoresSafeArea()
+          .opacity(1 - progress)
+          .allowsHitTesting(session.isExpanded)
+        VStack(spacing: 0) {
+          MobileStreamDetails(channel: channel, model: model)
+          MobileWatchRewardsStatus(tracker: session.watchTracker)
+          if layout == .portrait {
+            Divider()
+            MobileChatView(service: model.chat, channel: channel.login)
+          } else {
+            Spacer(minLength: 0)
+          }
+        }
+        .frame(width: videoWidth, height: max(0, geometry.size.height - videoHeight))
+        .offset(y: videoHeight + progress * 80)
+        .opacity(layout == .videoOnly ? 0 : 1 - progress)
+        .allowsHitTesting(session.isExpanded && layout != .videoOnly)
+        .accessibilityHidden(!session.isExpanded || layout == .videoOnly)
         if layout == .sideBySide {
           HStack(spacing: 0) {
-            VStack(spacing: 0) {
-              video
-              MobileStreamDetails(channel: channel, model: model)
-              MobileWatchRewardsStatus(tracker: session.watchTracker)
-            }
-            .frame(minWidth: 0, maxWidth: .infinity)
-            Divider()
-            MobileChatView(service: model.chat, channel: channel.login)
-              .frame(width: min(380, geometry.size.width * 0.36))
-          }
-        } else {
-          video
-            .frame(maxHeight: layout == .videoOnly ? .infinity
-                   : min(geometry.size.width * 9 / 16, geometry.size.height * 0.42))
-          if layout == .portrait {
-            MobileStreamDetails(channel: channel, model: model)
-            MobileWatchRewardsStatus(tracker: session.watchTracker)
             Divider()
             MobileChatView(service: model.chat, channel: channel.login)
           }
+          .frame(width: chatWidth, height: geometry.size.height)
+          .offset(x: videoWidth + progress * chatWidth)
+          .opacity(1 - progress)
+          .allowsHitTesting(session.isExpanded)
+          .accessibilityHidden(!session.isExpanded)
         }
-      }
-      .background(palette.chatSideSurface)
-      .offset(y: collapseOffset)
-      .onChange(of: session.pictureInPictureState) { _, state in
-        if state == .starting || state == .active {
-          guard !isDeparting else { return }
-          isDeparting = true
-          withAnimation(reduceMotion ? nil : .easeOut(duration: 0.3)) {
-            collapseOffset = reduceMotion ? 0
-              : geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom
-          } completion: {
-            if isDeparting { session.collapseAnimationCompleted() }
+        // One mounted AVPlayerLayer changes geometry; neither animation nor native
+        // background PiP reparents or replaces the playing surface.
+        MobileVideoView(
+          model: model, channel: channel, hideChat: $hideChat, isFullscreen: layout == .videoOnly,
+          isMinimized: !session.isExpanded, videoController: session.videoController,
+          onCollapse: session.collapse, onClose: session.close, onExpand: session.expand,
+          onCollapseDragChanged: { updateCollapseDrag($0, distance: max(120, min(360, compact.midY))) },
+          onCollapseDragEnded: endCollapseDrag,
+          onFullscreen: { toggleFullscreen(exiting: layout == .videoOnly) },
+          onScene: { windowScene = $0 })
+          .frame(width: videoFrame.width, height: videoFrame.height)
+          .clipShape(RoundedRectangle(cornerRadius: progress * 14))
+          .overlay {
+            RoundedRectangle(cornerRadius: progress * 14)
+              .strokeBorder(palette.chromeOnOpaque.opacity(progress * 0.2), lineWidth: 1)
+              .allowsHitTesting(false)
           }
-        } else if state == .inline {
-          isDeparting = false
-          resetCollapseDrag()
-        }
+          .position(x: videoFrame.midX, y: videoFrame.midY)
       }
+      .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.9), value: session.isExpanded)
+      .onChange(of: session.isExpanded) { _, _ in collapseProgress = 0 }
     }
     .alert("Picture in Picture", isPresented: Binding(
       get: { session.errorMessage != nil }, set: { if !$0 { session.errorMessage = nil } }
@@ -92,23 +122,20 @@ struct MobilePlayerView: View {
     } message: { Text(rotationError ?? "") }
   }
 
-  private func updateCollapseDrag(_ translation: CGSize) {
-    guard session.pictureInPictureState == .inline, !isDeparting else { return }
+  private func updateCollapseDrag(_ translation: CGSize, distance: CGFloat) {
+    guard session.isExpanded else { return }
     if translation.height > abs(translation.width) {
-      collapseOffset = max(0, translation.height)
+      collapseProgress = min(1, max(0, translation.height / distance))
     }
   }
 
   private func endCollapseDrag(_ translation: CGSize) {
+    guard session.isExpanded else { return }
     if MobilePlayerCollapseGesture.shouldCollapse(translation: translation) {
       session.collapse()
     }
-    if session.pictureInPictureState == .inline { resetCollapseDrag() }
-  }
-
-  private func resetCollapseDrag() {
     withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85)) {
-      collapseOffset = 0
+      collapseProgress = 0
     }
   }
 
@@ -149,9 +176,11 @@ struct MobileVideoView: View {
   let channel: FollowedChannel
   @Binding var hideChat: Bool
   let isFullscreen: Bool
+  let isMinimized: Bool
   let videoController: MobileVideoController
   let onCollapse: () -> Void
   let onClose: () -> Void
+  let onExpand: () -> Void
   let onCollapseDragChanged: (CGSize) -> Void
   let onCollapseDragEnded: (CGSize) -> Void
   let onFullscreen: () -> Void
@@ -189,23 +218,53 @@ struct MobileVideoView: View {
       }
       Color.clear.contentShape(Rectangle())
         .onTapGesture {
-          controlsVisible.toggle()
-          interaction += 1
+          if isMinimized { onExpand() }
+          else { controlsVisible.toggle(); interaction += 1 }
         }
-        .accessibilityLabel(controlsVisible ? "Hide playback controls" : "Show playback controls")
+        .accessibilityLabel(isMinimized ? "Expand player"
+          : controlsVisible ? "Hide playback controls" : "Show playback controls")
         .accessibilityAddTraits(.isButton)
-        .accessibilityHidden(voiceOver)
-        .accessibilityIdentifier("mobile-controls-toggle")
+        .accessibilityHidden(voiceOver && !isMinimized)
+        .accessibilityIdentifier(isMinimized ? "mobile-expand-player" : "mobile-controls-toggle")
       if model.presentationState == .loading {
-        StreamLoadingView(posterURL: channel.thumbnailURL, avatarURL: channel.profileImageURL,
-          title: channel.displayName)
-          .accessibilityIdentifier("mobile-video-loading")
+        if isMinimized {
+          ProgressView().accessibilityLabel("Loading stream").allowsHitTesting(false)
+        } else {
+          StreamLoadingView(posterURL: channel.thumbnailURL, avatarURL: channel.profileImageURL,
+            title: channel.displayName)
+            .accessibilityIdentifier("mobile-video-loading")
+        }
       }
-      if let error = model.errorMessage {
+      if let error = model.errorMessage, !isMinimized {
         MobileStatusView(message: error) { model.retry() }
           .background(palette.chromeOpaqueSurface)
       }
-      if controlsVisible || held {
+      if isMinimized {
+        VStack {
+          HStack {
+            Button(action: onClose) { Icon(glyph: .x, size: 18).frame(width: 44, height: 44) }
+              .accessibilityLabel("Close player")
+              .modifier(MobileControlSurface())
+            Spacer(minLength: 0)
+            Button(action: model.togglePlayPause) {
+              Icon(glyph: model.isPaused ? .playerPlayFilled : .playerPauseFilled, size: 18)
+                .frame(width: 44, height: 44)
+            }
+            .accessibilityLabel(model.isPaused ? "Play" : "Pause")
+            .accessibilityIdentifier("mobile-mini-play-pause")
+            .disabled(model.isLoading || model.errorMessage != nil)
+            .modifier(MobileControlSurface())
+          }
+          Spacer(minLength: 0)
+          if let error = model.errorMessage {
+            Text(error).font(.caption).lineLimit(2).padding(4)
+              .modifier(MobileControlSurface())
+              .allowsHitTesting(false)
+          }
+        }
+        .padding(6)
+        .buttonStyle(.plain)
+      } else if controlsVisible || held {
         MobilePlayerControls(
           model: model, viewerCount: channel.viewerCount, hideChat: $hideChat, isFullscreen: isFullscreen,
           onCollapse: onCollapse,
@@ -227,6 +286,10 @@ struct MobileVideoView: View {
       .onChanged { onCollapseDragChanged($0.translation) }
       .onEnded { onCollapseDragEnded($0.translation) })
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: controlsVisible)
+    .onChange(of: isMinimized) { _, _ in
+      controlsVisible = true
+      interaction += 1
+    }
     .task(id: HideState(interaction: interaction, held: held)) {
       guard !held else { return }
       do { try await Task.sleep(for: .seconds(4)) } catch { return }
@@ -258,8 +321,7 @@ struct MobilePlayerSurface: UIViewControllerRepresentable {
 }
 
 final class MobileVideoController: UIViewController {
-  // AVPlayerViewController has no public API to start PiP from a custom gesture.
-  // Keep one player layer alive across presentation changes for AVKit's PiP controller.
+  // Share one layer between the animated in-app player and AVKit's native PiP.
   let playerLayer = AVPlayerLayer()
   var onScene: ((UIWindowScene) -> Void)?
   var onReady: ((Bool, AVPlayer) -> Void)?

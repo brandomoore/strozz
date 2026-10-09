@@ -5,6 +5,33 @@ import XCTest
 
 @MainActor
 final class MobileLoadingPresentationTests: XCTestCase {
+  func testMiniPlayerRendersAcrossThemes() async throws {
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    defer { window.rootViewController = previous }
+    let channel = FollowedChannel(
+      id: "fixture", login: "fixture", displayName: "Live channel", title: "Fixture stream",
+      gameName: "", viewerCount: 1200, thumbnailURL: nil, profileImageURL: nil, isLive: true)
+    for theme in AppTheme.allCases {
+      let model = MobilePlaybackModel(muted: true)
+      defer { model.stop() }
+      model.displayReady(true, for: model.player)
+      let content = MobileVideoView(
+        model: model, channel: channel, hideChat: .constant(false), isFullscreen: false,
+        isMinimized: true, videoController: MobileVideoController(), onCollapse: {},
+        onClose: {}, onExpand: {}, onCollapseDragChanged: { _ in }, onCollapseDragEnded: { _ in },
+        onFullscreen: {}, onScene: { _ in })
+        .frame(width: 240, height: 135)
+        .environment(\.themePalette, theme.palette(systemColorScheme: .light))
+        .preferredColorScheme(theme.preferredColorScheme)
+      let host = UIHostingController(rootView: content)
+      window.rootViewController = host
+      await layout(host)
+      capture(host, name: "mini-\(theme.rawValue)")
+    }
+  }
+
   func testLoadingReadyAndErrorRenderAcrossThemes() async throws {
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     let window = try XCTUnwrap(scene.keyWindow)
@@ -20,8 +47,8 @@ final class MobileLoadingPresentationTests: XCTestCase {
       let palette = theme.palette(systemColorScheme: .light)
       let content = MobileVideoView(
         model: model, channel: channel, hideChat: .constant(false),
-        isFullscreen: false, videoController: MobileVideoController(), onCollapse: {},
-        onClose: {}, onCollapseDragChanged: { _ in }, onCollapseDragEnded: { _ in },
+        isFullscreen: false, isMinimized: false, videoController: MobileVideoController(), onCollapse: {},
+        onClose: {}, onExpand: {}, onCollapseDragChanged: { _ in }, onCollapseDragEnded: { _ in },
         onFullscreen: {}, onScene: { _ in }
       )
       .frame(height: UIDevice.current.userInterfaceIdiom == .pad ? 500 : 220)

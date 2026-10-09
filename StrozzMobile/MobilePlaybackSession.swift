@@ -14,15 +14,14 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
   private(set) var model: MobilePlaybackModel
   private(set) var videoController = MobileVideoController()
   private(set) var pictureInPictureState = PictureInPictureState.inline
-  var isPresented = false
+  private(set) var isExpanded = false
   var errorMessage: String?
   let watchTracker = TwitchWatchTracker()
   @ObservationIgnored private var pictureInPicture: AVPictureInPictureController?
   @ObservationIgnored private var pendingChannel: FollowedChannel?
   @ObservationIgnored private var finishing = false
   @ObservationIgnored private var restoreCompletion: ((Bool) -> Void)?
-  @ObservationIgnored private var stopAfterRestore = false
-  @ObservationIgnored private var collapseAnimationFinished = false
+  @ObservationIgnored private var returnToAppWhenStarted = false
   @ObservationIgnored private var phase = ScenePhase.active
   @ObservationIgnored private let makeModel: () -> MobilePlaybackModel
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "mobile-pip")
@@ -59,7 +58,7 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
     watchTracker.stop()
     restoreCompletion?(false)
     restoreCompletion = nil
-    stopAfterRestore = false
+    returnToAppWhenStarted = false
     switch pictureInPictureState {
     case .starting:
       // Wait for the start callback before asking AVKit to stop its transition.
@@ -85,14 +84,13 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
       pendingChannel = nil
       begin(next)
     } else {
-      isPresented = false
+      isExpanded = false
     }
   }
 
   private func begin(_ channel: FollowedChannel) {
     self.channel = channel
     errorMessage = nil
-    collapseAnimationFinished = false
     model = makeModel()
     videoController = MobileVideoController()
     videoController.player = model.player
@@ -103,55 +101,47 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
     model.onPlayerChanged = { [weak videoController] player in videoController?.player = player }
     pictureInPicture = AVPictureInPictureController(playerLayer: videoController.playerLayer)
     pictureInPicture?.delegate = self
-    pictureInPicture?.canStartPictureInPictureAutomaticallyFromInline = false
-    isPresented = true
+    pictureInPicture?.canStartPictureInPictureAutomaticallyFromInline = true
+    isExpanded = true
     model.start(channel: channel.login)
   }
 
   func collapse() {
-    guard channel != nil, pictureInPictureState == .inline, !finishing else { return }
-    guard let pictureInPicture else {
-      report(String(localized: "Picture in Picture is not supported on this device."))
+    guard channel != nil, !finishing else { return }
+    isExpanded = false
+  }
+
+  func expand() {
+    restore()
+  }
+
+  private func startBackgroundPictureInPicture() {
+    guard channel != nil, !finishing, pictureInPictureState == .inline,
+      !model.isAudioOnly, !model.isExternalPlayback, !model.isPaused,
+      let pictureInPicture, pictureInPicture.isPictureInPicturePossible else {
+      if model.isActive, !keepsPlayingInBackground {
+        Self.logger.info("Native PiP unavailable for background playback; suspending until foreground")
+        model.suspend()
+      }
       return
     }
-    guard !model.isAudioOnly else {
-      report(String(localized: "Picture in Picture is unavailable for audio-only playback."))
-      return
-    }
-    guard !model.isExternalPlayback else {
-      report(String(localized: "Stop AirPlay before starting Picture in Picture."))
-      return
-    }
-    guard pictureInPicture.isPictureInPicturePossible else {
-      report(String(localized: "Picture in Picture is not available yet. Wait for the video to play, then try again."))
-      return
-    }
-    collapseAnimationFinished = false
     pictureInPictureState = .starting
     pictureInPicture.startPictureInPicture()
   }
 
-  func collapseAnimationCompleted() {
-    guard pictureInPictureState == .starting || pictureInPictureState == .active else { return }
-    collapseAnimationFinished = true
-    dismissCollapsedPlayerIfReady()
-  }
-
-  private func dismissCollapsedPlayerIfReady() {
-    guard pictureInPictureState == .active, collapseAnimationFinished, !finishing else { return }
-    // The page already slid away alongside AVKit; don't run a second modal exit.
-    var transaction = Transaction()
-    transaction.disablesAnimations = true
-    withTransaction(transaction) { isPresented = false }
-  }
-
   private func restore() {
     guard channel != nil, !finishing else { return }
+    isExpanded = true
+    returnFromNativePictureInPicture()
+  }
+
+  private func returnFromNativePictureInPicture() {
     if pictureInPictureState == .active {
       pictureInPictureState = .restoring
-      stopAfterRestore = true
+      pictureInPicture?.stopPictureInPicture()
+    } else if pictureInPictureState == .starting {
+      returnToAppWhenStarted = true
     }
-    isPresented = true
   }
 
   func playerDidAppear() {
@@ -159,20 +149,17 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
     let completion = restoreCompletion
     restoreCompletion = nil
     completion?(true)
-    if stopAfterRestore {
-      stopAfterRestore = false
-      pictureInPicture?.stopPictureInPicture()
-    }
-  }
-
-  func presentationDismissed() {
-    if !isPresented, pictureInPictureState == .inline { close() }
   }
 
   func sceneChanged(_ phase: ScenePhase) {
     self.phase = phase
-    if phase == .background, !keepsPlayingInBackground { model.suspend() }
-    else if phase == .active { model.resume() }
+    if phase == .background {
+      returnToAppWhenStarted = false
+      startBackgroundPictureInPicture()
+    } else if phase == .active {
+      model.resume()
+      returnFromNativePictureInPicture()
+    }
   }
 
   func trackWatch(auth: TwitchAuthSession, rewards: TwitchWatchRewardsSession) async {
@@ -185,7 +172,7 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
           ready: item.status == .readyToPlay && !model.isLoading && model.errorMessage == nil,
           playing: model.player.timeControlStatus == .playing,
           foreground: phase == .active || pictureInPictureState == .active,
-          visible: isPresented || pictureInPictureState == .active,
+          visible: phase == .active || pictureInPictureState == .active,
           userPaused: model.isPaused, muted: model.player.isMuted || model.player.volume == 0),
           session: rewards)
       } else { watchTracker.stop() }
@@ -219,7 +206,7 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
       pictureInPicture?.stopPictureInPicture()
     } else {
       pictureInPictureState = .active
-      dismissCollapsedPlayerIfReady()
+      if returnToAppWhenStarted { returnFromNativePictureInPicture() }
     }
   }
 
@@ -232,6 +219,7 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
 
   func failedToStartPictureInPicture(_ error: Error) {
     pictureInPictureState = .inline
+    returnToAppWhenStarted = false
     if finishing { finishTransition() }
     else {
       report(String(localized: "Could not start Picture in Picture. \(error.localizedDescription)"))
@@ -247,6 +235,7 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
   func didStopPictureInPicture() {
     if pictureInPictureState == .restoring, !finishing {
       pictureInPictureState = .inline
+      returnToAppWhenStarted = false
       if phase == .background { model.suspend() }
     } else {
       model.stop()
@@ -272,8 +261,11 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
       return
     }
     restoreCompletion = completionHandler
+    let returningToApp = pictureInPictureState == .restoring
     pictureInPictureState = .restoring
-    isPresented = true
+    if !returningToApp { isExpanded = true }
+    // The same source stays mounted while compact and while native PiP is active.
+    if videoController.viewIfLoaded?.window != nil { playerDidAppear() }
   }
 }
 

@@ -169,14 +169,19 @@ scroll up to read earlier messages, then tap the floating **Jump to present**
 button to resume following live chat. It disappears at the live edge without
 reserving an empty status row or changing the chat viewport.
 
-Swipe down anywhere over the live video, or tap its down chevron, to continue in
-native iOS Picture in Picture and return to the page you opened the stream from.
-The player follows your pull and slides away as PiP starts; a short pull springs
-back, and Reduce Motion skips the exit movement.
-The same stream keeps playing over Strozz and other apps. Restore it using PiP's
-system control, close PiP to stop, or select another stream or broadcast to replace
-playback. Home previews stay paused while a stream is in PiP. If PiP is unavailable,
-the player stays open and explains why.
+Swipe down anywhere over the live video, or tap its down chevron, to shrink it into
+Strozz's in-app mini-player and return to the page you opened the stream from.
+The same video surface follows your pull smoothly; a short pull springs back, and
+Reduce Motion skips the resizing animation. Tap the mini-player to expand it, use
+its pause or close controls, or select another stream or broadcast to replace it.
+Home previews stay paused while a live stream is playing.
+
+When you leave Strozz, supported video playback switches to native iOS Picture in
+Picture. Returning to the app brings playback back to its previous expanded or
+mini-player layout; PiP's system restore control opens the expanded player.
+Closing native PiP stops playback. If native PiP cannot start, background playback
+is suspended and resumes when you return. In-app minimization still works when
+native PiP is unavailable, including audio-only playback.
 
 Past broadcasts use native on-demand controls with seeking. **Continue watching**
 on Home and channel profiles resumes saved progress; finished broadcasts leave

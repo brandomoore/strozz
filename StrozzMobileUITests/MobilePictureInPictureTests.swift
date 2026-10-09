@@ -4,16 +4,11 @@ import XCTest
 final class MobilePictureInPictureTests: XCTestCase {
   override func setUp() {
     continueAfterFailure = false
-    XCUIDevice.shared.orientation = .portrait
   }
 
-  func testSwipeOverVideoReturnsToBrowseAndChevronCollapsesTheNextStream() throws {
-    guard ProcessInfo.processInfo.environment["STROZZ_MOBILE_LIVE_TESTS"] == "1" else {
-      throw XCTSkip("Set STROZZ_MOBILE_LIVE_TESTS=1 for native Picture in Picture verification.")
-    }
-    let app = XCUIApplication()
-    app.launchEnvironment["STROZZ_MUTE_PLAYBACK"] = "1"
-    app.launch()
+  func testSwipeReturnsToBrowseWithAnInAppPlayerAndRestoresOrReplacesIt() throws {
+    try requireLiveTests()
+    let app = launch()
     defer { app.terminate() }
     app.buttons["Browse"].firstMatch.tap()
     let category = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'category-'")).firstMatch
@@ -27,51 +22,81 @@ final class MobilePictureInPictureTests: XCTestCase {
     app.buttons[first].tap()
     waitForVideo(app)
     let surface = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+    let expanded = surface.frame
     let start = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.25))
-    let end = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.9))
+    let end = start.withOffset(CGVector(dx: 0, dy: 120))
     start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0)
-    if app.alerts["Picture in Picture"].waitForExistence(timeout: 2) {
-      let unsupported = app.staticTexts["Picture in Picture is not supported on this device."].exists
-      capture(app, name: "PiP unavailable without dismissing the player")
-      XCTAssertTrue(surface.exists)
-      app.alerts.buttons["OK"].tap()
-      if unsupported {
-        throw XCTSkip("This runtime does not support native PiP; exercise the native transitions on a physical device.")
-      }
-      XCTFail("Native PiP did not start")
-      return
-    }
-    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: surface)
-    waitForExpectations(timeout: 12)
-    XCTAssertTrue(app.navigationBars[previousPage].waitForExistence(timeout: 12))
-    let pip = app.otherElements["PIPUIView"]
-    XCTAssertTrue(pip.waitForExistence(timeout: 10), "Require AVKit's actual floating window")
-    capture(app, name: "Native PiP over originating category")
-    let system = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-    let hierarchy = XCTAttachment(string: app.debugDescription + "\nSYSTEM:\n" + system.debugDescription)
-    hierarchy.name = "Native PiP controls"
-    hierarchy.lifetime = .keepAlways
-    add(hierarchy)
-    XCTAssertTrue(app.buttons[first].waitForExistence(timeout: 10), "Return to the originating category, not Home")
+    XCTAssertTrue(app.buttons["mobile-expand-player"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.navigationBars[previousPage].exists)
+    XCTAssertTrue(surface.exists, "The playing surface stays mounted")
+    XCTAssertLessThan(surface.frame.width, expanded.width - 100)
+    XCTAssertFalse(app.otherElements["PIPUIView"].exists, "Native PiP is reserved for leaving the app")
+    XCTAssertTrue(app.buttons[first].isHittable)
+    capture("In-app player over originating category")
 
+    app.buttons["Home"].firstMatch.tap()
+    XCTAssertTrue(app.buttons["mobile-expand-player"].exists, "The mini-player follows tab navigation")
+    app.buttons["Browse"].firstMatch.tap()
+    XCTAssertTrue(app.navigationBars[previousPage].exists)
+    app.buttons["mobile-expand-player"].tap()
+    waitForVideo(app)
+    XCTAssertEqual(surface.frame.width, expanded.width, accuracy: 1)
+    collapseWithChevron(app)
     app.buttons[first].tap()
     waitForVideo(app)
-    XCTAssertFalse(pip.exists, "Selecting the playing stream restores it inline")
-    showControls(app)
-    app.buttons["mobile-minimize-player"].tap()
-    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: surface)
-    waitForExpectations(timeout: 12)
-    XCTAssertTrue(pip.waitForExistence(timeout: 10))
-
+    collapseWithChevron(app)
     app.buttons[second].tap()
     waitForVideo(app)
-    showControls(app)
-    app.buttons["mobile-minimize-player"].tap()
-    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: surface)
+    collapseWithChevron(app)
+    capture("Replacement stream in the in-app player")
+    app.buttons["Close player"].tap()
+    XCTAssertFalse(app.buttons["mobile-expand-player"].exists)
+    XCTAssertFalse(surface.exists)
+    XCTAssertTrue(app.buttons[second].isHittable)
+  }
+
+  func testLeavingAppUsesNativePiPAndReturningRestoresTheMiniPlayer() throws {
+    try requireLiveTests()
+    guard ProcessInfo.processInfo.environment["STROZZ_MOBILE_NATIVE_PIP_TESTS"] == "1" else {
+      throw XCTSkip("Run native-background transitions on a PiP-capable destination.")
+    }
+    let app = launch()
+    defer { app.terminate() }
+    let stream = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'stream-'")).firstMatch
+    XCTAssertTrue(stream.waitForExistence(timeout: 45))
+    stream.tap()
+    waitForVideo(app)
+    collapseWithChevron(app)
+    XCUIDevice.shared.press(.home)
+    let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
+    settings.activate()
+    defer { settings.terminate() }
+    XCTAssertTrue(settings.navigationBars.firstMatch.waitForExistence(timeout: 10))
+    let pip = app.otherElements["PIPUIView"]
+    capture("Native PiP over another app")
+    XCTAssertTrue(pip.waitForExistence(timeout: 12), "Require a real system PiP window outside Strozz")
+    app.activate()
+    XCTAssertTrue(app.buttons["mobile-expand-player"].waitForExistence(timeout: 12))
+    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.otherElements["PIPUIView"])
     waitForExpectations(timeout: 12)
-    XCTAssertTrue(app.navigationBars[previousPage].waitForExistence(timeout: 12))
-    XCTAssertTrue(pip.waitForExistence(timeout: 10))
-    capture(app, name: "Replacement stream in native PiP")
+    XCTAssertFalse(app.alerts["Picture in Picture"].exists)
+    app.buttons["mobile-expand-player"].tap()
+    waitForVideo(app)
+    capture("Expanded player after native handoff")
+  }
+
+  private func requireLiveTests() throws {
+    guard ProcessInfo.processInfo.environment["STROZZ_MOBILE_LIVE_TESTS"] == "1" else {
+      throw XCTSkip("Set STROZZ_MOBILE_LIVE_TESTS=1 for live mini-player verification.")
+    }
+  }
+
+  private func launch() -> XCUIApplication {
+    XCUIDevice.shared.orientation = .portrait
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_MUTE_PLAYBACK"] = "1"
+    app.launch()
+    return app
   }
 
   private func waitForVideo(_ app: XCUIApplication) {
@@ -80,16 +105,17 @@ final class MobilePictureInPictureTests: XCTestCase {
     expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: loading)
     waitForExpectations(timeout: 45)
     XCTAssertFalse(app.buttons["Try again"].exists)
-    capture(app, name: "Inline video before PiP")
   }
 
-  private func showControls(_ app: XCUIApplication) {
+  private func collapseWithChevron(_ app: XCUIApplication) {
     if !app.buttons["mobile-minimize-player"].isHittable {
       app.buttons["mobile-controls-toggle"].tap()
     }
+    app.buttons["mobile-minimize-player"].tap()
+    XCTAssertTrue(app.buttons["mobile-expand-player"].waitForExistence(timeout: 10))
   }
 
-  private func capture(_ app: XCUIApplication, name: String) {
+  private func capture(_ name: String) {
     let image = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
     image.name = name
     image.lifetime = .keepAlways

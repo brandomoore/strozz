@@ -21,7 +21,7 @@ struct MobilePlayerControls: View {
           Button(action: onCollapse) {
             Icon(glyph: .chevronRight, size: 22).rotationEffect(.degrees(90)).frame(width: 44, height: 44)
           }
-            .accessibilityLabel("Minimize to Picture in Picture")
+            .accessibilityLabel("Minimize player")
             .accessibilityIdentifier("mobile-minimize-player")
             .modifier(MobileControlSurface())
           Spacer(minLength: 0)

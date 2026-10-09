@@ -72,7 +72,6 @@ struct MobileRootView: View {
   }
 
   var body: some View {
-    @Bindable var playback = playback
     let palette = theme.theme.palette(systemColorScheme: colorScheme)
     let previewsEnabled = tab == 0 && playback.channel == nil && scenePhase == .active
     TabView(selection: $tab) {
@@ -95,10 +94,12 @@ struct MobileRootView: View {
         .tabItem { Label { Text("Account") } icon: { Image("tb-user-circle") } }
         .tag(2)
     }
-    .fullScreenCover(isPresented: $playback.isPresented, onDismiss: playback.presentationDismissed) {
+    .allowsHitTesting(!playback.isExpanded)
+    .accessibilityHidden(playback.isExpanded)
+    .overlay {
       if let channel = playback.channel {
         MobilePlayerView(channel: channel, session: playback)
-          .presentationBackground(.clear)
+          .id(ObjectIdentifier(playback.model))
       }
     }
     .environment(\.themePalette, palette)
