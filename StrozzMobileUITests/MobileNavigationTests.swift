@@ -397,8 +397,8 @@ final class MobileNavigationTests: XCTestCase {
     XCTAssertTrue(playPause.exists)
   }
 
-  private func capture(_ app: XCUIApplication, name: String) {
-    let attachment = XCTAttachment(screenshot: app.screenshot())
+  private func capture(_: XCUIApplication, name: String) {
+    let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
     attachment.name = name
     attachment.lifetime = .keepAlways
     add(attachment)

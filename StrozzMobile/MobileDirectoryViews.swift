@@ -358,6 +358,7 @@ struct MobileStreamArtwork: View {
 struct MobileViewerBadge: View {
   let count: Int?
   var isCompact = false
+  var isVideoOverlay = false
   @Environment(\.themePalette) private var palette
 
   var body: some View {
@@ -374,7 +375,7 @@ struct MobileViewerBadge: View {
     .font(isCompact ? .caption2.weight(.semibold) : .caption.weight(.semibold))
     .lineLimit(1)
     .padding(.horizontal, isCompact ? 4 : 6).padding(.vertical, isCompact ? 2 : 4)
-    .modifier(MobileControlSurface())
+    .modifier(MobileControlSurface(isVideoOverlay: isVideoOverlay))
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(count.map {
       isCompact ? String(localized: "Live, \($0) viewers") : String(localized: "\($0) viewers")

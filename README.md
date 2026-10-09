@@ -180,6 +180,9 @@ is retained when expanding and minimizing the same stream or returning from nati
 Quick drags coast briefly on release; the edges and resize limits have gentle
 resistance and settle back smoothly. Grab it again to stop the glide.
 Reduce Motion keeps movement direct, without momentum or elastic settling.
+Player controls use white icons without individual backplates, with broad dark
+gradients providing contrast over the video in every theme. Reduce Transparency
+strengthens those gradients without obscuring the picture with opaque panels.
 Home previews stay paused while a live stream is playing.
 
 When you leave Strozz, supported video playback switches to native iOS Picture in

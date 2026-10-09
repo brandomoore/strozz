@@ -333,6 +333,7 @@ struct MobileVideoView: View {
   @Environment(\.themePalette) private var palette
   @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
   @State private var controlsVisible = true
   @State private var interaction = 0
   @State private var showQuality = false
@@ -390,7 +391,7 @@ struct MobileVideoView: View {
           HStack {
             Button(action: onClose) { Icon(glyph: .x, size: 18).frame(width: 44, height: 44) }
               .accessibilityLabel("Close player")
-              .modifier(MobileControlSurface())
+              .modifier(MobileControlSurface(isVideoOverlay: true))
             Spacer(minLength: 0)
             Button(action: model.togglePlayPause) {
               Icon(glyph: model.isPaused ? .playerPlayFilled : .playerPauseFilled, size: 18)
@@ -399,17 +400,21 @@ struct MobileVideoView: View {
             .accessibilityLabel(model.isPaused ? "Play" : "Pause")
             .accessibilityIdentifier("mobile-mini-play-pause")
             .disabled(model.isLoading || model.errorMessage != nil)
-            .modifier(MobileControlSurface())
+            .modifier(MobileControlSurface(isVideoOverlay: true))
           }
           Spacer(minLength: 0)
           if let error = model.errorMessage {
             Text(error).font(.caption).lineLimit(2).padding(4)
-              .modifier(MobileControlSurface())
+              .modifier(MobileControlSurface(isVideoOverlay: true))
               .allowsHitTesting(false)
           }
         }
         .padding(6)
         .buttonStyle(.plain)
+        .background {
+          MobilePlayerControlScrim(showsBottom: model.errorMessage != nil, showsCenter: false,
+                                   reduceTransparency: reduceTransparency)
+        }
       } else if controlsVisible || held {
         MobilePlayerControls(
           model: model, viewerCount: channel.viewerCount, hideChat: $hideChat, isFullscreen: isFullscreen,
