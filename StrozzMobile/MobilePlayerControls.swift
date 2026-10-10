@@ -15,13 +15,14 @@ struct MobilePlayerControls: View {
   let onRoutes: (Bool) -> Void
   var showsChatToggle = false
   var landscapeChannel: FollowedChannel? = nil
+  var onModePresentation: (Bool) -> Void = { _ in }
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
   @AppStorage(PersistenceKey.showStreamDuration) private var showStreamDuration = true
 
   var body: some View {
     ZStack {
       VStack(spacing: landscapeChannel == nil ? 8 : 4) {
-        HStack(spacing: 8) {
+        HStack(spacing: 4) {
           Button(action: onCollapse) {
             Icon(glyph: .chevronRight, size: 22).rotationEffect(.degrees(90)).frame(width: 44, height: 44)
           }
@@ -29,6 +30,9 @@ struct MobilePlayerControls: View {
             .accessibilityIdentifier("mobile-minimize-player")
             .modifier(MobileControlSurface(isVideoOverlay: true))
           Spacer(minLength: 0)
+          MobilePlaybackModeButton(model: model, onVideoSelection: { hideChat = false },
+            onPresentation: onModePresentation)
+            .modifier(MobileControlSurface(isVideoOverlay: true))
           if model.presentationState == .ready {
             MobileAirPlayPicker(onPresentation: onRoutes)
               .frame(width: 44, height: 44)
@@ -200,7 +204,7 @@ struct MobileQualitySheet: View {
         }
         qualityRow("Auto - Standard", quality: .automatic)
         ForEach(model.qualities) { quality in
-          qualityRow(quality.name, quality: .fixed(quality.id))
+          qualityRow(quality.name, quality: quality.isAudioOnly ? .audioOnly : .fixed(quality.id))
         }
         if let reason = model.nativeFailure {
           Text(reason).font(.footnote).foregroundStyle(.secondary)

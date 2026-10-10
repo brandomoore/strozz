@@ -1,5 +1,13 @@
 import SwiftUI
 
+enum MobileChatWidth {
+  // Zero preserves the original adaptive width until the user resizes chat.
+  static let automatic = 0.0
+  static let defaultWidth = 320.0
+  static let range = 200.0...600.0
+  static let step = 20.0
+}
+
 enum MobileChatAppearance {
   static let textSize = 16.0
   static let emoteSize = 26.0
@@ -75,6 +83,7 @@ struct MobileChatSettingsView: View {
 
   var body: some View {
     Form {
+      MobileChatWidthSettings()
       MobileChatReadabilitySettings(preset: preset, textSize: $textSize, lineHeight: $lineHeight,
         letterSpacing: $letterSpacing, messageSpacing: $messageSpacing, fontStyle: $fontStyle)
       MobileChatEmoteSettings(automatic: $emoteAuto, size: $emoteSize, animated: $animatedEmotes)
@@ -106,6 +115,36 @@ struct MobileChatSettingsView: View {
     .navigationTitle("Chat settings")
     .navigationBarTitleDisplayMode(.inline)
     .accessibilityIdentifier("mobile-chat-settings-form")
+  }
+}
+
+private struct MobileChatWidthSettings: View {
+  @AppStorage(PersistenceKey.mobileChatWidthValue) private var width = MobileChatWidth.automatic
+
+  private var selectedWidth: Binding<Double> {
+    Binding {
+      width == MobileChatWidth.automatic ? MobileChatWidth.defaultWidth
+        : min(MobileChatWidth.range.upperBound, max(MobileChatWidth.range.lowerBound, width))
+    } set: { width = $0 }
+  }
+
+  var body: some View {
+    Section {
+      Stepper(value: selectedWidth, in: MobileChatWidth.range, step: MobileChatWidth.step) {
+        LabeledContent("Width") {
+          if width == MobileChatWidth.automatic { Text("Automatic") }
+          else { Text("\(Int(width)) pt").monospacedDigit() }
+        }
+      }
+      .accessibilityIdentifier("chat-setting-width")
+      Button("Automatic width") { width = MobileChatWidth.automatic }
+        .disabled(width == MobileChatWidth.automatic)
+        .accessibilityIdentifier("chat-setting-width-reset")
+    } header: {
+      Text("Side chat")
+    } footer: {
+      Text("Drag the divider beside the video or use this control. Your width is saved and limited to half the window. Portrait chat stays full-width.")
+    }
   }
 }
 

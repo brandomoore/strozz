@@ -27,12 +27,58 @@ final class MobilePlayerGeometryTests: XCTestCase {
       hideChat: false), .sideBySide)
     XCTAssertEqual(MobilePlayerLayout.resolve(size: .init(width: 700, height: 500), isPhone: false,
       hideChat: false), .portrait)
+    for mode in [MobilePlaybackMode.audioOnly, .chatOnly] {
+      XCTAssertEqual(MobilePlayerLayout.resolve(size: .init(width: 1024, height: 500), isPhone: false,
+        hideChat: true, mode: mode), .chatOnly)
+      XCTAssertEqual(MobilePlayerLayout.chatOnly.videoFrame(in: .init(width: 1024, height: 500)), .zero)
+    }
+  }
+
+  func testCustomChatWidthIsBoundedAndKeepsVideoCentered() {
+    for size in [CGSize(width: 568, height: 320), .init(width: 750, height: 380),
+                 .init(width: 1024, height: 740), .init(width: 1366, height: 972)] {
+      for requested in [150.0, 200, 320, 480, 600, 1000] {
+        let width = MobilePlayerLayout.sideChatWidth(in: size, preferredWidth: requested)
+        let frame = MobilePlayerLayout.sideBySide.videoFrame(in: size, preferredChatWidth: requested)
+        XCTAssertLessThanOrEqual(width, min(600, size.width / 2))
+        XCTAssertGreaterThanOrEqual(width + 0.001, min(200, size.width / 3))
+        XCTAssertGreaterThanOrEqual(frame.width + 0.001, min(380, size.width * 2 / 3, size.height * 16 / 9))
+        XCTAssertEqual(frame.midX, (size.width - width) / 2, accuracy: 0.001)
+        XCTAssertEqual(frame.midY, size.height / 2, accuracy: 0.001)
+        XCTAssertEqual(frame.width / frame.height, 16 / 9, accuracy: 0.001)
+        XCTAssertLessThanOrEqual(frame.maxX, size.width - width)
+        XCTAssertEqual(MobilePlayerLayout.sideChatWidth(in: size, preferredWidth: width), width,
+          "Passing a resolved width to the video must not change the pane boundary")
+      }
+      let automatic = MobilePlayerLayout.sideChatWidth(in: size)
+      XCTAssertEqual(MobilePlayerLayout.sideChatWidth(in: size, preferredWidth: automatic), automatic, accuracy: 0.001)
+    }
+    XCTAssertEqual(MobilePlayerLayout.sideChatWidth(in: .init(width: 1366, height: 972), preferredWidth: 480), 480)
+    XCTAssertEqual(MobilePlayerLayout.sideChatWidth(in: .init(width: 750, height: 380), preferredWidth: 480), 370)
+  }
+
+  func testDividerTracksItsInitialWidthWithoutCompoundingAndClampsBothDirections() {
+    let size = CGSize(width: 1366, height: 972)
+    var drag = MobileChatWidthDrag(initialWidth: 320)
+    for translation in [-40.0, -80, 40, 80] {
+      drag.translation = translation
+      XCTAssertEqual(drag.width(in: size, preferredWidth: 500), 320 - translation)
+    }
+    drag.translation = -2000
+    XCTAssertEqual(drag.width(in: size, preferredWidth: 320), 600)
+    drag.translation = 2000
+    XCTAssertEqual(drag.width(in: size, preferredWidth: 320), 200)
+    XCTAssertEqual(MobileChatWidthDrag().width(in: size, preferredWidth: 0), 320,
+      "Cancelling a gesture restores the saved preference")
+    for layout in [MobilePlayerLayout.portrait, .videoOnly] {
+      XCTAssertEqual(layout.videoFrame(in: size, preferredChatWidth: 600), layout.videoFrame(in: size))
+    }
   }
 
   func testLandscapeControlsFitTheVideoAtLargeTextSizes() {
     let state = RotationMountState()
     defer { state.session.close() }
-    for width in [380.0, 500] {
+    for width in [568.0 * 2 / 3, 380, 500] {
       for typeSize in [DynamicTypeSize.large, .accessibility3] {
         let host = UIHostingController(rootView: MobilePlayerControls(
           model: state.session.model, viewerCount: 1200, hideChat: .constant(false), isFullscreen: true,
@@ -73,9 +119,21 @@ final class MobilePlayerGeometryTests: XCTestCase {
     let initialChat = try XCTUnwrap(findChat(in: host.view))
     let initialVideo = state.session.videoController.view
     let player = state.session.model.player
+    defer { state.defaults.removePersistentDomain(forName: state.suite) }
     for landscape in [true, false, true, false] {
       state.landscape = landscape
-      try await Task.sleep(for: .milliseconds(300))
+      for width in [200.0, 480, 600, MobileChatWidth.automatic] {
+        state.defaults.set(width, forKey: PersistenceKey.mobileChatWidthValue)
+        try await Task.sleep(for: .milliseconds(150))
+        host.view.layoutIfNeeded()
+        XCTAssertTrue(findChat(in: host.view) === initialChat)
+        XCTAssertTrue(state.session.videoController.view === initialVideo)
+        XCTAssertTrue(state.session.model.player === player)
+      }
+    }
+    for mode in [MobilePlaybackMode.audioOnly, .chatOnly, .video] {
+      state.session.model.selectMode(mode)
+      try await Task.sleep(for: .milliseconds(150))
       host.view.layoutIfNeeded()
       XCTAssertTrue(findChat(in: host.view) === initialChat)
       XCTAssertTrue(state.session.videoController.view === initialVideo)
@@ -93,6 +151,8 @@ final class MobilePlayerGeometryTests: XCTestCase {
 @Observable
 private final class RotationMountState {
   var landscape = false
+  let suite = "ChatWidthMount.\(UUID())"
+  let defaults: UserDefaults
   let auth = TwitchAuthSession()
   let channel = FollowedChannel(id: "fixture", login: "fixture", displayName: "Sample streamer",
     title: "A stream description that appears with the controls", gameName: "Game",
@@ -100,6 +160,7 @@ private final class RotationMountState {
   let session: MobilePlaybackSession
 
   init() {
+    defaults = UserDefaults(suiteName: suite)!
     session = .layoutFixture(channel: channel)
     session.model.chat.isConnected = true
   }
@@ -111,6 +172,7 @@ private struct RotationMountHarness: View {
   var body: some View {
     MobilePlayerView(channel: state.channel, session: state.session)
       .environment(state.auth)
+      .defaultAppStorage(state.defaults)
       .environment(\.verticalSizeClass, state.landscape ? .compact : .regular)
       .frame(width: state.landscape ? 750 : 390, height: state.landscape ? 380 : 750)
   }
