@@ -90,6 +90,9 @@ final class MobilePlaybackModel {
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "mobile-playback")
 
   #if DEBUG
+  @ObservationIgnored let diagnostics = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(
+    directory: URL.cachesDirectory.appendingPathComponent("MobilePlaybackDiagnostics", isDirectory: true),
+    maximumFileBytes: 512 * 1024, maximumFiles: 2, maximumPending: 32, mirrorToSystemLog: false))
   @ObservationIgnored private var isLayoutFixture = false
 
   func prepareLayoutFixtureMetadata() {
@@ -158,6 +161,9 @@ final class MobilePlaybackModel {
     guard !isActive else { return }
     self.channel = channel
     isActive = true
+    #if DEBUG
+    diagnostics.beginSession(channel: channel, playbackMode: "mobile")
+    #endif
     refreshStreamMetadata()
     observeAudioSession()
     chat.connect(to: channel)
@@ -291,6 +297,9 @@ final class MobilePlaybackModel {
     for observer in audioObservers { NotificationCenter.default.removeObserver(observer) }
     audioObservers.removeAll()
     invalidate()
+    #if DEBUG
+    diagnostics.endSession(reason: "stopped")
+    #endif
     chat.disconnect()
     releaseAudioSession()
   }
@@ -449,6 +458,9 @@ final class MobilePlaybackModel {
     jumpObserver = nil
     player.currentItem?.cancelPendingSeeks()
     player.pause()
+    #if DEBUG
+    diagnostics.trackItem(nil)
+    #endif
     player.replaceCurrentItem(with: nil)
     videoOutput = nil
     engine?.stop()
@@ -529,6 +541,9 @@ final class MobilePlaybackModel {
           player.replaceCurrentItem(with: item)
         }
         guard player.currentItem === item else { throw MobilePlaybackError.unavailable }
+        #if DEBUG
+        diagnostics.trackItem(item, source: useNative ? "native" : isAudioOnly ? "audio" : "standard")
+        #endif
         player.isMuted = isMuted || muteForTesting
         player.allowsExternalPlayback = !useNative
         if position.shouldPlay && position.date == nil { player.play() }
@@ -757,8 +772,14 @@ final class MobilePlaybackModel {
         case .none:
           break
         }
+        #if DEBUG
+        let freshVideoFrame = videoOutput?.hasNewPixelBuffer(forItemTime: item.currentTime()) == true
+        #endif
         if let videoOutput,
            videoOutput.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) != nil {
+          #if DEBUG
+          if freshVideoFrame { diagnostics.videoFrameObserved() }
+          #endif
           lastVideoFrame = uptime
           receivedVideoFrame = true
           if engine != nil { item.automaticallyPreservesTimeOffsetFromLive = false }

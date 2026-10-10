@@ -22,7 +22,7 @@ struct MobileChatLayoutFixture: View {
       MobileChatComposerInput(text: $draft, sending: false, onSend: { draft = "" },
         onSettings: { showSettings = true }, reduceTransparency: false)
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 4)
     }
     .environment(\.themePalette, .light)
     .preferredColorScheme(.light)
@@ -69,7 +69,7 @@ struct MobileChatComposerFixture: View {
               streak: 10, errorMessage: nil) : nil)
       .padding(.leading, ProcessInfo.processInfo.environment["STROZZ_REWARDS_FIXTURE"] == "1" ? 8 : 12)
       .padding(.trailing, 12)
-      .padding(.bottom, 8)
+      .padding(.vertical, 4)
     }
     .background(palette.chatSideSurface)
     .environment(\.themePalette, palette)

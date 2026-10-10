@@ -118,8 +118,12 @@ final class MobileChatTests: XCTestCase {
     let send = app.buttons["mobile-chat-send"]
     let settings = app.buttons["mobile-chat-settings"]
     XCTAssertTrue(field.waitForExistence(timeout: 10))
+    let capsule = app.otherElements["mobile-chat-composer"]
+    XCTAssertEqual(capsule.frame.height, 44, accuracy: 0.5)
     XCTAssertGreaterThanOrEqual(settings.frame.width, 44)
     XCTAssertGreaterThanOrEqual(settings.frame.height, 44)
+    XCTAssertEqual(settings.frame.midX, capsule.frame.maxX - 22, accuracy: 0.5)
+    XCTAssertEqual(settings.frame.midY, capsule.frame.midY, accuracy: 0.5)
     XCTAssertFalse(send.exists)
     let latest = app.descendants(matching: .any).matching(identifier: "mobile-chat-latest-message").firstMatch
     let originalMessageHeight = latest.frame.height
@@ -146,6 +150,8 @@ final class MobileChatTests: XCTestCase {
     XCTAssertTrue(textSize.label.contains("17"))
     app.buttons["Done"].tap()
     XCTAssertGreaterThan(latest.frame.height, originalMessageHeight, "Saved text size must affect rendered messages")
+    XCTAssertEqual(capsule.frame.height, 44, accuracy: 0.5,
+      "Chat message-size changes must not enlarge the composer")
     settings.tap()
     XCTAssertTrue(textSize.waitForExistence(timeout: 5))
     XCTAssertTrue(textSize.label.contains("17"), "Chat appearance must persist when reopening settings")
@@ -157,6 +163,11 @@ final class MobileChatTests: XCTestCase {
     XCTAssertTrue(send.isEnabled)
     XCTAssertFalse(settings.exists)
     XCTAssertGreaterThan(field.frame.height, initialHeight)
+    XCTAssertGreaterThanOrEqual(send.frame.width, 44)
+    XCTAssertGreaterThanOrEqual(send.frame.height, 44)
+    XCTAssertEqual(send.frame.midX, capsule.frame.maxX - 22, accuracy: 0.5)
+    XCTAssertEqual(send.frame.midY, capsule.frame.maxY - 22, accuracy: 0.5,
+      "The Send circle must share the expanded composer's bottom-right corner center")
     XCTAssertEqual(field.value as? String, message)
     app.buttons["Change appearance"].tap()
     app.buttons["Reduce transparency"].tap()
@@ -177,6 +188,7 @@ final class MobileChatTests: XCTestCase {
     XCTAssertEqual(app.staticTexts["composer-submitted"].label, message)
     XCTAssertTrue(settings.waitForExistence(timeout: 5))
     XCTAssertFalse(send.exists)
+    XCTAssertEqual(capsule.frame.height, 44, accuracy: 0.5)
     field.tap()
     field.typeText("   ")
     XCTAssertTrue(settings.exists)

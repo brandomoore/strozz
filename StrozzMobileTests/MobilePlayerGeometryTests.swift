@@ -4,6 +4,36 @@ import XCTest
 
 @MainActor
 final class MobilePlayerGeometryTests: XCTestCase {
+  func testSurfaceDiagnosticsDistinguishUnmountedHiddenAndDetachedVideo() throws {
+    let controller = MobileVideoController()
+    XCTAssertFalse(controller.diagnosticSnapshot().flags["surface_in_window"] ?? true)
+    XCTAssertFalse(controller.isViewLoaded, "Collecting diagnostics must not mount a video surface")
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let previous = scene.keyWindow
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = controller
+    window.makeKeyAndVisible()
+    defer {
+      window.isHidden = true
+      window.rootViewController = nil
+      previous?.makeKey()
+    }
+    controller.view.layoutIfNeeded()
+    var snapshot = controller.diagnosticSnapshot()
+    XCTAssertEqual(snapshot.flags["surface_in_window"], true)
+    XCTAssertEqual(snapshot.flags["layer_attached"], true)
+    XCTAssertEqual(snapshot.flags["surface_intersects_window"], true)
+    XCTAssertEqual(snapshot.metrics["surface_opacity"], 1)
+    controller.view.alpha = 0
+    snapshot = controller.diagnosticSnapshot()
+    XCTAssertEqual(snapshot.metrics["surface_opacity"], 0)
+    controller.view.alpha = 1
+    controller.playerLayer.isHidden = true
+    XCTAssertEqual(controller.diagnosticSnapshot().flags["surface_hidden"], true)
+    controller.playerLayer.removeFromSuperlayer()
+    XCTAssertEqual(controller.diagnosticSnapshot().flags["layer_attached"], false)
+  }
+
   func testSideVideoIsCenteredAndChatNeverExceedsOneThirdOr320Points() {
     for size in [CGSize(width: 568, height: 320), .init(width: 750, height: 380),
                  .init(width: 900, height: 400), .init(width: 1024, height: 740),

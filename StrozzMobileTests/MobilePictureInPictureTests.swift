@@ -430,6 +430,43 @@ final class MobilePictureInPictureTests: XCTestCase {
     session.close()
   }
 
+  func testSwitchingMinimizedStreamsDoesNotDetachTheNewController() async throws {
+    let session = MobilePlaybackSession {
+      let model = MobilePlaybackModel(muted: true)
+      model.prepareLayoutFixtureMetadata()
+      model.displayReady(true, for: model.player)
+      return model
+    }
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    let host = UIHostingController(rootView: StreamSwitchHarness(session: session)
+      .environment(TwitchAuthSession()))
+    window.rootViewController = host
+    defer { session.close(); window.rootViewController = previous }
+    for login in ["first", "second", "third"] {
+      let outgoing = session.videoController
+      if session.channel != nil {
+        session.collapse()
+        try await Task.sleep(for: .milliseconds(500))
+      }
+      session.select(channel(login))
+      let incoming = session.videoController
+      try await Task.sleep(for: .milliseconds(600))
+      host.view.layoutIfNeeded()
+      XCTAssertNotNil(incoming.viewIfLoaded?.window,
+        "The outgoing subtree must not mount and then detach the incoming stream's controller")
+      for _ in 0..<30 {
+        if outgoing.viewIfLoaded?.window == nil { break }
+        try await Task.sleep(for: .milliseconds(100))
+      }
+      XCTAssertNil(outgoing.viewIfLoaded?.window)
+      XCTAssertNotNil(incoming.viewIfLoaded?.window)
+      XCTAssertTrue(incoming.player === session.model.player)
+      XCTAssertGreaterThan(incoming.view.bounds.width, 320)
+    }
+  }
+
   func testNativeCloseAndVODReplacementEndLivePlayback() {
     for explicitClose in [false, true] {
       let session = makeSession()
@@ -567,5 +604,18 @@ final class MobilePictureInPictureTests: XCTestCase {
   private func channel(_ login: String) -> FollowedChannel {
     FollowedChannel(id: login, login: login, displayName: login, title: "Live stream",
                     gameName: "", viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true)
+  }
+}
+
+private struct StreamSwitchHarness: View {
+  let session: MobilePlaybackSession
+
+  var body: some View {
+    Color.clear.overlay {
+      if let channel = session.channel {
+        MobilePlayerView(channel: channel, session: session)
+          .id(ObjectIdentifier(session.model))
+      }
+    }
   }
 }

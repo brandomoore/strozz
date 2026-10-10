@@ -151,7 +151,12 @@ The rounded chat composer grows as you type. Its **…** button opens **Chat
 settings** when the draft is empty and becomes **Send** when there is text.
 The keyboard's Send key also sends; pasted multiline text remains supported.
 The composer follows the selected theme and uses an opaque surface with Reduce
-Transparency.
+Transparency. At the default system text size, the input is 44 points tall and
+the bottom bar is 52 points tall, excluding the device safe area. Send/settings
+keeps a 44-point touch target around its smaller visible circle, concentric with
+the rounded trailing corner and inset by 4 points. Multiline drafts
+and larger accessibility text can increase the height; resizing chat or changing
+chat message size does not scale the composer.
 
 Opening a mobile stream shows its profile photo, description, category, and
 playback controls. After four seconds of inactivity they collapse together,
@@ -183,6 +188,8 @@ The iPhone rotation button uses a rotation glyph. The chat toggle appears only
 in landscape: iPhone starts video-only and can open or hide side-by-side chat;
 iPad offers the same toggle when its side-by-side layout is available. Portrait
 chat stays below the video without a misleading sideways collapse button.
+Fullscreen video hides the system status bar; leaving fullscreen or minimizing
+restores the normal system appearance.
 By default, side chat uses at most one third of the available width, capped at 320 points.
 Drag the divider beside the video, or use **Chat settings > Side chat > Width**,
 to make it narrower or wider. The saved width is local to the mobile app and
@@ -203,6 +210,8 @@ The aspect-fitted video is centered vertically and horizontally in the left pane
 Landscape profile details appear with the controls over the lower video area,
 so revealing them does not move or resize the video. One mounted chat view moves
 between portrait and landscape instead of rebuilding the timeline and composer.
+Each stream's player view retains its own model and video controller until that
+view is removed, so replacing a minimized stream cannot detach the incoming video.
 Drafts, in-flight sends, and the chat reading state are shared across those layouts.
 Tapping the video or rotating dismisses the keyboard without discarding a draft.
 The composer shows an upward arrow to send, or the settings dots when empty.
@@ -211,6 +220,16 @@ animate. Offscreen animation buffers are released, and all chat animation pauses
 during minimization, while chat is hidden, or in the background. Incoming chat
 continues to collect in its bounded buffer; hidden/gesture-time view updates are
 deferred until chat is visible again, without reconnecting or changing playback.
+Unchanged mobile message rows retain their rendered content as messages arrive.
+Chat badges, emotes, and GIFs use native image views backed by the same SDWebImage
+cache, avoiding per-image Combine publisher overhead during long sessions and
+resizing. Animation remains controlled by the viewport and accessibility settings.
+Development builds keep a bounded, local `Library/Caches/MobilePlaybackDiagnostics`
+record of player state, fresh decoded-frame age, PiP state, and video-layer
+attachment/visibility. Sampling is limited to once every two seconds and uses
+the existing background telemetry writer; it does not store stream URLs, chat
+messages, or credentials. This allows a blank-video recurrence to be inspected
+without attaching a debugger. Release builds do not collect these snapshots.
 
 Chat settings are also available from **Account** and when reading anonymously.
 Adjust mobile size presets, fonts, spacing, emote sizing and animation, badges,

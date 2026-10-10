@@ -167,39 +167,14 @@ struct MobileChatTimeline: View {
             animationsActive: animationsActive && scenePhase == .active,
             viewportHeight: viewportHeight
           ) {
-            VStack(alignment: .leading, spacing: 4) {
-              if let notice = message.systemMessage {
-                Text(notice).font(.caption.bold()).foregroundStyle(.secondary)
-                  .fixedSize(horizontal: false, vertical: true)
-              }
-              RichChatLineView(
-                message: message,
-                nameColor: (message.colorHex.flatMap { Color(twitchHex: $0) }
-                  ?? palette.chatSidePrimaryText)
-                  .chatReadable(onSurface: palette.chatSideSurface, minRatio: 4.5),
-                globalEmoteURLs: emoteURLs, badgeURLs: badgeURLs, cheermotes: cheermotes,
-                textSize: textSize * typeScale, emoteSize: resolvedEmoteSize * typeScale,
-                lineHeight: lineHeight * typeScale, letterSpacing: letterSpacing * typeScale,
-                animatedEmotes: animatedEmotes && !reduceMotion,
-                fontStyle: ChatFontStyle(rawValue: fontStyle) ?? .standard,
-                showBadges: showBadges, showPlatformBadges: showPlatforms,
-                bodyColorOverride: palette.chatSidePrimaryText, wrapsOversizedTokens: true,
-                onInspectEmote: { name, url in
-                  inspectedEmote = MobileChatEmote(name: name, url: url)
-                }, scalesCustomFont: false)
-            }
-            .padding(.horizontal, highlighted ? 8 : 0)
-            .padding(.vertical, highlighted ? 6 : 0)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-              if highlighted {
-                RoundedRectangle(cornerRadius: 8).fill(palette.chatMentionSurface)
-                  .overlay {
-                    RoundedRectangle(cornerRadius: 8).strokeBorder(
-                      palette.chatMentionBorder, lineWidth: 1)
-                  }
-              }
-            }
+            MobileChatMessageRow(message: message, emoteURLs: emoteURLs,
+              badgeURLs: badgeURLs, cheermotes: cheermotes,
+              textSize: textSize * typeScale, emoteSize: resolvedEmoteSize * typeScale,
+              lineHeight: lineHeight * typeScale, letterSpacing: letterSpacing * typeScale,
+              animatedEmotes: animatedEmotes && !reduceMotion,
+              fontStyle: ChatFontStyle(rawValue: fontStyle) ?? .standard,
+              showBadges: showBadges, showPlatforms: showPlatforms, highlighted: highlighted,
+              inspectedEmote: $inspectedEmote)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier(
               message.id == messages.last?.id ? "mobile-chat-latest-message" : "mobile-chat-message"
@@ -237,6 +212,58 @@ struct MobileChatTimeline: View {
     .sheet(item: $inspectedEmote) { emote in
       MobileEmoteDetailView(emote: emote)
         .environment(\.themePalette, palette)
+    }
+  }
+}
+
+private struct MobileChatMessageRow: View {
+  let message: ChatMessage
+  let emoteURLs: [String: URL]
+  let badgeURLs: [String: URL]
+  let cheermotes: [Cheermote]
+  let textSize: CGFloat
+  let emoteSize: CGFloat
+  let lineHeight: CGFloat
+  let letterSpacing: CGFloat
+  let animatedEmotes: Bool
+  let fontStyle: ChatFontStyle
+  let showBadges: Bool
+  let showPlatforms: Bool
+  let highlighted: Bool
+  @Binding var inspectedEmote: MobileChatEmote?
+  @Environment(\.themePalette) private var palette
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      if let notice = message.systemMessage {
+        Text(notice).font(.caption.bold()).foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      RichChatLineView(
+        message: message,
+        nameColor: (message.colorHex.flatMap { Color(twitchHex: $0) }
+          ?? palette.chatSidePrimaryText)
+          .chatReadable(onSurface: palette.chatSideSurface, minRatio: 4.5),
+        globalEmoteURLs: emoteURLs, badgeURLs: badgeURLs, cheermotes: cheermotes,
+        textSize: textSize, emoteSize: emoteSize,
+        lineHeight: lineHeight, letterSpacing: letterSpacing,
+        animatedEmotes: animatedEmotes, fontStyle: fontStyle,
+        showBadges: showBadges, showPlatformBadges: showPlatforms,
+        bodyColorOverride: palette.chatSidePrimaryText, wrapsOversizedTokens: true,
+        onInspectEmote: { name, url in
+          inspectedEmote = MobileChatEmote(name: name, url: url)
+        }, scalesCustomFont: false)
+    }
+    .padding(.horizontal, highlighted ? 8 : 0)
+    .padding(.vertical, highlighted ? 6 : 0)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background {
+      if highlighted {
+        RoundedRectangle(cornerRadius: 8).fill(palette.chatMentionSurface)
+          .overlay {
+            RoundedRectangle(cornerRadius: 8).strokeBorder(palette.chatMentionBorder, lineWidth: 1)
+          }
+      }
     }
   }
 }
@@ -327,7 +354,7 @@ struct MobileChatComposer: View {
     }
     .padding(.leading, rewards == nil ? 12 : 8)
     .padding(.trailing, 12)
-    .padding(.vertical, 8)
+    .padding(.vertical, 4)
   }
 }
 
@@ -387,6 +414,7 @@ struct MobileChatComposerInput: View {
         Button(action: hasDraft ? onSend : onSettings) {
           ZStack {
             Circle().fill(palette.chatSidePrimaryText.opacity(canSend ? 1 : 0.08))
+              .frame(width: 36, height: 36)
             Icon(glyph: hasDraft ? .arrowUp : .dots, size: 20)
               .foregroundStyle(canSend ? palette.chatSideSurface : palette.chatSidePrimaryText)
               .opacity(sending ? 0 : 1)
@@ -397,7 +425,7 @@ struct MobileChatComposerInput: View {
             }
           }
           .frame(width: 44, height: 44)
-          .contentShape(Circle())
+          .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(hasDraft ? Text("Send message") : Text("Chat settings"))
@@ -406,10 +434,10 @@ struct MobileChatComposerInput: View {
         .disabled(sending)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: hasDraft)
       }
-      .padding(4)
+      .padding(.leading, 4)
       .background { MobileChatComposerSurface(reduceTransparency: reduceTransparency) }
       .overlay {
-        RoundedRectangle(cornerRadius: 26, style: .continuous)
+        RoundedRectangle(cornerRadius: 22, style: .circular)
           .strokeBorder(palette.chromeOpaqueBorder, lineWidth: 0.5)
           .allowsHitTesting(false)
       }
@@ -424,7 +452,7 @@ private struct MobileChatComposerSurface: View {
   @Environment(\.themePalette) private var palette
 
   var body: some View {
-    let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
+    let shape = RoundedRectangle(cornerRadius: 22, style: .circular)
     if reduceTransparency {
       shape.fill(palette.chromeOpaqueSurface)
     } else if #available(iOS 26.0, *) {

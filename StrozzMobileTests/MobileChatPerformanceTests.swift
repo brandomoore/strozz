@@ -7,6 +7,53 @@ import XCTest
 
 @MainActor
 final class MobileChatPerformanceTests: XCTestCase {
+  func testBadgedHistoryAppendAndResizeResponsiveness() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("chat-badges-\(UUID()).gif")
+    try makeAnimation(at: url)
+    defer { removeFixture(url) }
+    let state = PerformanceChatState()
+    let badges = ["subscriber/1", "premium/1", "moderator/1"]
+    state.badgeURLs = Dictionary(uniqueKeysWithValues: badges.map { ($0, url) })
+    func message(_ index: Int) -> ChatMessage {
+      ChatMessage(username: "Viewer\(index)", colorHex: nil, badgeKeys: badges,
+        text: "Message \(index) with several words that wrap while resizing chat",
+        twitchEmoteURLs: [:])
+    }
+    state.messages = (0..<500).map(message)
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let previous = scene.keyWindow
+    let host = UIHostingController(rootView: PerformanceChatHarness(state: state))
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = host
+    window.makeKeyAndVisible()
+    defer {
+      window.isHidden = true
+      window.rootViewController = nil
+      previous?.makeKey()
+    }
+    host.view.layoutIfNeeded()
+    try await Task.sleep(for: .seconds(1))
+    var delays: [Double] = []
+    let cpuStart = cpuSeconds()
+    for batch in 0..<20 {
+      let started = ProcessInfo.processInfo.systemUptime
+      state.messages = Array(state.messages.dropFirst()) + [message(500 + batch)]
+      state.width = batch.isMultiple(of: 2) ? 320 : 390
+      try await Task.sleep(for: .milliseconds(50))
+      host.view.layoutIfNeeded()
+      delays.append(ProcessInfo.processInfo.systemUptime - started - 0.05)
+    }
+    let sorted = delays.sorted()
+    let p95 = sorted[Int(Double(sorted.count - 1) * 0.95)]
+    let report = "500 messages with three badges; 20 appends/resizes; CPU=\(cpuSeconds() - cpuStart)s; main-thread overrun p95=\(p95)s; max=\(sorted.last ?? 0)s"
+    let attachment = XCTAttachment(string: report)
+    attachment.name = "Badged chat responsiveness"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+    XCTAssertLessThan(p95, 0.25, report)
+    XCTAssertEqual(state.messages.count, 500)
+  }
+
   func testGIFHistoryLoadsOnlyVisiblePreviewsAndBoundsAnimationWork() async throws {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("chat-gifs-\(UUID()).gif")
     try makeAnimation(at: url, size: CGSize(width: 512, height: 512))
@@ -247,6 +294,8 @@ final class MobileChatPerformanceTests: XCTestCase {
 @Observable
 private final class PerformanceChatState {
   var messages: [ChatMessage] = []
+  var badgeURLs: [String: URL] = [:]
+  var width: CGFloat = 390
   var animationsActive = true
   var phase = ScenePhase.active
 }
@@ -255,8 +304,9 @@ private struct PerformanceChatHarness: View {
   let state: PerformanceChatState
 
   var body: some View {
-    MobileChatTimeline(messages: state.messages, animationsActive: state.animationsActive)
-      .frame(width: 390, height: 600)
+    MobileChatTimeline(messages: state.messages, badgeURLs: state.badgeURLs,
+      animationsActive: state.animationsActive)
+      .frame(width: state.width, height: 600)
       .environment(\.themePalette, .dark)
       .environment(\.scenePhase, state.phase)
   }

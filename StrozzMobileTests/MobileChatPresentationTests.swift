@@ -84,10 +84,48 @@ final class MobileChatPresentationTests: XCTestCase {
           reduceTransparency: true, rewards: rewards).environment(\.dynamicTypeSize, typeSize))
         let size = host.sizeThatFits(in: CGSize(width: width, height: 1000))
         XCTAssertEqual(size.width, width, accuracy: 1)
-        XCTAssertGreaterThanOrEqual(size.height, 52)
+        XCTAssertGreaterThanOrEqual(size.height, 44)
+        if typeSize == .large { XCTAssertEqual(size.height, 44, accuracy: 0.5) }
+        else { XCTAssertGreaterThan(size.height, 44, "Accessibility text must not be clipped to the default height") }
         XCTAssertLessThan(size.height, 300)
       }
+    }
+  }
 
+  func testDefaultComposerIs44PointsAndBottomBarIs52Points() {
+    let rewards = MobileChatRewardsSummary(balance: 57990, name: "Leaves",
+      imageURL: nil, streak: 10, errorMessage: nil)
+    for width in [250.0, 320, 700] {
+      for summary in [nil, rewards] {
+        for text in ["", "Hi"] {
+          for opaque in [false, true] {
+            let state = MobileChatComposerState()
+            state.text = text
+            let input = UIHostingController(rootView: MobileChatComposerInput(
+              text: .constant(text), sending: false, onSend: {}, onSettings: {},
+              reduceTransparency: opaque, rewards: summary)
+              .environment(\.dynamicTypeSize, .large))
+            let bar = UIHostingController(rootView: MobileChatComposer(
+              channel: "fixture", onSettings: {}, rewards: summary, composer: state)
+              .environment(TwitchAuthSession())
+              .environment(\.dynamicTypeSize, .large))
+            let proposal = CGSize(width: width, height: 1000)
+            XCTAssertEqual(input.sizeThatFits(in: proposal).height, 44, accuracy: 0.5)
+            XCTAssertEqual(bar.sizeThatFits(in: proposal).height, 52, accuracy: 0.5)
+          }
+        }
+      }
+    }
+  }
+
+  func testCompactComposerStillGrowsForMultilineDrafts() {
+    for text in ["First line\nSecond line", String(repeating: "A longer message ", count: 20)] {
+      let host = UIHostingController(rootView: MobileChatComposerInput(
+        text: .constant(text), sending: false, onSend: {}, onSettings: {},
+        reduceTransparency: true).environment(\.dynamicTypeSize, .large))
+      let size = host.sizeThatFits(in: CGSize(width: 280, height: 1000))
+      XCTAssertGreaterThan(size.height, 44)
+      XCTAssertLessThanOrEqual(size.height, ceil(UIFont.systemFont(ofSize: 17).lineHeight * 4 + 20))
     }
   }
 
