@@ -7,6 +7,7 @@ struct MobilePlayerLayoutFixture: View {
   @State private var auth = TwitchAuthSession()
   @State private var imageURL: URL?
   @State private var failure: String?
+  @State private var statusBarState = "unknown"
 
   var body: some View {
     ZStack {
@@ -28,6 +29,22 @@ struct MobilePlayerLayoutFixture: View {
           .accessibilityIdentifier("fixture-player-viewport")
           .accessibilityValue("\(geometry.frame(in: .global).minY) \(geometry.size.height)")
           .allowsHitTesting(false)
+      }
+    }
+    .overlay(alignment: .topLeading) {
+      Color.clear.frame(width: 1, height: 1)
+        .accessibilityElement()
+        .accessibilityIdentifier("fixture-status-bar")
+        .accessibilityValue(statusBarState)
+        .allowsHitTesting(false)
+    }
+    .task {
+      while !Task.isCancelled {
+        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
+           let manager = scene.statusBarManager {
+          statusBarState = manager.isStatusBarHidden ? "hidden" : "visible"
+        }
+        do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
       }
     }
     .task {

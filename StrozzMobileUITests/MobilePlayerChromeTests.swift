@@ -3,6 +3,33 @@ import XCTest
 
 @MainActor
 final class MobilePlayerChromeTests: XCTestCase {
+  func testFullscreenHidesStatusBarAndLeavingRestoresIt() {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
+    app.launchEnvironment["STROZZ_PLAYER_PAUSED_FIXTURE"] = "1"
+    app.launch()
+    defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
+    let fullscreen = app.buttons["mobile-rotate-player"]
+    XCTAssertTrue(fullscreen.waitForExistence(timeout: 10))
+    let statusBar = app.otherElements["fixture-status-bar"]
+    expectation(for: NSPredicate(format: "value == 'visible'"), evaluatedWith: statusBar)
+    waitForExpectations(timeout: 5)
+    fullscreen.tap()
+    expectation(for: NSPredicate(format: "value == 'hidden'"), evaluatedWith: statusBar)
+    waitForExpectations(timeout: 5)
+    capture(app, "Fullscreen video without system status bar")
+    fullscreen.tap()
+    expectation(for: NSPredicate(format: "value == 'visible'"), evaluatedWith: statusBar)
+    waitForExpectations(timeout: 5)
+    if UIDevice.current.userInterfaceIdiom == .pad {
+      fullscreen.tap()
+      app.buttons["mobile-minimize-player"].tap()
+      XCTAssertTrue(app.buttons["mobile-expand-player"].waitForExistence(timeout: 3))
+      expectation(for: NSPredicate(format: "value == 'visible'"), evaluatedWith: statusBar)
+      waitForExpectations(timeout: 5)
+    }
+  }
+
   override func setUp() {
     continueAfterFailure = false
     XCUIDevice.shared.orientation = .portrait

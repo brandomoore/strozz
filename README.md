@@ -183,6 +183,8 @@ The iPhone rotation button uses a rotation glyph. The chat toggle appears only
 in landscape: iPhone starts video-only and can open or hide side-by-side chat;
 iPad offers the same toggle when its side-by-side layout is available. Portrait
 chat stays below the video without a misleading sideways collapse button.
+Fullscreen video hides the system status bar; leaving fullscreen or minimizing
+restores the normal system appearance.
 By default, side chat uses at most one third of the available width, capped at 320 points.
 Drag the divider beside the video, or use **Chat settings > Side chat > Width**,
 to make it narrower or wider. The saved width is local to the mobile app and

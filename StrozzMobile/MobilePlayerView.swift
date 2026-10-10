@@ -334,6 +334,7 @@ struct MobilePlayerView: View {
           .transition(reduceMotion ? .identity : .opacity)
         }
       }
+      .statusBarHidden(session.isExpanded && layout == .videoOnly)
       .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: streamDetailsVisible)
       .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.9), value: session.isExpanded)
       .onChange(of: session.isExpanded) { _, _ in collapseProgress = 0 }
