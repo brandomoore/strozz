@@ -17,7 +17,7 @@ final class MobilePlayerChromeTests: XCTestCase {
     let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
     XCTAssertTrue(video.waitForExistence(timeout: 10))
     let expanded = video.frame
-    let timeline = app.scrollViews["mobile-chat-panel"]
+    let timeline = app.scrollViews["mobile-chat-timeline"]
     for _ in 0..<3 { timeline.swipeDown() }
     XCTAssertTrue(app.buttons["Jump to present"].exists)
     for _ in 0..<3 {
@@ -45,7 +45,7 @@ final class MobilePlayerChromeTests: XCTestCase {
     let details = app.otherElements["mobile-stream-details"]
     let controls = app.buttons["mobile-play-pause"]
     let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
-    let timeline = app.scrollViews["mobile-chat-panel"]
+    let timeline = app.scrollViews["mobile-chat-timeline"]
     XCTAssertTrue(details.waitForExistence(timeout: 10))
     XCTAssertFalse(app.staticTexts["Stream chat"].exists)
     XCTAssertFalse(app.buttons["mobile-toggle-chat"].exists, "Portrait has no sideways chat toggle")
@@ -123,8 +123,8 @@ final class MobilePlayerChromeTests: XCTestCase {
     XCTAssertTrue(viewers.exists)
     XCTAssertEqual(live.frame.midY, viewers.frame.midY, accuracy: 1,
       "Elapsed time and viewers must sit side by side, not stack")
-    XCTAssertLessThan(live.frame.maxX, viewers.frame.minX)
-    XCTAssertLessThan(viewers.frame.maxX, app.buttons["mobile-mute"].frame.minX)
+    XCTAssertEqual(live.frame.minX - viewers.frame.maxX, 14, accuracy: 1)
+    XCTAssertLessThan(live.frame.maxX, app.buttons["mobile-mute"].frame.minX)
     XCTAssertFalse(app.staticTexts["Live"].exists, "The elapsed timer replaces the redundant Live word")
     capture(app, "Horizontal red-dot time and viewer readouts without backplates")
   }
@@ -154,7 +154,7 @@ final class MobilePlayerChromeTests: XCTestCase {
     defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
     let details = app.otherElements["mobile-stream-details"]
     let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
-    let timeline = app.scrollViews["mobile-chat-panel"]
+    let timeline = app.scrollViews["mobile-chat-timeline"]
     XCTAssertTrue(video.waitForExistence(timeout: 10))
     expectation(for: NSPredicate { _, _ in
       app.frame.width > app.frame.height && video.frame.width > video.frame.height
@@ -165,22 +165,32 @@ final class MobilePlayerChromeTests: XCTestCase {
       XCTAssertFalse(details.exists, "Phone fullscreen must not reveal an offscreen profile")
       XCTAssertFalse(timeline.isHittable)
       XCTAssertGreaterThan(video.frame.width, video.frame.height)
+      let fullscreenWidth = video.frame.width
       let toggle = app.buttons["mobile-toggle-chat"]
+      tapVideo(app)
+      if !toggle.waitForExistence(timeout: 0.3) { tapVideo(app) }
       XCTAssertEqual(toggle.label, "Show chat")
+      app.buttons["mobile-play-pause"].tap()
       toggle.tap()
       XCTAssertTrue(timeline.waitForExistence(timeout: 3))
       XCTAssertTrue(app.frame.contains(timeline.frame))
       XCTAssertGreaterThanOrEqual(timeline.frame.minX, video.frame.maxX)
+      assertCenteredSideLayout(app, video: video)
       XCTAssertEqual(toggle.label, "Hide chat")
       capture(app, "Phone landscape with optional side chat")
-      toggle.tap()
-      XCTAssertFalse(timeline.isHittable)
+      app.buttons["mobile-toggle-chat"].tap()
+      XCTAssertEqual(video.frame.width, fullscreenWidth, accuracy: 1)
+      XCTAssertEqual(app.buttons["mobile-toggle-chat"].label, "Show chat")
+      capture(app, "Phone landscape after hiding side chat")
+      let hiddenChat = app.otherElements["mobile-player-chat-region"]
+      XCTAssertGreaterThanOrEqual(hiddenChat.frame.minX, video.frame.maxX - 1)
       let rotate = app.buttons["mobile-rotate-player"]
       XCTAssertEqual(rotate.label, "Rotate to portrait")
       rotate.tap()
       expectation(for: NSPredicate { _, _ in app.frame.width < app.frame.height }, evaluatedWith: app)
       waitForExpectations(timeout: 5)
-      XCTAssertTrue(timeline.isHittable)
+      app.scrollViews["mobile-chat-timeline"].swipeDown()
+      XCTAssertTrue(app.buttons["Jump to present"].waitForExistence(timeout: 3))
       XCTAssertFalse(toggle.exists)
     } else {
       tapVideo(app)
@@ -190,6 +200,7 @@ final class MobilePlayerChromeTests: XCTestCase {
       let chatFrame = timeline.frame
       XCTAssertTrue(app.frame.contains(chatFrame), "Side chat must stay fully on screen")
       XCTAssertGreaterThanOrEqual(chatFrame.minX, videoFrame.maxX)
+      assertCenteredSideLayout(app, video: video)
       waitForHidden(details)
       XCTAssertEqual(video.frame, videoFrame)
       XCTAssertEqual(timeline.frame, chatFrame)
@@ -198,6 +209,100 @@ final class MobilePlayerChromeTests: XCTestCase {
       XCTAssertEqual(timeline.frame, chatFrame)
       capture(app, "Tablet side chat with stream profile revealed")
     }
+  }
+
+  func testRepeatedPortraitLandscapeTransitionsPreserveDraftAndChat() {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
+    app.launchEnvironment["STROZZ_PLAYER_DRAFT_FIXTURE"] = "1"
+    app.launch()
+    defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
+    let field = app.textViews["mobile-chat-composer-input"]
+    let timeline = app.scrollViews["mobile-chat-timeline"]
+    let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+    XCTAssertTrue(field.waitForExistence(timeout: 10))
+    let portraitWidth = video.frame.width
+    field.tap()
+    field.typeText("Keep this draft while rotating")
+    XCTAssertEqual(video.frame.width, portraitWidth, accuracy: 1,
+      "The portrait keyboard must not move chat into a sidebar")
+    XCTAssertFalse(app.buttons["mobile-toggle-chat"].exists,
+      "Opening the keyboard in portrait must not switch to the landscape layout")
+    tapVideo(app)
+    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.keyboards.firstMatch)
+    waitForExpectations(timeout: 5)
+    timeline.swipeDown()
+    XCTAssertTrue(app.buttons["Jump to present"].exists)
+    let portraitVideo = video.frame
+    for iteration in 0..<2 {
+      XCUIDevice.shared.orientation = iteration == 0 ? .landscapeLeft : .landscapeRight
+      expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
+      waitForExpectations(timeout: 5)
+      if UIDevice.current.userInterfaceIdiom == .phone {
+        if !app.buttons["mobile-toggle-chat"].isHittable { tapVideo(app) }
+        if app.buttons["mobile-toggle-chat"].label == "Show chat" { app.buttons["mobile-toggle-chat"].tap() }
+      }
+      let rotatedTimeline = app.scrollViews["mobile-chat-timeline"]
+      XCTAssertTrue(rotatedTimeline.waitForExistence(timeout: 5))
+      XCTAssertEqual(field.value as? String, "Keep this draft while rotating")
+      XCTAssertTrue(app.buttons["Jump to present"].exists)
+      assertCenteredSideLayout(app, video: video)
+      capture(app, "Landscape \(iteration) with centered video and retained draft")
+      let jump = app.buttons["Jump to present"]
+      jump.tap()
+      waitForHidden(jump)
+      rotatedTimeline.swipeDown()
+      XCTAssertTrue(jump.waitForExistence(timeout: 3))
+      XCUIDevice.shared.orientation = .portrait
+      expectation(for: NSPredicate { _, _ in app.frame.width < app.frame.height }, evaluatedWith: app)
+      waitForExpectations(timeout: 5)
+      XCTAssertEqual(field.value as? String, "Keep this draft while rotating")
+      XCTAssertTrue(app.buttons["Jump to present"].exists)
+      XCTAssertEqual(video.frame.width, portraitVideo.width, accuracy: 1)
+      XCTAssertEqual(video.frame.height, portraitVideo.height, accuracy: 1)
+      XCTAssertGreaterThanOrEqual(timeline.frame.minY, video.frame.maxY)
+      capture(app, "Portrait \(iteration) after rotation with retained draft")
+    }
+  }
+
+  private func assertCenteredSideLayout(_ app: XCUIApplication, video: XCUIElement) {
+    let chat = app.otherElements["mobile-player-chat-region"]
+    XCTAssertTrue(chat.exists)
+    XCTAssertLessThanOrEqual(chat.frame.width, 320.5)
+    XCTAssertLessThanOrEqual(chat.frame.width, app.frame.width / 3 + 1)
+    // Scroll-view accessibility bounds include the iPad status-bar area even
+    // when drawing is clipped; use the fixture's actual safe-area layout proposal.
+    let viewport = (app.otherElements["fixture-player-viewport"].value as? String ?? "")
+      .split(separator: " ").compactMap { Double($0) }
+    XCTAssertEqual(viewport.count, 2)
+    guard viewport.count == 2 else { return }
+    XCTAssertEqual(video.frame.midY, viewport[0] + viewport[1] / 2, accuracy: 1,
+      "The video must stay vertically centered even when profile details are revealed")
+    XCTAssertLessThanOrEqual(video.frame.maxX, chat.frame.minX + 1)
+  }
+
+  func testLandscapeProfileDoesNotOverlapControlsOrMoveTheVideo() {
+    XCUIDevice.shared.orientation = .landscapeLeft
+    let app = launch()
+    defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
+    let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+    XCTAssertTrue(video.waitForExistence(timeout: 10))
+    tapVideo(app)
+    if !app.buttons["mobile-toggle-chat"].waitForExistence(timeout: 0.3) { tapVideo(app) }
+    if app.buttons["mobile-toggle-chat"].label == "Show chat" { app.buttons["mobile-toggle-chat"].tap() }
+    tapVideo(app)
+    if !app.buttons["mobile-play-pause"].waitForExistence(timeout: 0.3) { tapVideo(app) }
+    app.buttons["mobile-play-pause"].tap()
+    let details = app.otherElements["mobile-stream-details"]
+    XCTAssertTrue(details.waitForExistence(timeout: 2))
+    let videoFrame = video.frame
+    let detailsFrame = details.frame
+    let buttonsFrame = app.buttons["mobile-mute"].frame
+    XCTAssertGreaterThanOrEqual(detailsFrame.minY, videoFrame.minY)
+    XCTAssertLessThanOrEqual(detailsFrame.maxY, videoFrame.maxY + 1)
+    XCTAssertLessThanOrEqual(buttonsFrame.maxY, detailsFrame.minY + 1)
+    assertCenteredSideLayout(app, video: video)
+    capture(app, "Centered landscape video with compact profile and clear controls")
   }
 
   private func launch() -> XCUIApplication {
@@ -219,7 +324,9 @@ final class MobilePlayerChromeTests: XCTestCase {
 
   private func assertLatestVisible(_ app: XCUIApplication, timeline: XCUIElement) {
     let latest = app.descendants(matching: .any).matching(identifier: "mobile-chat-latest-message").firstMatch
-    XCTAssertTrue(latest.isHittable)
+    XCTAssertTrue(latest.exists)
+    XCTAssertGreaterThan(latest.frame.height, 0)
+    XCTAssertGreaterThanOrEqual(latest.frame.minY, timeline.frame.minY - 1)
     XCTAssertLessThanOrEqual(latest.frame.maxY, timeline.frame.maxY + 1)
   }
 

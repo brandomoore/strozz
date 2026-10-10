@@ -59,8 +59,9 @@ struct MobileChatView: View, Equatable {
         .padding(.trailing, 12)
       }
     }
+    .accessibilityElement(children: .contain)
     .accessibilityIdentifier("mobile-chat-panel")
-    .background(palette.chatSideSurface)
+    .background(palette.chatSideSurface, ignoresSafeAreaEdges: [])
     .onChange(of: updatesActive, initial: true) { _, active in
       pausedMessages = active ? nil : service.messages
     }
@@ -278,15 +279,30 @@ struct MobileChatTopFade: View {
 
 private struct MobileChatJumpButton: View {
   let scroll: MobileChatScrollState
+  @Environment(\.themePalette) private var palette
 
   var body: some View {
     if !scroll.followsLatest {
       Button("Jump to present", action: scroll.jumpToPresent)
         .font(.subheadline.weight(.semibold))
-        .buttonStyle(.borderedProminent)
+        .foregroundStyle(palette.chatSidePrimaryText)
+        .modifier(MobileChatJumpButtonAppearance())
         .buttonBorderShape(.capsule)
         .controlSize(.large)
         .accessibilityIdentifier("mobile-chat-jump-to-present")
+    }
+  }
+}
+
+private struct MobileChatJumpButtonAppearance: ViewModifier {
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+  @Environment(\.themePalette) private var palette
+
+  func body(content: Content) -> some View {
+    if #available(iOS 26.0, *), !reduceTransparency {
+      content.buttonStyle(.glass)
+    } else {
+      content.buttonStyle(.bordered).tint(palette.chatSidePrimaryText)
     }
   }
 }
@@ -371,7 +387,7 @@ struct MobileChatComposerInput: View {
         Button(action: hasDraft ? onSend : onSettings) {
           ZStack {
             Circle().fill(palette.chatSidePrimaryText.opacity(canSend ? 1 : 0.08))
-            Icon(glyph: hasDraft ? .send : .dots, size: 20)
+            Icon(glyph: hasDraft ? .arrowUp : .dots, size: 20)
               .foregroundStyle(canSend ? palette.chatSideSurface : palette.chatSidePrimaryText)
               .opacity(sending ? 0 : 1)
             if sending {

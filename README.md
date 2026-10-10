@@ -138,6 +138,15 @@ and offers retry when loading fails. Animated previews respect both the chat
 animation preference and Reduce Motion.
 Dismiss the sheet to return to chat without stopping playback.
 
+Native Twitch GIPHY messages display as compact GIF previews on Apple TV and
+iPhone/iPad; tap a mobile preview to enlarge it. Strozz reads Twitch's `gifs`
+attachment tag rather than expanding arbitrary pasted links. Previews use the
+small GIPHY rendition without the original tracking query, load when visible,
+and pause offscreen or in the background. Animated-emote settings and Reduce
+Motion also apply to GIFs. Preview dimensions stay fixed while loading, and
+unavailable images retain a readable label. This supports receiving GIFs, not
+a GIF picker or sending them; Kick's existing animated emotes remain unchanged.
+
 The rounded chat composer grows as you type. Its **…** button opens **Chat
 settings** when the draft is empty and becomes **Send** when there is text.
 The keyboard's Send key also sends; pasted multiline text remains supported.
@@ -154,9 +163,12 @@ a connection status appears only while chat is reconnecting.
 Messages fade gently over the top 48 points of the chat viewport, without
 changing scroll insets or fading the composer. Reduce Transparency and Increase
 Contrast disable that fade.
+The floating Jump to present button uses native Liquid Glass on iOS 26 or later,
+with a standard bordered fallback on older systems or with Reduce Transparency.
 
-The video controls show one horizontal readout row: a red live dot with elapsed
-time, then a viewer icon and compact count, without chips or backplates. The red
+The video controls show one horizontal readout row: a viewer icon and compact
+count, then a red live dot with elapsed time, without chips or backplates. Each
+icon stays close to its value, with more space between the two groups. The red
 dot appears only at the live edge. The readouts
 hide with the controls; the Account > Overlays duration preference still applies.
 Playback quality
@@ -171,7 +183,14 @@ The iPhone rotation button uses a rotation glyph. The chat toggle appears only
 in landscape: iPhone starts video-only and can open or hide side-by-side chat;
 iPad offers the same toggle when its side-by-side layout is available. Portrait
 chat stays below the video without a misleading sideways collapse button.
+Side chat uses at most one third of the available width, capped at 320 points.
+The aspect-fitted video is centered vertically and horizontally in the left pane.
+Landscape profile details appear with the controls over the lower video area,
+so revealing them does not move or resize the video. One mounted chat view moves
+between portrait and landscape instead of rebuilding the timeline and composer.
 Drafts, in-flight sends, and the chat reading state are shared across those layouts.
+Tapping the video or rotating dismisses the keyboard without discarding a draft.
+The composer shows an upward arrow to send, or the settings dots when empty.
 Chat keeps its exact-height scrollback, but only emotes intersecting the viewport
 animate. Offscreen animation buffers are released, and all chat animation pauses
 during minimization, while chat is hidden, or in the background. Incoming chat

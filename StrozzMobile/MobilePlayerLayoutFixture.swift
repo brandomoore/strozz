@@ -21,6 +21,15 @@ struct MobilePlayerLayoutFixture: View {
     .environment(auth)
     .environment(\.themePalette, .dark)
     .preferredColorScheme(.dark)
+    .overlay {
+      GeometryReader { geometry in
+        Color.clear
+          .accessibilityElement()
+          .accessibilityIdentifier("fixture-player-viewport")
+          .accessibilityValue("\(geometry.frame(in: .global).minY) \(geometry.size.height)")
+          .allowsHitTesting(false)
+      }
+    }
     .task {
       do {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("stream-avatar-\(UUID()).png")
@@ -37,6 +46,10 @@ struct MobilePlayerLayoutFixture: View {
           title: "A stream description that appears with the controls", gameName: "Just Chatting",
           viewerCount: 1200, thumbnailURL: nil, profileImageURL: url, isLive: true)
         let player = MobilePlaybackSession.layoutFixture(channel: channel)
+        if ProcessInfo.processInfo.environment["STROZZ_PLAYER_DRAFT_FIXTURE"] == "1" {
+          auth.isAuthenticated = true
+          auth.userID = "fixture"
+        }
         player.model.chat.channel = channel.login
         player.model.chat.isConnected = true
         let historySize = ProcessInfo.processInfo.environment["STROZZ_LONG_CHAT_FIXTURE"] == "1" ? 500 : 100

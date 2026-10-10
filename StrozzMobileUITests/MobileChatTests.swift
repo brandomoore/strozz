@@ -2,6 +2,33 @@ import XCTest
 
 @MainActor
 final class MobileChatTests: XCTestCase {
+  func testNativeGIFCanBeEnlargedAndReturnsToTheSameChatLayout() {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "emotes"
+    app.launchEnvironment["STROZZ_GIF_FIXTURE"] = "1"
+    app.launch()
+    defer { app.terminate() }
+    let gif = app.buttons["chat-gif"]
+    XCTAssertTrue(gif.waitForExistence(timeout: 10))
+    let inlineFrame = gif.frame
+    XCTAssertGreaterThanOrEqual(inlineFrame.height, 72)
+    XCTAssertLessThanOrEqual(inlineFrame.height, 120)
+    gif.tap()
+    XCTAssertTrue(app.navigationBars["GIF"].waitForExistence(timeout: 5))
+    XCTAssertEqual(app.staticTexts["emote-detail-name"].label, "[Fixture Wave GIF]")
+    XCTAssertEqual(app.staticTexts["emote-detail-provider"].label, "GIPHY")
+    let artwork = app.descendants(matching: .any).matching(identifier: "emote-detail-artwork").firstMatch
+    expectation(for: NSPredicate(format: "value == %@", "Loaded"), evaluatedWith: artwork)
+    waitForExpectations(timeout: 5)
+    let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+    screenshot.name = "Native Twitch GIF preview"
+    screenshot.lifetime = .keepAlways
+    add(screenshot)
+    app.buttons["emote-detail-done"].tap()
+    XCTAssertTrue(gif.waitForExistence(timeout: 5))
+    XCTAssertEqual(gif.frame, inlineFrame)
+  }
+
   func testTappingEmoteShowsLargerNamedPreviewAndHandlesMissingImages() {
     let app = XCUIApplication()
     app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "emotes"

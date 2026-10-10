@@ -9,10 +9,9 @@ struct MobileStreamReadouts: View {
   @Environment(\.themePalette) private var palette
 
   var body: some View {
-    HStack(spacing: 6) {
-      MobileLiveReadout(state: state, startedAt: showDuration ? startedAt : nil, onGoLive: onGoLive)
+    HStack(spacing: 14) {
       if let viewerCount {
-        HStack(spacing: 5) {
+        HStack(spacing: 4) {
           Icon(glyph: .user, size: 18).accessibilityHidden(true)
           Text(viewerCount, format: .number.notation(.compactName))
         }
@@ -21,6 +20,7 @@ struct MobileStreamReadouts: View {
         .accessibilityLabel(Text("\(viewerCount, format: .number) viewers"))
         .accessibilityIdentifier("mobile-viewer-readout")
       }
+      MobileLiveReadout(state: state, startedAt: showDuration ? startedAt : nil, onGoLive: onGoLive)
     }
     .font(.subheadline)
     .monospacedDigit()
@@ -39,7 +39,7 @@ private struct MobileLiveReadout: View {
   var body: some View {
     switch state {
     case .live:
-      HStack(spacing: 5) {
+      HStack(spacing: 4) {
         Circle().fill(palette.liveIndicator).frame(width: 7, height: 7).accessibilityHidden(true)
         if let startedAt {
           TimelineView(.periodic(from: .now, by: 1)) { context in

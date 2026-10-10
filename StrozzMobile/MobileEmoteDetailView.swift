@@ -5,6 +5,7 @@ struct MobileChatEmote: Hashable, Identifiable {
   let name: String
   let url: URL
   var id: Self { self }
+  var isGIF: Bool { url.host?.lowercased() == "media.giphy.com" }
 
   var provider: String? {
     switch url.host?.lowercased() {
@@ -13,6 +14,7 @@ struct MobileChatEmote: Hashable, Identifiable {
     case "cdn.betterttv.net": return "BetterTTV"
     case "cdn.frankerfacez.com": return "FrankerFaceZ"
     case "files.kick.com": return "Kick"
+    case "media.giphy.com": return "GIPHY"
     case "yt3.ggpht.com", "yt4.ggpht.com", "yt3.googleusercontent.com": return "YouTube"
     default: return nil
     }
@@ -71,7 +73,7 @@ struct MobileEmoteDetailView: View {
       }
       .background(palette.chatSideSurface)
       .foregroundStyle(palette.chatSidePrimaryText)
-      .navigationTitle("Emote")
+      .navigationTitle(emote.isGIF ? Text("GIF") : Text("Emote"))
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
@@ -105,7 +107,8 @@ private struct MobileEmoteArtwork: View {
         if failed {
           VStack(spacing: 12) {
             Icon(glyph: .alertCircle, size: 32)
-            Text("Couldn't load emote")
+            if emote.isGIF { Text("Couldn't load GIF") }
+            else { Text("Couldn't load emote") }
             Button("Try again") {
               requestID = UUID()
               failed = false
@@ -120,7 +123,8 @@ private struct MobileEmoteArtwork: View {
           WebImage(url: url, isAnimating: .constant(animated && !reduceMotion)) { image in
             image.resizable().scaledToFit()
           } placeholder: {
-            ProgressView("Loading emote")
+            if emote.isGIF { ProgressView("Loading GIF") }
+            else { ProgressView("Loading emote") }
           }
           .onSuccess { _, _, _ in
             DispatchQueue.main.async {

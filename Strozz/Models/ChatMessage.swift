@@ -53,6 +53,7 @@ struct ChatMessage: Identifiable, Sendable {
     /// Message-scoped Kick emotes parsed from the inline `[emote:id:name]`
     /// tokens in a Kick chat message. Key = emote token, value = CDN image URL.
     var kickEmoteURLs: [String: URL] = [:]
+    var gifs: [ChatGIF] = []
     /// True for `/me` action messages (rendered in the user's color).
     let isAction: Bool
     /// True when Twitch flags this as the user's first message in the channel
@@ -149,6 +150,7 @@ extension ChatMessage {
         self.badgeKeys = badges
         self.text = message
         self.twitchEmoteURLs = twitchEmoteURLs
+        self.gifs = ChatGIF.parse(tags["gifs"], in: message, offset: action ? 8 : 0)
         self.youtubeEmoteURLs = [:]
         self.isAction = action
         self.isFirstMessage = tags["first-msg"] == "1"
@@ -316,6 +318,7 @@ extension ChatMessage {
         self.badgeKeys = badges
         self.text = userText
         self.twitchEmoteURLs = twitchEmoteURLs
+        self.gifs = ChatGIF.parse(tags["gifs"], in: userText)
         self.youtubeEmoteURLs = [:]
         self.isAction = false
         self.isFirstMessage = false

@@ -178,7 +178,7 @@ struct RichChatLineView: View {
             switch segment {
             case .text(let text):
                 result += text
-            case .emote(let name, _):
+            case .emote(let name, _), .gif(let name, _):
                 result += " \(name) "
             case .cheer(let amount, _, _):
                 result += " \(amount) bits "
@@ -308,6 +308,19 @@ struct RichChatLineView: View {
             } else {
                 emote(name: name, url: url)
             }
+        case .gif(let name, let url):
+            let preview = ChatGIFView(name: name, url: url, foreground: bodyColor,
+                                      height: min(120, max(72, emoteHeight * 3)), animated: animatedEmotes)
+                .id(url)
+            if let onInspectEmote {
+                Button { onInspectEmote(name, url) } label: { preview }
+                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
+                    .accessibilityLabel("View GIF \(name)")
+                    .accessibilityIdentifier("chat-gif")
+            } else {
+                preview
+            }
         case .cheer(let amount, let url, let colorHex):
             let color = Color(twitchHex: colorHex) ?? .gray
             let content = HStack(spacing: 1) {
@@ -354,6 +367,7 @@ struct RichChatLineView: View {
             twitchEmoteURLs: message.twitchEmoteURLs,
             youtubeEmoteURLs: message.youtubeEmoteURLs,
             kickEmoteURLs: message.kickEmoteURLs,
+            gifs: message.gifs,
             globalEmoteURLs: globalEmoteURLs,
             cheermotes: cheermotes,
             shouldRenderCheers: shouldRenderCheers
@@ -388,6 +402,42 @@ struct RichChatLineView: View {
     }
 }
 
+struct ChatGIFView: View {
+    let name: String
+    let url: URL
+    let foreground: Color
+    let height: CGFloat
+    let animated: Bool
+    @Environment(\.chatAnimationsActive) private var managedVisibility
+    @Environment(\.scenePhase) private var phase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var visible = false
+    @State private var requested = false
+
+    private var active: Bool { (managedVisibility ?? visible) && phase == .active }
+
+    var body: some View {
+        Group {
+            if requested {
+                EmoteView(name: name, url: url, fallbackColor: foreground, fallbackFontSize: 14,
+                          emoteHeight: height, animated: animated && !reduceMotion,
+                          constrainsWidth: true, isGIF: true)
+            } else {
+                Text(name).font(.caption).lineLimit(2).foregroundStyle(foreground)
+            }
+        }
+        .frame(minWidth: 0, idealWidth: height * 1.5, maxWidth: height * 1.5,
+               minHeight: height, maxHeight: height)
+        .clipped()
+        .environment(\.chatAnimationsActive, active)
+        .onScrollVisibilityChange(threshold: 0.01) { visible = $0 }
+        .onChange(of: active, initial: true) { _, active in
+            if active { requested = true }
+        }
+        .onDisappear { visible = false }
+    }
+}
+
 private struct EmoteView: View {
     let name: String
     let url: URL
@@ -397,19 +447,30 @@ private struct EmoteView: View {
     /// When false, render the emote's first frame statically (no animation).
     var animated: Bool = true
     var constrainsWidth: Bool = false
+    var isGIF = false
 
     @State private var loadFailed = false
     @State private var animationRequested = false
     @Environment(\.chatAnimationsActive) private var animationsActive
 
+    private var imageContext: [SDWebImageContextOption: Any]? {
+        isGIF ? [.imageThumbnailPixelSize: CGSize(width: 360, height: 240)] : nil
+    }
+
     var body: some View {
         Group {
             if loadFailed {
-                Text(name)
-                    .font(.system(size: fallbackFontSize))
-                    .foregroundStyle(fallbackColor)
+                if isGIF {
+                    Text("GIF unavailable: \(name)")
+                        .font(.caption).lineLimit(3).foregroundStyle(fallbackColor)
+                } else {
+                    Text(name)
+                        .font(.system(size: fallbackFontSize))
+                        .foregroundStyle(fallbackColor)
+                }
             } else if animated {
-                AnimatedImage(url: url, isAnimating: $animationRequested)
+                AnimatedImage(url: url, options: isGIF ? [.matchAnimatedImageClass] : [],
+                              context: imageContext, isAnimating: $animationRequested)
                     .onViewCreate { view, _ in
                         // Managed rows, not UIKit attachment/alpha changes, own playback.
                         view.autoPlayAnimatedImage = animationsActive == nil
@@ -419,6 +480,7 @@ private struct EmoteView: View {
                             view.autoPlayAnimatedImage = animationRequested
                         }
                     }
+                    .maxBufferSize(isGIF ? 2 * 1024 * 1024 : nil)
                     .purgeable(animationsActive == false)
                     .onFailure { _ in
                         // Defer the state mutation: SDWebImage fires this callback
@@ -438,7 +500,8 @@ private struct EmoteView: View {
                 // must explicitly pin it off to hold the first frame. Animated
                 // WebP/GIF emotes then stay still while keeping the same layout
                 // footprint.
-                WebImage(url: url, isAnimating: .constant(false)) { image in
+                WebImage(url: url, options: isGIF ? [.decodeFirstFrameOnly] : [],
+                         context: imageContext, isAnimating: .constant(false)) { image in
                     image
                         .resizable()
                         .aspectRatio(contentMode: .fit)

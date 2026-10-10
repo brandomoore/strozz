@@ -9,6 +9,7 @@ import Foundation
 enum ChatLineSegment: Hashable, Sendable {
     case text(String)
     case emote(name: String, url: URL)
+    case gif(name: String, url: URL)
     case cheer(amount: Int, url: URL, colorHex: String)
 }
 
@@ -24,10 +25,32 @@ enum ChatLineTokenizer {
         twitchEmoteURLs: [String: URL],
         youtubeEmoteURLs: [String: URL],
         kickEmoteURLs: [String: URL] = [:],
+        gifs: [ChatGIF] = [],
         globalEmoteURLs: [String: URL],
         cheermotes: [Cheermote],
         shouldRenderCheers: Bool
     ) -> [ChatLineSegment] {
+        if !gifs.isEmpty {
+            let scalars = Array(text.unicodeScalars)
+            var output: [ChatLineSegment] = []
+            var cursor = 0
+            func appendText(_ range: Range<Int>) {
+                guard !range.isEmpty else { return }
+                output.append(contentsOf: segments(
+                    text: String(String.UnicodeScalarView(scalars[range])),
+                    twitchEmoteURLs: twitchEmoteURLs, youtubeEmoteURLs: youtubeEmoteURLs,
+                    kickEmoteURLs: kickEmoteURLs, globalEmoteURLs: globalEmoteURLs,
+                    cheermotes: cheermotes, shouldRenderCheers: shouldRenderCheers))
+            }
+            for gif in gifs {
+                guard gif.range.lowerBound >= cursor, gif.range.upperBound <= scalars.count else { continue }
+                appendText(cursor..<gif.range.lowerBound)
+                output.append(.gif(name: gif.name, url: gif.url))
+                cursor = gif.range.upperBound
+            }
+            appendText(cursor..<scalars.count)
+            return output
+        }
         // Plain messages (no message-scoped Twitch/YouTube/Kick emotes) skip the
         // three-way dictionary merge and the key sort entirely — that work only
         // matters when there are scoped emotes to inline-match.

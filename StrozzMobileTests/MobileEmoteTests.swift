@@ -4,6 +4,16 @@ import XCTest
 
 @MainActor
 final class MobileEmoteTests: XCTestCase {
+  func testNativeGIFPreviewIdentifiesGiphyWithoutUpsizingTheDownload() throws {
+    let url = try XCTUnwrap(URL(string: "https://media.giphy.com/media/Example123/200w.gif"))
+    let gif = MobileChatEmote(name: "[Wave GIF]", url: url)
+    XCTAssertTrue(gif.isGIF)
+    XCTAssertEqual(gif.provider, "GIPHY")
+    XCTAssertEqual(gif.previewURL, url)
+    XCTAssertFalse(MobileChatEmote(name: "Emote",
+      url: try XCTUnwrap(URL(string: "https://files.kick.com/emote/1/fullsize"))).isGIF)
+  }
+
   func testPreviewUsesLargerKnownProviderImagesWithoutLosingURLComponents() throws {
     for (source, preview, provider) in [
       ("https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/2.0",
