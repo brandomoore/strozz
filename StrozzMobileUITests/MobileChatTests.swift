@@ -118,6 +118,8 @@ final class MobileChatTests: XCTestCase {
     let send = app.buttons["mobile-chat-send"]
     let settings = app.buttons["mobile-chat-settings"]
     XCTAssertTrue(field.waitForExistence(timeout: 10))
+    let capsule = app.otherElements["mobile-chat-composer"]
+    XCTAssertEqual(capsule.frame.height, 44, accuracy: 0.5)
     XCTAssertGreaterThanOrEqual(settings.frame.width, 44)
     XCTAssertGreaterThanOrEqual(settings.frame.height, 44)
     XCTAssertFalse(send.exists)
@@ -146,6 +148,8 @@ final class MobileChatTests: XCTestCase {
     XCTAssertTrue(textSize.label.contains("17"))
     app.buttons["Done"].tap()
     XCTAssertGreaterThan(latest.frame.height, originalMessageHeight, "Saved text size must affect rendered messages")
+    XCTAssertEqual(capsule.frame.height, 44, accuracy: 0.5,
+      "Chat message-size changes must not enlarge the composer")
     settings.tap()
     XCTAssertTrue(textSize.waitForExistence(timeout: 5))
     XCTAssertTrue(textSize.label.contains("17"), "Chat appearance must persist when reopening settings")
@@ -177,6 +181,7 @@ final class MobileChatTests: XCTestCase {
     XCTAssertEqual(app.staticTexts["composer-submitted"].label, message)
     XCTAssertTrue(settings.waitForExistence(timeout: 5))
     XCTAssertFalse(send.exists)
+    XCTAssertEqual(capsule.frame.height, 44, accuracy: 0.5)
     field.tap()
     field.typeText("   ")
     XCTAssertTrue(settings.exists)

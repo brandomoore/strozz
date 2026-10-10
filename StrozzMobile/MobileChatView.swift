@@ -354,7 +354,7 @@ struct MobileChatComposer: View {
     }
     .padding(.leading, rewards == nil ? 12 : 8)
     .padding(.trailing, 12)
-    .padding(.vertical, 8)
+    .padding(.vertical, 4)
   }
 }
 
@@ -414,6 +414,7 @@ struct MobileChatComposerInput: View {
         Button(action: hasDraft ? onSend : onSettings) {
           ZStack {
             Circle().fill(palette.chatSidePrimaryText.opacity(canSend ? 1 : 0.08))
+              .frame(width: 36, height: 36)
             Icon(glyph: hasDraft ? .arrowUp : .dots, size: 20)
               .foregroundStyle(canSend ? palette.chatSideSurface : palette.chatSidePrimaryText)
               .opacity(sending ? 0 : 1)
@@ -424,7 +425,7 @@ struct MobileChatComposerInput: View {
             }
           }
           .frame(width: 44, height: 44)
-          .contentShape(Circle())
+          .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(hasDraft ? Text("Send message") : Text("Chat settings"))
@@ -433,10 +434,10 @@ struct MobileChatComposerInput: View {
         .disabled(sending)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: hasDraft)
       }
-      .padding(4)
+      .padding(.horizontal, 4)
       .background { MobileChatComposerSurface(reduceTransparency: reduceTransparency) }
       .overlay {
-        RoundedRectangle(cornerRadius: 26, style: .continuous)
+        RoundedRectangle(cornerRadius: 22, style: .continuous)
           .strokeBorder(palette.chromeOpaqueBorder, lineWidth: 0.5)
           .allowsHitTesting(false)
       }
@@ -451,7 +452,7 @@ private struct MobileChatComposerSurface: View {
   @Environment(\.themePalette) private var palette
 
   var body: some View {
-    let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
+    let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
     if reduceTransparency {
       shape.fill(palette.chromeOpaqueSurface)
     } else if #available(iOS 26.0, *) {

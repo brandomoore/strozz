@@ -151,7 +151,11 @@ The rounded chat composer grows as you type. Its **…** button opens **Chat
 settings** when the draft is empty and becomes **Send** when there is text.
 The keyboard's Send key also sends; pasted multiline text remains supported.
 The composer follows the selected theme and uses an opaque surface with Reduce
-Transparency.
+Transparency. At the default system text size, the input is 44 points tall and
+the bottom bar is 52 points tall, excluding the device safe area. Send/settings
+keeps a 44-point touch target around its smaller visible circle. Multiline drafts
+and larger accessibility text can increase the height; resizing chat or changing
+chat message size does not scale the composer.
 
 Opening a mobile stream shows its profile photo, description, category, and
 playback controls. After four seconds of inactivity they collapse together,
