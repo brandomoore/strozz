@@ -11,22 +11,37 @@ enum MobilePlayerLayout: Equatable {
     return !isPhone && size.width >= 800 && size.width > size.height ? .sideBySide : .portrait
   }
 
-  static func sideChatWidth(in size: CGSize) -> CGFloat {
-    min(320, size.width / 3)
+  static func sideChatWidth(in size: CGSize, preferredWidth: CGFloat = MobileChatWidth.automatic) -> CGFloat {
+    if preferredWidth == MobileChatWidth.automatic {
+      return min(MobileChatWidth.defaultWidth, size.width / 3)
+    }
+    let minimumVideoWidth = min(380, size.width * 2 / 3)
+    return min(size.width - minimumVideoWidth, size.width / 2, MobileChatWidth.range.upperBound,
+               max(min(MobileChatWidth.range.lowerBound, size.width / 3), preferredWidth))
   }
 
-  func videoFrame(in size: CGSize) -> CGRect {
+  func videoFrame(in size: CGSize, preferredChatWidth: CGFloat = MobileChatWidth.automatic) -> CGRect {
     switch self {
     case .portrait:
       return CGRect(x: 0, y: 0, width: size.width, height: min(size.width * 9 / 16, size.height * 0.42))
     case .videoOnly:
       return CGRect(origin: .zero, size: size)
     case .sideBySide:
-      let columnWidth = size.width - Self.sideChatWidth(in: size)
+      let columnWidth = size.width - Self.sideChatWidth(in: size, preferredWidth: preferredChatWidth)
       let width = min(columnWidth, size.height * 16 / 9)
       let height = width * 9 / 16
       return CGRect(x: (columnWidth - width) / 2, y: (size.height - height) / 2, width: width, height: height)
     }
+  }
+}
+
+struct MobileChatWidthDrag {
+  var initialWidth: CGFloat?
+  var translation: CGFloat = 0
+
+  func width(in size: CGSize, preferredWidth: CGFloat) -> CGFloat {
+    MobilePlayerLayout.sideChatWidth(in: size,
+      preferredWidth: initialWidth.map { max(1, $0 - translation) } ?? preferredWidth)
   }
 }
 
@@ -156,6 +171,8 @@ struct MobilePlayerView: View {
   @State private var collapseProgress: CGFloat = 0
   @State private var miniPlayerPlacement = MobileMiniPlayerLayout.Placement()
   @GestureState private var miniPlayerManipulation = MobileMiniPlayerLayout.Manipulation()
+  @GestureState private var chatWidthDrag = MobileChatWidthDrag()
+  @AppStorage(PersistenceKey.mobileChatWidthValue) private var preferredChatWidth = MobileChatWidth.automatic
   @Environment(\.themePalette) private var palette
   @Environment(\.verticalSizeClass) private var verticalSizeClass
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -178,10 +195,10 @@ struct MobilePlayerView: View {
         size: CGSize(width: geometry.size.width, height: geometry.size.height + geometry.safeAreaInsets.bottom),
         isPhone: isPhone, hideChat: !isPhone && (hideChat || fullscreen),
         phoneLandscape: phoneLandscape, showPhoneLandscapeChat: landscapeChatVisible)
-      let sideChatWidth = MobilePlayerLayout.sideChatWidth(in: geometry.size)
+      let sideChatWidth = chatWidthDrag.width(in: geometry.size, preferredWidth: preferredChatWidth)
       let chatWidth = layout == .sideBySide ? sideChatWidth : 0
       let leftWidth = geometry.size.width - chatWidth
-      let expanded = layout.videoFrame(in: geometry.size)
+      let expanded = layout.videoFrame(in: geometry.size, preferredChatWidth: sideChatWidth)
       let chatIsSide = layout != .portrait
       let chatIsVisible = session.isExpanded && layout != .videoOnly
       let expandedWindowFrame = expanded.offsetBy(
@@ -207,7 +224,7 @@ struct MobilePlayerView: View {
           // One timeline/composer moves between positions without remounting.
           MobileChatView(service: model.chat, channel: channel.login,
             composer: chatComposer, scroll: chatScroll, rewards: MobileChatRewardsSummary.snapshot(of: session.watchTracker),
-            isActive: chatIsVisible, isManipulating: collapseProgress > 0)
+            isActive: chatIsVisible, isManipulating: collapseProgress > 0 || chatWidthDrag.initialWidth != nil)
             .equatable()
         }
         .background(palette.chatSideSurface, ignoresSafeAreaEdges: [])
@@ -272,6 +289,28 @@ struct MobilePlayerView: View {
           .animation(
             reduceMotion || miniPlayerManipulation.startFrame != nil ? nil : MobileMiniPlayerLayout.settlingAnimation,
             value: miniPlayerManipulation.startFrame == nil)
+        if chatIsVisible && layout == .sideBySide && collapseProgress == 0 {
+          // Overlay the divider without inserting a new container around the mounted player.
+          MobileChatResizeHandle(width: sideChatWidth) { delta in
+            preferredChatWidth = MobilePlayerLayout.sideChatWidth(
+              in: geometry.size, preferredWidth: sideChatWidth + delta)
+          }
+          .position(x: leftWidth, y: geometry.size.height / 2)
+          .gesture(
+            DragGesture(minimumDistance: 3, coordinateSpace: .global)
+              .updating($chatWidthDrag) { value, state, _ in
+                if state.initialWidth == nil { state.initialWidth = sideChatWidth }
+                state.translation = value.translation.width
+              }
+              .onEnded { value in
+                // GestureState may reset before onEnded; the saved width is unchanged during the drag.
+                let drag = MobileChatWidthDrag(
+                  initialWidth: MobilePlayerLayout.sideChatWidth(
+                    in: geometry.size, preferredWidth: preferredChatWidth),
+                  translation: value.translation.width)
+                preferredChatWidth = drag.width(in: geometry.size, preferredWidth: preferredChatWidth).rounded()
+              })
+        }
       }
       .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.9), value: session.isExpanded)
       .onChange(of: session.isExpanded) { _, _ in collapseProgress = 0 }
@@ -345,6 +384,35 @@ struct MobilePlayerView: View {
     windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: exiting ? .portrait : .landscapeRight)) { error in
       Task { @MainActor in rotationError = error.localizedDescription }
     }
+  }
+}
+
+private struct MobileChatResizeHandle: View {
+  let width: CGFloat
+  let adjust: (CGFloat) -> Void
+  @Environment(\.themePalette) private var palette
+
+  var body: some View {
+    Capsule()
+      .fill(palette.chatSidePrimaryText.opacity(0.65))
+      .frame(width: 4, height: 36)
+      .padding(.horizontal, 4)
+      .padding(.vertical, 8)
+      .background(palette.chatSideSurface, in: Capsule())
+      .frame(width: 44, height: 88)
+      .contentShape(Rectangle())
+      .accessibilityElement()
+      .accessibilityLabel("Chat width")
+      .accessibilityValue("\(Int(width)) points")
+      .accessibilityHint("Drag left to widen chat or right to narrow it.")
+      .accessibilityAdjustableAction { direction in
+        switch direction {
+        case .increment: adjust(MobileChatWidth.step)
+        case .decrement: adjust(-MobileChatWidth.step)
+        @unknown default: break
+        }
+      }
+      .accessibilityIdentifier("mobile-chat-resize-handle")
   }
 }
 

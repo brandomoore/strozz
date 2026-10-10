@@ -32,6 +32,9 @@ struct MobilePlayerLayoutFixture: View {
     }
     .task {
       do {
+        if ProcessInfo.processInfo.environment["STROZZ_CHAT_WIDTH_FIXTURE_RESET"] == "1" {
+          UserDefaults.standard.removeObject(forKey: PersistenceKey.mobileChatWidthValue)
+        }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("stream-avatar-\(UUID()).png")
         let image = UIGraphicsImageRenderer(size: CGSize(width: 64, height: 64)).image { context in
           UIColor.systemTeal.setFill()

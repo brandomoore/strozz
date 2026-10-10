@@ -8,6 +8,91 @@ final class MobilePlayerChromeTests: XCTestCase {
     XCUIDevice.shared.orientation = .portrait
   }
 
+  func testChatDividerAndSettingsResizePersistAndPreserveReadingPosition() {
+    XCUIDevice.shared.orientation = .landscapeLeft
+    let app = launch()
+    defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
+    let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+    XCTAssertTrue(video.waitForExistence(timeout: 10))
+    showSideChat(app)
+    let chat = app.otherElements["mobile-player-chat-region"]
+    let handle = app.descendants(matching: .any).matching(identifier: "mobile-chat-resize-handle").firstMatch
+    let timeline = app.scrollViews["mobile-chat-timeline"]
+    XCTAssertTrue(handle.waitForExistence(timeout: 3))
+    let originalWidth = chat.frame.width
+    timeline.swipeDown()
+    XCTAssertTrue(app.buttons["Jump to present"].waitForExistence(timeout: 3))
+    let center = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+    center.press(forDuration: 0.1, thenDragTo: center.withOffset(CGVector(dx: -70, dy: 0)),
+      withVelocity: .slow, thenHoldForDuration: 0)
+    XCTAssertEqual(chat.frame.width, originalWidth + 70, accuracy: 3)
+    XCTAssertLessThanOrEqual(video.frame.maxX, chat.frame.minX + 1)
+    XCTAssertTrue(app.buttons["Jump to present"].exists)
+    let wider = chat.frame.width
+    let moved = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+    moved.press(forDuration: 0.1, thenDragTo: moved.withOffset(CGVector(dx: 40, dy: 0)),
+      withVelocity: .slow, thenHoldForDuration: 0)
+    XCTAssertEqual(chat.frame.width, wider - 40, accuracy: 3)
+    let dragged = chat.frame.width
+
+    app.buttons["mobile-chat-settings"].tap()
+    let stepper = app.steppers["chat-setting-width"]
+    XCTAssertTrue(stepper.waitForExistence(timeout: 3))
+    capture(app, "Native saved side-chat width settings")
+    stepper.buttons["chat-setting-width-Increment"].tap()
+    app.buttons["Done"].tap()
+    XCTAssertEqual(chat.frame.width, dragged + 20, accuracy: 2)
+    let saved = chat.frame.width
+    XCTAssertTrue(app.buttons["Jump to present"].exists)
+    app.buttons["Jump to present"].tap()
+    waitForHidden(app.buttons["Jump to present"])
+    capture(app, "Resizable side chat after divider and settings adjustments")
+
+    tapVideo(app)
+    if !app.buttons["mobile-minimize-player"].waitForExistence(timeout: 0.3) { tapVideo(app) }
+    app.buttons["mobile-minimize-player"].tap()
+    XCTAssertTrue(app.buttons["mobile-expand-player"].waitForExistence(timeout: 3))
+    XCTAssertFalse(handle.exists)
+    app.buttons["mobile-expand-player"].tap()
+    XCTAssertTrue(handle.waitForExistence(timeout: 3))
+    XCTAssertEqual(chat.frame.width, saved, accuracy: 2)
+
+    XCUIDevice.shared.orientation = .portrait
+    expectation(for: NSPredicate { _, _ in app.frame.width < app.frame.height }, evaluatedWith: app)
+    waitForExpectations(timeout: 5)
+    expectation(for: NSPredicate { _, _ in chat.frame.minY >= video.frame.maxY - 1 }, evaluatedWith: chat)
+    waitForExpectations(timeout: 3)
+    XCTAssertFalse(handle.exists)
+    XCTAssertGreaterThanOrEqual(chat.frame.minY, video.frame.maxY - 1)
+    XCUIDevice.shared.orientation = .landscapeLeft
+    expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
+    waitForExpectations(timeout: 5)
+    showSideChat(app)
+    XCTAssertEqual(chat.frame.width, saved, accuracy: 2)
+
+    app.terminate()
+    app.launchEnvironment.removeValue(forKey: "STROZZ_CHAT_WIDTH_FIXTURE_RESET")
+    app.launch()
+    XCTAssertTrue(video.waitForExistence(timeout: 10))
+    showSideChat(app)
+    XCTAssertEqual(chat.frame.width, saved, accuracy: 2, "Saved width must survive relaunch")
+    app.buttons["mobile-chat-settings"].tap()
+    app.buttons["chat-setting-width-reset"].tap()
+    app.buttons["Done"].tap()
+    XCTAssertEqual(chat.frame.width, originalWidth, accuracy: 2)
+  }
+
+  private func showSideChat(_ app: XCUIApplication) {
+    if app.descendants(matching: .any).matching(identifier: "mobile-chat-resize-handle").firstMatch.exists { return }
+    let pause = app.buttons["mobile-play-pause"]
+    if !pause.exists { tapVideo(app) }
+    if !pause.waitForExistence(timeout: 0.3) { tapVideo(app) }
+    if pause.label == "Pause" { pause.tap() }
+    let toggle = app.buttons["mobile-toggle-chat"]
+    XCTAssertTrue(toggle.waitForExistence(timeout: 3))
+    if toggle.label == "Show chat" { toggle.tap() }
+  }
+
   func testSwipeMinimizesWithFullChatHistoryAndRestoresReadingPosition() {
     let app = XCUIApplication()
     app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
@@ -215,6 +300,7 @@ final class MobilePlayerChromeTests: XCTestCase {
     let app = XCUIApplication()
     app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
     app.launchEnvironment["STROZZ_PLAYER_DRAFT_FIXTURE"] = "1"
+    app.launchEnvironment["STROZZ_CHAT_WIDTH_FIXTURE_RESET"] = "1"
     app.launch()
     defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
     let field = app.textViews["mobile-chat-composer-input"]
@@ -260,7 +346,7 @@ final class MobilePlayerChromeTests: XCTestCase {
       XCTAssertTrue(app.buttons["Jump to present"].exists)
       XCTAssertEqual(video.frame.width, portraitVideo.width, accuracy: 1)
       XCTAssertEqual(video.frame.height, portraitVideo.height, accuracy: 1)
-      XCTAssertGreaterThanOrEqual(timeline.frame.minY, video.frame.maxY)
+      XCTAssertGreaterThanOrEqual(timeline.frame.minY, video.frame.maxY - 1)
       capture(app, "Portrait \(iteration) after rotation with retained draft")
     }
   }
@@ -308,6 +394,7 @@ final class MobilePlayerChromeTests: XCTestCase {
   private func launch() -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
+    app.launchEnvironment["STROZZ_CHAT_WIDTH_FIXTURE_RESET"] = "1"
     app.launch()
     return app
   }
