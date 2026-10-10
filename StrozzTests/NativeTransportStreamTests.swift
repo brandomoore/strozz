@@ -1,5 +1,9 @@
 import XCTest
+#if os(tvOS)
 @testable import Strozz
+#else
+@testable import StrozzMobile
+#endif
 
 final class NativeTransportStreamTests: XCTestCase {
   private func packet(pid: Int, counter: Int, payload: [UInt8]) -> Data {
@@ -64,7 +68,39 @@ final class NativeTransportStreamTests: XCTestCase {
   func testMissingPacketsAreNotPublishedAsContinuousMedia() throws {
     var value = try parser()
     _ = try value.append(video(frame: 0, clock: 0, idr: true))
-    XCTAssertThrowsError(try value.append(video(frame: 2, clock: 3000)))
+    XCTAssertThrowsError(try value.append(video(frame: 2, clock: 3000))) {
+      XCTAssertEqual($0 as? NativeHLSFailureDetail, .transportContinuity)
+    }
+  }
+
+  func testReportedTimestampGapRemainsRejectedWithPreciseEvidence() throws {
+    var value = try parser()
+    _ = try value.append(video(frame: 0, clock: 0, idr: true))
+    XCTAssertThrowsError(try value.append(video(frame: 1, clock: 24_390))) {
+      XCTAssertEqual($0 as? NativeHLSFailureDetail, .timestampInterval(24_390))
+      XCTAssertEqual(NativeHLSError.classify($0), .transition)
+      let diagnostic = NativeHLSFailureDiagnostic(error: $0, operation: "indexing",
+        rendition: 3, active: 4, fatal: false)
+      XCTAssertEqual(diagnostic.metrics["timestamp_interval_seconds"], 0.271)
+      XCTAssertEqual(diagnostic.attributes["detail"], "transport_timestamp_interval")
+      XCTAssertEqual(diagnostic.attributes["scope"], "rendition")
+    }
+    XCTAssertEqual(value.duration, 0, "Do not publish a partial segment using unverified timing")
+  }
+
+  func testNormalLowFrameRateAndInvalidBackwardClocksRemainDistinct() throws {
+    var value = try parser()
+    for frame in 0..<20 {
+      _ = try value.append(video(frame: frame, clock: UInt64(frame * 9000), idr: frame == 0))
+    }
+    XCTAssertNoThrow(try value.finish(expectedDuration: 2))
+    for clock: UInt64 in [0, (1 << 33) - 1] {
+      value = try parser()
+      _ = try value.append(video(frame: 0, clock: 0, idr: true))
+      XCTAssertThrowsError(try value.append(video(frame: 1, clock: clock))) {
+        XCTAssertEqual(NativeHLSError.classify($0), .transition)
+      }
+    }
   }
 
   func testIdenticalRetransmittedPacketDoesNotBreakContinuity() throws {

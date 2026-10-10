@@ -82,7 +82,8 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
     lock.unlock()
     guard let continuation else { completionHandler(.cancel); return }
     guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-      continuation.finish(throwing: NativeHLSError.unavailable)
+      continuation.finish(throwing: NativeHLSFailureDetail.httpStatus(
+        (response as? HTTPURLResponse)?.statusCode ?? -1))
       completionHandler(.cancel)
       return
     }

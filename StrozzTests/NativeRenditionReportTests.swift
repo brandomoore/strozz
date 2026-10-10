@@ -6,6 +6,109 @@ import XCTest
 #endif
 
 final class NativeRenditionReportTests: XCTestCase {
+  func testFailedUnusedRenditionDoesNotCancelHealthyPlaybackOrRestartOnProbe() async throws {
+    for failure in [NativeHLSFailureDetail.httpStatus(503), .timestampInterval(24_390)] {
+      let fixture = FailingRenditionFixture(failure: failure)
+      let diagnostics = NativeFailureCapture()
+      let origin = try await makeFailingOrigin(fixture: fixture, diagnostics: diagnostics) { _ in
+        XCTFail("An unused rendition failure must not restart healthy playback")
+      }
+      for _ in 0..<3 {
+        do {
+          _ = try await origin.response(URL(string: "strozz-native-ll://fixture/media/1.m3u8")!)
+          XCTFail("Failed rendition must report an error, not an empty success")
+        } catch {
+          XCTAssertEqual(NativeHLSError.classify(error), failure.reason)
+        }
+        do {
+          guard case .playlist(let data) = try await origin.response(
+            URL(string: "strozz-native-ll://fixture/media/0.m3u8")!) else {
+            XCTFail("Expected the healthy playlist"); continue
+          }
+          let text = String(decoding: data, as: UTF8.self)
+          XCTAssertTrue(text.contains("#EXT-X-PART:"))
+          XCTAssertFalse(text.contains("#EXT-X-RENDITION-REPORT:"),
+            "Do not direct an adaptive switch to a quarantined rendition")
+        } catch {
+          XCTFail("Healthy playback was poisoned by another rendition: \(error)")
+        }
+      }
+      let count = await fixture.count
+      XCTAssertEqual(count, 1, "A failed rendition must not enter a retry loop or keep refreshing reports")
+      XCTAssertEqual(diagnostics.values.count, 1)
+      XCTAssertEqual(diagnostics.values.first?.attributes["scope"], "rendition")
+      XCTAssertEqual(diagnostics.values.first?.attributes["detail"], failure.code)
+      XCTAssertEqual(diagnostics.values.first?.counters["rendition"], 1)
+      XCTAssertEqual(diagnostics.values.first?.counters["active_rendition"], 0)
+      if case .httpStatus = failure {
+        XCTAssertEqual(diagnostics.values.first?.counters["http_status"], 503)
+      }
+      await origin.stop()
+    }
+  }
+
+  func testActiveRenditionStillEscalatesOnceAndMissingPreloadDoesNotStealOwnership() async throws {
+    let fixture = FailingRenditionFixture(failure: .timestampInterval(24_390))
+    let diagnostics = NativeFailureCapture()
+    let failed = expectation(description: "Active failure reaches bounded native recovery once")
+    failed.assertForOverFulfill = true
+    let origin = try await makeFailingOrigin(fixture: fixture, diagnostics: diagnostics) { reason in
+      XCTAssertEqual(reason, .transition)
+      failed.fulfill()
+    }
+    let media = await origin.media("/part/1/11/0.ts")
+    XCTAssertEqual(media, Data([1, 2, 3]))
+    let missing = await origin.media("/part/0/11/99.ts")
+    XCTAssertNil(missing)
+    do {
+      _ = try await origin.response(URL(string: "strozz-native-ll://fixture/media/1.m3u8")!)
+      XCTFail("The active rendition's invalid media must not be ignored")
+    } catch { XCTAssertEqual(NativeHLSError.classify(error), .transition) }
+    await fulfillment(of: [failed], timeout: 1)
+    for _ in 0..<3 {
+      do {
+        _ = try await origin.response(URL(string: "strozz-native-ll://fixture/media/0.m3u8")!)
+        XCTFail("The old engine must stop once active recovery owns replacement")
+      } catch { XCTAssertEqual(NativeHLSError.classify(error), .transition) }
+    }
+    XCTAssertEqual(diagnostics.values.count, 1)
+    XCTAssertEqual(diagnostics.values.first?.attributes["scope"], "engine")
+    XCTAssertEqual(diagnostics.values.first?.counters["active_rendition"], 1)
+    await origin.stop()
+  }
+
+  func testFailureDiagnosticsExcludeUnderlyingSensitiveErrorData() {
+    let error = NSError(domain: NSURLErrorDomain, code: URLError.timedOut.rawValue, userInfo: [
+      NSURLErrorFailingURLErrorKey: URL(string: "https://example.test/live?token=secret")!,
+      NSLocalizedDescriptionKey: "private server response",
+    ])
+    let value = NativeHLSFailureDiagnostic(error: error, operation: "media", rendition: 1, active: 0, fatal: false)
+    XCTAssertEqual(value.attributes["error_domain"], NSURLErrorDomain)
+    XCTAssertEqual(value.attributes["error_code"], "-1001")
+    XCTAssertFalse(value.attributes.values.joined().contains("secret"))
+    XCTAssertFalse(value.attributes.values.joined().contains("private"))
+    XCTAssertTrue(value.metrics.isEmpty)
+  }
+
+  private func makeFailingOrigin(fixture: FailingRenditionFixture, diagnostics: NativeFailureCapture,
+                                failure: @escaping @Sendable (NativeHLSError) -> Void) async throws -> NativeHLSOrigin {
+    let root = URL(string: "https://example.test/current.m3u8")!
+    let origin = NativeHLSOrigin(root: root, headers: [:], history: 30,
+      loadData: { try await fixture.load($0) }, diagnostic: { diagnostics.append($0) }, failure: failure)
+    let part = NativeHLSOrigin.Part(offset: 0, length: 188, duration: 0.4,
+      independent: true, media: Data([1, 2, 3]))
+    let segments = (0..<12).map { number in
+      NativeHLSOrigin.Segment(sequence: number, url: root,
+        date: Date(timeIntervalSince1970: Double(1000 + number * 2)), discontinuity: 0, tags: [],
+        parts: Array(repeating: part, count: 5), complete: true)
+    }
+    _ = try await origin.renderForTesting(segments, otherRenditions: [
+      1: .init(url: URL(string: "https://example.test/failed.m3u8")!, segments: segments,
+        reportedCompleteSequence: 11)
+    ], readyToServe: true)
+    return origin
+  }
+
   func testPlaylistProbesDoNotExtendAnUnusedMediaDownloadLifetime() async throws {
     let root = URL(string: "https://example.test/current.m3u8")!
     let old = Date(timeIntervalSince1970: 1000)
@@ -13,6 +116,7 @@ final class NativeRenditionReportTests: XCTestCase {
       loadData: { _ in XCTFail("Seeded playlists must not fetch upstream"); throw URLError(.badURL) }) { _ in
       XCTFail("A metadata-only request must not fail playback")
     }
+
     let part = NativeHLSOrigin.Part(offset: 0, length: 188, duration: 0.4, independent: true)
     let segments = (0..<12).map { number in
       NativeHLSOrigin.Segment(sequence: number, url: root,
@@ -334,6 +438,28 @@ final class NativeRenditionReportTests: XCTestCase {
     ], readyToServe: true)
     return origin
   }
+}
+
+private actor FailingRenditionFixture {
+  private(set) var count = 0
+  let failure: NativeHLSFailureDetail
+
+  init(failure: NativeHLSFailureDetail) { self.failure = failure }
+
+  func load(_ request: URLRequest) throws -> (Data, URLResponse) {
+    count += 1
+    guard case .httpStatus(let status) = failure else { throw failure }
+    let url = try XCTUnwrap(request.url)
+    return (Data(), try XCTUnwrap(HTTPURLResponse(url: url, statusCode: status,
+      httpVersion: nil, headerFields: nil)))
+  }
+}
+
+private final class NativeFailureCapture: @unchecked Sendable {
+  private let lock = NSLock()
+  private var storage: [NativeHLSFailureDiagnostic] = []
+  var values: [NativeHLSFailureDiagnostic] { lock.withLock { storage } }
+  func append(_ value: NativeHLSFailureDiagnostic) { lock.withLock { storage.append(value) } }
 }
 
 private actor MasterTargetFixture {

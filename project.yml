@@ -135,6 +135,7 @@ targets:
       - path: StrozzMobileTests
       - path: StrozzTests/PlaybackPresentationStateTests.swift
       - path: StrozzTests/NativeRenditionReportTests.swift
+      - path: StrozzTests/NativeTransportStreamTests.swift
       - path: StrozzTests/NativeBufferedStallRecoveryTests.swift
       - path: StrozzTests/NativeHLSChunkReaderTests.swift
       - path: StrozzTests/NativePreviewTests.swift

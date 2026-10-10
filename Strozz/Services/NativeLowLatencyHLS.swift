@@ -14,9 +14,11 @@ final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unche
   let queue = DispatchQueue(label: "strozz.native-hls.requests")
 
   init(sourceURL: URL, headers: [String: String], history: Double,
+       diagnostic: @escaping @Sendable (NativeHLSFailureDiagnostic) -> Void = { _ in },
        failure: @escaping @Sendable (NativeHLSError) -> Void) {
     self.sourceURL = sourceURL
-    origin = NativeHLSOrigin(root: sourceURL, headers: headers, history: history, failure: failure)
+    origin = NativeHLSOrigin(root: sourceURL, headers: headers, history: history,
+      diagnostic: diagnostic, failure: failure)
     super.init()
   }
 
@@ -138,6 +140,7 @@ actor NativeHLSOrigin {
     var reportedCompleteSequence: Int?
     var reportedSegments: [Segment] = []
     var inferredDiscontinuities = 0
+    var failure: NativeHLSError?
 
     var liveHoldBack: Double {
       // Cover the upstream publication interval plus the native part cushion.
@@ -162,6 +165,7 @@ actor NativeHLSOrigin {
   let headers: [String: String]
   let history: Double
   let failure: @Sendable (NativeHLSError) -> Void
+  let diagnostic: @Sendable (NativeHLSFailureDiagnostic) -> Void
   let session: URLSession
   private let loadData: DataLoader?
   private var master: String?
@@ -246,9 +250,11 @@ actor NativeHLSOrigin {
   #endif
 
   init(root: URL, headers: [String: String], history: Double, loadData: DataLoader? = nil,
+       diagnostic: @escaping @Sendable (NativeHLSFailureDiagnostic) -> Void = { _ in },
        failure: @escaping @Sendable (NativeHLSError) -> Void) {
     self.root = root; self.headers = headers; self.history = max(12, min(history, 1800))
     self.failure = failure
+    self.diagnostic = diagnostic
     self.loadData = loadData
     let config = URLSessionConfiguration.ephemeral
     config.urlCache = nil
@@ -311,6 +317,9 @@ actor NativeHLSOrigin {
                         otherRenditions: [Int: Rendition] = [:], readyToServe: Bool = false) throws -> String {
     sources = otherRenditions
     sources[0] = Rendition(url: root, segments: segments)
+    cachedMediaBytes = sources.values.reduce(0) { total, source in
+      total + source.segments.reduce(0) { $0 + $1.parts.reduce(0) { $0 + ($1.media?.count ?? 0) } }
+    }
     sources[0]?.ended = ended
     sources[0]?.hasPrefetch = hasPrefetch
     sources[0]?.target = target
@@ -324,7 +333,7 @@ actor NativeHLSOrigin {
     return String(decoding: try playlist(0, base: URL(string: "\(NativeLowLatencyHLS.scheme)://test/root.m3u8")!), as: UTF8.self)
   }
 
-  private func media(_ path: String) async -> Data? {
+  func media(_ path: String) async -> Data? {
     #if DEBUG
     let started = Date()
     var servedBytes: Int?
@@ -335,12 +344,13 @@ actor NativeHLSOrigin {
       let sequence = Int(fields[2]), let name = fields[3].split(separator: ".").first,
       let number = Int(name),
       number >= 0, sources[index] != nil else { return nil }
-    lastActive = index
     sources[index]?.lastMediaRequest = Date()
     let deadline = Date().addingTimeInterval(4)
-    while !stopped, error == nil, !Task.isCancelled {
+    while !stopped, error == nil, sources[index]?.failure == nil, !Task.isCancelled {
       if let segment = sources[index]?.segments.first(where: { $0.sequence == sequence }) {
         if segment.parts.indices.contains(number) {
+          // A speculative preload is not proof that playback switched renditions.
+          if segment.parts[number].media != nil { lastActive = index }
           #if DEBUG
           servedBytes = segment.parts[number].media?.count
           #endif
@@ -378,15 +388,40 @@ actor NativeHLSOrigin {
     else { (data, response) = try await session.data(for: request(url)) }
     try Task.checkCancellation()
     guard !stopped else { throw CancellationError() }
-    guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 4 * 1024 * 1024 else {
-      throw NativeHLSError.unavailable
+    guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+      throw NativeHLSFailureDetail.httpStatus((response as? HTTPURLResponse)?.statusCode ?? -1)
     }
+    guard data.count < 4 * 1024 * 1024 else { throw NativeHLSError.invalidMedia }
     return data
   }
 
-  private func fail(_ error: Error) {
-    guard !stopped, !Task.isCancelled, self.error == nil, !(error is CancellationError) else { return }
-    let reason = error as? NativeHLSError ?? .unavailable
+  private func fail(_ error: Error, rendition: Int? = nil, operation: String = "playlist") {
+    guard !stopped, !Task.isCancelled, self.error == nil, !(error is CancellationError),
+      (error as? URLError)?.code != .cancelled else { return }
+    if let rendition, sources[rendition]?.failure != nil { return }
+    let reason = NativeHLSError.classify(error)
+    let fatal = rendition == nil || rendition == lastActive
+    let detail = NativeHLSFailureDiagnostic(error: error, operation: operation,
+      rendition: rendition, active: lastActive, fatal: fatal)
+    Self.logger.error("Native HLS failure: \(detail.attributes, privacy: .public) \(detail.metrics, privacy: .public) \(detail.counters, privacy: .public)")
+    diagnostic(detail)
+    if let rendition, var source = sources[rendition] {
+      source.failure = reason
+      source.reachedLiveEdge = false
+      source.reportedCompleteSequence = nil
+      cachedMediaBytes -= source.segments.reduce(0) { $0 + $1.parts.reduce(0) { $0 + ($1.media?.count ?? 0) } }
+      source.segments = Self.retainedMetadata(source.segments, history: history)
+      sources[rendition] = source
+    }
+    // Quarantine an unused quality for this engine. AVPlayer may reject that
+    // switch, but its healthy rendition must keep downloading and playing.
+    guard fatal else {
+      if let rendition {
+        sources[rendition]?.task?.cancel()
+        sources[rendition]?.task = nil
+      }
+      return
+    }
     self.error = reason
     sources.values.forEach { $0.task?.cancel() }
     failure(reason)
@@ -467,7 +502,7 @@ actor NativeHLSOrigin {
   private func updateRenditionReports() {
     guard sources.count > 1, reportTask == nil,
       Date().timeIntervalSince(reportsUpdatedAt) >= 1 else { return }
-    let urls = sources.filter { $0.value.task == nil }.mapValues(\.url)
+    let urls = sources.filter { $0.value.task == nil && $0.value.failure == nil }.mapValues(\.url)
     guard !urls.isEmpty else { return }
     // Reports help a later quality switch; an unused rendition must never hold
     // the active blocking playlist or compete with its already-indexed metadata.
@@ -507,6 +542,7 @@ actor NativeHLSOrigin {
     }
     guard !stopped, !Task.isCancelled else { return }
     for index in urls.keys {
+      guard sources[index]?.failure == nil else { continue }
       sources[index]?.reportedCompleteSequence = reports[index]?.last?.sequence
       if let segments = reports[index], let source = sources[index] {
         sources[index]?.reportedSegments = Self.retainedMetadata(
@@ -516,6 +552,7 @@ actor NativeHLSOrigin {
   }
 
   func response(_ url: URL) async throws -> Response {
+    var requestedRendition: Int?
     #if DEBUG
     let started = Date()
     var served = false
@@ -539,6 +576,8 @@ actor NativeHLSOrigin {
       let components = url.path.split(separator: "/").map(String.init)
       let index = url.path == "/root.m3u8" ? 0 : Int(components.dropFirst().first?.split(separator: ".").first ?? "")
       guard let index, sources[index] != nil else { throw NativeHLSError.invalidMedia }
+      requestedRendition = index
+      if let failure = sources[index]?.failure { throw failure }
       let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
       let msn = query.first { $0.name == "_HLS_msn" }?.value.flatMap(Int.init)
       let part = query.first { $0.name == "_HLS_part" }?.value.flatMap(Int.init)
@@ -557,6 +596,7 @@ actor NativeHLSOrigin {
         try Task.checkCancellation()
         if let error { throw error }
         guard let source = sources[index] else { throw CancellationError() }
+        if let failure = source.failure { throw failure }
         let published = source.publishedSegments
         if components.first == "part", components.count == 4,
           let sequence = Int(components[2]), let name = components[3].split(separator: ".").first,
@@ -598,7 +638,9 @@ actor NativeHLSOrigin {
       }
       throw CancellationError()
     } catch {
-      if !(error is CancellationError), (error as? URLError)?.code != .resourceUnavailable { fail(error) }
+      if (error as? URLError)?.code != .resourceUnavailable {
+        fail(error, rendition: requestedRendition)
+      }
       throw error
     }
   }
@@ -663,7 +705,7 @@ actor NativeHLSOrigin {
     } else {
       lines.append("#EXT-X-PRELOAD-HINT:TYPE=PART,URI=\"\(prefix)/part/\(index)/\(sequence)/\(number).mp4\"")
     }
-    for (otherID, other) in sources where otherID != index {
+    for (otherID, other) in sources where otherID != index && other.failure == nil {
       if let tail = other.publishedSegments.last(where: { !$0.parts.isEmpty }), other.task != nil {
         lines.append("#EXT-X-RENDITION-REPORT:URI=\"\(otherID).m3u8\",LAST-MSN=\(tail.sequence),LAST-PART=\(tail.parts.count - 1)")
       } else if let sequence = other.reportedCompleteSequence {
@@ -711,6 +753,7 @@ actor NativeHLSOrigin {
   private func run(_ index: Int, startingAt requestedSequence: Int? = nil) async {
     let reader = NativeHLSChunkReader()
     defer { reader.stop() }
+    var operation = "manifest"
     do {
       guard let url = sources[index]?.url else { return }
       var next: Int? = sources[index]?.segments.last.map { $0.sequence + 1 }
@@ -721,6 +764,7 @@ actor NativeHLSOrigin {
       while !stopped {
         try Task.checkCancellation()
         if index != lastActive, let last = sources[index]?.lastMediaRequest, Date().timeIntervalSince(last) > 8 { break }
+        operation = "manifest"
         let manifest = try NativeCMAF.manifest(String(decoding: try await data(url), as: UTF8.self), url: url)
         sources[index]?.hasPrefetch = manifest.hasPrefetch
         sources[index]?.publicationDuration = manifest.entries.compactMap(\.duration).max()
@@ -765,6 +809,7 @@ actor NativeHLSOrigin {
           track = nil
           endClock = nil
           if let initialization = entry.initialization {
+            operation = "initialization"
             track = try NativeCMAF.videoTrack(await data(initialization))
           }
           sources[index]?.initialization = map
@@ -815,9 +860,11 @@ actor NativeHLSOrigin {
         var tsPending = Data()
         var tsInitialization = Data()
         var cmafPending = Data()
+        operation = "media"
         for try await chunk in chunks {
           defer { reader.consumedChunk() }
           try Task.checkCancellation()
+          operation = "indexing"
           buffer.append(chunk)
           guard buffer.count < 32 * 1024 * 1024 else { throw NativeHLSError.invalidMedia }
           while !buffer.isEmpty {
@@ -892,7 +939,9 @@ actor NativeHLSOrigin {
           } else if !["emsg", "styp", "sidx", "free", "prft"].contains(box.type) { throw NativeHLSError.unsupported }
           offset += boxLength
           }
+          operation = "media"
         }
+        operation = "indexing"
         guard buffer.isEmpty, timing == nil else { throw NativeHLSError.invalidMedia }
         if track == nil {
           let range = try transportStream.finish(expectedDuration: entry.duration)
@@ -935,14 +984,16 @@ actor NativeHLSOrigin {
       sources[index]?.task = nil
     } catch {
       sources[index]?.task = nil
-      fail(error)
+      fail(error, rendition: index, operation: operation)
     }
   }
 
   private func publish(_ index: Int, _ part: Part) throws {
     guard var source = sources[index], !source.segments.isEmpty else { throw CancellationError() }
     let last = source.segments.count - 1
-    guard cachedMediaBytes + (part.media?.count ?? 0) <= 96 * 1024 * 1024 else { throw NativeHLSError.unavailable }
+    guard cachedMediaBytes + (part.media?.count ?? 0) <= 96 * 1024 * 1024 else {
+      throw NativeHLSFailureDetail.cacheCapacity(cachedMediaBytes)
+    }
     if source.segments[last].parts.isEmpty, !part.independent { throw NativeHLSError.invalidMedia }
     source.segments[last].parts.append(part)
     if source.indexingPrefetch { source.reachedLiveEdge = true }
