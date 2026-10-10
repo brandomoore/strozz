@@ -167,7 +167,7 @@ struct MobileHomeView: View {
                 MobileLiveFeedContent(
                   channels: homeChannels,
                   isLoading: personalFeed ? (personalLoading || (auth.isAuthenticated
-                    && (follows.isLoading || follows.lastUpdatedAt == nil)))
+                    && (follows.isLoading || (follows.lastUpdatedAt == nil && follows.errorMessage == nil))))
                     : (category == nil ? recommendations.isLoading || recommendations.lastUpdatedAt == nil
                       : categoryStreams.isLoadingStreams),
                   errorMessage: personalFeed ? nil
@@ -240,6 +240,10 @@ struct MobileHomeView: View {
       }
       let current = follows
       if auth.isAuthenticated { await current.refresh(using: auth) }
+    }
+    .onChange(of: auth.accessToken) { _, _ in
+      guard auth.isAuthenticated, follows.errorMessage != nil else { return }
+      Task { await follows.refresh(using: auth) }
     }
     .task(id: "\(auth.userID ?? "")-\(feed == .following)") {
       if feed == .following { await follows.loadDirectory(using: auth) }

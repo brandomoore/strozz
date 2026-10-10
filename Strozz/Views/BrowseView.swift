@@ -38,7 +38,7 @@ struct BrowseView: View {
 
 // MARK: - Categories Grid
 
-private struct BrowseCategoriesView: View {
+struct BrowseCategoriesView: View {
   let service: BrowseService
   let isLoading: Bool
   let onSelectCategory: (TwitchCategory) -> Void
@@ -51,65 +51,72 @@ private struct BrowseCategoriesView: View {
   ]
 
   var body: some View {
-    ScrollView(.vertical, showsIndicators: false) {
-      VStack(alignment: .leading, spacing: 24) {
-        HStack {
-          Text("Browse")
-            .font(.title.weight(.bold))
-            .accessibilityAddTraits(.isHeader)
+    GeometryReader { viewport in
+      ScrollView(.vertical, showsIndicators: false) {
+        VStack(alignment: .leading, spacing: 24) {
+          HStack {
+            Text("Browse")
+              .font(.title.weight(.bold))
+              .accessibilityAddTraits(.isHeader)
 
-          if service.isLoadingCategories {
-            ProgressView().scaleEffect(0.85)
-          }
+            if service.isLoadingCategories {
+              ProgressView().scaleEffect(0.85)
+            }
 
-          Spacer()
+            Spacer()
 
-          Button("Refresh") {
-            Task { await service.loadCategories() }
-          }
-        }
-
-        if let err = service.categoryErrorMessage {
-          Text(err)
-            .font(.footnote)
-            .foregroundStyle(.orange)
-        }
-
-        LazyVGrid(columns: columns, spacing: 28) {
-          if service.categories.isEmpty && isLoading {
-            ForEach(LoadingSkeleton.categories) { category in
-              CategoryCardView(category: category, isFocused: false)
-                .modifier(LoadingSkeletonStyle())
+            Button("Refresh") {
+              Task { await service.loadCategories() }
             }
           }
-          ForEach(service.categories) { category in
-            let isFocused = focusedID == category.id
-            CategoryCardView(
-              category: category,
-              isFocused: isFocused
-            )
-            .contentShape(RoundedRectangle(cornerRadius: CategoryCardView.contentShapeCornerRadius))
-            .focusable(true)
-            .focused($focusedID, equals: category.id)
-            .prefersDefaultFocus(
-              category.id == service.categories.first?.id,
-              in: browseFocusNamespace
-            )
-            .focusEffectDisabled()
-            .onTapGesture {
-              onSelectCategory(category)
-            }
-            .zIndex(isFocused ? 2 : 0)
+
+          if let err = service.categoryErrorMessage {
+            Text(err)
+              .font(.footnote)
+              .foregroundStyle(.orange)
           }
+
+          LazyVGrid(columns: columns, spacing: 28) {
+            if service.categories.isEmpty && isLoading {
+              ForEach(LoadingSkeleton.categories) { category in
+                CategoryCardView(category: category, isFocused: false)
+                  .modifier(LoadingSkeletonStyle())
+              }
+            }
+            ForEach(service.categories) { category in
+              let isFocused = focusedID == category.id
+              CategoryCardView(
+                category: category,
+                isFocused: isFocused
+              )
+              .contentShape(
+                RoundedRectangle(cornerRadius: CategoryCardView.contentShapeCornerRadius)
+              )
+              .focusable(true)
+              .focused($focusedID, equals: category.id)
+              .prefersDefaultFocus(
+                category.id == service.categories.first?.id,
+                in: browseFocusNamespace
+              )
+              .focusEffectDisabled()
+              .onTapGesture {
+                onSelectCategory(category)
+              }
+              .zIndex(isFocused ? 2 : 0)
+            }
+          }
+          .padding(.vertical, 8)
+          .focusSection()
+          .focusScope(browseFocusNamespace)
         }
-        .padding(.vertical, 8)
-        .focusSection()
-        .focusScope(browseFocusNamespace)
+        .padding(.horizontal, AppLayout.horizontalPadding)
+        .padding(.bottom, 12)
       }
-      .padding(.horizontal, AppLayout.horizontalPadding)
-      .padding(.bottom, 12)
+      .contentMargins(.top, viewport.safeAreaInsets.top, for: .scrollContent)
+      .contentMargins(.bottom, viewport.safeAreaInsets.bottom, for: .scrollContent)
+      .ignoresSafeArea(.container, edges: .vertical)
+      .scrollClipDisabled()
     }
-    .scrollClipDisabled()
   }
 }
 
@@ -161,7 +168,7 @@ struct CategoryStreamsView: View {
   }
 
   var body: some View {
-    ZStack(alignment: .top) {
+    GeometryReader { viewport in
       ScrollView(.vertical, showsIndicators: false) {
         VStack(alignment: .leading, spacing: 20) {
           // Header (scrolls with content)
@@ -247,12 +254,16 @@ struct CategoryStreamsView: View {
           }
         }
         .padding(.horizontal, AppLayout.horizontalPadding)
-        .padding(.top, 8)
+        .padding(.top, 16)
         .padding(.bottom, gridBottomInset)
       }
+      // Clipping alone does not control lazy-grid culling. Make the scroll
+      // viewport full-height and keep resting header spacing inside its content.
+      .contentMargins(.top, viewport.safeAreaInsets.top, for: .scrollContent)
+      .contentMargins(.bottom, viewport.safeAreaInsets.bottom, for: .scrollContent)
+      .ignoresSafeArea(.container, edges: .vertical)
       .scrollClipDisabled()
     }
-    .padding(.top, 8)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .navigationBarHidden(true)
     .toolbar(.hidden, for: .tabBar)

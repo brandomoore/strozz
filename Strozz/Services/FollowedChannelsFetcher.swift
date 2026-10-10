@@ -15,6 +15,8 @@ import Foundation
 /// Foundation-only so it can back a future iOS target.
 @MainActor
 struct FollowedChannelsFetcher {
+  var loadData: NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) }
+
   func fetchLiveFollowedChannels(clientID: String, accessToken: String, userID: String)
     async throws -> [FollowedChannel]
   {
@@ -450,7 +452,7 @@ struct FollowedChannelsFetcher {
   }
 
   private func performHelixRequest(_ req: URLRequest) async throws -> (Data, Int) {
-    let (data, response) = try await NetworkClient.api.data(for: req)
+    let (data, response) = try await loadData(req)
     let status = (response as? HTTPURLResponse)?.statusCode ?? -1
     return (data, status)
   }

@@ -2,8 +2,9 @@ import SwiftUI
 
 struct TwitchAccountLoadingView: View {
   var body: some View {
-    ProgressView("Loading your account...")
+    ProgressView()
       .frame(maxWidth: .infinity, alignment: .leading)
+      .accessibilityLabel("Loading your account")
       .accessibilityIdentifier("twitch-account-restoring")
   }
 }
