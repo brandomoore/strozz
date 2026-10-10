@@ -187,7 +187,9 @@ struct MobilePlayerView: View {
           }
           if layout == .portrait {
             MobileChatView(service: model.chat, channel: channel.login,
-              composer: chatComposer, scroll: chatScroll, rewards: MobileChatRewardsSummary.snapshot(of: session.watchTracker))
+              composer: chatComposer, scroll: chatScroll, rewards: MobileChatRewardsSummary.snapshot(of: session.watchTracker),
+              isActive: session.isExpanded, isManipulating: collapseProgress > 0)
+              .equatable()
           } else {
             Spacer(minLength: 0)
           }
@@ -201,7 +203,9 @@ struct MobilePlayerView: View {
         if canToggleChat {
           HStack(spacing: 0) {
             MobileChatView(service: model.chat, channel: channel.login,
-              composer: chatComposer, scroll: chatScroll, rewards: MobileChatRewardsSummary.snapshot(of: session.watchTracker))
+              composer: chatComposer, scroll: chatScroll, rewards: MobileChatRewardsSummary.snapshot(of: session.watchTracker),
+              isActive: session.isExpanded && layout == .sideBySide, isManipulating: collapseProgress > 0)
+              .equatable()
           }
           .frame(width: sideChatWidth, height: geometry.size.height)
           .offset(x: videoWidth + progress * sideChatWidth)

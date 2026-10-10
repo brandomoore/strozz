@@ -1,6 +1,17 @@
 import SwiftUI
 import SDWebImageSwiftUI
 
+private struct ChatAnimationsActiveKey: EnvironmentKey {
+    static let defaultValue: Bool? = nil
+}
+
+extension EnvironmentValues {
+    var chatAnimationsActive: Bool? {
+        get { self[ChatAnimationsActiveKey.self] }
+        set { self[ChatAnimationsActiveKey.self] = newValue }
+    }
+}
+
 struct RichChatLineView: View {
     let message: ChatMessage
     let nameColor: Color
@@ -388,6 +399,8 @@ private struct EmoteView: View {
     var constrainsWidth: Bool = false
 
     @State private var loadFailed = false
+    @State private var animationRequested = false
+    @Environment(\.chatAnimationsActive) private var animationsActive
 
     var body: some View {
         Group {
@@ -396,7 +409,17 @@ private struct EmoteView: View {
                     .font(.system(size: fallbackFontSize))
                     .foregroundStyle(fallbackColor)
             } else if animated {
-                AnimatedImage(url: url)
+                AnimatedImage(url: url, isAnimating: $animationRequested)
+                    .onViewCreate { view, _ in
+                        // Managed rows, not UIKit attachment/alpha changes, own playback.
+                        view.autoPlayAnimatedImage = animationsActive == nil
+                    }
+                    .onViewUpdate { view, _ in
+                        if animationsActive != nil {
+                            view.autoPlayAnimatedImage = animationRequested
+                        }
+                    }
+                    .purgeable(animationsActive == false)
                     .onFailure { _ in
                         // Defer the state mutation: SDWebImage fires this callback
                         // synchronously while cancelling in-flight loads during view
@@ -431,6 +454,9 @@ private struct EmoteView: View {
                 .fixedSize(horizontal: !constrainsWidth, vertical: false)
             }
         }
+        // The image loader retains this binding until completion; a captured
+        // constant can otherwise restore stale visibility after the load finishes.
+        .onChange(of: animationsActive, initial: true) { _, active in animationRequested = active ?? true }
     }
 }
 

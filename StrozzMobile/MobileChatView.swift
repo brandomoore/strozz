@@ -1,16 +1,28 @@
 import SwiftUI
 
-struct MobileChatView: View {
+struct MobileChatView: View, Equatable {
   let service: ChatService
   let channel: String
   let composer: MobileChatComposerState
   let scroll: MobileChatScrollState
   var rewards: MobileChatRewardsSummary? = nil
+  var isActive = true
+  var isManipulating = false
   @Environment(\.themePalette) private var palette
   @Environment(TwitchAuthSession.self) private var auth
   @Environment(TwitchAccountSync.self) private var sync: TwitchAccountSync?
+  @Environment(\.scenePhase) private var scenePhase
   @State private var showAccount = false
   @State private var showSettings = false
+  @State private var pausedMessages: [ChatMessage]?
+
+  private var updatesActive: Bool { isActive && !isManipulating && scenePhase == .active }
+
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.service === rhs.service && lhs.channel == rhs.channel && lhs.composer === rhs.composer
+      && lhs.scroll === rhs.scroll && lhs.rewards == rhs.rewards
+      && lhs.isActive == rhs.isActive && lhs.isManipulating == rhs.isManipulating
+  }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -21,9 +33,10 @@ struct MobileChatView: View {
           .frame(maxWidth: .infinity, alignment: .leading)
           .padding(12)
       }
-      MobileChatTimeline(messages: service.messages, emoteURLs: service.emoteURLs,
+      MobileChatTimeline(messages: updatesActive ? service.messages : (pausedMessages ?? service.messages), emoteURLs: service.emoteURLs,
                          badgeURLs: service.badgeURLs, cheermotes: service.cheermotes,
-                         viewerLogin: auth.userLogin, viewerDisplayName: auth.userDisplayName, scroll: scroll)
+                         viewerLogin: auth.userLogin, viewerDisplayName: auth.userDisplayName, scroll: scroll,
+                         animationsActive: isActive && !isManipulating)
       Divider()
       if auth.isAuthenticated, sync?.isRestoringAccount != true {
         MobileChatComposer(channel: channel, onSettings: { showSettings = true }, rewards: rewards, composer: composer)
@@ -48,6 +61,9 @@ struct MobileChatView: View {
     }
     .accessibilityIdentifier("mobile-chat-panel")
     .background(palette.chatSideSurface)
+    .onChange(of: updatesActive, initial: true) { _, active in
+      pausedMessages = active ? nil : service.messages
+    }
     .sheet(isPresented: $showAccount) {
       NavigationStack {
         MobileAccountView()
@@ -106,11 +122,14 @@ struct MobileChatTimeline: View {
   var viewerLogin: String? = nil
   var viewerDisplayName: String? = nil
   @State var scroll = MobileChatScrollState()
+  var animationsActive = true
   @State private var inspectedEmote: MobileChatEmote?
+  @State private var viewportHeight: CGFloat = 0
   @Environment(\.themePalette) private var palette
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
   @Environment(\.colorSchemeContrast) private var contrast
+  @Environment(\.scenePhase) private var scenePhase
   @ScaledMetric(relativeTo: .body) private var typeScale: CGFloat = 1
   @AppStorage(PersistenceKey.chatTextSizeValue) private var textSize = MobileChatAppearance.textSize
   @AppStorage(PersistenceKey.chatEmoteAuto) private var emoteAuto = true
@@ -143,37 +162,48 @@ struct MobileChatTimeline: View {
         ForEach(messages) { message in
           let highlighted = highlights && ChatHighlightRules.matches(message, viewerLogin: viewerLogin,
             viewerDisplayName: viewerDisplayName, keywords: highlightWords)
-          VStack(alignment: .leading, spacing: 4) {
-            if let notice = message.systemMessage {
-              Text(notice).font(.caption.bold()).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+          MobileVisibleChatRow(
+            animationsActive: animationsActive && scenePhase == .active,
+            viewportHeight: viewportHeight
+          ) {
+            VStack(alignment: .leading, spacing: 4) {
+              if let notice = message.systemMessage {
+                Text(notice).font(.caption.bold()).foregroundStyle(.secondary)
+                  .fixedSize(horizontal: false, vertical: true)
+              }
+              RichChatLineView(
+                message: message,
+                nameColor: (message.colorHex.flatMap { Color(twitchHex: $0) }
+                  ?? palette.chatSidePrimaryText)
+                  .chatReadable(onSurface: palette.chatSideSurface, minRatio: 4.5),
+                globalEmoteURLs: emoteURLs, badgeURLs: badgeURLs, cheermotes: cheermotes,
+                textSize: textSize * typeScale, emoteSize: resolvedEmoteSize * typeScale,
+                lineHeight: lineHeight * typeScale, letterSpacing: letterSpacing * typeScale,
+                animatedEmotes: animatedEmotes && !reduceMotion,
+                fontStyle: ChatFontStyle(rawValue: fontStyle) ?? .standard,
+                showBadges: showBadges, showPlatformBadges: showPlatforms,
+                bodyColorOverride: palette.chatSidePrimaryText, wrapsOversizedTokens: true,
+                onInspectEmote: { name, url in
+                  inspectedEmote = MobileChatEmote(name: name, url: url)
+                }, scalesCustomFont: false)
             }
-            RichChatLineView(
-              message: message,
-              nameColor: (message.colorHex.flatMap { Color(twitchHex: $0) } ?? palette.chatSidePrimaryText)
-                .chatReadable(onSurface: palette.chatSideSurface, minRatio: 4.5),
-              globalEmoteURLs: emoteURLs, badgeURLs: badgeURLs, cheermotes: cheermotes,
-              textSize: textSize * typeScale, emoteSize: resolvedEmoteSize * typeScale,
-              lineHeight: lineHeight * typeScale, letterSpacing: letterSpacing * typeScale,
-              animatedEmotes: animatedEmotes && !reduceMotion,
-              fontStyle: ChatFontStyle(rawValue: fontStyle) ?? .standard,
-              showBadges: showBadges, showPlatformBadges: showPlatforms,
-              bodyColorOverride: palette.chatSidePrimaryText, wrapsOversizedTokens: true,
-              onInspectEmote: { name, url in
-                inspectedEmote = MobileChatEmote(name: name, url: url)
-              }, scalesCustomFont: false)
-          }
-          .padding(.horizontal, highlighted ? 8 : 0)
-          .padding(.vertical, highlighted ? 6 : 0)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .background {
-            if highlighted {
-              RoundedRectangle(cornerRadius: 8).fill(palette.chatMentionSurface)
-                .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(palette.chatMentionBorder, lineWidth: 1) }
+            .padding(.horizontal, highlighted ? 8 : 0)
+            .padding(.vertical, highlighted ? 6 : 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+              if highlighted {
+                RoundedRectangle(cornerRadius: 8).fill(palette.chatMentionSurface)
+                  .overlay {
+                    RoundedRectangle(cornerRadius: 8).strokeBorder(
+                      palette.chatMentionBorder, lineWidth: 1)
+                  }
+              }
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(
+              message.id == messages.last?.id ? "mobile-chat-latest-message" : "mobile-chat-message"
+            )
           }
-          .accessibilityElement(children: .contain)
-          .accessibilityIdentifier(message.id == messages.last?.id ? "mobile-chat-latest-message" : "mobile-chat-message")
         }
       }
       .padding(12)
@@ -188,6 +218,7 @@ struct MobileChatTimeline: View {
                distanceFromBottom: geometry.contentSize.height + geometry.contentInsets.bottom
                  - geometry.contentOffset.y - geometry.containerSize.height)
     } action: { old, new in
+      if viewportHeight != new.viewportSize.height { viewportHeight = new.viewportSize.height }
       scroll.geometryChanged(distanceFromBottom: new.distanceFromBottom,
         sizeChanged: old.contentSize != new.contentSize || old.viewportSize != new.viewportSize
           || old.bottomInset != new.bottomInset)
@@ -206,6 +237,22 @@ struct MobileChatTimeline: View {
       MobileEmoteDetailView(emote: emote)
         .environment(\.themePalette, palette)
     }
+  }
+}
+
+private struct MobileVisibleChatRow<Content: View>: View {
+  let animationsActive: Bool
+  let viewportHeight: CGFloat
+  @ViewBuilder let content: Content
+  @State private var visible = false
+
+  var body: some View {
+    content
+      .environment(\.chatAnimationsActive, animationsActive && visible)
+      .onGeometryChange(for: Bool.self) { geometry in
+        let frame = geometry.frame(in: .scrollView(axis: .vertical))
+        return viewportHeight > 0 && frame.maxY > 0 && frame.minY < viewportHeight
+      } action: { visible = $0 }
   }
 }
 

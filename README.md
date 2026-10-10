@@ -172,6 +172,11 @@ in landscape: iPhone starts video-only and can open or hide side-by-side chat;
 iPad offers the same toggle when its side-by-side layout is available. Portrait
 chat stays below the video without a misleading sideways collapse button.
 Drafts, in-flight sends, and the chat reading state are shared across those layouts.
+Chat keeps its exact-height scrollback, but only emotes intersecting the viewport
+animate. Offscreen animation buffers are released, and all chat animation pauses
+during minimization, while chat is hidden, or in the background. Incoming chat
+continues to collect in its bounded buffer; hidden/gesture-time view updates are
+deferred until chat is visible again, without reconnecting or changing playback.
 
 Chat settings are also available from **Account** and when reading anonymously.
 Adjust mobile size presets, fonts, spacing, emote sizing and animation, badges,

@@ -39,7 +39,8 @@ struct MobilePlayerLayoutFixture: View {
         let player = MobilePlaybackSession.layoutFixture(channel: channel)
         player.model.chat.channel = channel.login
         player.model.chat.isConnected = true
-        player.model.chat.messages = (0..<100).compactMap {
+        let historySize = ProcessInfo.processInfo.environment["STROZZ_LONG_CHAT_FIXTURE"] == "1" ? 500 : 100
+        player.model.chat.messages = (0..<historySize).compactMap {
           ChatMessage(ircLine: ":viewer!viewer@host PRIVMSG #fixture :Message \($0) in the live chat")
         }
         session = player

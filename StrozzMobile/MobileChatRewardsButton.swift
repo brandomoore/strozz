@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct MobileChatRewardsSummary {
+struct MobileChatRewardsSummary: Equatable {
   var balance: Int?
   var name: String
   var imageURL: URL?

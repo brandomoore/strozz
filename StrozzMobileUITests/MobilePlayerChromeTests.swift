@@ -8,6 +8,37 @@ final class MobilePlayerChromeTests: XCTestCase {
     XCUIDevice.shared.orientation = .portrait
   }
 
+  func testSwipeMinimizesWithFullChatHistoryAndRestoresReadingPosition() {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
+    app.launchEnvironment["STROZZ_LONG_CHAT_FIXTURE"] = "1"
+    app.launch()
+    defer { app.terminate() }
+    let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+    XCTAssertTrue(video.waitForExistence(timeout: 10))
+    let expanded = video.frame
+    let timeline = app.scrollViews["mobile-chat-panel"]
+    for _ in 0..<3 { timeline.swipeDown() }
+    XCTAssertTrue(app.buttons["Jump to present"].exists)
+    for _ in 0..<3 {
+      let start = video.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.25))
+      let clock = Date()
+      start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 150)),
+        withVelocity: .slow, thenHoldForDuration: 0)
+      let mini = app.buttons["mobile-expand-player"]
+      XCTAssertTrue(mini.waitForExistence(timeout: 2))
+      XCTAssertLessThan(video.frame.width, expanded.width - 50)
+      let measurement = XCTAttachment(string: "Swipe and XCTest synchronization: \(Date().timeIntervalSince(clock)) seconds")
+      measurement.name = "Full-history minimize interaction"
+      measurement.lifetime = .keepAlways
+      add(measurement)
+      mini.tap()
+      XCTAssertTrue(app.buttons["mobile-controls-toggle"].waitForExistence(timeout: 2))
+      XCTAssertEqual(video.frame.width, expanded.width, accuracy: 1)
+      XCTAssertTrue(app.buttons["Jump to present"].exists)
+    }
+  }
+
   func testDetailsCollapseWithControlsAndTappingVideoRestoresBoth() {
     let app = launch()
     defer { app.terminate() }
