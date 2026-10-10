@@ -190,6 +190,15 @@ adapts to smaller windows, never taking more than half the available width or
 crowding the video's controls.
 **Automatic width** restores the original sizing. The divider also supports
 VoiceOver adjustment; it is absent in portrait, fullscreen, and the mini-player.
+The resize handle hides and reappears with the playback controls. Dragging keeps
+the controls visible and restarts their idle timeout when you release it.
+**Playback mode** offers **Video and chat**, **Audio and chat**, and **Chat only**.
+Audio and chat uses the stream's audio-only rendition and keeps playing in the
+background without PiP. Chat only stops media playback and downloads while
+leaving chat connected. Both give chat the full window, with a compact toolbar
+for changing modes or closing the stream; audio mode also has pause and mute.
+Returning to video restores the last video quality at the live edge. A missing
+audio-only rendition is reported rather than silently downloading hidden video.
 The aspect-fitted video is centered vertically and horizontally in the left pane.
 Landscape profile details appear with the controls over the lower video area,
 so revealing them does not move or resize the video. One mounted chat view moves

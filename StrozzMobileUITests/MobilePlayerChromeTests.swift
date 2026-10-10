@@ -10,7 +10,7 @@ final class MobilePlayerChromeTests: XCTestCase {
 
   func testChatDividerAndSettingsResizePersistAndPreserveReadingPosition() {
     XCUIDevice.shared.orientation = .landscapeLeft
-    let app = launch()
+    let app = launch(paused: true)
     defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
     let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
     XCTAssertTrue(video.waitForExistence(timeout: 10))
@@ -83,7 +83,6 @@ final class MobilePlayerChromeTests: XCTestCase {
   }
 
   private func showSideChat(_ app: XCUIApplication) {
-    if app.descendants(matching: .any).matching(identifier: "mobile-chat-resize-handle").firstMatch.exists { return }
     let pause = app.buttons["mobile-play-pause"]
     if !pause.exists { tapVideo(app) }
     if !pause.waitForExistence(timeout: 0.3) { tapVideo(app) }
@@ -91,6 +90,46 @@ final class MobilePlayerChromeTests: XCTestCase {
     let toggle = app.buttons["mobile-toggle-chat"]
     XCTAssertTrue(toggle.waitForExistence(timeout: 3))
     if toggle.label == "Show chat" { toggle.tap() }
+  }
+
+  func testChatResizeHandleFollowsControlsAndRestartsTimeoutAfterDragging() {
+    XCUIDevice.shared.orientation = .landscapeLeft
+    let app = launch(paused: true)
+    defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
+    let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+    XCTAssertTrue(video.waitForExistence(timeout: 10))
+    showSideChat(app)
+    let handle = app.descendants(matching: .any).matching(identifier: "mobile-chat-resize-handle").firstMatch
+    let controls = app.buttons["mobile-play-pause"]
+    let chat = app.otherElements["mobile-player-chat-region"]
+    XCTAssertTrue(handle.waitForExistence(timeout: 3))
+    let initialChat = chat.frame
+    let initialVideo = video.frame
+    if controls.label == "Play" { controls.tap() }
+    XCTAssertEqual(controls.label, "Pause", "The fixture must be playing before testing the idle timeout")
+    waitForHidden(controls)
+    XCTAssertFalse(handle.exists)
+    XCTAssertEqual(chat.frame, initialChat)
+    XCTAssertEqual(video.frame, initialVideo)
+
+    tapVideo(app)
+    XCTAssertTrue(handle.waitForExistence(timeout: 2))
+    XCTAssertTrue(controls.exists)
+    tapVideo(app)
+    waitForHidden(handle)
+    XCTAssertFalse(controls.exists)
+
+    tapVideo(app)
+    XCTAssertTrue(handle.waitForExistence(timeout: 2))
+    let center = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+    center.press(forDuration: 0.1, thenDragTo: center.withOffset(CGVector(dx: -40, dy: 0)),
+      withVelocity: .slow, thenHoldForDuration: 5)
+    XCTAssertEqual(chat.frame.width, initialChat.width + 40, accuracy: 3)
+    XCTAssertTrue(handle.exists, "A drag must hold controls and restart the idle timeout on release")
+    XCTAssertTrue(controls.exists)
+    waitForHidden(controls)
+    XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "mobile-chat-resize-handle").firstMatch.exists)
+    XCTAssertEqual(chat.frame.width, initialChat.width + 40, accuracy: 3)
   }
 
   func testSwipeMinimizesWithFullChatHistoryAndRestoresReadingPosition() {
@@ -122,6 +161,100 @@ final class MobilePlayerChromeTests: XCTestCase {
       XCTAssertEqual(video.frame.width, expanded.width, accuracy: 1)
       XCTAssertTrue(app.buttons["Jump to present"].exists)
     }
+  }
+
+  func testThreePlaybackModesRetainChatAndDraftAndRestoreVideo() {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
+    app.launchEnvironment["STROZZ_PLAYER_DRAFT_FIXTURE"] = "1"
+    app.launchEnvironment["STROZZ_PLAYER_PAUSED_FIXTURE"] = "1"
+    app.launchEnvironment["STROZZ_LONG_CHAT_FIXTURE"] = "1"
+    app.launch()
+    defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
+    let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+    let chat = app.otherElements["mobile-player-chat-region"]
+    let field = app.textViews["mobile-chat-composer-input"]
+    let timeline = app.scrollViews["mobile-chat-timeline"]
+    XCTAssertTrue(video.waitForExistence(timeout: 10))
+    let originalChatHeight = chat.frame.height
+    field.tap()
+    field.typeText("Keep this draft in every mode")
+    tapVideo(app)
+    if !app.buttons["mobile-playback-mode"].waitForExistence(timeout: 0.3) { tapVideo(app) }
+    for _ in 0..<3 { timeline.swipeDown() }
+    let jump = app.buttons["Jump to present"]
+    XCTAssertTrue(jump.exists)
+
+    selectMode("Chat only", in: app)
+    let header = app.otherElements["mobile-chat-only-controls"]
+    XCTAssertTrue(header.waitForExistence(timeout: 3))
+    XCTAssertEqual(video.frame.size, .zero, "The mounted player must reserve no space")
+    XCTAssertFalse(app.buttons["mobile-play-pause"].exists)
+    XCTAssertFalse(app.buttons["mobile-audio-play-pause"].exists)
+    XCTAssertGreaterThan(chat.frame.height, originalChatHeight + 100)
+    XCTAssertEqual(field.value as? String, "Keep this draft in every mode")
+    XCTAssertTrue(jump.exists)
+    capture(app, "Chat only fills the window with accessible mode and close controls")
+
+    selectMode("Audio and chat", in: app)
+    let audio = app.buttons["mobile-audio-play-pause"]
+    XCTAssertTrue(audio.waitForExistence(timeout: 3))
+    XCTAssertEqual(video.frame.size, .zero)
+    XCTAssertEqual(audio.label, "Pause audio")
+    audio.tap()
+    XCTAssertEqual(audio.label, "Play audio")
+    audio.tap()
+    XCTAssertEqual(audio.label, "Pause audio")
+    XCTAssertEqual(field.value as? String, "Keep this draft in every mode")
+    XCTAssertTrue(jump.exists)
+    XCUIDevice.shared.orientation = .landscapeLeft
+    expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
+    waitForExpectations(timeout: 5)
+    XCTAssertGreaterThan(chat.frame.width, app.frame.width * 0.8)
+    XCTAssertTrue(header.frame.contains(app.buttons["mobile-playback-mode"].frame))
+    capture(app, "Audio and full-width chat in landscape")
+
+    selectMode("Video and chat", in: app)
+    expectation(for: NSPredicate { _, _ in video.frame.width > 0 }, evaluatedWith: video)
+    waitForExpectations(timeout: 3)
+    XCTAssertFalse(header.exists)
+    XCTAssertTrue(chat.exists, "Restoring video must also restore chat in phone landscape")
+    XCTAssertLessThanOrEqual(video.frame.maxX, chat.frame.minX + 1)
+    XCTAssertEqual(field.value as? String, "Keep this draft in every mode")
+    XCTAssertTrue(jump.exists)
+    waitForHidden(app.buttons["mobile-play-pause"])
+  }
+
+  func testChatOnlyRetainsACloseControlWithoutVideo() {
+    let app = launch(paused: true)
+    defer { app.terminate() }
+    XCTAssertTrue(app.buttons["mobile-playback-mode"].waitForExistence(timeout: 10))
+    selectMode("Chat only", in: app)
+    app.buttons["Close player"].tap()
+    waitForHidden(app.otherElements["mobile-player-chat-region"])
+  }
+
+  func testChoosingVideoAndChatRevealsChatWithoutChangingPlaybackMode() {
+    XCUIDevice.shared.orientation = .landscapeLeft
+    let app = launch(paused: true)
+    defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
+    let toggle = app.buttons["mobile-toggle-chat"]
+    XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+    if toggle.label == "Hide chat" { toggle.tap() }
+    selectMode("Video and chat", in: app)
+    XCTAssertEqual(toggle.label, "Hide chat")
+    let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+    let chat = app.otherElements["mobile-player-chat-region"]
+    XCTAssertLessThanOrEqual(video.frame.maxX, chat.frame.minX + 1)
+  }
+
+  private func selectMode(_ mode: String, in app: XCUIApplication) {
+    let button = app.buttons["mobile-playback-mode"]
+    XCTAssertTrue(button.waitForExistence(timeout: 3))
+    button.tap()
+    XCTAssertTrue(app.navigationBars["Playback mode"].waitForExistence(timeout: 3))
+    app.buttons[mode].tap()
+    waitForHidden(app.navigationBars["Playback mode"])
   }
 
   func testDetailsCollapseWithControlsAndTappingVideoRestoresBoth() {
@@ -391,10 +524,11 @@ final class MobilePlayerChromeTests: XCTestCase {
     capture(app, "Centered landscape video with compact profile and clear controls")
   }
 
-  private func launch() -> XCUIApplication {
+  private func launch(paused: Bool = false) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
     app.launchEnvironment["STROZZ_CHAT_WIDTH_FIXTURE_RESET"] = "1"
+    if paused { app.launchEnvironment["STROZZ_PLAYER_PAUSED_FIXTURE"] = "1" }
     app.launch()
     return app
   }

@@ -27,6 +27,11 @@ final class MobilePlayerGeometryTests: XCTestCase {
       hideChat: false), .sideBySide)
     XCTAssertEqual(MobilePlayerLayout.resolve(size: .init(width: 700, height: 500), isPhone: false,
       hideChat: false), .portrait)
+    for mode in [MobilePlaybackMode.audioOnly, .chatOnly] {
+      XCTAssertEqual(MobilePlayerLayout.resolve(size: .init(width: 1024, height: 500), isPhone: false,
+        hideChat: true, mode: mode), .chatOnly)
+      XCTAssertEqual(MobilePlayerLayout.chatOnly.videoFrame(in: .init(width: 1024, height: 500)), .zero)
+    }
   }
 
   func testCustomChatWidthIsBoundedAndKeepsVideoCentered() {
@@ -125,6 +130,14 @@ final class MobilePlayerGeometryTests: XCTestCase {
         XCTAssertTrue(state.session.videoController.view === initialVideo)
         XCTAssertTrue(state.session.model.player === player)
       }
+    }
+    for mode in [MobilePlaybackMode.audioOnly, .chatOnly, .video] {
+      state.session.model.selectMode(mode)
+      try await Task.sleep(for: .milliseconds(150))
+      host.view.layoutIfNeeded()
+      XCTAssertTrue(findChat(in: host.view) === initialChat)
+      XCTAssertTrue(state.session.videoController.view === initialVideo)
+      XCTAssertTrue(state.session.model.player === player)
     }
   }
 
