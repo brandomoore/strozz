@@ -272,16 +272,7 @@ struct RichChatLineView: View {
     }
 
     private func badgeView(url: URL) -> some View {
-        // WebImage (SDWebImage) keeps a decoded in-memory cache, so a badge that
-        // repeats across nearly every chat line isn't re-fetched and re-decoded
-        // each time a line scrolls into view the way SwiftUI's AsyncImage would.
-        WebImage(url: url) { image in
-            image
-                .resizable()
-                .scaledToFit()
-        } placeholder: {
-            Color.clear
-        }
+        ChatBadgeImage(url: url)
         .frame(width: badgeSize, height: badgeSize)
         .accessibilityHidden(true)
     }
@@ -399,6 +390,32 @@ struct RichChatLineView: View {
     static func clearSegmentCache() {
         segmentCache.removeAll(keepingCapacity: false)
         segmentCacheOrder.removeAll(keepingCapacity: false)
+    }
+}
+
+/// Repeated badges share SDWebImage's cache without WebImage's per-image
+/// Combine publisher bookkeeping, which stalls the main thread in long chats.
+struct ChatBadgeImage: UIViewRepresentable {
+    let url: URL
+
+    func makeUIView(context: Context) -> UIImageView {
+        let view = UIImageView()
+        view.contentMode = .scaleAspectFit
+        view.isAccessibilityElement = false
+        return view
+    }
+
+    func updateUIView(_ view: UIImageView, context: Context) {
+        guard view.sd_imageURL != url else { return }
+        view.sd_setImage(with: url, placeholderImage: nil, options: [.decodeFirstFrameOnly])
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIImageView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(by: .zero)
+    }
+
+    static func dismantleUIView(_ view: UIImageView, coordinator: ()) {
+        view.sd_cancelCurrentImageLoad()
     }
 }
 

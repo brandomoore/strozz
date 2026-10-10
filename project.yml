@@ -143,6 +143,7 @@ targets:
       - path: StrozzTests/TwitchAutomaticSignInTests.swift
       - path: StrozzTests/FollowingRecoveryTests.swift
       - path: StrozzTests/TwitchGIFTests.swift
+      - path: StrozzTests/ChatBadgeRenderingTests.swift
     dependencies:
       - target: StrozzMobile
     settings:

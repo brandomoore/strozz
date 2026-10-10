@@ -196,6 +196,9 @@ animate. Offscreen animation buffers are released, and all chat animation pauses
 during minimization, while chat is hidden, or in the background. Incoming chat
 continues to collect in its bounded buffer; hidden/gesture-time view updates are
 deferred until chat is visible again, without reconnecting or changing playback.
+Unchanged mobile message rows retain their rendered content as messages arrive.
+Repeated chat badges use native image views backed by the same SDWebImage cache,
+avoiding per-badge Combine publisher overhead during long sessions and resizing.
 
 Chat settings are also available from **Account** and when reading anonymously.
 Adjust mobile size presets, fonts, spacing, emote sizing and animation, badges,
