@@ -510,6 +510,14 @@ and channel profiles. Stream-card identity follows the streamer, not the
 broadcast ID or ranking, so tvOS can retain focus through live-status updates
 and reordering. Return refreshes do not force focus back to the first card.
 
+On foreground return, account synchronization and token validation finish before
+refreshing Home. Concurrent account recovery waits for the current local update
+and reuses a token adopted from iCloud rather than racing its single-use refresh.
+A temporary Following failure preserves that account's previous channels and
+shows a retryable error; it never replaces them with Trending or marks the failed
+attempt as fresh. Trending is for signed-out browsing only. Late or cancelled
+requests cannot overwrite a newer refresh or another account's directory.
+
 On Apple TV, selecting a stream requests exclusive playback audio. If another
 app interrupts that initial handoff, Strozz makes one bounded reactivation
 attempt; muted panes and deliberate pauses do not repeatedly claim audio.

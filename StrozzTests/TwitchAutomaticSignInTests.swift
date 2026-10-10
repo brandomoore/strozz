@@ -184,6 +184,137 @@ final class TwitchAutomaticSignInTests: XCTestCase {
     let owners = await fixture.database.ownerRequests
     XCTAssertEqual(owners, 1)
   }
+  func testForegroundSyncWaitsForExistingAccountUpdate() async throws {
+    let fixture = try Fixture()
+    defer { fixture.stop() }
+    try await fixture.saveCloudAccount()
+    await fixture.start()
+    fixture.auth.validationTask?.cancel()
+    await fixture.database.holdOwner()
+    let first = Task { await fixture.sync.synchronize() }
+    try await waitForBusy(fixture.sync)
+    var secondFinished = false
+    let second = Task { await fixture.sync.synchronize(); secondFinished = true }
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertFalse(secondFinished, "Foreground callers must not refresh follows before sync finishes")
+    await fixture.database.releaseOwner()
+    await first.value
+    await second.value
+    XCTAssertTrue(secondFinished)
+    XCTAssertFalse(fixture.sync.isBusy)
+    XCTAssertNil(fixture.sync.errorMessage)
+  }
+
+  func testUnauthorizedRecoveryWaitsForSyncAndRotatesOnlyOnce() async throws {
+    let fixture = try Fixture()
+    defer { fixture.stop() }
+    try await fixture.saveCloudAccount()
+    await fixture.start()
+    fixture.auth.validationTask?.cancel()
+    await fixture.network.enableRefresh()
+    await fixture.database.holdOwner()
+    let sync = Task { await fixture.sync.synchronize() }
+    try await waitForBusy(fixture.sync)
+    let first = Task { try await fixture.auth.recoverAccessToken(afterUnauthorized: "synthetic-access") }
+    let second = Task { try await fixture.auth.recoverAccessToken(afterUnauthorized: "synthetic-access") }
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertTrue(fixture.sync.isBusy)
+    let before = await fixture.network.requests
+    XCTAssertFalse(before.contains("/oauth2/token"))
+    await fixture.database.releaseOwner()
+    await sync.value
+    let tokens = try await [first.value, second.value]
+    XCTAssertEqual(tokens, ["rotated-access", "rotated-access"])
+    let requests = await fixture.network.requests
+    XCTAssertEqual(requests.filter { $0 == "/oauth2/token" }.count, 1)
+    XCTAssertTrue(fixture.auth.isAuthenticated)
+    XCTAssertNil(fixture.sync.errorMessage)
+    let snapshot = await fixture.database.fetch(owner: "owner")
+    XCTAssertEqual(snapshot?.account.credential?.accessToken, "rotated-access")
+    XCTAssertNil(snapshot?.account.refreshID)
+  }
+
+  func testCancelledRenewalWaiterDoesNotCancelSyncOrSpendRefreshToken() async throws {
+    let fixture = try Fixture()
+    defer { fixture.stop() }
+    try await fixture.saveCloudAccount()
+    await fixture.start()
+    fixture.auth.validationTask?.cancel()
+    await fixture.network.enableRefresh()
+    await fixture.database.holdOwner()
+    let sync = Task { await fixture.sync.synchronize() }
+    try await waitForBusy(fixture.sync)
+    let cancelled = expectation(description: "Cancelled waiter returns")
+    let renewal = Task {
+      do { _ = try await fixture.sync.renew(rejectedAccessToken: "synthetic-access"); XCTFail("Cancelled renewal succeeded") }
+      catch { XCTAssertTrue(error is CancellationError) }
+      cancelled.fulfill()
+    }
+    await Task.yield()
+    renewal.cancel()
+    await fulfillment(of: [cancelled], timeout: 2)
+    XCTAssertTrue(fixture.sync.isBusy)
+    await fixture.database.releaseOwner()
+    await sync.value
+    let requests = await fixture.network.requests
+    XCTAssertFalse(requests.contains("/oauth2/token"))
+    XCTAssertTrue(fixture.auth.isAuthenticated)
+  }
+
+  func testSignOutWhileRenewalWaitsCannotRestoreOldAccount() async throws {
+    let fixture = try Fixture()
+    defer { fixture.stop() }
+    try await fixture.saveCloudAccount()
+    await fixture.start()
+    fixture.auth.validationTask?.cancel()
+    await fixture.database.holdOwner()
+    let sync = Task { await fixture.sync.synchronize() }
+    try await waitForBusy(fixture.sync)
+    let renewal = Task { try await fixture.sync.renew(rejectedAccessToken: "synthetic-access") }
+    try await Task.sleep(for: .milliseconds(30))
+    fixture.auth.signOut()
+    await fixture.database.releaseOwner()
+    await sync.value
+    do { _ = try await renewal.value; XCTFail("Signed-out renewal succeeded") }
+    catch { XCTAssertTrue(error is CancellationError) }
+    XCTAssertFalse(fixture.auth.isAuthenticated)
+    XCTAssertNil(fixture.auth.accessToken)
+    let requests = await fixture.network.requests
+    XCTAssertFalse(requests.contains("/oauth2/token"))
+  }
+
+  func testRenewalReusesTokenAdoptedByTheInFlightSync() async throws {
+    let fixture = try Fixture()
+    defer { fixture.stop() }
+    try await fixture.saveCloudAccount()
+    await fixture.start()
+    fixture.auth.validationTask?.cancel()
+    let saved = await fixture.database.fetch(owner: "owner")
+    var next = try fixture.credential()
+    next.accessToken = "another-device-access"
+    next.refreshToken = "another-device-refresh"
+    _ = try await fixture.database.save(.init(owner: "owner", credential: next), replacing: saved)
+    await fixture.database.holdOwner()
+    let sync = Task { await fixture.sync.synchronize() }
+    try await waitForBusy(fixture.sync)
+    let renewal = Task { try await fixture.auth.recoverAccessToken(afterUnauthorized: "synthetic-access") }
+    try await Task.sleep(for: .milliseconds(30))
+    await fixture.database.releaseOwner()
+    await sync.value
+    let token = try await renewal.value
+    XCTAssertEqual(token, "another-device-access")
+    let requests = await fixture.network.requests
+    XCTAssertFalse(requests.contains("/oauth2/token"), "Do not spend the rotated token again after cloud adoption")
+    XCTAssertNil(fixture.sync.errorMessage)
+  }
+
+  private func waitForBusy(_ sync: TwitchAccountSync) async throws {
+    for _ in 0..<100 {
+      if sync.isBusy { return }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    XCTFail("Account update did not start")
+  }
 }
 
 @MainActor
@@ -238,8 +369,10 @@ private final class Fixture {
 
 private actor AutomaticSignInNetwork {
   private var client = ""
+  private var refreshEnabled = false
   private(set) var requests: [String] = []
   func setClientID(_ value: String) { client = value }
+  func enableRefresh() { refreshEnabled = true }
   func load(_ request: URLRequest) throws -> (Data, URLResponse) {
     let url = try XCTUnwrap(request.url)
     requests.append(url.path)
@@ -255,8 +388,14 @@ private actor AutomaticSignInNetwork {
         "verification_uri": "https://www.twitch.tv/activate", "expires_in": 600, "interval": 2]
       status = 200
     case "/oauth2/token":
-      body = ["error": "authorization_pending", "message": "authorization_pending"]
-      status = 400
+      if refreshEnabled {
+        body = ["access_token": "rotated-access", "refresh_token": "rotated-refresh",
+          "token_type": "bearer", "expires_in": 3600]
+        status = 200
+      } else {
+        body = ["error": "authorization_pending", "message": "authorization_pending"]
+        status = 400
+      }
     default:
       throw URLError(.unsupportedURL)
     }

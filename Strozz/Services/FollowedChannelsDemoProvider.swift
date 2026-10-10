@@ -3,7 +3,7 @@ import Foundation
 /// Demo/fallback data source for `FollowedChannelsService`.
 ///
 /// Supplies the channels shown when no real authenticated session is available
-/// (or a followed-channels fetch fails): top live streams pulled anonymously
+/// (never as a substitute for a failed followed-channels fetch): top live streams pulled anonymously
 /// from Twitch GraphQL via `fetchTrendingChannels`, with a small hand-curated
 /// `demoChannels` list as the last-resort fallback. Pure data — it never
 /// touches observable state or UI; the service decides when to use it and owns
@@ -13,6 +13,8 @@ import Foundation
 /// `@MainActor` service. Foundation-only so it can back a future iOS target.
 @MainActor
 struct FollowedChannelsDemoProvider {
+  var loadData: NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) }
+
   /// Fetches top live streams anonymously from Twitch GraphQL.
   /// This powers demo mode when user auth is not configured yet.
   func fetchTrendingChannels(limit: Int = 20) async throws -> [FollowedChannel] {
@@ -80,7 +82,7 @@ struct FollowedChannelsDemoProvider {
     req.httpBody = try JSONSerialization.data(
       withJSONObject: TwitchAPIClient.graphQLBody(query: query, variables: ["first": limit]))
 
-    let (data, response) = try await NetworkClient.api.data(for: req)
+    let (data, response) = try await loadData(req)
     try TwitchAPIClient.validatedData(data, response)
 
     let decoded = try TwitchAPIClient.decode(TrendingEnvelope.self, from: data)

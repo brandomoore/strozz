@@ -64,6 +64,7 @@ struct MobileRootView: View {
   @Environment(\.scenePhase) private var scenePhase
   @Environment(MobilePlaybackSession.self) private var playback
   @Environment(TwitchAuthSession.self) private var auth
+  @Environment(TwitchAccountSync.self) private var accountSync
   @Environment(TwitchWatchRewardsSession.self) private var rewards
   @State private var preview = MobileHomePreview()
   @State private var tab = 0
@@ -135,6 +136,15 @@ struct MobileRootView: View {
     }
     .onDisappear { preview.stop() }
     .onChange(of: scenePhase, initial: true) { _, phase in playback.sceneChanged(phase) }
+    .onChange(of: scenePhase) { _, phase in
+      guard phase == .active else { return }
+      Task {
+        await accountSync.synchronize()
+        await auth.validateSessionIfNeeded()
+        guard scenePhase == .active, !Task.isCancelled else { return }
+        returnRefresh.refreshThumbnails()
+      }
+    }
     .task(id: playback.channel?.channelKey) { await playback.trackWatch(auth: auth, rewards: rewards) }
   }
 

@@ -1,12 +1,13 @@
 import Foundation
 import Observation
+import OSLog
 
 /// Public facade for the signed-in viewer's followed channels.
 ///
 /// Owns the observable state that the UI binds to (the live "Following" rail,
 /// the full Following directory, the follow-category profile, plus loading and
 /// error flags) and the orchestration that decides *when* to fetch live data,
-/// fall back to demo/trending content, refresh expired tokens, or enrich with
+/// show anonymous trending content, refresh expired tokens, or enrich with
 /// YouTube presence. The heavy lifting is delegated to focused, Foundation-only
 /// collaborators so this type stays a thin coordinator:
 ///
@@ -27,9 +28,50 @@ final class FollowedChannelsService {
     TwitchConfig.webPublicClientID
   ]
 
-  private let fetcher = FollowedChannelsFetcher()
-  private let demoProvider = FollowedChannelsDemoProvider()
+  private let fetcher: FollowedChannelsFetcher
+  private let demoProvider: FollowedChannelsDemoProvider
   private let avatarPrewarmer = FollowedChannelsAvatarPrewarmer()
+  private var accountID: String?
+  private var refreshID = UUID()
+  private var directoryRequestID = UUID()
+  private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "following")
+
+  init(loadData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) }) {
+    fetcher = FollowedChannelsFetcher(loadData: loadData)
+    demoProvider = FollowedChannelsDemoProvider(loadData: loadData)
+  }
+
+  private struct Account: Equatable {
+    let userID: String?
+    let authenticated: Bool
+    let generation: UUID
+
+    @MainActor init(_ auth: TwitchAuthSession) {
+      userID = auth.userID
+      authenticated = auth.isAuthenticated
+      generation = auth.sessionGeneration
+    }
+  }
+
+  /// Clear another account's data immediately, but retain this account's last good
+  /// results while its connection is being recovered.
+  func accountChanged(using auth: TwitchAuthSession) {
+    guard accountID != auth.userID else { return }
+    accountID = auth.userID
+    refreshID = UUID()
+    directoryRequestID = UUID()
+    channels = []
+    directory = []
+    followedCategories = [:]
+    followedLogins = []
+    isUsingDemoData = false
+    isLoading = false
+    isLoadingDirectory = false
+    errorMessage = nil
+    directoryErrorMessage = nil
+    lastUpdatedAt = nil
+    directoryLoadedAt = nil
+  }
 
   private(set) var channels: [FollowedChannel] = [] {
     didSet { avatarPrewarmer.prewarm(channels) }
@@ -46,7 +88,14 @@ final class FollowedChannelsService {
   private(set) var isLoading = false
   private(set) var isUsingDemoData = false
   private(set) var errorMessage: String?
+  /// Last successful refresh, never a failed attempt or cancelled request.
   private(set) var lastUpdatedAt: Date?
+
+  func needsRefresh(staleAfter interval: TimeInterval, now: Date = Date()) -> Bool {
+    guard !isLoading else { return false }
+    guard errorMessage == nil, let lastUpdatedAt else { return true }
+    return now.timeIntervalSince(lastUpdatedAt) >= interval
+  }
 
   /// The full "Following" directory — every channel the viewer follows, live
   /// **and** offline — sorted live-first. Populated lazily by `loadDirectory`
@@ -89,31 +138,59 @@ final class FollowedChannelsService {
   }
 
   func refresh(using auth: TwitchAuthSession) async {
+    guard !Task.isCancelled else { return }
+    accountChanged(using: auth)
+    let account = Account(auth)
+    let request = UUID()
+    refreshID = request
     isLoading = true
     errorMessage = nil
 
-    defer {
-      isLoading = false
-      lastUpdatedAt = Date()
+    defer { if refreshID == request { isLoading = false } }
+    func isCurrent() -> Bool {
+      !Task.isCancelled && refreshID == request && Account(auth) == account
     }
 
     guard auth.isAuthenticated else {
-      channels = await fetchDemoChannels()
-      isUsingDemoData = true
+      // False authentication can mean "restoring", not an anonymous viewer.
+      if auth.userID != nil || auth.accessToken != nil || auth.refreshToken != nil
+        || auth.cloudSync?.isRestoringAccount == true
+        || (auth.cloudSync?.isSignedOutLocally != true
+          && (auth.cloudSync?.errorMessage != nil || auth.errorMessage != nil)) {
+        errorMessage = auth.errorMessage ?? auth.cloudSync?.errorMessage
+          ?? "Your Twitch connection is being restored. Try refreshing shortly."
+        return
+      }
+      do {
+        let trending = try await demoProvider.fetchTrendingChannels()
+        guard isCurrent() else { return }
+        isUsingDemoData = true
+        channels = trending.isEmpty ? FollowedChannelsDemoProvider.demoChannels : trending
+        if trending.isEmpty { errorMessage = "Trending feed is empty right now. Showing fallback demo channels." }
+        else { lastUpdatedAt = Date() }
+      } catch {
+        guard isCurrent(), !(error is CancellationError) else { return }
+        channels = FollowedChannelsDemoProvider.demoChannels
+        isUsingDemoData = true
+        errorMessage = "Could not load trending channels. Showing fallback demo channels."
+        Self.logger.error("Trending refresh failed: \((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
+      }
       return
     }
 
+    // A previous anonymous rail is not valid signed-in content.
+    if isUsingDemoData {
+      channels = []
+      isUsingDemoData = false
+      lastUpdatedAt = nil
+    }
     guard let clientID = resolveClientID() else {
-      channels = await fetchDemoChannels()
-      isUsingDemoData = true
       errorMessage =
         "Cannot load followed channels until TWITCH_CLIENT_ID is set in Config/TwitchSecrets.xcconfig.local."
       return
     }
 
     if Self.disallowedClientIDs.contains(clientID.lowercased()) {
-      channels = await fetchDemoChannels()
-      isUsingDemoData = true
       errorMessage =
         "TWITCH_CLIENT_ID is using a public Twitch web client (shows \"Twilight\"). Create your own Twitch app and use its Client ID to load followed channels."
       return
@@ -121,70 +198,39 @@ final class FollowedChannelsService {
 
     guard let userID = auth.userID
     else {
-      channels = await fetchDemoChannels()
-      isUsingDemoData = true
+      errorMessage = "Could not identify your Twitch account. Check your connection in Settings."
       return
     }
 
-    let initialAccessToken: String
-    if let accessToken = auth.accessToken {
-      initialAccessToken = accessToken
-    } else {
-      do {
-        initialAccessToken = try await auth.refreshAccessTokenIfNeeded(force: true)
-      } catch {
-        channels = await fetchDemoChannels()
-        isUsingDemoData = true
-        let detail = describe(error)
-        errorMessage =
-          "Could not load followed channels (\(detail)). Showing trending channels instead."
-        return
-      }
-    }
-
     do {
-      channels = try await fetcher.fetchLiveFollowedChannels(
-        clientID: clientID,
-        accessToken: initialAccessToken,
-        userID: userID
-      )
-      isUsingDemoData = false
-    } catch let error as TwitchHelixRequestError where error.status == 401 {
+      let initialAccessToken = try await auth.refreshAccessTokenIfNeeded()
+      guard isCurrent() else { return }
+      let loaded: [FollowedChannel]
       do {
+        loaded = try await fetcher.fetchLiveFollowedChannels(
+          clientID: clientID, accessToken: initialAccessToken, userID: userID)
+      } catch let error as TwitchHelixRequestError where error.status == 401 {
+        guard isCurrent() else { return }
         let refreshedAccessToken = try await auth.recoverAccessToken(
           afterUnauthorized: initialAccessToken)
-        channels = try await fetcher.fetchLiveFollowedChannels(
+        guard isCurrent() else { return }
+        loaded = try await fetcher.fetchLiveFollowedChannels(
           clientID: clientID,
           accessToken: refreshedAccessToken,
           userID: userID
         )
-        isUsingDemoData = false
-      } catch {
-        channels = await fetchDemoChannels()
-        isUsingDemoData = true
-        let detail = describe(error)
-        errorMessage =
-          "Could not load followed channels (\(detail)). Showing trending channels instead."
       }
+      guard isCurrent() else { return }
+      channels = loaded
+      isUsingDemoData = false
+      lastUpdatedAt = Date()
+      await refreshFollowedCategories(clientID: clientID, accessToken: auth.accessToken ?? initialAccessToken,
+        userID: userID, isCurrent: isCurrent)
     } catch {
-      channels = await fetchDemoChannels()
-      isUsingDemoData = true
+      guard isCurrent(), !(error is CancellationError) else { return }
       let detail = describe(error)
-      errorMessage =
-        "Could not load followed channels (\(detail)). Showing trending channels instead."
-    }
-
-    // Best-effort: build the full follow-category profile (incl. offline follows)
-    // for personalized recommendations. Never affects the Following rail.
-    if !isUsingDemoData {
-      await refreshFollowedCategories(
-        clientID: clientID,
-        accessToken: auth.accessToken ?? initialAccessToken,
-        userID: userID
-      )
-    } else {
-      followedCategories = [:]
-      followedLogins = []
+      errorMessage = "Could not refresh followed channels (\(detail)). Try refreshing again."
+      Self.logger.error("Following refresh failed: \((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
     }
   }
 
@@ -193,6 +239,8 @@ final class FollowedChannelsService {
   /// result is reused unless `force` is set. Requires a real authenticated
   /// session (the directory has no demo/trending equivalent).
   func loadDirectory(using auth: TwitchAuthSession, force: Bool = false) async {
+    guard !Task.isCancelled else { return }
+    accountChanged(using: auth)
     guard auth.isAuthenticated, let userID = auth.userID else { return }
     guard let clientID = resolveClientID(),
           !Self.disallowedClientIDs.contains(clientID.lowercased())
@@ -201,12 +249,18 @@ final class FollowedChannelsService {
       return
     }
 
-    if !force, directoryLoadedAt != nil { return }
-    if isLoadingDirectory { return }
+    if !force, directoryLoadedAt != nil, directoryErrorMessage == nil { return }
+    if isLoadingDirectory && !force { return }
 
+    let account = Account(auth)
+    let request = UUID()
+    directoryRequestID = request
     isLoadingDirectory = true
     directoryErrorMessage = nil
-    defer { isLoadingDirectory = false }
+    defer { if directoryRequestID == request { isLoadingDirectory = false } }
+    func isCurrent() -> Bool {
+      !Task.isCancelled && directoryRequestID == request && Account(auth) == account
+    }
 
     let accessToken: String
     if let token = auth.accessToken {
@@ -215,6 +269,7 @@ final class FollowedChannelsService {
       do {
         accessToken = try await auth.refreshAccessTokenIfNeeded(force: true)
       } catch {
+        guard isCurrent(), !(error is CancellationError) else { return }
         directoryErrorMessage =
           "Could not load your follows (\(describe(error)))."
         return
@@ -222,20 +277,29 @@ final class FollowedChannelsService {
     }
 
     do {
-      directory = try await fetcher.fetchFollowingDirectory(
+      guard isCurrent() else { return }
+      let loaded = try await fetcher.fetchFollowingDirectory(
         clientID: clientID, accessToken: accessToken, userID: userID)
+      guard isCurrent() else { return }
+      directory = loaded
       directoryLoadedAt = Date()
     } catch let error as TwitchHelixRequestError where error.status == 401 {
+      guard isCurrent() else { return }
       do {
         let refreshed = try await auth.recoverAccessToken(
           afterUnauthorized: accessToken)
-        directory = try await fetcher.fetchFollowingDirectory(
+        guard isCurrent() else { return }
+        let loaded = try await fetcher.fetchFollowingDirectory(
           clientID: clientID, accessToken: refreshed, userID: userID)
+        guard isCurrent() else { return }
+        directory = loaded
         directoryLoadedAt = Date()
       } catch {
+        guard isCurrent(), !(error is CancellationError) else { return }
         directoryErrorMessage = "Could not load your follows (\(describe(error)))."
       }
     } catch {
+      guard isCurrent(), !(error is CancellationError) else { return }
       directoryErrorMessage = "Could not load your follows (\(describe(error)))."
     }
   }
@@ -243,25 +307,31 @@ final class FollowedChannelsService {
   /// Loads the categories of every channel the viewer follows (online and offline)
   /// and tallies them by category. Best-effort: on any failure the previous
   /// profile is left intact so a transient error doesn't wipe recommendations.
-  private func refreshFollowedCategories(clientID: String, accessToken: String, userID: String) async {
+  private func refreshFollowedCategories(clientID: String, accessToken: String, userID: String,
+                                        isCurrent: () -> Bool) async {
     do {
       let follows = try await fetcher.fetchFollowedBroadcasters(
         clientID: clientID, accessToken: accessToken, userID: userID)
+      guard isCurrent() else { return }
       let ids = follows.map(\.broadcasterID)
       guard !ids.isEmpty else {
         followedCategories = [:]
         followedLogins = []
         return
       }
-      followedLogins = Set(
+      let logins = Set(
         follows.compactMap {
           let login = $0.broadcasterLogin?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
           return (login?.isEmpty == false) ? login : nil
         })
-      followedCategories = try await fetcher.fetchChannelCategoryCounts(
+      let categories = try await fetcher.fetchChannelCategoryCounts(
         clientID: clientID, accessToken: accessToken, broadcasterIDs: ids)
+      guard isCurrent() else { return }
+      followedLogins = logins
+      followedCategories = categories
     } catch {
-      // Keep any previously-loaded profile.
+      guard isCurrent(), !(error is CancellationError) else { return }
+      Self.logger.warning("Follow category refresh failed; preserving previous profile: \((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
     }
   }
 
@@ -275,20 +345,6 @@ final class FollowedChannelsService {
       return nil
     }
     return trimmed
-  }
-
-  private func fetchDemoChannels() async -> [FollowedChannel] {
-    do {
-      let trending = try await demoProvider.fetchTrendingChannels()
-      if !trending.isEmpty {
-        return trending
-      }
-      errorMessage = "Trending feed is empty right now. Showing fallback demo channels."
-    } catch {
-      errorMessage = "Could not load trending channels. Showing fallback demo channels."
-    }
-
-    return FollowedChannelsDemoProvider.demoChannels
   }
 
   private func describe(_ error: Error) -> String {

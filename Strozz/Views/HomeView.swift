@@ -346,14 +346,10 @@ struct HomeView: View {
       Task {
         await environment.accountSync.synchronize()
         await auth.validateSessionIfNeeded()
-      }
-      // Returning to the app — even a day later — must not leave stale cards on
-      // screen. Only once the initial load has finished (so this can't race it),
-      // and unforced so each rail's staleness window keeps a quick trip away
-      // free.
-      guard hasCompletedInitialLoad else { return }
-      promptGoLiveSetupIfNeeded()
-      Task {
+        // Account recovery must finish before an expired Following request can
+        // attempt renewal. A failed refresh is retryable, not five-minute fresh data.
+        guard hasCompletedInitialLoad, isForeground, !Task.isCancelled else { return }
+        promptGoLiveSetupIfNeeded()
         await refreshHomeSections(force: false)
         await youtubeSubscriptions.refresh(using: youtubeAuth)
         await refreshYouTubeSubscriptionLiveness()
@@ -377,9 +373,17 @@ struct HomeView: View {
       // Re-seed the go-live baseline against the new account's follows.
       goLive.start(using: auth)
       Task {
-        await refreshFollowedChannelsIfNeeded(force: true)
+        await refreshHomeSections(force: true)
         requestFocusIfPossible(force: true)
       }
+    }
+    .onChange(of: auth.userID) { _, _ in
+      follows.accountChanged(using: auth)
+      Task { await refreshHomeSections(force: true) }
+    }
+    .onChange(of: auth.accessToken) { _, _ in
+      guard auth.isAuthenticated, follows.errorMessage != nil || follows.isUsingDemoData else { return }
+      Task { await refreshHomeSections(force: true) }
     }
     .onChange(of: youtubeAuth.isAuthenticated) { _, _ in
       Task {
@@ -981,9 +985,7 @@ struct HomeView: View {
   }
 
   private func shouldAutoRefreshFollowedChannels() -> Bool {
-    guard !follows.isLoading else { return false }
-    guard let lastUpdatedAt = follows.lastUpdatedAt else { return true }
-    return Date().timeIntervalSince(lastUpdatedAt) >= autoRefreshStaleInterval
+    follows.needsRefresh(staleAfter: autoRefreshStaleInterval)
   }
 
   private func shouldAutoRefreshRecommendations() -> Bool {

@@ -6,7 +6,16 @@ import OSLog
 @MainActor
 @Observable
 final class TwitchAccountSync {
-  private(set) var isBusy = false
+  private(set) var isBusy = false {
+    didSet {
+      if !isBusy {
+        let waiting = idleWaiters.values
+        idleWaiters.removeAll()
+        for waiter in waiting { waiter.resume() }
+      }
+    }
+  }
+  @ObservationIgnored private var idleWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
   private(set) var status = "Checking iCloud..."
   private(set) var errorMessage: String?
   private(set) var isSignedOutLocally: Bool
@@ -185,6 +194,18 @@ final class TwitchAccountSync {
   }
 
   func synchronize(preferCloud: Bool = false) async {
+    if isBusy {
+      do { try await waitUntilIdle() } catch { return }
+      // Join the active account update instead of reporting completion before it.
+      if !preferCloud { return }
+    }
+    if let refresh = auth?.refreshInFlight {
+      do { _ = try await refresh.value }
+      catch is CancellationError { return }
+      catch { report(error) }
+      return
+    }
+    guard !Task.isCancelled else { return }
     guard !isSignedOutLocally, !isBusy, let auth, !auth.isAuthenticating, auth.refreshInFlight == nil else { return }
     isBusy = true
     defer { isBusy = false }
@@ -265,6 +286,12 @@ final class TwitchAccountSync {
   }
 
   func renew(rejectedAccessToken: String?) async throws -> String {
+    let expectedGeneration = auth?.sessionGeneration
+    let expectedUserID = auth?.userID
+    try await waitUntilIdle()
+    guard auth?.sessionGeneration == expectedGeneration, auth?.userID == expectedUserID else {
+      throw CancellationError()
+    }
     guard !isBusy, !isSignedOutLocally, let auth, let local = auth.storedCredential,
       let owner = local.cloudOwner else { throw TwitchSyncError.busy }
     isBusy = true
@@ -281,6 +308,7 @@ final class TwitchAccountSync {
         succeeded()
         return shared.accessToken
       }
+
       let updated = try await rotate(snapshot: snapshot, generation: generation)
       try check(generation)
       try auth.useCredential(updated)
@@ -290,6 +318,23 @@ final class TwitchAccountSync {
       report(error)
       throw error
     }
+  }
+
+  private func waitUntilIdle() async throws {
+    while isBusy {
+      let id = UUID()
+      try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+          if Task.isCancelled { continuation.resume(throwing: CancellationError()) }
+          else { idleWaiters[id] = continuation }
+        }
+      } onCancel: {
+        Task { @MainActor [weak self] in
+          self?.idleWaiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
+        }
+      }
+    }
+    try Task.checkCancellation()
   }
 
   private func rotate(snapshot: TwitchCloudSnapshot, generation: UUID) async throws -> TwitchCredential {

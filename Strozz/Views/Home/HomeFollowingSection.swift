@@ -62,7 +62,8 @@ struct HomeFollowingSection: View {
 
       if channels.isEmpty {
         HomeStreamRailPlaceholder(rail: rail, style: style,
-          isLoading: follows.isLoading || follows.lastUpdatedAt == nil || environment.accountSync.isRestoringAccount,
+          isLoading: follows.isLoading || (follows.lastUpdatedAt == nil && follows.errorMessage == nil)
+            || environment.accountSync.isRestoringAccount,
           emptyMessage: follows.isUsingDemoData
             ? "No trending channels are available right now." : "No followed channels are available yet.")
       } else {
