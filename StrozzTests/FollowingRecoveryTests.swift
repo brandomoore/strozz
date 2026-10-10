@@ -77,7 +77,25 @@ final class FollowingRecoveryTests: XCTestCase {
     XCTAssertEqual(loader.paths.count, requests)
     XCTAssertEqual(service.channels, channels)
     XCTAssertFalse(service.isUsingDemoData)
-    XCTAssertNotNil(service.errorMessage)
+    XCTAssertNil(service.errorMessage, "Normal restoration is not an error")
+  }
+
+  func testStartupRestorationIsQuietButActualAccountErrorsRemainVisible() async {
+    let auth = auth()
+    auth.isAuthenticated = false
+    let loader = FollowingLoader()
+    let service = FollowedChannelsService(loadData: { try await loader.load($0) })
+    await service.refresh(using: auth)
+    XCTAssertNil(service.errorMessage)
+    XCTAssertNil(service.lastUpdatedAt)
+    XCTAssertFalse(service.isUsingDemoData)
+    XCTAssertTrue(loader.paths.isEmpty)
+
+    auth.errorMessage = "Your saved Twitch connection needs attention."
+    await service.refresh(using: auth)
+    XCTAssertEqual(service.errorMessage, auth.errorMessage)
+    XCTAssertTrue(loader.paths.isEmpty)
+    XCTAssertFalse(service.isUsingDemoData)
   }
 
   func testAnonymousTrendingRequestCannotOverwriteRestoredFollowing() async throws {

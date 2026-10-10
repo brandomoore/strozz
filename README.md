@@ -511,7 +511,8 @@ broadcast ID or ranking, so tvOS can retain focus through live-status updates
 and reordering. Return refreshes do not force focus back to the first card.
 
 On foreground return, account synchronization and token validation finish before
-refreshing Home. Concurrent account recovery waits for the current local update
+refreshing Home. Normal restoration has no visible account-status message; only
+actual account or refresh errors are shown. Concurrent account recovery waits for the current local update
 and reuses a token adopted from iCloud rather than racing its single-use refresh.
 A temporary Following failure preserves that account's previous channels and
 shows a retryable error; it never replaces them with Trending or marks the failed

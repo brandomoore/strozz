@@ -158,7 +158,6 @@ final class FollowedChannelsService {
         || (auth.cloudSync?.isSignedOutLocally != true
           && (auth.cloudSync?.errorMessage != nil || auth.errorMessage != nil)) {
         errorMessage = auth.errorMessage ?? auth.cloudSync?.errorMessage
-          ?? "Your Twitch connection is being restored. Try refreshing shortly."
         return
       }
       do {
