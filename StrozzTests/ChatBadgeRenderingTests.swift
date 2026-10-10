@@ -1,5 +1,7 @@
 import SDWebImage
+import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
 import XCTest
 #if os(iOS)
 @testable import StrozzMobile
@@ -9,6 +11,48 @@ import XCTest
 
 @MainActor
 final class ChatBadgeRenderingTests: XCTestCase {
+  func testWideEmoteKeepsItsAspectRatioWhenAnimationIsToggled() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("wide-emote-\(UUID()).gif")
+    let output = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.gif.identifier as CFString, 2, nil))
+    CGImageDestinationSetProperties(output,
+      [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+    for color in [UIColor.systemBlue, .systemGreen] {
+      let image = UIGraphicsImageRenderer(size: CGSize(width: 160, height: 40)).image {
+        color.setFill()
+        $0.fill(CGRect(x: 0, y: 0, width: 160, height: 40))
+      }
+      CGImageDestinationAddImage(output, try XCTUnwrap(image.cgImage),
+        [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 0.1]] as CFDictionary)
+    }
+    XCTAssertTrue(CGImageDestinationFinalize(output))
+    defer {
+      do { try FileManager.default.removeItem(at: url) }
+      catch { XCTFail("Could not remove owned emote fixture: \(error)") }
+    }
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let previous = scene.keyWindow
+    let state = BadgeRenderingState(url: url)
+    let host = UIHostingController(rootView: EmoteRenderingHarness(state: state))
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = host
+    window.makeKeyAndVisible()
+    defer {
+      window.isHidden = true
+      window.rootViewController = nil
+      previous?.makeKey()
+    }
+    host.view.layoutIfNeeded()
+    try await waitUntil { self.imageView(in: host.view)?.isAnimating == true }
+    let image = try XCTUnwrap(imageView(in: host.view) as? SDAnimatedImageView)
+    for animated in [false, true] {
+      state.animated = animated
+      try await waitUntil { image.isAnimating == animated && image.image != nil }
+      host.view.layoutIfNeeded()
+      XCTAssertEqual(image.bounds.width, 104, accuracy: 1)
+      XCTAssertEqual(image.bounds.height, 26, accuracy: 1)
+    }
+  }
+
   func testBadgeKeepsItsNativeViewThroughResizingAndUpdatesChangedURLs() async throws {
     let firstURL = FileManager.default.temporaryDirectory.appendingPathComponent("badge-first-\(UUID()).png")
     let secondURL = FileManager.default.temporaryDirectory.appendingPathComponent("badge-second-\(UUID()).png")
@@ -80,6 +124,7 @@ final class ChatBadgeRenderingTests: XCTestCase {
 private final class BadgeRenderingState {
   var url: URL
   var size: CGFloat = 16
+  var animated = true
   init(url: URL) { self.url = url }
 }
 
@@ -87,5 +132,16 @@ private struct BadgeRenderingHarness: View {
   let state: BadgeRenderingState
   var body: some View {
     ChatBadgeImage(url: state.url).frame(width: state.size, height: state.size)
+  }
+}
+
+private struct EmoteRenderingHarness: View {
+  let state: BadgeRenderingState
+  var body: some View {
+    RichChatLineView(message: ChatMessage(username: "Viewer", colorHex: nil, badgeKeys: [],
+      text: "Wide", twitchEmoteURLs: ["Wide": state.url]), nameColor: .primary,
+      globalEmoteURLs: [:], badgeURLs: [:], textSize: 16, emoteSize: 26,
+      animatedEmotes: state.animated)
+      .frame(width: 300, height: 100)
   }
 }

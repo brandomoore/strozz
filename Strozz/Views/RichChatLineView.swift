@@ -1,5 +1,5 @@
 import SwiftUI
-import SDWebImageSwiftUI
+import SDWebImage
 
 private struct ChatAnimationsActiveKey: EnvironmentKey {
     static let defaultValue: Bool? = nil
@@ -290,6 +290,7 @@ struct RichChatLineView: View {
             if let onInspectEmote {
                 Button { onInspectEmote(name, url) } label: {
                     emote(name: name, url: url)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .contentShape(Rectangle())
@@ -304,7 +305,9 @@ struct RichChatLineView: View {
                                       height: min(120, max(72, emoteHeight * 3)), animated: animatedEmotes)
                 .id(url)
             if let onInspectEmote {
-                Button { onInspectEmote(name, url) } label: { preview }
+                Button { onInspectEmote(name, url) } label: {
+                    preview.contentShape(Rectangle())
+                }
                     .buttonStyle(.plain)
                     .contentShape(Rectangle())
                     .accessibilityLabel("View GIF \(name)")
@@ -323,7 +326,9 @@ struct RichChatLineView: View {
                     .foregroundStyle(color)
             }
             if let onInspectEmote {
-                Button { onInspectEmote(String(localized: "\(amount) bits"), url) } label: { content }
+                Button { onInspectEmote(String(localized: "\(amount) bits"), url) } label: {
+                    content.contentShape(Rectangle())
+                }
                     .buttonStyle(.plain)
                     .contentShape(Rectangle())
                     .accessibilityLabel("View cheer of \(amount) bits")
@@ -402,6 +407,7 @@ struct ChatBadgeImage: UIViewRepresentable {
         let view = UIImageView()
         view.contentMode = .scaleAspectFit
         view.isAccessibilityElement = false
+        view.isUserInteractionEnabled = false
         return view
     }
 
@@ -467,12 +473,8 @@ private struct EmoteView: View {
     var isGIF = false
 
     @State private var loadFailed = false
-    @State private var animationRequested = false
+    @State private var imageAspectRatio: CGFloat = 1
     @Environment(\.chatAnimationsActive) private var animationsActive
-
-    private var imageContext: [SDWebImageContextOption: Any]? {
-        isGIF ? [.imageThumbnailPixelSize: CGSize(width: 360, height: 240)] : nil
-    }
 
     var body: some View {
         Group {
@@ -485,58 +487,82 @@ private struct EmoteView: View {
                         .font(.system(size: fallbackFontSize))
                         .foregroundStyle(fallbackColor)
                 }
-            } else if animated {
-                AnimatedImage(url: url, options: isGIF ? [.matchAnimatedImageClass] : [],
-                              context: imageContext, isAnimating: $animationRequested)
-                    .onViewCreate { view, _ in
-                        // Managed rows, not UIKit attachment/alpha changes, own playback.
-                        view.autoPlayAnimatedImage = animationsActive == nil
-                    }
-                    .onViewUpdate { view, _ in
-                        if animationsActive != nil {
-                            view.autoPlayAnimatedImage = animationRequested
-                        }
-                    }
-                    .maxBufferSize(isGIF ? 2 * 1024 * 1024 : nil)
-                    .purgeable(animationsActive == false)
-                    .onFailure { _ in
-                        // Defer the state mutation: SDWebImage fires this callback
-                        // synchronously while cancelling in-flight loads during view
-                        // teardown. Writing @State inline re-enters SwiftUI's storage
-                        // mid-update and trips a Swift exclusivity conflict (SIGABRT).
-                        DispatchQueue.main.async {
-                            loadFailed = true
-                        }
-                    }
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(height: emoteHeight)
-                    .fixedSize(horizontal: !constrainsWidth, vertical: false)
             } else {
-                // Static path: WebImage's `isAnimating` defaults to `true`, so we
-                // must explicitly pin it off to hold the first frame. Animated
-                // WebP/GIF emotes then stay still while keeping the same layout
-                // footprint.
-                WebImage(url: url, options: isGIF ? [.decodeFirstFrameOnly] : [],
-                         context: imageContext, isAnimating: .constant(false)) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                } placeholder: {
-                    Color.clear
-                }
-                .onFailure { _ in
-                    DispatchQueue.main.async {
+                ChatEmoteImage(url: url, animated: animated, active: animationsActive ?? true, isGIF: isGIF) { size in
+                    if let size, size.height > 0 {
+                        imageAspectRatio = size.width / size.height
+                    } else {
                         loadFailed = true
                     }
                 }
+                .allowsHitTesting(false)
+                .aspectRatio(imageAspectRatio, contentMode: .fit)
                 .frame(height: emoteHeight)
                 .fixedSize(horizontal: !constrainsWidth, vertical: false)
             }
         }
-        // The image loader retains this binding until completion; a captured
-        // constant can otherwise restore stale visibility after the load finishes.
-        .onChange(of: animationsActive, initial: true) { _, active in animationRequested = active ?? true }
+    }
+}
+
+struct ChatEmoteImage: UIViewRepresentable {
+    let url: URL
+    let animated: Bool
+    let active: Bool
+    let isGIF: Bool
+    let onLoad: (CGSize?) -> Void
+
+    final class Coordinator {
+        var request = UUID()
+        var animated: Bool?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> SDAnimatedImageView {
+        let view = SDAnimatedImageView()
+        view.contentMode = .scaleAspectFit
+        view.autoPlayAnimatedImage = false
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        return view
+    }
+
+    func updateUIView(_ view: SDAnimatedImageView, context: Context) {
+        let coordinator = context.coordinator
+        view.autoPlayAnimatedImage = animated && active
+        view.clearBufferWhenStopped = !active
+        view.maxBufferSize = isGIF ? 2 * 1024 * 1024 : 0
+        if view.sd_imageURL != url || coordinator.animated != animated {
+            coordinator.request = UUID()
+            coordinator.animated = animated
+            let request = coordinator.request
+            var imageContext: [SDWebImageContextOption: Any] = [.animatedImageClass: SDAnimatedImage.self]
+            if isGIF { imageContext[.imageThumbnailPixelSize] = CGSize(width: 360, height: 240) }
+            view.sd_setImage(with: url, placeholderImage: nil,
+                            options: animated ? [.matchAnimatedImageClass] : [.decodeFirstFrameOnly],
+                            context: imageContext, progress: nil) { image, _, _, _ in
+                let size = image?.size
+                // Cache hits and cancelled loads can complete during a view update.
+                DispatchQueue.main.async { [weak view] in
+                    guard let view, coordinator.request == request, view.sd_imageURL == url else { return }
+                    onLoad(size)
+                }
+            }
+        }
+        if animated && active { view.startAnimating() }
+        else { view.stopAnimating() }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: SDAnimatedImageView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(by: CGSize(width: 1, height: 1))
+    }
+
+    static func dismantleUIView(_ view: SDAnimatedImageView, coordinator: Coordinator) {
+        coordinator.request = UUID()
+        view.autoPlayAnimatedImage = false
+        view.clearBufferWhenStopped = true
+        view.stopAnimating()
+        view.sd_cancelCurrentImageLoad()
     }
 }
 
