@@ -203,6 +203,8 @@ The aspect-fitted video is centered vertically and horizontally in the left pane
 Landscape profile details appear with the controls over the lower video area,
 so revealing them does not move or resize the video. One mounted chat view moves
 between portrait and landscape instead of rebuilding the timeline and composer.
+Each stream's player view retains its own model and video controller until that
+view is removed, so replacing a minimized stream cannot detach the incoming video.
 Drafts, in-flight sends, and the chat reading state are shared across those layouts.
 Tapping the video or rotating dismisses the keyboard without discarding a draft.
 The composer shows an upward arrow to send, or the settings dots when empty.
@@ -215,6 +217,12 @@ Unchanged mobile message rows retain their rendered content as messages arrive.
 Chat badges, emotes, and GIFs use native image views backed by the same SDWebImage
 cache, avoiding per-image Combine publisher overhead during long sessions and
 resizing. Animation remains controlled by the viewport and accessibility settings.
+Development builds keep a bounded, local `Library/Caches/MobilePlaybackDiagnostics`
+record of player state, fresh decoded-frame age, PiP state, and video-layer
+attachment/visibility. Sampling is limited to once every two seconds and uses
+the existing background telemetry writer; it does not store stream URLs, chat
+messages, or credentials. This allows a blank-video recurrence to be inspected
+without attaching a debugger. Release builds do not collect these snapshots.
 
 Chat settings are also available from **Account** and when reading anonymously.
 Adjust mobile size presets, fonts, spacing, emote sizing and animation, badges,

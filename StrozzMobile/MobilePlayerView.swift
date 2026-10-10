@@ -163,6 +163,8 @@ enum MobileMiniPlayerLayout {
 struct MobilePlayerView: View {
   let channel: FollowedChannel
   let session: MobilePlaybackSession
+  private let model: MobilePlaybackModel
+  private let videoController: MobileVideoController
   @State private var hideChat = false
   @State private var fullscreen = false
   @State private var landscapeChatVisible = false
@@ -180,8 +182,16 @@ struct MobilePlayerView: View {
   @Environment(\.verticalSizeClass) private var verticalSizeClass
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+  init(channel: FollowedChannel, session: MobilePlaybackSession) {
+    self.channel = channel
+    self.session = session
+    // An outgoing SwiftUI subtree can outlive a channel switch. It must not
+    // borrow the new stream's controller and detach it during its own teardown.
+    model = session.model
+    videoController = session.videoController
+  }
+
   var body: some View {
-    let model = session.model
     GeometryReader { geometry in
       let isPhone = UIDevice.current.userInterfaceIdiom == .phone
       let phoneLandscape = isPhone && verticalSizeClass == .compact
@@ -252,14 +262,14 @@ struct MobilePlayerView: View {
           isFullscreen: isPhone ? phoneLandscape : layout == .videoOnly,
           isMinimized: !session.isExpanded,
           isManipulating: miniPlayerManipulation.startFrame != nil || chatWidthDrag.initialWidth != nil,
-          videoController: session.videoController,
+          videoController: videoController,
           onCollapse: session.collapse, onClose: session.close, onExpand: session.expand,
           onCollapseDragChanged: { updateCollapseDrag($0, distance: max(120, min(360, compact.midY))) },
           onCollapseDragEnded: endCollapseDrag,
           onFullscreen: { toggleFullscreen(exiting: isPhone ? phoneLandscape : layout == .videoOnly) },
           onScene: { windowScene = $0 },
           onLayout: { [weak session] frame in
-            guard let session else { return }
+            guard let session, session.videoController === videoController else { return }
             if session.isExpanded,
               abs(frame.minX - expandedWindowFrame.minX) < 1,
               abs(frame.minY - expandedWindowFrame.minY) < 1,
@@ -357,7 +367,7 @@ struct MobilePlayerView: View {
       .updating($miniPlayerManipulation) { value, state, _ in
         if state.startFrame == nil {
           // Catch a gliding player where it is displayed, not at its animation's destination.
-          state.startFrame = session.videoController.presentedFrame?.offsetBy(dx: -origin.x, dy: -origin.y) ?? frame
+          state.startFrame = videoController.presentedFrame?.offsetBy(dx: -origin.x, dy: -origin.y) ?? frame
         }
         state.update(translation: value.first?.translation, magnification: value.second?.magnification,
                      anchor: value.second?.startAnchor)
@@ -642,6 +652,37 @@ final class MobileVideoController: UIViewController {
     get { playerLayer.player }
     set { playerLayer.player = newValue }
   }
+
+  #if DEBUG
+  func diagnosticSnapshot() -> PlaybackTelemetrySnapshot {
+    var snapshot = PlaybackTelemetrySnapshot()
+    let window = viewIfLoaded?.window
+    snapshot.flags["surface_in_window"] = window != nil
+    snapshot.flags["layer_attached"] = viewIfLoaded.map { playerLayer.superlayer === $0.layer } ?? false
+    snapshot.flags["layer_display_ready"] = playerLayer.isReadyForDisplay
+    snapshot.metrics["layer_width"] = playerLayer.bounds.width
+    snapshot.metrics["layer_height"] = playerLayer.bounds.height
+    snapshot.metrics["video_rect_width"] = playerLayer.videoRect.width
+    snapshot.metrics["video_rect_height"] = playerLayer.videoRect.height
+    var opacity: Float = 1
+    var hidden = false
+    var layer: CALayer? = playerLayer
+    while let current = layer {
+      opacity *= current.presentation()?.opacity ?? current.opacity
+      hidden = hidden || current.isHidden
+      layer = current.superlayer
+    }
+    snapshot.metrics["surface_opacity"] = Double(opacity)
+    snapshot.flags["surface_hidden"] = hidden
+    if let window {
+      let frame = playerLayer.convert(playerLayer.bounds, to: window.layer)
+      snapshot.metrics["surface_x"] = frame.minX
+      snapshot.metrics["surface_y"] = frame.minY
+      snapshot.flags["surface_intersects_window"] = frame.intersects(window.bounds)
+    }
+    return snapshot
+  }
+  #endif
 
   init() {
     super.init(nibName: nil, bundle: nil)

@@ -6,6 +6,116 @@ import XCTest
 
 @MainActor
 final class MobileLivePlaybackTests: XCTestCase {
+  func testOptInVideoSurfaceSurvivesLiveLayoutChanges() async throws {
+    guard ProcessInfo.processInfo.environment["STROZZ_MOBILE_LIVE_TESTS"] == "1",
+      let login = ProcessInfo.processInfo.environment["STROZZ_MOBILE_LIVE_CHANNEL"] else {
+      throw XCTSkip("Opt in with a live channel to exercise actual video presentation.")
+    }
+    let search = SearchService()
+    await search.search(login)
+    let channel = try XCTUnwrap(search.channelResults.first { $0.login == login && $0.isLive })
+    let session = MobilePlaybackSession(makeModel: { MobilePlaybackModel(muted: true) })
+    let state = LiveSurfaceLayout()
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    let host = UIHostingController(rootView: LiveSurfaceHarness(session: session, state: state))
+    window.rootViewController = host
+    defer {
+      session.close()
+      window.rootViewController = previous
+    }
+    session.select(channel)
+    try await waitForPlayback(session.model)
+    for _ in 0..<300 {
+      if session.model.isReadyForDisplay && !session.model.isLoading { break }
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    XCTAssertTrue(session.model.isReadyForDisplay)
+    try await Task.sleep(for: .seconds(5))
+    let controller = session.videoController
+    let layer = controller.playerLayer
+    for (index, size) in [CGSize(width: 1100, height: 750), .init(width: 834, height: 1150),
+                          .init(width: 1000, height: 750)].enumerated() {
+      state.size = size
+      try await Task.sleep(for: .seconds(3))
+      host.view.layoutIfNeeded()
+      let diagnostics = XCTAttachment(string: describe(host, model: session.model)
+        + "\nattached=\(layer.superlayer === controller.view.layer) layerFrame=\(layer.frame) videoRect=\(layer.videoRect) opacity=\(layer.opacity)")
+      diagnostics.name = "Live surface layout \(index)"
+      diagnostics.lifetime = .keepAlways
+      add(diagnostics)
+      XCTAssertTrue(layer.superlayer === controller.view.layer)
+      XCTAssertGreaterThan(layer.bounds.width, 0)
+      XCTAssertGreaterThan(layer.bounds.height, 0)
+      XCTAssertTrue(layer.isReadyForDisplay)
+      let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+        window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+      }
+      let screenshot = XCTAttachment(image: image)
+      screenshot.name = "Actual live video layout \(index)"
+      screenshot.lifetime = .keepAlways
+      add(screenshot)
+    }
+  }
+
+  func testOptInSwitchingFromMiniPlayerKeepsNewVideoVisible() async throws {
+    guard ProcessInfo.processInfo.environment["STROZZ_MOBILE_LIVE_TESTS"] == "1",
+      let login = ProcessInfo.processInfo.environment["STROZZ_MOBILE_LIVE_CHANNEL"] else {
+      throw XCTSkip("Opt in with a live channel to exercise stream switching.")
+    }
+    let search = SearchService()
+    await search.search(login)
+    let first = try XCTUnwrap(search.channelResults.first { $0.login == login && $0.isLive })
+    let browse = BrowseService()
+    await browse.loadCategories()
+    await browse.loadStreams(for: try XCTUnwrap(browse.categories.first))
+    let second = try XCTUnwrap(browse.categoryStreams.first { $0.login != login && $0.isLive })
+    let session = MobilePlaybackSession(makeModel: { MobilePlaybackModel(muted: true) })
+    let state = LiveSurfaceLayout()
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    let host = UIHostingController(rootView: LiveSurfaceHarness(session: session, state: state))
+    window.rootViewController = host
+    defer { session.close(); window.rootViewController = previous }
+    for (index, channel) in [first, second, first].enumerated() {
+      let oldController = session.videoController
+      if session.channel != nil {
+        session.collapse()
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertLessThanOrEqual(oldController.view.bounds.width, 321)
+      }
+      session.select(channel)
+      try await waitForPlayback(session.model)
+      for _ in 0..<300 {
+        if session.model.isReadyForDisplay && !session.model.isLoading { break }
+        try await Task.sleep(for: .milliseconds(100))
+      }
+      try await Task.sleep(for: .seconds(5))
+      let current = session.videoController
+      XCTAssertTrue(session.isExpanded)
+      XCTAssertTrue(current.player === session.model.player)
+      XCTAssertTrue(current.playerLayer.isReadyForDisplay)
+      XCTAssertNotNil(current.viewIfLoaded?.window)
+      XCTAssertTrue(current.playerLayer.superlayer === current.view.layer)
+      XCTAssertGreaterThan(current.view.bounds.width, 400)
+      if index > 0 { XCTAssertNil(oldController.viewIfLoaded?.window) }
+      let diagnostic = XCTAttachment(string: describe(host, model: session.model)
+        + "\n\(current.diagnosticSnapshot())")
+      diagnostic.name = "Mini-player handoff \(index) \(channel.login)"
+      diagnostic.lifetime = .keepAlways
+      add(diagnostic)
+      let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+        window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+      }
+      let screenshot = XCTAttachment(image: image)
+      screenshot.name = "Rendered mini-player handoff \(index)"
+      screenshot.lifetime = .keepAlways
+      add(screenshot)
+    }
+  }
+
   func testOptInNativeFramesQualityAndForeground() async throws {
     guard ProcessInfo.processInfo.environment["STROZZ_MOBILE_LIVE_TESTS"] == "1" else {
       throw XCTSkip("Set STROZZ_MOBILE_LIVE_TESTS=1 for bounded live playback.")
@@ -186,5 +296,31 @@ final class MobileLivePlaybackTests: XCTestCase {
     }
     XCTFail("Playback did not reach the requested state")
     throw NSError(domain: "MobileLivePlaybackTests", code: 2)
+  }
+}
+
+@MainActor
+@Observable
+private final class LiveSurfaceLayout {
+  var size = CGSize(width: 1100, height: 750)
+}
+
+private struct LiveSurfaceHarness: View {
+  let session: MobilePlaybackSession
+  let state: LiveSurfaceLayout
+  @State private var auth = TwitchAuthSession()
+
+  var body: some View {
+    Color.clear
+      .overlay {
+        if let channel = session.channel {
+          MobilePlayerView(channel: channel, session: session)
+            .id(ObjectIdentifier(session.model))
+        }
+      }
+      .environment(auth)
+      .environment(\.themePalette, .light)
+      .preferredColorScheme(.light)
+      .frame(width: state.size.width, height: state.size.height)
   }
 }

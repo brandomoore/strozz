@@ -206,6 +206,9 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
 
   func trackWatch(auth: TwitchAuthSession, rewards: TwitchWatchRewardsSession) async {
     while !Task.isCancelled, let channel {
+      #if DEBUG
+      recordVideoDiagnostics()
+      #endif
       if auth.isAuthenticated, let userID = auth.userID, let item = model.player.currentItem {
         watchTracker.update(.init(
           target: .init(channel: channel.login, userID: userID, itemID: ObjectIdentifier(item)),
@@ -222,6 +225,40 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
     }
     watchTracker.stop()
   }
+
+  #if DEBUG
+  @ObservationIgnored private var lastVideoDiagnosticsAt = -Double.infinity
+
+  private func recordVideoDiagnostics() {
+    let now = ProcessInfo.processInfo.systemUptime
+    guard now - lastVideoDiagnosticsAt >= 2 else { return }
+    lastVideoDiagnosticsAt = now
+    var snapshot = videoController.diagnosticSnapshot()
+    let item = model.player.currentItem
+    snapshot.attributes["mode"] = String(describing: model.mode)
+    snapshot.attributes["pip_state"] = String(describing: pictureInPictureState)
+    snapshot.attributes["time_control_status"] = model.player.timeControlStatus == .playing ? "playing"
+      : model.player.timeControlStatus == .paused ? "paused" : "waiting"
+    snapshot.metrics["playhead_seconds"] = model.player.currentTime().seconds
+    snapshot.metrics["playback_rate"] = Double(model.player.rate)
+    snapshot.metrics["video_frame_age_seconds"] = model.diagnostics.videoFrameAge
+    if let item {
+      snapshot.metrics["presentation_width"] = Double(item.presentationSize.width)
+      snapshot.metrics["presentation_height"] = Double(item.presentationSize.height)
+    }
+    snapshot.counters["player_status"] = model.player.status.rawValue
+    snapshot.counters["item_status"] = item?.status.rawValue
+    snapshot.flags["same_player"] = videoController.player === model.player
+    snapshot.flags["loading"] = model.isLoading
+    snapshot.flags["user_paused"] = model.isPaused
+    snapshot.flags["expanded"] = isExpanded
+    snapshot.flags["model_display_ready"] = model.isReadyForDisplay
+    snapshot.flags["external_playback"] = model.isExternalPlayback
+    snapshot.flags["background"] = phase != .active
+    snapshot.flags["playback_requested"] = model.isActive
+    model.diagnostics.recordSnapshot(snapshot)
+  }
+  #endif
 
   private func report(_ message: String) {
     errorMessage = message
