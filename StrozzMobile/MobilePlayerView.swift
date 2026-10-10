@@ -2,31 +2,49 @@ import AVKit
 import SwiftUI
 
 enum MobilePlayerLayout: Equatable {
-  case portrait, sideBySide, videoOnly
+  case portrait, sideBySide, videoOnly, chatOnly
 
   static func resolve(size: CGSize, isPhone: Bool, hideChat: Bool, phoneLandscape: Bool = false,
-                      showPhoneLandscapeChat: Bool = false) -> Self {
+                      showPhoneLandscapeChat: Bool = false, mode: MobilePlaybackMode = .video) -> Self {
+    if mode != .video { return .chatOnly }
     if isPhone && phoneLandscape { return showPhoneLandscapeChat ? .sideBySide : .videoOnly }
     if hideChat { return .videoOnly }
     return !isPhone && size.width >= 800 && size.width > size.height ? .sideBySide : .portrait
   }
 
-  static func sideChatWidth(in size: CGSize) -> CGFloat {
-    min(320, size.width / 3)
+  static func sideChatWidth(in size: CGSize, preferredWidth: CGFloat = MobileChatWidth.automatic) -> CGFloat {
+    if preferredWidth == MobileChatWidth.automatic {
+      return min(MobileChatWidth.defaultWidth, size.width / 3)
+    }
+    let minimumVideoWidth = min(380, size.width * 2 / 3)
+    return min(size.width - minimumVideoWidth, size.width / 2, MobileChatWidth.range.upperBound,
+               max(min(MobileChatWidth.range.lowerBound, size.width / 3), preferredWidth))
   }
 
-  func videoFrame(in size: CGSize) -> CGRect {
+  func videoFrame(in size: CGSize, preferredChatWidth: CGFloat = MobileChatWidth.automatic) -> CGRect {
     switch self {
+    case .chatOnly:
+      return .zero
     case .portrait:
       return CGRect(x: 0, y: 0, width: size.width, height: min(size.width * 9 / 16, size.height * 0.42))
     case .videoOnly:
       return CGRect(origin: .zero, size: size)
     case .sideBySide:
-      let columnWidth = size.width - Self.sideChatWidth(in: size)
+      let columnWidth = size.width - Self.sideChatWidth(in: size, preferredWidth: preferredChatWidth)
       let width = min(columnWidth, size.height * 16 / 9)
       let height = width * 9 / 16
       return CGRect(x: (columnWidth - width) / 2, y: (size.height - height) / 2, width: width, height: height)
     }
+  }
+}
+
+struct MobileChatWidthDrag {
+  var initialWidth: CGFloat?
+  var translation: CGFloat = 0
+
+  func width(in size: CGSize, preferredWidth: CGFloat) -> CGFloat {
+    MobilePlayerLayout.sideChatWidth(in: size,
+      preferredWidth: initialWidth.map { max(1, $0 - translation) } ?? preferredWidth)
   }
 }
 
@@ -156,6 +174,8 @@ struct MobilePlayerView: View {
   @State private var collapseProgress: CGFloat = 0
   @State private var miniPlayerPlacement = MobileMiniPlayerLayout.Placement()
   @GestureState private var miniPlayerManipulation = MobileMiniPlayerLayout.Manipulation()
+  @GestureState private var chatWidthDrag = MobileChatWidthDrag()
+  @AppStorage(PersistenceKey.mobileChatWidthValue) private var preferredChatWidth = MobileChatWidth.automatic
   @Environment(\.themePalette) private var palette
   @Environment(\.verticalSizeClass) private var verticalSizeClass
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -177,12 +197,12 @@ struct MobilePlayerView: View {
       let layout = MobilePlayerLayout.resolve(
         size: CGSize(width: geometry.size.width, height: geometry.size.height + geometry.safeAreaInsets.bottom),
         isPhone: isPhone, hideChat: !isPhone && (hideChat || fullscreen),
-        phoneLandscape: phoneLandscape, showPhoneLandscapeChat: landscapeChatVisible)
-      let sideChatWidth = MobilePlayerLayout.sideChatWidth(in: geometry.size)
+        phoneLandscape: phoneLandscape, showPhoneLandscapeChat: landscapeChatVisible, mode: model.mode)
+      let sideChatWidth = chatWidthDrag.width(in: geometry.size, preferredWidth: preferredChatWidth)
       let chatWidth = layout == .sideBySide ? sideChatWidth : 0
       let leftWidth = geometry.size.width - chatWidth
-      let expanded = layout.videoFrame(in: geometry.size)
-      let chatIsSide = layout != .portrait
+      let expanded = layout.videoFrame(in: geometry.size, preferredChatWidth: sideChatWidth)
+      let chatIsSide = layout == .sideBySide || layout == .videoOnly
       let chatIsVisible = session.isExpanded && layout != .videoOnly
       let expandedWindowFrame = expanded.offsetBy(
         dx: geometry.frame(in: .global).minX, dy: geometry.frame(in: .global).minY)
@@ -200,6 +220,9 @@ struct MobilePlayerView: View {
           .opacity(1 - progress)
           .allowsHitTesting(session.isExpanded)
         VStack(spacing: 0) {
+          if model.mode != .video {
+            MobileChatOnlyControls(channel: channel, model: model, onClose: session.close)
+          }
           if streamDetailsVisible && session.isExpanded && layout == .portrait {
             MobileStreamDetails(channel: channel, model: model)
             .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
@@ -207,7 +230,7 @@ struct MobilePlayerView: View {
           // One timeline/composer moves between positions without remounting.
           MobileChatView(service: model.chat, channel: channel.login,
             composer: chatComposer, scroll: chatScroll, rewards: MobileChatRewardsSummary.snapshot(of: session.watchTracker),
-            isActive: chatIsVisible, isManipulating: collapseProgress > 0)
+            isActive: chatIsVisible, isManipulating: collapseProgress > 0 || chatWidthDrag.initialWidth != nil)
             .equatable()
         }
         .background(palette.chatSideSurface, ignoresSafeAreaEdges: [])
@@ -227,7 +250,8 @@ struct MobilePlayerView: View {
         MobileVideoView(
           model: model, channel: channel, hideChat: chatHidden,
           isFullscreen: isPhone ? phoneLandscape : layout == .videoOnly,
-          isMinimized: !session.isExpanded, isManipulating: miniPlayerManipulation.startFrame != nil,
+          isMinimized: !session.isExpanded,
+          isManipulating: miniPlayerManipulation.startFrame != nil || chatWidthDrag.initialWidth != nil,
           videoController: session.videoController,
           onCollapse: session.collapse, onClose: session.close, onExpand: session.expand,
           onCollapseDragChanged: { updateCollapseDrag($0, distance: max(120, min(360, compact.midY))) },
@@ -269,15 +293,50 @@ struct MobilePlayerView: View {
                               origin: geometry.frame(in: .global).origin),
             including: session.isExpanded ? .subviews : .all)
           .position(x: videoFrame.midX, y: videoFrame.midY)
+          .opacity(model.mode == .video ? 1 : 0)
+          .allowsHitTesting(model.mode == .video)
+          .accessibilityHidden(model.mode != .video)
           .animation(
             reduceMotion || miniPlayerManipulation.startFrame != nil ? nil : MobileMiniPlayerLayout.settlingAnimation,
             value: miniPlayerManipulation.startFrame == nil)
+        if chatIsVisible && layout == .sideBySide && collapseProgress == 0
+          && (streamDetailsVisible || chatWidthDrag.initialWidth != nil) {
+          // Overlay the divider without inserting a new container around the mounted player.
+          MobileChatResizeHandle(width: sideChatWidth) { delta in
+            preferredChatWidth = MobilePlayerLayout.sideChatWidth(
+              in: geometry.size, preferredWidth: sideChatWidth + delta)
+          }
+          .position(x: leftWidth, y: geometry.size.height / 2)
+          .gesture(
+            DragGesture(minimumDistance: 3, coordinateSpace: .global)
+              .updating($chatWidthDrag) { value, state, _ in
+                if state.initialWidth == nil { state.initialWidth = sideChatWidth }
+                state.translation = value.translation.width
+              }
+              .onEnded { value in
+                // GestureState may reset before onEnded; the saved width is unchanged during the drag.
+                let drag = MobileChatWidthDrag(
+                  initialWidth: MobilePlayerLayout.sideChatWidth(
+                    in: geometry.size, preferredWidth: preferredChatWidth),
+                  translation: value.translation.width)
+                preferredChatWidth = drag.width(in: geometry.size, preferredWidth: preferredChatWidth).rounded()
+              })
+          .transition(reduceMotion ? .identity : .opacity)
+        }
       }
+      .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: streamDetailsVisible)
       .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.9), value: session.isExpanded)
       .onChange(of: session.isExpanded) { _, _ in collapseProgress = 0 }
       .onChange(of: layout) { _, _ in
         collapseProgress = 0
         windowScene?.keyWindow?.endEditing(true)
+      }
+      .onChange(of: model.mode) { _, mode in
+        if mode == .video {
+          hideChat = false
+          fullscreen = false
+          landscapeChatVisible = true
+        }
       }
     }
     .alert("Picture in Picture", isPresented: Binding(
@@ -348,6 +407,35 @@ struct MobilePlayerView: View {
   }
 }
 
+private struct MobileChatResizeHandle: View {
+  let width: CGFloat
+  let adjust: (CGFloat) -> Void
+  @Environment(\.themePalette) private var palette
+
+  var body: some View {
+    Capsule()
+      .fill(palette.chatSidePrimaryText.opacity(0.65))
+      .frame(width: 4, height: 36)
+      .padding(.horizontal, 4)
+      .padding(.vertical, 8)
+      .background(palette.chatSideSurface, in: Capsule())
+      .frame(width: 44, height: 88)
+      .contentShape(Rectangle())
+      .accessibilityElement()
+      .accessibilityLabel("Chat width")
+      .accessibilityValue("\(Int(width)) points")
+      .accessibilityHint("Drag left to widen chat or right to narrow it.")
+      .accessibilityAdjustableAction { direction in
+        switch direction {
+        case .increment: adjust(MobileChatWidth.step)
+        case .decrement: adjust(-MobileChatWidth.step)
+        @unknown default: break
+        }
+      }
+      .accessibilityIdentifier("mobile-chat-resize-handle")
+  }
+}
+
 struct MobileVideoView: View {
   let model: MobilePlaybackModel
   let channel: FollowedChannel
@@ -377,6 +465,7 @@ struct MobileVideoView: View {
   @State private var showQuality = false
   @State private var showShare = false
   @State private var showRoutes = false
+  @State private var showModes = false
 
   private struct HideState: Equatable {
     let interaction: Int
@@ -385,8 +474,8 @@ struct MobileVideoView: View {
 
   var body: some View {
     let held = model.isPaused || model.presentationState != .ready
-      || voiceOver || showQuality || showShare || showRoutes || (isMinimized && isManipulating)
-    let showsControls = controlsVisible || held
+      || voiceOver || showQuality || showShare || showRoutes || showModes || isManipulating
+    let showsControls = model.mode == .video && (controlsVisible || held)
     ZStack {
       palette.playerBackdrop
       MobilePlayerSurface(controller: videoController, onScene: onScene, onLayout: onLayout)
@@ -394,7 +483,7 @@ struct MobileVideoView: View {
         .opacity(model.isLoading ? 0 : 1)
         .accessibilityIdentifier("mobile-video-surface")
         .allowsHitTesting(false)
-      if (model.isAudioOnly || model.isExternalPlayback) && !model.isLoading {
+      if model.mode == .video && model.isExternalPlayback && !model.isLoading {
         Label {
           Text(model.isExternalPlayback ? "Playing with AirPlay" : "Audio only")
         } icon: { Icon(glyph: .volume, size: 24) }
@@ -411,9 +500,9 @@ struct MobileVideoView: View {
           : showsControls ? "Hide playback controls" : "Show playback controls")
         .accessibilityAddTraits(.isButton)
         .accessibilityHint(isMinimized ? Text("Drag to move. Pinch to resize.") : Text(""))
-        .accessibilityHidden(voiceOver && !isMinimized)
+        .accessibilityHidden(model.mode != .video || (voiceOver && !isMinimized))
         .accessibilityIdentifier(isMinimized ? "mobile-expand-player" : "mobile-controls-toggle")
-      if model.presentationState == .loading {
+      if model.mode == .video && model.presentationState == .loading {
         if isMinimized {
           ProgressView().accessibilityLabel("Loading stream").allowsHitTesting(false)
         } else {
@@ -422,7 +511,7 @@ struct MobileVideoView: View {
             .accessibilityIdentifier("mobile-video-loading")
         }
       }
-      if let error = model.errorMessage, !isMinimized {
+      if let error = model.errorMessage, model.mode == .video, !isMinimized {
         MobileStatusView(message: error) { model.retry() }
           .background(palette.chromeOpaqueSurface)
       }
@@ -475,7 +564,12 @@ struct MobileVideoView: View {
             showRoutes = presenting
             if presenting { model.prepareForAirPlay() }
           },
-          showsChatToggle: showsChatToggle, landscapeChannel: showsLandscapeDetails ? channel : nil)
+          showsChatToggle: showsChatToggle, landscapeChannel: showsLandscapeDetails ? channel : nil,
+          onModePresentation: { showing in
+            showModes = showing
+            controlsVisible = true
+            interaction += 1
+          })
       }
     }
     .simultaneousGesture(DragGesture(minimumDistance: 12, coordinateSpace: .global)
@@ -491,7 +585,6 @@ struct MobileVideoView: View {
       interaction += 1
     }
     .onChange(of: isManipulating) { _, _ in
-      guard isMinimized else { return }
       controlsVisible = true
       interaction += 1
     }

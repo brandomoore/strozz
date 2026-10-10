@@ -4,6 +4,20 @@ import XCTest
 
 @MainActor
 final class MobilePlaybackTests: XCTestCase {
+  func testLayoutFixtureCanPauseAndResumeWithoutResolvingMedia() {
+    let model = MobilePlaybackModel()
+    model.activateAudioSession = {}
+    model.prepareLayoutFixtureMetadata()
+    model.selectMode(.audioOnly)
+    model.selectMode(.video)
+    model.togglePlayPause()
+    XCTAssertTrue(model.isPaused)
+    model.togglePlayPause()
+    XCTAssertFalse(model.isPaused)
+    XCTAssertEqual(model.presentationState, .ready)
+    model.stop()
+  }
+
   func testReplacementMobileAppUsesTheNewIdentityAndStorage() {
     XCTAssertEqual(Bundle.main.bundleIdentifier, "com.thatcube.Strozz")
     XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, "Strozz")
@@ -32,6 +46,140 @@ final class MobilePlaybackTests: XCTestCase {
     XCTAssertEqual(MobileQuality.automatic.source(in: playback), master)
     XCTAssertEqual(MobileQuality.fixed("source").source(in: playback), video)
     XCTAssertNil(MobileQuality.fixed("missing").source(in: playback))
+    XCTAssertNil(MobileQuality.audioOnly.source(in: playback),
+      "Audio-only must never silently load the video master")
+  }
+
+  func testChatOnlyInvalidatesPendingVideoWithoutDisconnectingChatOrResumingInBackground() async {
+    let gate = ResolutionGate()
+    var calls = 0
+    let model = MobilePlaybackModel(muted: true) { _ in
+      calls += 1
+      return await gate.wait()
+    }
+    model.activateAudioSession = {}
+    model.loadMetadata = { _ in nil }
+    model.select(.fixed("720p60"))
+    model.start(channel: "fixture")
+    await gate.waitUntilRequested()
+    let chat = model.chat
+    model.selectMode(.chatOnly)
+    gate.finish()
+    await Task.yield()
+    XCTAssertTrue(model.chat === chat)
+    XCTAssertEqual(model.chat.channel, "fixture")
+    XCTAssertTrue(model.isActive)
+    XCTAssertNil(model.player.currentItem)
+    XCTAssertEqual(model.player.rate, 0)
+    XCTAssertTrue(model.isPaused)
+    XCTAssertEqual(model.presentationState, .ready)
+    model.retry()
+    model.goLive()
+    model.handleMediaServicesLost()
+    model.handleMediaServicesReset()
+    model.suspend()
+    model.resume()
+    await Task.yield()
+    XCTAssertEqual(calls, 1)
+    XCTAssertNil(model.player.currentItem)
+    XCTAssertFalse(model.isLoading)
+    model.selectMode(.video)
+    await gate.waitUntilRequested()
+    XCTAssertEqual(model.selection, .fixed("720p60"))
+    XCTAssertEqual(calls, 2)
+    model.stop()
+    gate.finish()
+  }
+
+  func testMissingAudioOnlyRenditionSurfacesAnErrorWithoutLoadingVideo() async throws {
+    let model = MobilePlaybackModel(muted: true) { _ in
+      StreamPlayback(master: URL(string: "https://example.invalid/master.m3u8")!, qualities: [])
+    }
+    model.activateAudioSession = {}
+    model.loadMetadata = { _ in nil }
+    model.select(.audioOnly)
+    model.start(channel: "fixture")
+    defer { model.stop() }
+    for _ in 0..<100 {
+      if model.errorMessage != nil { break }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertEqual(model.errorMessage,
+      String(localized: "This stream doesn't offer audio-only playback. Choose Video and chat or Chat only."))
+    XCTAssertNil(model.player.currentItem)
+    XCTAssertNil(model.nativeFailure)
+    XCTAssertEqual(model.mode, .audioOnly)
+    model.selectMode(.chatOnly)
+    XCTAssertNil(model.errorMessage)
+    XCTAssertEqual(model.presentationState, .ready)
+  }
+
+  func testChatOnlyDuringPictureInPictureStartReturnsWithoutClosingChat() async {
+    let gate = ResolutionGate()
+    let model = MobilePlaybackModel(muted: true) { _ in await gate.wait() }
+    model.activateAudioSession = {}
+    model.loadMetadata = { _ in nil }
+    let session = MobilePlaybackSession(makeModel: { model })
+    session.select(FollowedChannel(id: "fixture", login: "fixture", displayName: "Fixture", title: "",
+      gameName: "", viewerCount: 0, thumbnailURL: nil, profileImageURL: nil, isLive: true))
+    await gate.waitUntilRequested()
+    session.willStartPictureInPicture()
+    model.selectMode(.chatOnly)
+    session.didStartPictureInPicture()
+    XCTAssertEqual(session.pictureInPictureState, .restoring)
+    session.didStopPictureInPicture()
+    XCTAssertEqual(session.pictureInPictureState, .inline)
+    XCTAssertTrue(model.isActive)
+    XCTAssertNotNil(session.channel)
+    XCTAssertEqual(model.chat.channel, "fixture")
+    XCTAssertNil(model.player.currentItem)
+    session.close()
+    gate.finish()
+  }
+
+  func testAudioModeUsesOnlyAudioAndKeepsPlayingWithoutBackgroundPiP() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("mode-audio-\(UUID()).caf")
+    let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1))
+    let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 160000))
+    buffer.frameLength = buffer.frameCapacity
+    try XCTUnwrap(buffer.floatChannelData).pointee.initialize(repeating: 0, count: Int(buffer.frameLength))
+    do {
+      let file = try AVAudioFile(forWriting: url, settings: format.settings)
+      try file.write(from: buffer)
+    }
+    defer { try? FileManager.default.removeItem(at: url) }
+    let audio = StreamQuality(id: "audio", name: "Audio only", url: url, isAudioOnly: true, bitrate: 128000)
+    let model = MobilePlaybackModel(muted: true) { _ in
+      StreamPlayback(master: URL(string: "https://example.invalid/video.m3u8")!, qualities: [audio])
+    }
+    model.activateAudioSession = {}
+    model.loadMetadata = { _ in nil }
+    model.selectMode(.audioOnly)
+    let session = MobilePlaybackSession(makeModel: { model })
+    session.select(FollowedChannel(id: "fixture", login: "fixture", displayName: "Fixture", title: "",
+      gameName: "", viewerCount: 0, thumbnailURL: nil, profileImageURL: nil, isLive: true))
+    defer { session.close() }
+    for _ in 0..<200 {
+      if !model.isLoading { break }
+      try await Task.sleep(for: .milliseconds(25))
+    }
+    XCTAssertNil(model.errorMessage)
+    XCTAssertFalse(model.isLoading)
+    let item = try XCTUnwrap(model.player.currentItem)
+    XCTAssertEqual((item.asset as? AVURLAsset)?.url, url)
+    let videoTracks = try await item.asset.loadTracks(withMediaType: .video)
+    let audioTracks = try await item.asset.loadTracks(withMediaType: .audio)
+    XCTAssertTrue(videoTracks.isEmpty)
+    XCTAssertEqual(audioTracks.count, 1)
+    session.sceneChanged(.background)
+    XCTAssertTrue(model.player.currentItem === item)
+    XCTAssertTrue(session.keepsPlayingInBackground)
+    XCTAssertEqual(session.pictureInPictureState, .inline)
+    session.sceneChanged(.active)
+    XCTAssertTrue(model.player.currentItem === item)
+    model.selectMode(.chatOnly)
+    XCTAssertNil(model.player.currentItem)
+    XCTAssertFalse(session.keepsPlayingInBackground)
   }
 
   func testDecodeRecoveryChoosesVideoAndNeverLoopsOnSource() {

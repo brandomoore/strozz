@@ -49,8 +49,12 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
   #endif
 
   var keepsPlayingInBackground: Bool {
-    pictureInPictureState == .starting || pictureInPictureState == .active
+    keepsAudioPlayingInBackground || pictureInPictureState == .starting || pictureInPictureState == .active
       || pictureInPictureState == .restoring
+  }
+
+  private var keepsAudioPlayingInBackground: Bool {
+    model.mode == .audioOnly && model.isActive && !model.isPaused && model.errorMessage == nil
   }
 
   func select(_ channel: FollowedChannel) {
@@ -118,9 +122,13 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
     }
     videoController.onAppear = { [weak self] in self?.playerDidAppear() }
     model.onPlayerChanged = { [weak videoController] player in videoController?.player = player }
+    model.onModeChanged = { [weak self] mode in
+      self?.pictureInPicture?.canStartPictureInPictureAutomaticallyFromInline = mode == .video
+      if mode != .video { self?.returnFromNativePictureInPicture() }
+    }
     pictureInPicture = AVPictureInPictureController(playerLayer: videoController.playerLayer)
     pictureInPicture?.delegate = self
-    pictureInPicture?.canStartPictureInPictureAutomaticallyFromInline = true
+    pictureInPicture?.canStartPictureInPictureAutomaticallyFromInline = model.mode == .video
     isExpanded = true
     model.start(channel: channel.login)
   }
@@ -135,6 +143,7 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
   }
 
   private func startBackgroundPictureInPicture() {
+    if keepsAudioPlayingInBackground { return }
     guard channel != nil, !finishing, pictureInPictureState == .inline,
       !model.isAudioOnly, !model.isExternalPlayback, !model.isPaused,
       let pictureInPicture, pictureInPicture.isPictureInPicturePossible else {
@@ -256,7 +265,7 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
     if finishing { finishTransition() }
     else {
       report(String(localized: "Could not start Picture in Picture. \(error.localizedDescription)"))
-      if phase == .background { model.suspend() }
+      if phase == .background, !keepsAudioPlayingInBackground { model.suspend() }
     }
   }
 
@@ -271,7 +280,7 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
     if pictureInPictureState == .restoring, !finishing {
       pictureInPictureState = .inline
       returnToAppWhenStarted = false
-      if phase == .background { model.suspend() }
+      if phase == .background, !keepsAudioPlayingInBackground { model.suspend() }
     } else {
       model.stop()
       watchTracker.stop()

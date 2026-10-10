@@ -101,6 +101,7 @@ enum PersistenceKey {
   static let chatMessageSpacingValue = "chatMessageSpacingValue"
   static let chatLineSpacingLegacy = "chatLineSpacing"
   static let chatWidthValue = "chatWidthValue"
+  static let mobileChatWidthValue = "mobile.chatWidth"
   static let chatWidthModeLegacy = "chatWidthMode"
 
   // MARK: Settings view bindings (also bound via `@AppStorage` in views)

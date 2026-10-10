@@ -2,14 +2,28 @@ import AVFoundation
 import Observation
 import OSLog
 
+enum MobilePlaybackMode: CaseIterable, Hashable {
+  case video, audioOnly, chatOnly
+
+  var title: LocalizedStringResource {
+    switch self {
+    case .video: "Video and chat"
+    case .audioOnly: "Audio and chat"
+    case .chatOnly: "Chat only"
+    }
+  }
+}
+
 enum MobileQuality: Hashable {
   case native
   case automatic
+  case audioOnly
   case fixed(String)
 
   func source(in playback: StreamPlayback) -> URL? {
     switch self {
     case .native, .automatic: return playback.master
+    case .audioOnly: return playback.qualities.first { $0.isAudioOnly }?.url
     case .fixed(let id): return playback.qualities.first { $0.id == id }?.url
     }
   }
@@ -22,6 +36,11 @@ final class MobilePlaybackModel {
   let chat = ChatService()
   private(set) var qualities: [StreamQuality] = []
   private(set) var selection: MobileQuality = .native
+  private(set) var mode: MobilePlaybackMode = .video {
+    didSet { if mode != oldValue { onModeChanged?(mode) } }
+  }
+  @ObservationIgnored var onModeChanged: ((MobilePlaybackMode) -> Void)?
+  @ObservationIgnored private var lastVideoSelection: MobileQuality = .native
   private(set) var prefersNativePlayback = true
   private(set) var nativeFailure: String?
   private(set) var recoveryNotice: String?
@@ -71,7 +90,11 @@ final class MobilePlaybackModel {
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "mobile-playback")
 
   #if DEBUG
+  @ObservationIgnored private var isLayoutFixture = false
+
   func prepareLayoutFixtureMetadata() {
+    isLayoutFixture = true
+    isActive = true
     streamStartedAt = Date().addingTimeInterval(-4 * 3600 - 37 * 60)
     livePosition.observe(extraDelay: 0)
   }
@@ -98,21 +121,24 @@ final class MobilePlaybackModel {
     switch selection {
     case .native: return "Auto - Native Low Latency"
     case .automatic: return "Auto - Standard"
+    case .audioOnly: return String(localized: "Audio only")
     case .fixed(let id): return qualities.first { $0.id == id }?.name ?? "Selected quality"
     }
   }
 
   var isAudioOnly: Bool {
+    if selection == .audioOnly { return true }
     guard case .fixed(let id) = selection else { return false }
     return qualities.first { $0.id == id }?.isAudioOnly == true
   }
 
   var requestsNativePlayback: Bool {
-    prefersNativePlayback && nativeFailure == nil && !isAudioOnly && !isExternalPlayback
+    mode == .video && prefersNativePlayback && nativeFailure == nil && !isAudioOnly && !isExternalPlayback
   }
 
   var presentationState: PlaybackPresentationState {
-    .init(isLoading: isLoading,
+    if mode == .chatOnly { return .ready }
+    return .init(isLoading: isLoading,
       awaitingVideo: !isReadyForDisplay && !isAudioOnly && !isPaused && !isExternalPlayback,
       isUnavailable: errorMessage != nil)
   }
@@ -140,15 +166,49 @@ final class MobilePlaybackModel {
   }
 
   func select(_ quality: MobileQuality) {
-    guard quality != selection,
+    let audio = quality == .audioOnly || qualities.contains { $0.isAudioOnly && quality == .fixed($0.id) }
+    if audio {
+      selectMode(.audioOnly)
+      return
+    }
+    guard quality != selection || mode != .video,
           quality != .native || (nativeFailure == nil && !isExternalPlayback) else { return }
-    let position = position()
+    let position = mode == .chatOnly ? Position(shouldPlay: true, date: nil) : position()
+    if mode == .video { lastVideoSelection = selection }
+    mode = .video
     selection = quality
     if quality == .native { prefersNativePlayback = true }
     if quality == .automatic { prefersNativePlayback = false }
     triedDecodeRecovery = false
     recoveryNotice = nil
     load(position: position)
+  }
+
+  func selectMode(_ mode: MobilePlaybackMode) {
+    guard mode != self.mode else { return }
+    if self.mode == .video { lastVideoSelection = selection }
+    self.mode = mode
+    let position = Position(shouldPlay: mode != .chatOnly, date: nil)
+    if suspendedPosition != nil { suspendedPosition = position }
+    if interruptedPosition != nil { interruptedPosition = position }
+    if resetPosition != nil { resetPosition = position }
+    recoveryNotice = nil
+    errorMessage = nil
+    triedDecodeRecovery = false
+    switch mode {
+    case .chatOnly:
+      mediaResetInProgress = false
+      invalidate()
+      isPaused = true
+      releaseAudioSession()
+    case .audioOnly:
+      selection = .audioOnly
+      load(position: position)
+    case .video:
+      selection = lastVideoSelection == .native && (nativeFailure != nil || isExternalPlayback)
+        ? .automatic : lastVideoSelection
+      load(position: position)
+    }
   }
 
   func goLive() {
@@ -158,6 +218,7 @@ final class MobilePlaybackModel {
   }
 
   func togglePlayPause() {
+    guard mode != .chatOnly else { return }
     if var interrupted = interruptedPosition {
       interrupted.shouldPlay = false
       interruptedPosition = interrupted
@@ -257,7 +318,7 @@ final class MobilePlaybackModel {
   }
 
   private func prepareAudioSession() -> Bool {
-    guard isActive, suspendedPosition == nil, interruptedPosition == nil,
+    guard mode != .chatOnly, isActive, suspendedPosition == nil, interruptedPosition == nil,
       !mediaServicesUnavailable else { return false }
     do {
       try activateAudioSession()
@@ -312,7 +373,7 @@ final class MobilePlaybackModel {
     needsFreshPlayer = true
     audioSessionActive = false
     invalidate()
-    isLoading = true
+    isLoading = mode != .chatOnly
     Self.logger.warning("Mobile media services lost; waiting for reset")
   }
 
@@ -324,6 +385,7 @@ final class MobilePlaybackModel {
     needsFreshPlayer = true
     audioSessionActive = false
     Self.logger.warning("Recreating mobile playback after media services reset")
+    if mode == .chatOnly { return }
     if suspendedPosition != nil {
       suspendedPosition = saved
       return
@@ -349,7 +411,7 @@ final class MobilePlaybackModel {
       mediaResetInProgress = false
       audioSessionActive = false
       invalidate()
-      isLoading = true
+      isLoading = mode != .chatOnly
       Self.logger.info("Mobile playback interrupted")
     case .ended:
       guard var saved = interruptedPosition else { return }
@@ -403,9 +465,17 @@ final class MobilePlaybackModel {
   }
 
   private func load(position: Position) {
-    guard isActive, suspendedPosition == nil, interruptedPosition == nil,
+    guard mode != .chatOnly, isActive, suspendedPosition == nil, interruptedPosition == nil,
       !mediaServicesUnavailable else { return }
     invalidate()
+    #if DEBUG
+    if isLayoutFixture {
+      player.replaceCurrentItem(with: AVPlayerItem(asset: AVMutableComposition()))
+      isPaused = !position.shouldPlay
+      isReadyForDisplay = true
+      return
+    }
+    #endif
     if needsFreshPlayer || player.status == .failed {
       recreatePlayer()
       needsFreshPlayer = false
@@ -425,7 +495,7 @@ final class MobilePlaybackModel {
         guard isCurrent(request) else { return }
         qualities = playback.qualities
         guard let url = selection.source(in: playback) else {
-          throw MobilePlaybackError.qualityUnavailable
+          throw selection == .audioOnly ? MobilePlaybackError.audioUnavailable : .qualityUnavailable
         }
         let useNative = requestsNativePlayback
         if useNative {
@@ -445,9 +515,11 @@ final class MobilePlaybackModel {
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         item.automaticallyPreservesTimeOffsetFromLive = useNative && position.shouldPlay && position.date == nil
         item.audioTimePitchAlgorithm = .timeDomain
-        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [:])
-        item.add(output)
-        videoOutput = output
+        if !isAudioOnly {
+          let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [:])
+          item.add(output)
+          videoOutput = output
+        }
         // Ordinary quality changes retain their AVKit owner. Foreground/reset
         // recovery replaces it before constructing the new item.
         if player.status == .failed { recreatePlayer() }
@@ -734,13 +806,14 @@ final class MobilePlaybackModel {
 }
 
 private enum MobilePlaybackError: LocalizedError, Equatable {
-  case unavailable, timeout, qualityUnavailable, positionUnavailable
+  case unavailable, timeout, qualityUnavailable, audioUnavailable, positionUnavailable
 
   var errorDescription: String? {
     switch self {
     case .unavailable: return "Could not play this stream. Try again."
     case .timeout: return "The stream stopped responding. Check your connection and try again."
     case .qualityUnavailable: return "That quality is no longer available. Choose Auto or another quality."
+    case .audioUnavailable: return String(localized: "This stream doesn't offer audio-only playback. Choose Video and chat or Chat only.")
     case .positionUnavailable: return "That position is no longer available. Use Go live to rejoin the stream."
     }
   }

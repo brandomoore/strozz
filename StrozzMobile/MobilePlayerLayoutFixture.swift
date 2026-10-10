@@ -32,6 +32,9 @@ struct MobilePlayerLayoutFixture: View {
     }
     .task {
       do {
+        if ProcessInfo.processInfo.environment["STROZZ_CHAT_WIDTH_FIXTURE_RESET"] == "1" {
+          UserDefaults.standard.removeObject(forKey: PersistenceKey.mobileChatWidthValue)
+        }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("stream-avatar-\(UUID()).png")
         let image = UIGraphicsImageRenderer(size: CGSize(width: 64, height: 64)).image { context in
           UIColor.systemTeal.setFill()
@@ -46,6 +49,9 @@ struct MobilePlayerLayoutFixture: View {
           title: "A stream description that appears with the controls", gameName: "Just Chatting",
           viewerCount: 1200, thumbnailURL: nil, profileImageURL: url, isLive: true)
         let player = MobilePlaybackSession.layoutFixture(channel: channel)
+        if ProcessInfo.processInfo.environment["STROZZ_PLAYER_PAUSED_FIXTURE"] == "1" {
+          player.model.togglePlayPause()
+        }
         if ProcessInfo.processInfo.environment["STROZZ_PLAYER_DRAFT_FIXTURE"] == "1" {
           auth.isAuthenticated = true
           auth.userID = "fixture"
