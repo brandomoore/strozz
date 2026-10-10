@@ -509,6 +509,9 @@ The same return-refresh behavior covers iPhone/iPad Home, Browse, categories,
 and channel profiles. Stream-card identity follows the streamer, not the
 broadcast ID or ranking, so tvOS can retain focus through live-status updates
 and reordering. Return refreshes do not force focus back to the first card.
+TV Browse grids use the full visible screen as their lazy-loading viewport.
+Header and safe-area spacing live inside the scroll content, so partially visible
+top or bottom rows do not disappear before reaching the screen edge.
 
 On foreground return, account synchronization and token validation finish before
 refreshing Home. Normal restoration has no visible account-status message; only
