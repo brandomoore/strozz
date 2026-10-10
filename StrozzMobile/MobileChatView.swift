@@ -3,6 +3,9 @@ import SwiftUI
 struct MobileChatView: View {
   let service: ChatService
   let channel: String
+  let composer: MobileChatComposerState
+  let scroll: MobileChatScrollState
+  var rewards: MobileChatRewardsSummary? = nil
   @Environment(\.themePalette) private var palette
   @Environment(TwitchAuthSession.self) private var auth
   @Environment(TwitchAccountSync.self) private var sync: TwitchAccountSync?
@@ -20,12 +23,13 @@ struct MobileChatView: View {
       }
       MobileChatTimeline(messages: service.messages, emoteURLs: service.emoteURLs,
                          badgeURLs: service.badgeURLs, cheermotes: service.cheermotes,
-                         viewerLogin: auth.userLogin, viewerDisplayName: auth.userDisplayName)
+                         viewerLogin: auth.userLogin, viewerDisplayName: auth.userDisplayName, scroll: scroll)
       Divider()
       if auth.isAuthenticated, sync?.isRestoringAccount != true {
-        MobileChatComposer(channel: channel, onSettings: { showSettings = true })
+        MobileChatComposer(channel: channel, onSettings: { showSettings = true }, rewards: rewards, composer: composer)
       } else {
         HStack {
+          if let rewards { MobileChatRewardsButton(summary: rewards) }
           if sync?.isRestoringAccount == true {
             TwitchAccountLoadingView()
           } else {
@@ -38,7 +42,8 @@ struct MobileChatView: View {
           .accessibilityLabel("Chat settings")
           .accessibilityIdentifier("mobile-chat-settings")
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, rewards == nil ? 12 : 8)
+        .padding(.trailing, 12)
       }
     }
     .accessibilityIdentifier("mobile-chat-panel")
@@ -104,6 +109,8 @@ struct MobileChatTimeline: View {
   @State private var inspectedEmote: MobileChatEmote?
   @Environment(\.themePalette) private var palette
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+  @Environment(\.colorSchemeContrast) private var contrast
   @ScaledMetric(relativeTo: .body) private var typeScale: CGFloat = 1
   @AppStorage(PersistenceKey.chatTextSizeValue) private var textSize = MobileChatAppearance.textSize
   @AppStorage(PersistenceKey.chatEmoteAuto) private var emoteAuto = true
@@ -187,6 +194,9 @@ struct MobileChatTimeline: View {
     }
     .onChange(of: messages.last?.id) { _, _ in scroll.messagesChanged() }
     .accessibilityIdentifier("mobile-chat-timeline")
+    .mask {
+      MobileChatTopFade(enabled: !reduceTransparency && contrast != .increased)
+    }
     .overlay(alignment: .bottom) {
       // A conditional scroll inset can reenter layout during a jump.
       MobileChatJumpButton(scroll: scroll)
@@ -195,6 +205,21 @@ struct MobileChatTimeline: View {
     .sheet(item: $inspectedEmote) { emote in
       MobileEmoteDetailView(emote: emote)
         .environment(\.themePalette, palette)
+    }
+  }
+}
+
+struct MobileChatTopFade: View {
+  var enabled = true
+  static let height: CGFloat = 24
+
+  var body: some View {
+    // Only alpha matters in this viewport mask; it never changes the scroll insets.
+    VStack(spacing: 0) {
+      LinearGradient(colors: [enabled ? .clear : .black, .black],
+        startPoint: .top, endPoint: .bottom)
+        .frame(height: Self.height)
+      Rectangle().fill(.black)
     }
   }
 }
@@ -217,24 +242,35 @@ private struct MobileChatJumpButton: View {
 struct MobileChatComposer: View {
   let channel: String
   let onSettings: () -> Void
+  var rewards: MobileChatRewardsSummary? = nil
   @Environment(TwitchAuthSession.self) private var auth
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-  @State private var text = ""
-  @State private var sending = false
-  @State private var errorMessage: String?
+  let composer: MobileChatComposerState
 
   var body: some View {
+    @Bindable var composer = composer
     VStack(alignment: .leading, spacing: 6) {
-      if let errorMessage { Text(errorMessage).font(.caption).foregroundStyle(.secondary) }
-      MobileChatComposerInput(text: $text, sending: sending,
-        onSend: { Task { await send() } }, onSettings: onSettings, reduceTransparency: reduceTransparency)
-      if text.count > 500 { Text("Messages can contain up to 500 characters.").font(.caption) }
+      if let errorMessage = composer.errorMessage { Text(errorMessage).font(.caption).foregroundStyle(.secondary) }
+      MobileChatComposerInput(text: $composer.text, sending: composer.sending,
+        onSend: { Task { await composer.send { try await auth.sendChatMessage($0, toChannel: channel) } } },
+        onSettings: onSettings,
+        reduceTransparency: reduceTransparency, rewards: rewards)
+      if composer.text.count > 500 { Text("Messages can contain up to 500 characters.").font(.caption) }
     }
-    .padding(.horizontal, 12)
+    .padding(.leading, rewards == nil ? 12 : 8)
+    .padding(.trailing, 12)
     .padding(.vertical, 8)
   }
+}
 
-  private func send() async {
+@MainActor
+@Observable
+final class MobileChatComposerState {
+  var text = ""
+  private(set) var sending = false
+  private(set) var errorMessage: String?
+
+  func send(_ action: (String) async throws -> Void) async {
     guard !sending else { return }
     guard text.count <= 500 else {
       errorMessage = "Messages can contain up to 500 characters."
@@ -244,7 +280,7 @@ struct MobileChatComposer: View {
     errorMessage = nil
     defer { sending = false }
     do {
-      try await auth.sendChatMessage(text, toChannel: channel)
+      try await action(text)
       text = ""
     } catch {
       errorMessage = error.localizedDescription
@@ -258,6 +294,7 @@ struct MobileChatComposerInput: View {
   let onSend: () -> Void
   let onSettings: () -> Void
   let reduceTransparency: Bool
+  var rewards: MobileChatRewardsSummary? = nil
   @Environment(\.themePalette) private var palette
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -265,49 +302,52 @@ struct MobileChatComposerInput: View {
     let hasDraft = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     let canSend = !sending && hasDraft
     HStack(alignment: .bottom, spacing: 8) {
-      MobileChatTextInput(text: $text, sending: sending, onSend: onSend)
-        .overlay(alignment: .topLeading) {
-          if text.isEmpty {
-            Text("Send a message")
-              .font(.body)
-              .foregroundStyle(.secondary)
-              .padding(.top, 10)
-              .allowsHitTesting(false)
-              .accessibilityHidden(true)
+      if let rewards { MobileChatRewardsButton(summary: rewards) }
+      HStack(alignment: .bottom, spacing: 8) {
+        MobileChatTextInput(text: $text, sending: sending, onSend: onSend)
+          .overlay(alignment: .topLeading) {
+            if text.isEmpty {
+              Text("Send a message")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .padding(.top, 10)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
           }
-        }
-        .padding(.leading, 14)
-      Button(action: hasDraft ? onSend : onSettings) {
-        ZStack {
-          Circle().fill(palette.chatSidePrimaryText.opacity(canSend ? 1 : 0.08))
-          Icon(glyph: hasDraft ? .send : .dots, size: 20)
-            .foregroundStyle(canSend ? palette.chatSideSurface : palette.chatSidePrimaryText)
-            .opacity(sending ? 0 : 1)
-          if sending {
-            ProgressView()
-              .tint(palette.chatSidePrimaryText)
-              .controlSize(.small)
+          .padding(.leading, 14)
+        Button(action: hasDraft ? onSend : onSettings) {
+          ZStack {
+            Circle().fill(palette.chatSidePrimaryText.opacity(canSend ? 1 : 0.08))
+            Icon(glyph: hasDraft ? .send : .dots, size: 20)
+              .foregroundStyle(canSend ? palette.chatSideSurface : palette.chatSidePrimaryText)
+              .opacity(sending ? 0 : 1)
+            if sending {
+              ProgressView()
+                .tint(palette.chatSidePrimaryText)
+                .controlSize(.small)
+            }
           }
+          .frame(width: 44, height: 44)
+          .contentShape(Circle())
         }
-        .frame(width: 44, height: 44)
-        .contentShape(Circle())
+        .buttonStyle(.plain)
+        .accessibilityLabel(hasDraft ? Text("Send message") : Text("Chat settings"))
+        .accessibilityValue(sending ? Text("Sending") : Text(""))
+        .accessibilityIdentifier(hasDraft ? "mobile-chat-send" : "mobile-chat-settings")
+        .disabled(sending)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: hasDraft)
       }
-      .buttonStyle(.plain)
-      .accessibilityLabel(hasDraft ? Text("Send message") : Text("Chat settings"))
-      .accessibilityValue(sending ? Text("Sending") : Text(""))
-      .accessibilityIdentifier(hasDraft ? "mobile-chat-send" : "mobile-chat-settings")
-      .disabled(sending)
-      .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: hasDraft)
+      .padding(4)
+      .background { MobileChatComposerSurface(reduceTransparency: reduceTransparency) }
+      .overlay {
+        RoundedRectangle(cornerRadius: 26, style: .continuous)
+          .strokeBorder(palette.chromeOpaqueBorder, lineWidth: 0.5)
+          .allowsHitTesting(false)
+      }
+      .accessibilityElement(children: .contain)
+      .accessibilityIdentifier("mobile-chat-composer")
     }
-    .padding(4)
-    .background { MobileChatComposerSurface(reduceTransparency: reduceTransparency) }
-    .overlay {
-      RoundedRectangle(cornerRadius: 26, style: .continuous)
-        .strokeBorder(palette.chromeOpaqueBorder, lineWidth: 0.5)
-        .allowsHitTesting(false)
-    }
-    .accessibilityElement(children: .contain)
-    .accessibilityIdentifier("mobile-chat-composer")
   }
 }
 

@@ -151,6 +151,24 @@ loading, VoiceOver, and open playback-control sheets keep them visible. The
 video surface and chat session stay mounted throughout the transition.
 Chat starts directly below the collapsed profile without a permanent heading;
 a connection status appears only while chat is reconnecting.
+Messages fade gently over the top 24 points of the chat viewport, without
+changing scroll insets or fading the composer. Reduce Transparency and Increase
+Contrast disable that fade.
+
+Uptime sits beside the live-position indicator in the video controls and hides
+with them; its Account > Overlays preference still applies. Playback quality
+remains in the quality menu rather than repeating below the profile. Channel
+points appear as a compact balance and the channel's own 18-point currency icon
+beside the message box, eight points from the leading edge (a gift icon is used
+when no image is available). Tap it for the streamer's currency name, exact
+balance, watch streak, and any rewards errors; opening it does not spend points.
+Only a loaded balance is shown, never a guessed zero.
+
+The iPhone rotation button uses a rotation glyph. The chat toggle appears only
+in landscape: iPhone starts video-only and can open or hide side-by-side chat;
+iPad offers the same toggle when its side-by-side layout is available. Portrait
+chat stays below the video without a misleading sideways collapse button.
+Drafts, in-flight sends, and the chat reading state are shared across those layouts.
 
 Chat settings are also available from **Account** and when reading anonymously.
 Adjust mobile size presets, fonts, spacing, emote sizing and animation, badges,

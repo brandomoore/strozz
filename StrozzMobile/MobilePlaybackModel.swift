@@ -70,6 +70,13 @@ final class MobilePlaybackModel {
   }
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "mobile-playback")
 
+  #if DEBUG
+  func prepareLayoutFixtureMetadata() {
+    streamStartedAt = Date().addingTimeInterval(-4 * 3600 - 37 * 60)
+    livePosition.observe(extraDelay: 0)
+  }
+  #endif
+
   struct Position {
     var shouldPlay: Bool
     var date: Date?

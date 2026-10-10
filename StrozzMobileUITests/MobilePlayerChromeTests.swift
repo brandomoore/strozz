@@ -17,14 +17,22 @@ final class MobilePlayerChromeTests: XCTestCase {
     let timeline = app.scrollViews["mobile-chat-panel"]
     XCTAssertTrue(details.waitForExistence(timeout: 10))
     XCTAssertFalse(app.staticTexts["Stream chat"].exists)
+    XCTAssertFalse(app.buttons["mobile-toggle-chat"].exists, "Portrait has no sideways chat toggle")
     XCTAssertTrue(app.staticTexts["Sample streamer"].exists)
     XCTAssertTrue(app.staticTexts["A stream description that appears with the controls"].exists)
     XCTAssertTrue(controls.exists)
+    let uptime = app.staticTexts["mobile-stream-uptime"]
+    XCTAssertTrue(uptime.exists)
+    XCTAssertFalse(details.staticTexts["Auto - Native Low Latency"].exists)
+    if !controls.exists { tapVideo(app) }
+    app.buttons["mobile-mute"].tap()
+    XCTAssertTrue(details.exists)
     let videoFrame = video.frame
     let expandedChat = timeline.frame
     capture(app, "Stream profile and controls on entry")
     waitForHidden(details)
     XCTAssertFalse(controls.exists)
+    XCTAssertFalse(uptime.exists, "Uptime follows the controls rather than becoming always visible")
     XCTAssertGreaterThan(timeline.frame.height, expandedChat.height + 50)
     XCTAssertEqual(timeline.frame.minY, video.frame.maxY, accuracy: 1,
       "Collapsed chat must start directly below the video without an empty heading row")
@@ -107,8 +115,25 @@ final class MobilePlayerChromeTests: XCTestCase {
     XCTAssertTrue(app.frame.contains(video.frame))
     if UIDevice.current.userInterfaceIdiom == .phone {
       XCTAssertFalse(details.exists, "Phone fullscreen must not reveal an offscreen profile")
-      XCTAssertFalse(timeline.exists)
+      XCTAssertFalse(timeline.isHittable)
       XCTAssertGreaterThan(video.frame.width, video.frame.height)
+      let toggle = app.buttons["mobile-toggle-chat"]
+      XCTAssertEqual(toggle.label, "Show chat")
+      toggle.tap()
+      XCTAssertTrue(timeline.waitForExistence(timeout: 3))
+      XCTAssertTrue(app.frame.contains(timeline.frame))
+      XCTAssertGreaterThanOrEqual(timeline.frame.minX, video.frame.maxX)
+      XCTAssertEqual(toggle.label, "Hide chat")
+      capture(app, "Phone landscape with optional side chat")
+      toggle.tap()
+      XCTAssertFalse(timeline.isHittable)
+      let rotate = app.buttons["mobile-rotate-player"]
+      XCTAssertEqual(rotate.label, "Rotate to portrait")
+      rotate.tap()
+      expectation(for: NSPredicate { _, _ in app.frame.width < app.frame.height }, evaluatedWith: app)
+      waitForExpectations(timeout: 5)
+      XCTAssertTrue(timeline.isHittable)
+      XCTAssertFalse(toggle.exists)
     } else {
       tapVideo(app)
       if !details.waitForExistence(timeout: 0.5) { tapVideo(app) }

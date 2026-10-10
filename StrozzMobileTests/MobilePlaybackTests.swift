@@ -13,6 +13,8 @@ final class MobilePlaybackTests: XCTestCase {
   func testResponsiveLayouts() {
     XCTAssertEqual(MobilePlayerLayout.resolve(size: CGSize(width: 390, height: 780), isPhone: true, hideChat: false), .portrait)
     XCTAssertEqual(MobilePlayerLayout.resolve(size: CGSize(width: 780, height: 390), isPhone: true, hideChat: false, phoneLandscape: true), .videoOnly)
+    XCTAssertEqual(MobilePlayerLayout.resolve(size: CGSize(width: 750, height: 380), isPhone: true,
+      hideChat: false, phoneLandscape: true, showPhoneLandscapeChat: true), .sideBySide)
     XCTAssertEqual(MobilePlayerLayout.resolve(size: CGSize(width: 390, height: 300), isPhone: true, hideChat: false), .portrait)
     XCTAssertEqual(MobilePlayerLayout.resolve(size: CGSize(width: 834, height: 1194), isPhone: false, hideChat: false), .portrait)
     XCTAssertEqual(MobilePlayerLayout.resolve(size: CGSize(width: 1024, height: 740), isPhone: false, hideChat: false), .sideBySide)

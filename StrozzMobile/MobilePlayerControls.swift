@@ -13,7 +13,9 @@ struct MobilePlayerControls: View {
   let onShare: () -> Void
   let onInteraction: () -> Void
   let onRoutes: (Bool) -> Void
+  var showsChatToggle = false
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+  @AppStorage(PersistenceKey.showStreamDuration) private var showStreamDuration = true
 
   var body: some View {
     ZStack {
@@ -46,7 +48,16 @@ struct MobilePlayerControls: View {
         if model.presentationState == .ready {
           HStack(alignment: .bottom, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-              livePositionControl
+              ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                  livePositionControl
+                  if showStreamDuration { MobileStreamUptime(startedAt: model.streamStartedAt) }
+                }
+                VStack(alignment: .leading, spacing: 0) {
+                  livePositionControl
+                  if showStreamDuration { MobileStreamUptime(startedAt: model.streamStartedAt) }
+                }
+              }
               if let viewerCount {
                 MobileViewerBadge(count: viewerCount, isVideoOverlay: true)
               }
@@ -61,18 +72,31 @@ struct MobilePlayerControls: View {
             .accessibilityLabel(model.isMuted ? "Unmute" : "Mute")
             .accessibilityIdentifier("mobile-mute")
             .modifier(MobileControlSurface(isVideoOverlay: true))
-            Button {
-              onInteraction()
-              hideChat.toggle()
-            } label: {
-              Icon(glyph: hideChat ? .sidebarRightExpand : .sidebarRightCollapse, size: 22).frame(width: 44, height: 44)
+            if showsChatToggle {
+              Button {
+                onInteraction()
+                hideChat.toggle()
+              } label: {
+                Icon(glyph: hideChat ? .sidebarRightExpand : .sidebarRightCollapse, size: 22).frame(
+                  width: 44, height: 44)
+              }
+              .accessibilityLabel(hideChat ? "Show chat" : "Hide chat")
+              .accessibilityIdentifier("mobile-toggle-chat")
+              .modifier(MobileControlSurface(isVideoOverlay: true))
             }
-            .accessibilityLabel(hideChat ? "Show chat" : "Hide chat")
-            .modifier(MobileControlSurface(isVideoOverlay: true))
             Button(action: onFullscreen) {
-              Icon(glyph: isFullscreen ? .dimensions : .arrowsMaximize, size: 22).frame(width: 44, height: 44)
+              Icon(
+                glyph: UIDevice.current.userInterfaceIdiom == .phone
+                  ? .rotateRectangle
+                  : isFullscreen ? .dimensions : .arrowsMaximize, size: 22
+              ).frame(width: 44, height: 44)
             }
-            .accessibilityLabel(isFullscreen ? "Exit fullscreen" : "Fullscreen")
+            .accessibilityLabel(
+              UIDevice.current.userInterfaceIdiom == .phone
+                ? (isFullscreen ? "Rotate to portrait" : "Rotate to landscape")
+                : (isFullscreen ? "Exit fullscreen" : "Fullscreen")
+            )
+            .accessibilityIdentifier("mobile-rotate-player")
             .modifier(MobileControlSurface(isVideoOverlay: true))
           }
         }
@@ -96,6 +120,25 @@ struct MobilePlayerControls: View {
     .background {
       MobilePlayerControlScrim(hasBottomControls: model.presentationState == .ready,
                                reduceTransparency: reduceTransparency)
+    }
+  }
+
+  struct MobileStreamUptime: View {
+    let startedAt: Date?
+
+    var body: some View {
+      if let startedAt {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+          let elapsed = context.date.timeIntervalSince(startedAt)
+          if elapsed.isFinite, elapsed >= 0 {
+            Text(Duration.seconds(elapsed), format: .time(pattern: .hourMinuteSecond(padHourToLength: 2)))
+              .font(.caption).monospacedDigit()
+              .modifier(MobileControlSurface(isVideoOverlay: true))
+              .accessibilityLabel(Text("Streaming for \(Duration.seconds(elapsed), format: .units(allowed: [.hours, .minutes], width: .wide))"))
+              .accessibilityIdentifier("mobile-stream-uptime")
+          }
+        }
+      }
     }
   }
 

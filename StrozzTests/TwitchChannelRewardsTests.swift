@@ -161,6 +161,24 @@ final class TwitchChannelRewardsTests: XCTestCase {
     }
   }
 
+  func testChannelIconUsesExistingContextAndIsOptional() async throws {
+    let transport = ChannelRewardsTransport()
+    let (api, _, _) = try fixture(transport)
+    let withoutIcon = try await api.channelPoints(login: "channel", token: "test-token")
+    XCTAssertNil(withoutIcon.imageURL)
+    await transport.setContext(rewardsContext().replacingOccurrences(of: "\"name\":\"Leaves\"",
+      with: "\"name\":\"Leaves\",\"image\":{\"url\":\"https://example.com/icon-1.png\",\"url2x\":\"https://example.com/icon-2.png\",\"url4x\":\"https://example.com/icon-4.png\"}"))
+    let withIcon = try await api.channelPoints(login: "channel", token: "test-token")
+    XCTAssertEqual(withIcon.imageURL?.absoluteString, "https://example.com/icon-2.png")
+    XCTAssertEqual(withIcon.balance, withoutIcon.balance)
+    XCTAssertEqual(withIcon.rewards, withoutIcon.rewards)
+    await transport.setContext(rewardsContext().replacingOccurrences(of: "\"name\":\"Leaves\"",
+      with: "\"name\":\"Leaves\",\"image\":{\"url2x\":\"http://example.com/icon.png\"}"))
+    let unusableIcon = try await api.channelPoints(login: "channel", token: "test-token")
+    XCTAssertNil(unusableIcon.imageURL)
+    XCTAssertEqual(unusableIcon.balance, withoutIcon.balance, "Cosmetic icon data must not discard the real balance")
+  }
+
   func testBitsCustomRewardsAndUnsupportedMessageRedemptionsCannotSpend() async throws {
     let transport = ChannelRewardsTransport()
     let (api, _, _) = try fixture(transport)

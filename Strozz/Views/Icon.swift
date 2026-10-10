@@ -19,6 +19,7 @@ enum Glyph: String {
   case minus
   case adjustmentsHorizontal = "adjustments-horizontal"
   case dimensions
+  case rotateRectangle = "rotate-rectangle"
   case x
   case check
   case heart

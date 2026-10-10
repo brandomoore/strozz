@@ -60,8 +60,12 @@ struct MobileChatComposerFixture: View {
       MobileChatComposerInput(text: $draft, sending: sending, onSend: {
         submitted = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         draft = ""
-      }, onSettings: { showSettings = true }, reduceTransparency: opaque)
-      .padding(.horizontal, 12)
+      }, onSettings: { showSettings = true }, reduceTransparency: opaque,
+        rewards: ProcessInfo.processInfo.environment["STROZZ_REWARDS_FIXTURE"] == "1"
+          ? MobileChatRewardsSummary(balance: 57990, name: "Delibird's", imageURL: nil,
+              streak: 10, errorMessage: nil) : nil)
+      .padding(.leading, ProcessInfo.processInfo.environment["STROZZ_REWARDS_FIXTURE"] == "1" ? 8 : 12)
+      .padding(.trailing, 12)
       .padding(.bottom, 8)
     }
     .background(palette.chatSideSurface)

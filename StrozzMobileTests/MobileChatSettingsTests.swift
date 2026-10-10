@@ -91,52 +91,68 @@ final class MobileChatSettingsTests: XCTestCase {
             XCTAssertLessThan(actual.height, 300)
           }
 
-          func testKeyboardReturnSubmitsButPastedMultilineTextAndIMECompositionDoNot() {
-            var draft = "Hello"
-            var submissions = 0
-            let input = MobileChatTextInput(text: Binding(get: { draft }, set: { draft = $0 }),
-              sending: false, onSend: { submissions += 1 })
-            let coordinator = input.makeCoordinator()
-            let view = UITextView()
-            view.text = draft
-            XCTAssertFalse(coordinator.textView(view, shouldChangeTextIn: NSRange(location: 5, length: 0),
-              replacementText: "\n"))
-            XCTAssertEqual(submissions, 1)
-            XCTAssertTrue(coordinator.textView(view, shouldChangeTextIn: NSRange(location: 5, length: 0),
-              replacementText: "First line\nSecond line"))
-            XCTAssertEqual(submissions, 1)
-            view.text = "   "
-            XCTAssertFalse(coordinator.textView(view, shouldChangeTextIn: NSRange(location: 3, length: 0),
-              replacementText: "\n"))
-            XCTAssertEqual(submissions, 1)
-            view.text = "First line\nSecond line"
-            coordinator.textViewDidChange(view)
-            XCTAssertEqual(draft, view.text)
-            view.setMarkedText("Composing", selectedRange: NSRange(location: 9, length: 0))
-            XCTAssertNotNil(view.markedTextRange)
-            XCTAssertTrue(coordinator.textView(view, shouldChangeTextIn: NSRange(location: 0, length: 0),
-              replacementText: "\n"))
-            XCTAssertEqual(submissions, 1)
-            coordinator.parent = MobileChatTextInput(text: .constant("Sending"), sending: true,
-              onSend: { submissions += 1 })
-            XCTAssertFalse(coordinator.textView(view, shouldChangeTextIn: NSRange(location: 0, length: 0),
-              replacementText: "\n"))
-            XCTAssertEqual(submissions, 1)
-          }
-
-          func testComposerGrowthStopsAtFourLines() {
-            for width in [280.0, 390, 700] {
-              let host = UIHostingController(rootView: MobileChatComposerInput(
-                text: .constant(String(repeating: "A long draft that will need scrolling. ", count: 40)),
-                sending: false, onSend: {}, onSettings: {}, reduceTransparency: true)
-                .environment(\.dynamicTypeSize, .large))
-              let actual = host.sizeThatFits(in: CGSize(width: width, height: UIView.layoutFittingExpandedSize.height))
-              let expected = ceil(UIFont.systemFont(ofSize: 17).lineHeight * 4 + 20) + 8
-              XCTAssertEqual(actual.height, expected, accuracy: 1)
-            }
-          }
         }
       }
+    }
+  }
+
+  func testKeyboardReturnSubmitsButPastedMultilineTextAndIMECompositionDoNot() {
+    var draft = "Hello"
+    var submissions = 0
+    let input = MobileChatTextInput(
+      text: Binding(get: { draft }, set: { draft = $0 }),
+      sending: false, onSend: { submissions += 1 })
+    let coordinator = input.makeCoordinator()
+    let view = UITextView()
+    view.text = draft
+    XCTAssertFalse(
+      coordinator.textView(
+        view, shouldChangeTextIn: NSRange(location: 5, length: 0),
+        replacementText: "\n"))
+    XCTAssertEqual(submissions, 1)
+    XCTAssertTrue(
+      coordinator.textView(
+        view, shouldChangeTextIn: NSRange(location: 5, length: 0),
+        replacementText: "First line\nSecond line"))
+    XCTAssertEqual(submissions, 1)
+    view.text = "   "
+    XCTAssertFalse(
+      coordinator.textView(
+        view, shouldChangeTextIn: NSRange(location: 3, length: 0),
+        replacementText: "\n"))
+    XCTAssertEqual(submissions, 1)
+    view.text = "First line\nSecond line"
+    coordinator.textViewDidChange(view)
+    XCTAssertEqual(draft, view.text)
+    view.setMarkedText("Composing", selectedRange: NSRange(location: 9, length: 0))
+    XCTAssertNotNil(view.markedTextRange)
+    XCTAssertTrue(
+      coordinator.textView(
+        view, shouldChangeTextIn: NSRange(location: 0, length: 0),
+        replacementText: "\n"))
+    XCTAssertEqual(submissions, 1)
+    coordinator.parent = MobileChatTextInput(
+      text: .constant("Sending"), sending: true,
+      onSend: { submissions += 1 })
+    XCTAssertFalse(
+      coordinator.textView(
+        view, shouldChangeTextIn: NSRange(location: 0, length: 0),
+        replacementText: "\n"))
+    XCTAssertEqual(submissions, 1)
+  }
+
+  func testComposerGrowthStopsAtFourLines() {
+    for width in [280.0, 390, 700] {
+      let host = UIHostingController(
+        rootView: MobileChatComposerInput(
+          text: .constant(String(repeating: "A long draft that will need scrolling. ", count: 40)),
+          sending: false, onSend: {}, onSettings: {}, reduceTransparency: true
+        )
+        .environment(\.dynamicTypeSize, .large))
+      let actual = host.sizeThatFits(
+        in: CGSize(width: width, height: UIView.layoutFittingExpandedSize.height))
+      let expected = ceil(UIFont.systemFont(ofSize: 17).lineHeight * 4 + 20) + 8
+      XCTAssertEqual(actual.height, expected, accuracy: 1)
     }
   }
 }

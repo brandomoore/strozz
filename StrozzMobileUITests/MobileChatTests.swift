@@ -193,4 +193,41 @@ final class MobileChatTests: XCTestCase {
     XCTAssertEqual(actual.width, expected.width, accuracy: 0.000001, file: file, line: line)
     XCTAssertEqual(actual.height, expected.height, accuracy: 0.000001, file: file, line: line)
   }
+
+  func testCompactPointsOpenDetailsWithoutLosingTheDraft() {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "composer"
+    app.launchEnvironment["STROZZ_REWARDS_FIXTURE"] = "1"
+    app.launch()
+    defer { app.terminate() }
+    let points = app.buttons["mobile-chat-rewards"]
+    XCTAssertTrue(points.waitForExistence(timeout: 10))
+    XCTAssertEqual(points.value as? String, "57,990")
+    XCTAssertEqual(points.label, "Delibird's")
+    XCTAssertEqual(points.frame.minX, 8, accuracy: 1)
+    XCTAssertLessThanOrEqual(points.frame.width, 72, "Points must not reserve a padded 96-point column")
+    let field = app.textViews["mobile-chat-composer-input"]
+    XCTAssertLessThanOrEqual(points.frame.maxX, field.frame.minX)
+    XCTAssertGreaterThanOrEqual(points.frame.height, 44)
+    field.tap()
+    field.typeText("My unsent draft")
+    points.tap()
+    XCTAssertTrue(app.navigationBars["Channel points"].waitForExistence(timeout: 3))
+    let balance = app.descendants(matching: .any).matching(identifier: "mobile-rewards-balance").firstMatch
+    let streak = app.descendants(matching: .any).matching(identifier: "mobile-rewards-streak").firstMatch
+    XCTAssertTrue(balance.waitForExistence(timeout: 3))
+    XCTAssertTrue(balance.label.contains("Delibird's"))
+    XCTAssertTrue((balance.label + String(describing: balance.value ?? "")).contains("57,990"))
+    XCTAssertTrue((streak.label + String(describing: streak.value ?? "")).contains("10 streams"))
+    let detailsShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+    detailsShot.name = "Exact points and streak details"
+    detailsShot.lifetime = .keepAlways
+    add(detailsShot)
+    app.buttons["Done"].tap()
+    XCTAssertEqual(field.value as? String, "My unsent draft")
+    let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+    shot.name = "Compact points beside the mobile composer"
+    shot.lifetime = .keepAlways
+    add(shot)
+  }
 }

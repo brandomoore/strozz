@@ -187,10 +187,10 @@ final class MobileNavigationTests: XCTestCase {
     // Pause keeps controls visible while screenshots and rotation are inspected.
     playPause.tap()
     XCTAssertEqual(playPause.label, "Play")
-    let fullscreen = app.buttons["Fullscreen"]
+    let fullscreen = app.buttons["mobile-rotate-player"]
     XCTAssertTrue(fullscreen.waitForExistence(timeout: 5))
     fullscreen.tap()
-    let exitFullscreen = app.buttons["Exit fullscreen"]
+    let exitFullscreen = app.buttons["mobile-rotate-player"]
     XCTAssertTrue(exitFullscreen.waitForExistence(timeout: 5))
     if UIDevice.current.userInterfaceIdiom == .phone {
       expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)

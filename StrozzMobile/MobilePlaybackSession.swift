@@ -42,6 +42,7 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
     session.model.activateAudioSession = {}
     session.model.player.replaceCurrentItem(with: AVPlayerItem(asset: AVMutableComposition()))
     session.model.displayReady(true, for: session.model.player)
+    session.model.prepareLayoutFixtureMetadata()
     session.videoController.player = session.model.player
     return session
   }

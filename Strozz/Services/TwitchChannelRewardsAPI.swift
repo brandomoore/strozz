@@ -7,6 +7,7 @@ struct TwitchChannelPoints: Equatable {
   var claimID: String?
   let rewards: [TwitchChannelReward]
   let emotes: [TwitchRewardEmote]
+  var imageURL: URL? = nil
 }
 
 struct TwitchRewardEmote: Equatable, Identifiable {
@@ -88,6 +89,18 @@ extension TwitchWatchRewardsAPI {
   }
 
   private struct PointsSettings: Decodable {
+    struct Image: Decodable {
+      let url: String?
+      let url2x: String?
+      let url4x: String?
+
+      var displayURL: URL? {
+        [url2x, url4x, url].compactMap { value in
+          guard let value, let url = URL(string: value), url.scheme == "https", url.host != nil else { return nil }
+          return url
+        }.first
+      }
+    }
     struct Variant: Decodable {
       struct Emote: Decodable { let id: String; let token: String }
       struct Modification: Decodable { let emote: Emote }
@@ -97,6 +110,7 @@ extension TwitchWatchRewardsAPI {
     }
     let isEnabled: Bool
     let name: String?
+    let image: Image?
     let customRewards: [RawReward]
     let automaticRewards: [RawReward]
     let emoteVariants: [Variant]
@@ -191,7 +205,7 @@ extension TwitchWatchRewardsAPI {
       name: settings.name ?? String(localized: "Channel points"),
       claimID: points.availableClaim?.id,
       rewards: (custom + automatic).sorted { ($0.cost, $0.title) < ($1.cost, $1.title) },
-      emotes: emotes)
+      emotes: emotes, imageURL: settings.image?.displayURL)
   }
 
   private struct MutationResult: Decodable {
