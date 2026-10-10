@@ -186,7 +186,6 @@ struct MobilePlayerView: View {
             .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
           }
           if layout == .portrait {
-            Divider()
             MobileChatView(service: model.chat, channel: channel.login,
               composer: chatComposer, scroll: chatScroll, rewards: MobileChatRewardsSummary.snapshot(of: session.watchTracker))
           } else {
@@ -201,7 +200,6 @@ struct MobilePlayerView: View {
         .accessibilityHidden(!session.isExpanded || layout == .videoOnly)
         if canToggleChat {
           HStack(spacing: 0) {
-            Divider()
             MobileChatView(service: model.chat, channel: channel.login,
               composer: chatComposer, scroll: chatScroll, rewards: MobileChatRewardsSummary.snapshot(of: session.watchTracker))
           }

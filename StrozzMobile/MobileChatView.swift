@@ -211,13 +211,18 @@ struct MobileChatTimeline: View {
 
 struct MobileChatTopFade: View {
   var enabled = true
-  static let height: CGFloat = 24
+  static let height: CGFloat = 48
 
   var body: some View {
     // Only alpha matters in this viewport mask; it never changes the scroll insets.
     VStack(spacing: 0) {
-      LinearGradient(colors: [enabled ? .clear : .black, .black],
-        startPoint: .top, endPoint: .bottom)
+      LinearGradient(stops: [
+        .init(color: enabled ? .clear : .black, location: 0),
+        .init(color: enabled ? .clear : .black, location: 0.12),
+        .init(color: .black.opacity(enabled ? 0.2 : 1), location: 0.4),
+        .init(color: .black.opacity(enabled ? 0.7 : 1), location: 0.75),
+        .init(color: .black, location: 1),
+      ], startPoint: .top, endPoint: .bottom)
         .frame(height: Self.height)
       Rectangle().fill(.black)
     }

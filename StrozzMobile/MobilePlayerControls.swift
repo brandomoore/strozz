@@ -46,22 +46,12 @@ struct MobilePlayerControls: View {
         }
         Spacer(minLength: 12)
         if model.presentationState == .ready {
-          HStack(alignment: .bottom, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-              ViewThatFits(in: .horizontal) {
-                HStack(spacing: 6) {
-                  livePositionControl
-                  if showStreamDuration { MobileStreamUptime(startedAt: model.streamStartedAt) }
-                }
-                VStack(alignment: .leading, spacing: 0) {
-                  livePositionControl
-                  if showStreamDuration { MobileStreamUptime(startedAt: model.streamStartedAt) }
-                }
+          HStack(spacing: 8) {
+            MobileStreamReadouts(state: model.liveStatus, startedAt: model.streamStartedAt,
+              viewerCount: viewerCount, showDuration: showStreamDuration) {
+                onInteraction()
+                model.goLive()
               }
-              if let viewerCount {
-                MobileViewerBadge(count: viewerCount, isVideoOverlay: true)
-              }
-            }
             Spacer(minLength: 0)
             Button {
               onInteraction()
@@ -120,64 +110,6 @@ struct MobilePlayerControls: View {
     .background {
       MobilePlayerControlScrim(hasBottomControls: model.presentationState == .ready,
                                reduceTransparency: reduceTransparency)
-    }
-  }
-
-  struct MobileStreamUptime: View {
-    let startedAt: Date?
-
-    var body: some View {
-      if let startedAt {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-          let elapsed = context.date.timeIntervalSince(startedAt)
-          if elapsed.isFinite, elapsed >= 0 {
-            Text(Duration.seconds(elapsed), format: .time(pattern: .hourMinuteSecond(padHourToLength: 2)))
-              .font(.caption).monospacedDigit()
-              .modifier(MobileControlSurface(isVideoOverlay: true))
-              .accessibilityLabel(Text("Streaming for \(Duration.seconds(elapsed), format: .units(allowed: [.hours, .minutes], width: .wide))"))
-              .accessibilityIdentifier("mobile-stream-uptime")
-          }
-        }
-      }
-    }
-  }
-
-  @ViewBuilder
-  private var livePositionControl: some View {
-    switch model.liveStatus {
-    case .live:
-      Label { Text("Live").font(.caption.bold()) } icon: { Icon(glyph: .broadcast, size: 16) }
-        .frame(minHeight: 44).padding(.horizontal, 8)
-        .modifier(MobileControlSurface(isVideoOverlay: true))
-        .accessibilityLabel("At the live edge")
-        .accessibilityIdentifier("mobile-live-status")
-    case .checking:
-      Text("Checking live").font(.caption)
-        .frame(minHeight: 44).padding(.horizontal, 8)
-        .modifier(MobileControlSurface(isVideoOverlay: true))
-        .accessibilityIdentifier("mobile-live-checking")
-    case .paused, .behind:
-      VStack(alignment: .leading, spacing: 2) {
-        if case .behind(let seconds) = model.liveStatus {
-          Text("\(seconds, format: .number.precision(.fractionLength(0)))s behind")
-            .font(.caption)
-            .accessibilityIdentifier("mobile-live-delay")
-        } else {
-          Text("Paused").font(.caption)
-            .accessibilityIdentifier("mobile-live-paused")
-        }
-        Button {
-          onInteraction()
-          model.goLive()
-        } label: {
-          Label { Text("Back to live").font(.caption.bold()) } icon: {
-            Icon(glyph: .broadcast, size: 16)
-          }
-          .frame(minHeight: 44).padding(.horizontal, 8)
-        }
-        .accessibilityIdentifier("mobile-go-live")
-      }
-      .modifier(MobileControlSurface(isVideoOverlay: true))
     }
   }
 }

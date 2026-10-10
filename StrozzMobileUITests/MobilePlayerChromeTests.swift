@@ -24,8 +24,8 @@ final class MobilePlayerChromeTests: XCTestCase {
     let uptime = app.staticTexts["mobile-stream-uptime"]
     XCTAssertTrue(uptime.exists)
     XCTAssertFalse(details.staticTexts["Auto - Native Low Latency"].exists)
-    if !controls.exists { tapVideo(app) }
-    app.buttons["mobile-mute"].tap()
+    tapVideo(app)
+    if !controls.waitForExistence(timeout: 0.3) { tapVideo(app) }
     XCTAssertTrue(details.exists)
     let videoFrame = video.frame
     let expandedChat = timeline.frame
@@ -79,6 +79,23 @@ final class MobilePlayerChromeTests: XCTestCase {
     let hiddenWhilePaused = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: details)
     hiddenWhilePaused.isInverted = true
     waitForExpectations(timeout: 5)
+  }
+
+  func testLiveTimeAndViewersAreOneUnboxedRow() {
+    let app = launch()
+    defer { app.terminate() }
+    let uptime = app.staticTexts["mobile-stream-uptime"]
+    XCTAssertTrue(uptime.waitForExistence(timeout: 10))
+    app.buttons["mobile-mute"].tap()
+    let live = app.descendants(matching: .any).matching(identifier: "mobile-live-status").firstMatch
+    let viewers = app.descendants(matching: .any).matching(identifier: "mobile-viewer-readout").firstMatch
+    XCTAssertTrue(viewers.exists)
+    XCTAssertEqual(live.frame.midY, viewers.frame.midY, accuracy: 1,
+      "Elapsed time and viewers must sit side by side, not stack")
+    XCTAssertLessThan(live.frame.maxX, viewers.frame.minX)
+    XCTAssertLessThan(viewers.frame.maxX, app.buttons["mobile-mute"].frame.minX)
+    XCTAssertFalse(app.staticTexts["Live"].exists, "The elapsed timer replaces the redundant Live word")
+    capture(app, "Horizontal red-dot time and viewer readouts without backplates")
   }
 
   func testQualitySheetHoldsDetailsAndRestartsTheIdleTimeout() {

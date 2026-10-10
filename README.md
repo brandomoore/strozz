@@ -151,12 +151,15 @@ loading, VoiceOver, and open playback-control sheets keep them visible. The
 video surface and chat session stay mounted throughout the transition.
 Chat starts directly below the collapsed profile without a permanent heading;
 a connection status appears only while chat is reconnecting.
-Messages fade gently over the top 24 points of the chat viewport, without
+Messages fade gently over the top 48 points of the chat viewport, without
 changing scroll insets or fading the composer. Reduce Transparency and Increase
 Contrast disable that fade.
 
-Uptime sits beside the live-position indicator in the video controls and hides
-with them; its Account > Overlays preference still applies. Playback quality
+The video controls show one horizontal readout row: a red live dot with elapsed
+time, then a viewer icon and compact count, without chips or backplates. The red
+dot appears only at the live edge. The readouts
+hide with the controls; the Account > Overlays duration preference still applies.
+Playback quality
 remains in the quality menu rather than repeating below the profile. Channel
 points appear as a compact balance and the channel's own 18-point currency icon
 beside the message box, eight points from the leading edge (a gift icon is used
