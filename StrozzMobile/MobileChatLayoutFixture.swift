@@ -1,5 +1,8 @@
 #if DEBUG
+import ImageIO
+import SDWebImage
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Deterministic UI-test surface; never connects to Twitch or starts playback.
 struct MobileChatLayoutFixture: View {
@@ -91,6 +94,7 @@ struct MobileChatComposerFixture: View {
 struct MobileEmoteInspectionFixture: View {
   @State private var messages: [ChatMessage] = []
   @State private var imageURL: URL?
+  @State private var gifCacheKey: String?
   @State private var failure: String?
 
   var body: some View {
@@ -103,6 +107,10 @@ struct MobileEmoteInspectionFixture: View {
     .preferredColorScheme(.light)
     .task {
       do {
+        if ProcessInfo.processInfo.environment["STROZZ_GIF_FIXTURE"] == "1" {
+          messages = [try nativeGIFMessage()]
+          return
+        }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("emote-\(UUID()).png")
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -125,10 +133,41 @@ struct MobileEmoteInspectionFixture: View {
       }
     }
     .onDisappear {
+      if let gifCacheKey { SDImageCache.shared.removeImage(forKey: gifCacheKey) }
       guard let imageURL else { return }
       do { try FileManager.default.removeItem(at: imageURL) }
       catch { print("Emote fixture cleanup failed: \((error as NSError).code)") }
     }
+  }
+
+  private func nativeGIFMessage() throws -> ChatMessage {
+    let data = NSMutableData()
+    guard let output = CGImageDestinationCreateWithData(data, UTType.gif.identifier as CFString, 2, nil)
+    else { throw CocoaError(.fileWriteUnknown) }
+    CGImageDestinationSetProperties(output,
+      [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+    for color in [UIColor.systemGreen, .systemBlue] {
+      let format = UIGraphicsImageRendererFormat()
+      format.scale = 1
+      let image = UIGraphicsImageRenderer(size: CGSize(width: 200, height: 140), format: format).image {
+        color.setFill()
+        $0.fill(CGRect(x: 0, y: 0, width: 200, height: 140))
+        UIColor.white.setFill()
+        $0.fill(CGRect(x: 60, y: 35, width: 80, height: 70))
+      }
+      guard let cgImage = image.cgImage else { throw CocoaError(.fileWriteUnknown) }
+      CGImageDestinationAddImage(output, cgImage,
+        [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 0.3]] as CFDictionary)
+    }
+    guard CGImageDestinationFinalize(output) else { throw CocoaError(.fileWriteUnknown) }
+    let id = "StrozzFixture" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+    let label = "[Fixture Wave GIF]"
+    guard let message = ChatMessage(ircLine:
+      "@gifs=0-\(label.unicodeScalars.count - 1)|\(id)|https://media.giphy.com/media/\(id)/giphy.gif :viewer!v@h PRIVMSG #fixture :\(label)"),
+      let gif = message.gifs.first else { throw CocoaError(.coderInvalidValue) }
+    gifCacheKey = gif.url.absoluteString
+    SDImageCache.shared.storeImageData(toDisk: data as Data, forKey: gif.url.absoluteString)
+    return message
   }
 }
 #endif

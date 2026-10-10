@@ -7,6 +7,57 @@ import XCTest
 
 @MainActor
 final class MobileChatPerformanceTests: XCTestCase {
+  func testGIFHistoryLoadsOnlyVisiblePreviewsAndBoundsAnimationWork() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("chat-gifs-\(UUID()).gif")
+    try makeAnimation(at: url, size: CGSize(width: 512, height: 512))
+    defer { removeFixture(url) }
+    let state = PerformanceChatState()
+    state.messages = (0..<500).map { index in
+      var message = ChatMessage(username: "Viewer", colorHex: nil, badgeKeys: [],
+        text: "[GIF \(index)]", twitchEmoteURLs: [:])
+      message.segments = [.gif(name: message.text, url: url)]
+      return message
+    }
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let previous = scene.keyWindow
+    let host = UIHostingController(rootView: PerformanceChatHarness(state: state))
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = host
+    window.makeKeyAndVisible()
+    defer {
+      window.isHidden = true
+      window.rootViewController = nil
+      previous?.makeKey()
+    }
+    host.view.layoutIfNeeded()
+    try await waitUntil { !self.animatedViews(in: host.view).filter(\.isAnimating).isEmpty }
+    let scroll = try XCTUnwrap(scrollView(in: host.view))
+    let views = animatedViews(in: host.view)
+    XCTAssertLessThanOrEqual(views.count, 12, "Do not download an entire GIF scrollback")
+    for view in views {
+      XCTAssertEqual(view.maxBufferSize, 2 * 1024 * 1024)
+      if let image = view.image {
+        XCTAssertLessThanOrEqual(image.size.width, 360)
+        XCTAssertLessThanOrEqual(image.size.height, 240)
+      }
+    }
+    state.phase = .background
+    try await Task.sleep(for: .milliseconds(300))
+    XCTAssertEqual(animatedViews(in: host.view).filter(\.isAnimating).count, 0)
+    state.phase = .active
+    try await waitUntil { !self.animatedViews(in: host.view).filter(\.isAnimating).isEmpty }
+    state.animationsActive = false
+    try await Task.sleep(for: .milliseconds(300))
+    XCTAssertEqual(animatedViews(in: host.view).filter(\.isAnimating).count, 0)
+    state.animationsActive = true
+    scroll.setContentOffset(CGPoint(x: 0, y: 200), animated: false)
+    try await Task.sleep(for: .milliseconds(500))
+    let scrolled = animatedViews(in: host.view)
+    XCTAssertGreaterThan(scrolled.filter(\.isAnimating).count, 0)
+    XCTAssertLessThanOrEqual(scrolled.filter(\.isAnimating).count, 12)
+    XCTAssertLessThanOrEqual(scrolled.count, 24, "Only visited rows should request GIF images")
+  }
+
   func testOnlyViewportEmotesAnimateWithLongHistory() async throws {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("chat-performance-\(UUID()).gif")
     try makeAnimation(at: url)
@@ -175,15 +226,15 @@ final class MobileChatPerformanceTests: XCTestCase {
       + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
   }
 
-  private func makeAnimation(at url: URL) throws {
+  private func makeAnimation(at url: URL, size: CGSize = CGSize(width: 32, height: 32)) throws {
     let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.gif.identifier as CFString, 2, nil))
     CGImageDestinationSetProperties(destination, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
     for color in [UIColor.systemBlue, .systemGreen] {
       let format = UIGraphicsImageRendererFormat()
       format.scale = 1
-      let image = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 32), format: format).image { context in
+      let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
         color.setFill()
-        context.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+        context.fill(CGRect(origin: .zero, size: size))
       }
       CGImageDestinationAddImage(destination, try XCTUnwrap(image.cgImage),
         [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 0.1]] as CFDictionary)

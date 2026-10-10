@@ -15,6 +15,7 @@ extension ChatService {
       twitchEmoteURLs: message.twitchEmoteURLs,
       youtubeEmoteURLs: message.youtubeEmoteURLs,
       kickEmoteURLs: message.kickEmoteURLs,
+      gifs: message.gifs,
       globalEmoteURLs: emoteURLs,
       cheermotes: cheermotes,
       shouldRenderCheers: shouldRenderCheers

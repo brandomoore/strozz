@@ -138,6 +138,15 @@ and offers retry when loading fails. Animated previews respect both the chat
 animation preference and Reduce Motion.
 Dismiss the sheet to return to chat without stopping playback.
 
+Native Twitch GIPHY messages display as compact GIF previews on Apple TV and
+iPhone/iPad; tap a mobile preview to enlarge it. Strozz reads Twitch's `gifs`
+attachment tag rather than expanding arbitrary pasted links. Previews use the
+small GIPHY rendition without the original tracking query, load when visible,
+and pause offscreen or in the background. Animated-emote settings and Reduce
+Motion also apply to GIFs. Preview dimensions stay fixed while loading, and
+unavailable images retain a readable label. This supports receiving GIFs, not
+a GIF picker or sending them; Kick's existing animated emotes remain unchanged.
+
 The rounded chat composer grows as you type. Its **…** button opens **Chat
 settings** when the draft is empty and becomes **Send** when there is text.
 The keyboard's Send key also sends; pasted multiline text remains supported.

@@ -105,6 +105,7 @@ actor ChatIngestPipeline {
       twitchEmoteURLs: message.twitchEmoteURLs,
       youtubeEmoteURLs: message.youtubeEmoteURLs,
       kickEmoteURLs: message.kickEmoteURLs,
+      gifs: message.gifs,
       globalEmoteURLs: snapshot.globalEmoteURLs,
       cheermotes: snapshot.cheermotes,
       shouldRenderCheers: shouldRenderCheers
