@@ -11,12 +11,13 @@ struct MobileChatView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack {
-        Text("Stream chat").font(.subheadline.bold())
-        Spacer()
-        if !service.isConnected { Text("Connecting...").font(.caption).foregroundStyle(.secondary) }
+      if !service.isConnected {
+        Text("Connecting...")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(12)
       }
-      .padding(12)
       MobileChatTimeline(messages: service.messages, emoteURLs: service.emoteURLs,
                          badgeURLs: service.badgeURLs, cheermotes: service.cheermotes,
                          viewerLogin: auth.userLogin, viewerDisplayName: auth.userDisplayName)

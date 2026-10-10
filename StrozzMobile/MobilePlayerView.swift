@@ -129,6 +129,7 @@ struct MobilePlayerView: View {
   @State private var fullscreen = false
   @State private var windowScene: UIWindowScene?
   @State private var rotationError: String?
+  @State private var streamDetailsVisible = true
   @State private var collapseProgress: CGFloat = 0
   @State private var miniPlayerPlacement = MobileMiniPlayerLayout.Placement()
   @GestureState private var miniPlayerManipulation = MobileMiniPlayerLayout.Manipulation()
@@ -166,8 +167,13 @@ struct MobilePlayerView: View {
           .opacity(1 - progress)
           .allowsHitTesting(session.isExpanded)
         VStack(spacing: 0) {
-          MobileStreamDetails(channel: channel, model: model)
-          MobileWatchRewardsStatus(tracker: session.watchTracker)
+          if streamDetailsVisible && session.isExpanded && layout != .videoOnly {
+            VStack(spacing: 0) {
+              MobileStreamDetails(channel: channel, model: model)
+              MobileWatchRewardsStatus(tracker: session.watchTracker)
+            }
+            .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
+          }
           if layout == .portrait {
             Divider()
             MobileChatView(service: model.chat, channel: channel.login)
@@ -175,6 +181,7 @@ struct MobilePlayerView: View {
             Spacer(minLength: 0)
           }
         }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: streamDetailsVisible)
         .frame(width: videoWidth, height: max(0, geometry.size.height - videoHeight))
         .offset(y: videoHeight + progress * 80)
         .opacity(layout == .videoOnly ? 0 : 1 - progress)
@@ -211,7 +218,8 @@ struct MobilePlayerView: View {
               abs(frame.height - expandedWindowFrame.height) < 1 {
               session.playerDidLayoutExpandedSurface()
             }
-          })
+          },
+          onControlsVisibilityChange: { streamDetailsVisible = $0 })
           .frame(width: videoFrame.width, height: videoFrame.height)
           .clipShape(RoundedRectangle(cornerRadius: progress * 14))
           .overlay {
@@ -341,6 +349,7 @@ struct MobileVideoView: View {
   let onFullscreen: () -> Void
   let onScene: (UIWindowScene) -> Void
   let onLayout: (CGRect) -> Void
+  var onControlsVisibilityChange: ((Bool) -> Void)? = nil
   @Environment(\.themePalette) private var palette
   @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -454,6 +463,9 @@ struct MobileVideoView: View {
       .onEnded { onCollapseDragEnded($0.translation) },
       including: isMinimized ? .subviews : .all)
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: controlsVisible)
+    .onChange(of: showsControls, initial: true) { _, visible in
+      onControlsVisibilityChange?(visible)
+    }
     .onChange(of: isMinimized) { _, _ in
       controlsVisible = true
       interaction += 1
@@ -566,24 +578,37 @@ struct MobileStreamDetails: View {
   @AppStorage(PersistenceKey.showStreamDuration) private var showStreamDuration = true
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text(channel.displayName).font(.headline)
-      Text(channel.title).font(.subheadline).lineLimit(2)
-      HStack(alignment: .firstTextBaseline, spacing: 12) {
-        Text(model.qualityLabel)
-        if showStreamDuration {
-          BroadcastUptimeView(startedAt: model.streamStartedAt)
+    HStack(alignment: .top, spacing: 12) {
+      CachedAsyncImage(url: channel.profileImageURL) { image in
+        image.resizable().scaledToFill()
+      } placeholder: { Circle().fill(.quaternary) }
+        .frame(width: 52, height: 52)
+        .clipShape(Circle())
+        .accessibilityHidden(true)
+      VStack(alignment: .leading, spacing: 4) {
+        Text(channel.displayName).font(.headline)
+        Text(channel.title).font(.subheadline).lineLimit(2)
+        if !channel.gameName.isEmpty {
+          Text(channel.gameName).font(.caption).foregroundStyle(.secondary)
         }
-      }
-      .font(.caption)
-      .foregroundStyle(.secondary)
-      if let notice = model.recoveryNotice {
-        Text(notice).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-      } else if let failure = model.nativeFailure {
-        Text("Using standard playback: \(failure)").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+          Text(model.qualityLabel)
+          if showStreamDuration {
+            BroadcastUptimeView(startedAt: model.streamStartedAt)
+          }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        if let notice = model.recoveryNotice {
+          Text(notice).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        } else if let failure = model.nativeFailure {
+          Text("Using standard playback: \(failure)").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        }
       }
     }
     .padding(12)
     .frame(maxWidth: .infinity, alignment: .leading)
+    .accessibilityElement(children: .contain)
+    .accessibilityIdentifier("mobile-stream-details")
   }
 }

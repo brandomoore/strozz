@@ -25,6 +25,8 @@ struct StrozzMobileApp: App {
         MobileEmoteInspectionFixture()
       } else if ProcessInfo.processInfo.environment["STROZZ_LAYOUT_FIXTURE"] == "composer" {
         MobileChatComposerFixture()
+      } else if ProcessInfo.processInfo.environment["STROZZ_LAYOUT_FIXTURE"] == "player-chrome" {
+        MobilePlayerLayoutFixture()
       } else {
         appContent
       }

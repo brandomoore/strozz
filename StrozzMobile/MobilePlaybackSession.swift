@@ -34,6 +34,19 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
     super.init()
   }
 
+  #if DEBUG
+  static func layoutFixture(channel: FollowedChannel) -> MobilePlaybackSession {
+    let session = MobilePlaybackSession(makeModel: { MobilePlaybackModel(muted: true) })
+    session.channel = channel
+    session.isExpanded = true
+    session.model.activateAudioSession = {}
+    session.model.player.replaceCurrentItem(with: AVPlayerItem(asset: AVMutableComposition()))
+    session.model.displayReady(true, for: session.model.player)
+    session.videoController.player = session.model.player
+    return session
+  }
+  #endif
+
   var keepsPlayingInBackground: Bool {
     pictureInPictureState == .starting || pictureInPictureState == .active
       || pictureInPictureState == .restoring

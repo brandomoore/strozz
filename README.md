@@ -144,6 +144,14 @@ The keyboard's Send key also sends; pasted multiline text remains supported.
 The composer follows the selected theme and uses an opaque surface with Reduce
 Transparency.
 
+Opening a mobile stream shows its profile photo, description, category, and
+playback controls. After four seconds of inactivity they collapse together,
+leaving video and chat; tap the video to show or hide them again. Pausing,
+loading, VoiceOver, and open playback-control sheets keep them visible. The
+video surface and chat session stay mounted throughout the transition.
+Chat starts directly below the collapsed profile without a permanent heading;
+a connection status appears only while chat is reconnecting.
+
 Chat settings are also available from **Account** and when reading anonymously.
 Adjust mobile size presets, fonts, spacing, emote sizing and animation, badges,
 mention/reply/keyword highlights, and extra-delay chat sync. Existing mobile
