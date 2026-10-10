@@ -483,6 +483,12 @@ YouTube source uses the existing bounded retry and Twitch fallback notice.
 
 ### Playback diagnostics
 
+Native playback isolates failed unused quality renditions instead of restarting
+a healthy stream. Failures in the active rendition still use bounded recovery.
+The retained TV log identifies the failing operation and rendition, including
+HTTP status and transport-timing details when available; it never includes
+signed playback URLs or credentials.
+
 Live playback lets AVPlayer buffer before starting instead of forcing an
 immediate first frame. With **Prefer YouTube** enabled, Strozz gives source
 selection up to four seconds before falling back to Twitch; it does not start

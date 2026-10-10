@@ -71,7 +71,7 @@ struct NativeTransportStream {
     let continuity = Int(b[3] & 15)
     if let lastContinuity, continuity != (lastContinuity + 1) % 16 {
       if continuity == lastContinuity, lastVideoPacket == packet { return nil }
-      throw NativeHLSError.transition
+      throw NativeHLSFailureDetail.transportContinuity
     }
     lastContinuity = continuity
     lastVideoPacket = packet
@@ -88,7 +88,7 @@ struct NativeTransportStream {
       let clock = try Self.timestamp(payload, at: flags == 3 ? 14 : 9)
       if let previousClock {
         let interval = distance(clock, previousClock)
-        guard interval > 0, interval <= 9000 else { throw NativeHLSError.transition }
+        guard interval > 0, interval <= 9000 else { throw NativeHLSFailureDetail.timestampInterval(interval) }
         lastInterval = interval
       }
       previousClock = clock
@@ -131,7 +131,9 @@ struct NativeTransportStream {
     guard hasInitialIDR, let firstClock, let previousClock, let lastInterval, let partClock,
       byteCount > partOffset else { throw NativeHLSError.invalidMedia }
     let fullDuration = Double(distance(previousClock, firstClock) + lastInterval) / 90_000
-    if let expectedDuration, abs(fullDuration - expectedDuration) > 0.05 { throw NativeHLSError.transition }
+    if let expectedDuration, abs(fullDuration - expectedDuration) > 0.05 {
+      throw NativeHLSFailureDetail.transportDuration(actual: fullDuration, expected: expectedDuration)
+    }
     let tail = Double(distance(previousClock, partClock) + lastInterval) / 90_000
     guard tail > 0, tail <= 0.45, fullDuration <= 10 else { throw NativeHLSError.invalidMedia }
     duration = fullDuration

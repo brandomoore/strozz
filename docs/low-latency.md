@@ -108,6 +108,34 @@ necessary. The default does not force unsupported media to play or promise
 unlimited retries; legacy playback is the last-resort stability path, not the
 first response to a transient engine error.
 
+### Isolating failures during native quality switches
+
+An unused rendition's failed download or invalid media no longer cancels all
+rendition indexers. It is quarantined for the current engine, its cached media
+is released, and subsequent requests fail explicitly without restarting its
+downloads. Active playlists stop advertising that rendition in their reports;
+late metadata refreshes cannot restore it. Healthy playback keeps its player,
+buffer preference, and latency target. Fresh engine recovery clears the quarantine.
+Failures in the active rendition still use the bounded native-first recovery
+above. A missing speculative preload does not change which rendition is active;
+only successfully served media does.
+
+The TV report on build 1984 included a native reset on Caedrel with only a generic
+unavailable reason. A separate Coopscollection reproduction found a 271 ms video
+timestamp interval rejected by the transport parser in an unused rendition,
+which then cancelled the active rendition too. Failure isolation fixes that
+cross-rendition cancellation; it does not establish the cause of the Caedrel
+failure or make discontinuous media safe to index. Timestamp, packet-continuity,
+parent-duration, and partial-segment duration checks remain enforced.
+
+Native failures now retain structured operation, affected/active rendition,
+engine-versus-rendition scope, HTTP status or error domain/code, and specific
+timing/cache evidence. All platforms emit system-log diagnostics; TV also records
+`native_hls_failure` in its retained playback log, tagged with the originating
+engine generation even if recovery has already replaced it. Signed URLs,
+headers, and server error prose are not included. Events occur once per failed
+rendition, not per rejected reload.
+
 ### Silent audio after returning to the TV app
 
 A physical build 1921 report followed a thirteen-minute background interval:

@@ -91,7 +91,8 @@ final class NativeHLSChunkReaderTests: XCTestCase {
       _ = try await Self.read(reader, url: base.appendingPathComponent("failure"))
       XCTFail("Failed HTTP media must not be accepted")
     } catch {
-      XCTAssertEqual(error as? NativeHLSError, .unavailable)
+      XCTAssertEqual(error as? NativeHLSFailureDetail, .httpStatus(503))
+      XCTAssertEqual(NativeHLSError.classify(error), .unavailable)
     }
     let data = try await Self.read(reader, url: base.appendingPathComponent("next"))
     XCTAssertEqual(data, Data([1, 2, 3, 4]))

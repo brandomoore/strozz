@@ -11,6 +11,68 @@ enum NativeHLSError: String, Error, Sendable {
   case transportCodec = "The transport stream does not contain H.264 and AAC."
   case transportKeyframe = "The transport segment did not start at a verified H.264 keyframe."
   case partDuration = "A partial segment exceeded the supported duration."
+
+  static func classify(_ error: Error) -> Self {
+    if let detail = error as? NativeHLSFailureDetail { return detail.reason }
+    return error as? Self ?? .unavailable
+  }
+}
+
+/// Structured evidence only: never retain signed URLs, headers, or server error prose.
+enum NativeHLSFailureDetail: Error, Sendable, Equatable {
+  case httpStatus(Int)
+  case timestampInterval(UInt64)
+  case transportContinuity
+  case transportDuration(actual: Double, expected: Double)
+  case cacheCapacity(Int)
+
+  var reason: NativeHLSError {
+    switch self {
+    case .httpStatus, .cacheCapacity: .unavailable
+    case .timestampInterval, .transportContinuity, .transportDuration: .transition
+    }
+  }
+
+  var code: String {
+    switch self {
+    case .httpStatus: "http_status"
+    case .timestampInterval: "transport_timestamp_interval"
+    case .transportContinuity: "transport_packet_continuity"
+    case .transportDuration: "transport_duration_mismatch"
+    case .cacheCapacity: "media_cache_capacity"
+    }
+  }
+}
+
+struct NativeHLSFailureDiagnostic: Sendable {
+  let attributes: [String: String]
+  let metrics: [String: Double]
+  let counters: [String: Int]
+
+  init(error: Error, operation: String, rendition: Int?, active: Int, fatal: Bool) {
+    let nsError = error as NSError
+    var attributes = ["operation": operation, "scope": fatal ? "engine" : "rendition",
+      "reason": NativeHLSError.classify(error).rawValue,
+      "error_domain": nsError.domain, "error_code": String(nsError.code)]
+    var metrics: [String: Double] = [:]
+    var counters = ["active_rendition": active]
+    counters["rendition"] = rendition
+    if let detail = error as? NativeHLSFailureDetail {
+      attributes["detail"] = detail.code
+      switch detail {
+      case .httpStatus(let status): counters["http_status"] = status
+      case .timestampInterval(let ticks): metrics["timestamp_interval_seconds"] = Double(ticks) / 90_000
+      case .transportDuration(let actual, let expected):
+        metrics["actual_duration_seconds"] = actual
+        metrics["expected_duration_seconds"] = expected
+      case .cacheCapacity(let bytes): counters["cached_media_bytes"] = bytes
+      case .transportContinuity: break
+      }
+    }
+    self.attributes = attributes
+    self.metrics = metrics
+    self.counters = counters
+  }
 }
 
 /// Byte-level indexing only: encoded audio/video remains on Twitch's CDN.

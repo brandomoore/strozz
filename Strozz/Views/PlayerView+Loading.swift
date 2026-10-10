@@ -401,8 +401,20 @@ extension PlayerView {
       && model.nativeFallbackReason == nil
     if useNative {
       let generation = model.nativeGeneration
+      let telemetry = model.playbackTelemetry
+      let sessionID = telemetry.sessionID
       let native = reuseNative ?? NativeLowLatencyHLS(sourceURL: url, headers: PlaybackService.streamHeaders,
-        history: streamRewindEnabled ? rewindWindowSeconds : 12) { reason in
+        history: streamRewindEnabled ? rewindWindowSeconds : 12,
+        diagnostic: { [weak telemetry] detail in
+          Task { @MainActor in
+            guard let telemetry, telemetry.sessionID == sessionID else { return }
+            // A recovery may replace the engine before this main-actor event runs.
+            // Keep the originating generation rather than dropping that evidence.
+            telemetry.recordEvent("native_hls_failure", level: .error,
+              attributes: detail.attributes.merging(["native_generation": generation.uuidString]) { _, new in new },
+              metrics: detail.metrics, counters: detail.counters)
+          }
+        }) { reason in
           Task { @MainActor in
             guard generation == model.nativeGeneration, model.isUsingNativeHLS else { return }
             recoverNativeHLS(reason)
