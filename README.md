@@ -131,6 +131,62 @@ emotes. Sign in through **Account > Sign in to Twitch**, open the Twitch link,
 approve the displayed code, then return to Strozz. Browsing, playback, and
 reading chat also work anonymously.
 
+Tap a chat emote on iPhone or iPad to open a larger preview with its name and,
+when recognized, its provider. Supported providers use higher-resolution artwork;
+if that image is unavailable, the sheet labels its fallback to the chat image
+and offers retry when loading fails. Animated previews respect both the chat
+animation preference and Reduce Motion.
+Dismiss the sheet to return to chat without stopping playback.
+
+The rounded chat composer grows as you type. Its **…** button opens **Chat
+settings** when the draft is empty and becomes **Send** when there is text.
+The keyboard's Send key also sends; pasted multiline text remains supported.
+The composer follows the selected theme and uses an opaque surface with Reduce
+Transparency.
+
+Opening a mobile stream shows its profile photo, description, category, and
+playback controls. After four seconds of inactivity they collapse together,
+leaving video and chat; tap the video to show or hide them again. Pausing,
+loading, VoiceOver, and open playback-control sheets keep them visible. The
+video surface and chat session stay mounted throughout the transition.
+Chat starts directly below the collapsed profile without a permanent heading;
+a connection status appears only while chat is reconnecting.
+Messages fade gently over the top 48 points of the chat viewport, without
+changing scroll insets or fading the composer. Reduce Transparency and Increase
+Contrast disable that fade.
+
+The video controls show one horizontal readout row: a red live dot with elapsed
+time, then a viewer icon and compact count, without chips or backplates. The red
+dot appears only at the live edge. The readouts
+hide with the controls; the Account > Overlays duration preference still applies.
+Playback quality
+remains in the quality menu rather than repeating below the profile. Channel
+points appear as a compact balance and the channel's own 18-point currency icon
+beside the message box, eight points from the leading edge (a gift icon is used
+when no image is available). Tap it for the streamer's currency name, exact
+balance, watch streak, and any rewards errors; opening it does not spend points.
+Only a loaded balance is shown, never a guessed zero.
+
+The iPhone rotation button uses a rotation glyph. The chat toggle appears only
+in landscape: iPhone starts video-only and can open or hide side-by-side chat;
+iPad offers the same toggle when its side-by-side layout is available. Portrait
+chat stays below the video without a misleading sideways collapse button.
+Drafts, in-flight sends, and the chat reading state are shared across those layouts.
+Chat keeps its exact-height scrollback, but only emotes intersecting the viewport
+animate. Offscreen animation buffers are released, and all chat animation pauses
+during minimization, while chat is hidden, or in the background. Incoming chat
+continues to collect in its bounded buffer; hidden/gesture-time view updates are
+deferred until chat is visible again, without reconnecting or changing playback.
+
+Chat settings are also available from **Account** and when reading anonymously.
+Adjust mobile size presets, fonts, spacing, emote sizing and animation, badges,
+mention/reply/keyword highlights, and extra-delay chat sync. Existing mobile
+sizes remain the defaults; resetting appearance preserves saved keywords.
+Optional incoming YouTube and Kick chat are off until enabled. While watching
+a stream, edit its other channel handles or URLs and tap **Apply channel
+targets**; defaults use the Twitch handle, not automatic cross-platform account
+matching. Targets belong to the active stream session. Sending remains Twitch-only.
+
 Selecting a fixed video quality retains the native engine when native playback
 is selected, on both TV and mobile. Explicit standard playback, Audio Only, and
 AirPlay retain their standard paths; a genuine unsupported-format fallback is

@@ -1,6 +1,17 @@
 import SwiftUI
 import SDWebImageSwiftUI
 
+private struct ChatAnimationsActiveKey: EnvironmentKey {
+    static let defaultValue: Bool? = nil
+}
+
+extension EnvironmentValues {
+    var chatAnimationsActive: Bool? {
+        get { self[ChatAnimationsActiveKey.self] }
+        set { self[ChatAnimationsActiveKey.self] = newValue }
+    }
+}
+
 struct RichChatLineView: View {
     let message: ChatMessage
     let nameColor: Color
@@ -31,6 +42,8 @@ struct RichChatLineView: View {
     var bodyColorOverride: Color? = nil
     /// Mobile panes can be narrower than a URL or username, especially with Dynamic Type.
     var wrapsOversizedTokens: Bool = false
+    var onInspectEmote: ((String, URL) -> Void)? = nil
+    var scalesCustomFont: Bool = true
 
     /// VoiceOver state. The combined spoken label is only built when VoiceOver is
     /// actually running — otherwise computing it (segment walk + string split/join)
@@ -116,20 +129,19 @@ struct RichChatLineView: View {
             }
 
             Text(message.isAction ? "\(message.username) " : "\(message.username): ")
-                .font(fontStyle.font(size: nameFontSize, weight: .bold))
+                .font(fontStyle.font(size: nameFontSize, weight: .bold, scalesCustomFont: scalesCustomFont))
                 .tracking(letterSpacing)
                 .foregroundStyle(nameColor)
+                .accessibilityHidden(voiceOverEnabled && onInspectEmote != nil)
 
             ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                 segmentView(segment)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Collapse the whole line into one VoiceOver element so the couch
-        // experience reads "author, message" as a single utterance instead of
-        // stepping through every badge/emote image node (which otherwise speak
-        // raw emote URLs or surface empty, unlabeled image elements).
-        .accessibilityElement(children: .ignore)
+        // Keep the spoken message together; interactive mobile emotes remain
+        // individually reachable buttons within that message.
+        .accessibilityElement(children: onInspectEmote == nil ? .ignore : .contain)
         .accessibilityLabel(voiceOverEnabled ? accessibilityLabel : "")
     }
 
@@ -271,6 +283,7 @@ struct RichChatLineView: View {
             Color.clear
         }
         .frame(width: badgeSize, height: badgeSize)
+        .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -278,23 +291,48 @@ struct RichChatLineView: View {
         switch segment {
         case .text(let text):
             Text(text)
-                .font(fontStyle.font(size: bodyFontSize))
+                .font(fontStyle.font(size: bodyFontSize, scalesCustomFont: scalesCustomFont))
                 .tracking(letterSpacing)
                 .foregroundStyle(bodyColor)
+                .accessibilityHidden(voiceOverEnabled && onInspectEmote != nil)
         case .emote(let name, let url):
-            EmoteView(name: name, url: url, fallbackColor: bodyColor, fallbackFontSize: bodyFontSize,
-                      emoteHeight: emoteHeight, animated: animatedEmotes, constrainsWidth: wrapsOversizedTokens)
+            if let onInspectEmote {
+                Button { onInspectEmote(name, url) } label: {
+                    emote(name: name, url: url)
+                }
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
+                .accessibilityLabel("View emote \(name)")
+                .accessibilityHint("Shows a larger preview")
+                .accessibilityIdentifier("chat-emote-\(name)")
+            } else {
+                emote(name: name, url: url)
+            }
         case .cheer(let amount, let url, let colorHex):
             let color = Color(twitchHex: colorHex) ?? .gray
-            HStack(spacing: 1) {
+            let content = HStack(spacing: 1) {
                 EmoteView(name: "", url: url, fallbackColor: color, fallbackFontSize: bodyFontSize,
                           emoteHeight: emoteHeight, animated: animatedEmotes, constrainsWidth: wrapsOversizedTokens)
                 Text("\(amount)")
-                    .font(fontStyle.font(size: bodyFontSize, weight: .bold))
+                    .font(fontStyle.font(size: bodyFontSize, weight: .bold, scalesCustomFont: scalesCustomFont))
                     .tracking(letterSpacing)
                     .foregroundStyle(color)
             }
+            if let onInspectEmote {
+                Button { onInspectEmote(String(localized: "\(amount) bits"), url) } label: { content }
+                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
+                    .accessibilityLabel("View cheer of \(amount) bits")
+                    .accessibilityHint("Shows a larger preview")
+            } else {
+                content
+            }
         }
+    }
+
+    private func emote(name: String, url: URL) -> some View {
+        EmoteView(name: name, url: url, fallbackColor: bodyColor, fallbackFontSize: bodyFontSize,
+                  emoteHeight: emoteHeight, animated: animatedEmotes, constrainsWidth: wrapsOversizedTokens)
     }
 
     private var segments: [ChatLineSegment] {
@@ -361,6 +399,8 @@ private struct EmoteView: View {
     var constrainsWidth: Bool = false
 
     @State private var loadFailed = false
+    @State private var animationRequested = false
+    @Environment(\.chatAnimationsActive) private var animationsActive
 
     var body: some View {
         Group {
@@ -369,7 +409,17 @@ private struct EmoteView: View {
                     .font(.system(size: fallbackFontSize))
                     .foregroundStyle(fallbackColor)
             } else if animated {
-                AnimatedImage(url: url)
+                AnimatedImage(url: url, isAnimating: $animationRequested)
+                    .onViewCreate { view, _ in
+                        // Managed rows, not UIKit attachment/alpha changes, own playback.
+                        view.autoPlayAnimatedImage = animationsActive == nil
+                    }
+                    .onViewUpdate { view, _ in
+                        if animationsActive != nil {
+                            view.autoPlayAnimatedImage = animationRequested
+                        }
+                    }
+                    .purgeable(animationsActive == false)
                     .onFailure { _ in
                         // Defer the state mutation: SDWebImage fires this callback
                         // synchronously while cancelling in-flight loads during view
@@ -404,6 +454,9 @@ private struct EmoteView: View {
                 .fixedSize(horizontal: !constrainsWidth, vertical: false)
             }
         }
+        // The image loader retains this binding until completion; a captured
+        // constant can otherwise restore stale visibility after the load finishes.
+        .onChange(of: animationsActive, initial: true) { _, active in animationRequested = active ?? true }
     }
 }
 

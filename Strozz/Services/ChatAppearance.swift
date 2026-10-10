@@ -189,10 +189,11 @@ enum ChatFontStyle: String, CaseIterable, Identifiable {
   /// options; everything else uses the matching system design. The size is
   /// pre-corrected by `sizeMultiplier` so each typeface lands at a comparable
   /// visual size.
-  func font(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+  func font(size: CGFloat, weight: Font.Weight = .regular, scalesCustomFont: Bool = true) -> Font {
     let resolvedSize = size * sizeMultiplier
     if let customFontName {
-      return Font.custom(customFontName, size: resolvedSize).weight(weight)
+      return (scalesCustomFont ? Font.custom(customFontName, size: resolvedSize)
+        : Font.custom(customFontName, fixedSize: resolvedSize)).weight(weight)
     }
     return .system(size: resolvedSize, weight: weight, design: design)
   }

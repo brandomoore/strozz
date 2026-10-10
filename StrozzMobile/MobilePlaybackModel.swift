@@ -70,6 +70,13 @@ final class MobilePlaybackModel {
   }
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "mobile-playback")
 
+  #if DEBUG
+  func prepareLayoutFixtureMetadata() {
+    streamStartedAt = Date().addingTimeInterval(-4 * 3600 - 37 * 60)
+    livePosition.observe(extraDelay: 0)
+  }
+  #endif
+
   struct Position {
     var shouldPlay: Bool
     var date: Date?
@@ -128,6 +135,7 @@ final class MobilePlaybackModel {
     refreshStreamMetadata()
     observeAudioSession()
     chat.connect(to: channel)
+    MobileChatSourcePreferences.apply(to: chat, channel: channel)
     load(position: Position(shouldPlay: true, date: nil))
   }
 
@@ -204,6 +212,7 @@ final class MobilePlaybackModel {
     suspendedPosition = nil
     interruptedPosition = nil
     chat.connect(to: channel)
+    MobileChatSourcePreferences.apply(to: chat, channel: channel)
     refreshStreamMetadata()
     load(position: position)
   }
@@ -632,6 +641,7 @@ final class MobilePlaybackModel {
       while !Task.isCancelled {
         do { try await Task.sleep(for: .seconds(1)) } catch { return }
         guard let self, isCurrent(request) else { return }
+        MobileChatSourcePreferences.apply(to: chat, channel: channel)
         guard player.currentItem === item else {
           fail(MobilePlaybackError.unavailable.localizedDescription)
           return

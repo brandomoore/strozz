@@ -207,6 +207,11 @@ struct ThemePalette: Equatable {
   var chromeColorScheme: ColorScheme { isLight ? .light : .dark }
 
   var liveIndicator: Color { .red }
+  var chatMentionSurface: Color { chatMentionAccent.opacity(isLight ? 0.10 : 0.18) }
+  var chatMentionBorder: Color { chatMentionAccent.opacity(0.55) }
+  private var chatMentionAccent: Color {
+    isLight ? Color(red: 0.64, green: 0.36, blue: 0) : Color(red: 0.98, green: 0.65, blue: 0.10)
+  }
 
   // Video content has no app theme; this pair stays legible over the contrast scrim.
   var videoControlForeground: Color { .white }

@@ -13,7 +13,9 @@ struct MobilePlayerControls: View {
   let onShare: () -> Void
   let onInteraction: () -> Void
   let onRoutes: (Bool) -> Void
+  var showsChatToggle = false
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+  @AppStorage(PersistenceKey.showStreamDuration) private var showStreamDuration = true
 
   var body: some View {
     ZStack {
@@ -44,13 +46,12 @@ struct MobilePlayerControls: View {
         }
         Spacer(minLength: 12)
         if model.presentationState == .ready {
-          HStack(alignment: .bottom, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-              livePositionControl
-              if let viewerCount {
-                MobileViewerBadge(count: viewerCount, isVideoOverlay: true)
+          HStack(spacing: 8) {
+            MobileStreamReadouts(state: model.liveStatus, startedAt: model.streamStartedAt,
+              viewerCount: viewerCount, showDuration: showStreamDuration) {
+                onInteraction()
+                model.goLive()
               }
-            }
             Spacer(minLength: 0)
             Button {
               onInteraction()
@@ -61,18 +62,31 @@ struct MobilePlayerControls: View {
             .accessibilityLabel(model.isMuted ? "Unmute" : "Mute")
             .accessibilityIdentifier("mobile-mute")
             .modifier(MobileControlSurface(isVideoOverlay: true))
-            Button {
-              onInteraction()
-              hideChat.toggle()
-            } label: {
-              Icon(glyph: hideChat ? .sidebarRightExpand : .sidebarRightCollapse, size: 22).frame(width: 44, height: 44)
+            if showsChatToggle {
+              Button {
+                onInteraction()
+                hideChat.toggle()
+              } label: {
+                Icon(glyph: hideChat ? .sidebarRightExpand : .sidebarRightCollapse, size: 22).frame(
+                  width: 44, height: 44)
+              }
+              .accessibilityLabel(hideChat ? "Show chat" : "Hide chat")
+              .accessibilityIdentifier("mobile-toggle-chat")
+              .modifier(MobileControlSurface(isVideoOverlay: true))
             }
-            .accessibilityLabel(hideChat ? "Show chat" : "Hide chat")
-            .modifier(MobileControlSurface(isVideoOverlay: true))
             Button(action: onFullscreen) {
-              Icon(glyph: isFullscreen ? .dimensions : .arrowsMaximize, size: 22).frame(width: 44, height: 44)
+              Icon(
+                glyph: UIDevice.current.userInterfaceIdiom == .phone
+                  ? .rotateRectangle
+                  : isFullscreen ? .dimensions : .arrowsMaximize, size: 22
+              ).frame(width: 44, height: 44)
             }
-            .accessibilityLabel(isFullscreen ? "Exit fullscreen" : "Fullscreen")
+            .accessibilityLabel(
+              UIDevice.current.userInterfaceIdiom == .phone
+                ? (isFullscreen ? "Rotate to portrait" : "Rotate to landscape")
+                : (isFullscreen ? "Exit fullscreen" : "Fullscreen")
+            )
+            .accessibilityIdentifier("mobile-rotate-player")
             .modifier(MobileControlSurface(isVideoOverlay: true))
           }
         }
@@ -96,45 +110,6 @@ struct MobilePlayerControls: View {
     .background {
       MobilePlayerControlScrim(hasBottomControls: model.presentationState == .ready,
                                reduceTransparency: reduceTransparency)
-    }
-  }
-
-  @ViewBuilder
-  private var livePositionControl: some View {
-    switch model.liveStatus {
-    case .live:
-      Label { Text("Live").font(.caption.bold()) } icon: { Icon(glyph: .broadcast, size: 16) }
-        .frame(minHeight: 44).padding(.horizontal, 8)
-        .modifier(MobileControlSurface(isVideoOverlay: true))
-        .accessibilityLabel("At the live edge")
-        .accessibilityIdentifier("mobile-live-status")
-    case .checking:
-      Text("Checking live").font(.caption)
-        .frame(minHeight: 44).padding(.horizontal, 8)
-        .modifier(MobileControlSurface(isVideoOverlay: true))
-        .accessibilityIdentifier("mobile-live-checking")
-    case .paused, .behind:
-      VStack(alignment: .leading, spacing: 2) {
-        if case .behind(let seconds) = model.liveStatus {
-          Text("\(seconds, format: .number.precision(.fractionLength(0)))s behind")
-            .font(.caption)
-            .accessibilityIdentifier("mobile-live-delay")
-        } else {
-          Text("Paused").font(.caption)
-            .accessibilityIdentifier("mobile-live-paused")
-        }
-        Button {
-          onInteraction()
-          model.goLive()
-        } label: {
-          Label { Text("Back to live").font(.caption.bold()) } icon: {
-            Icon(glyph: .broadcast, size: 16)
-          }
-          .frame(minHeight: 44).padding(.horizontal, 8)
-        }
-        .accessibilityIdentifier("mobile-go-live")
-      }
-      .modifier(MobileControlSurface(isVideoOverlay: true))
     }
   }
 }

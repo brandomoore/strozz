@@ -193,6 +193,44 @@ final class MobileLoadingPresentationTests: XCTestCase {
     }
   }
 
+  func testVisibilityCallbackUsesHeldControlsAndKeepsTheVideoSurfaceMounted() async throws {
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    let model = MobilePlaybackModel(muted: true)
+    let controller = MobileVideoController()
+    controller.player = model.player
+    defer { window.rootViewController = previous; model.stop() }
+    let channel = FollowedChannel(id: "fixture", login: "fixture", displayName: "Fixture",
+      title: "Fixture stream", gameName: "", viewerCount: nil,
+      thumbnailURL: nil, profileImageURL: nil, isLive: true)
+    var changes: [Bool] = []
+    model.displayReady(true, for: model.player)
+    let host = UIHostingController(rootView: MobileVideoView(
+      model: model, channel: channel, hideChat: .constant(false),
+      isFullscreen: false, isMinimized: false, isManipulating: false,
+      videoController: controller, onCollapse: {}, onClose: {}, onExpand: {},
+      onCollapseDragChanged: { _ in }, onCollapseDragEnded: { _ in },
+      onFullscreen: {}, onScene: { _ in }, onLayout: { _ in },
+      onControlsVisibilityChange: { changes.append($0) }).frame(height: 220))
+    window.rootViewController = host
+    await layout(host)
+    XCTAssertEqual(changes, [true])
+    let mountedView = try XCTUnwrap(controller.viewIfLoaded)
+    let mountedParent = try XCTUnwrap(mountedView.superview)
+    try await Task.sleep(for: .seconds(4.2))
+    await layout(host)
+    XCTAssertEqual(changes, [true, false])
+    model.displayReady(false, for: model.player)
+    await layout(host)
+    XCTAssertEqual(changes, [true, false, true], "Loading holds actual controls visible even after the idle flag hid them")
+    try await Task.sleep(for: .seconds(4.2))
+    XCTAssertEqual(changes, [true, false, true])
+    XCTAssertTrue(controller.viewIfLoaded === mountedView)
+    XCTAssertTrue(mountedView.superview === mountedParent)
+    XCTAssertTrue(controller.player === model.player)
+  }
+
   private func layout(_ host: UIViewController) async {
     host.view.layoutIfNeeded()
     try? await Task.sleep(for: .milliseconds(200))

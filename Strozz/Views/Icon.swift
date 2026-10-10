@@ -19,6 +19,7 @@ enum Glyph: String {
   case minus
   case adjustmentsHorizontal = "adjustments-horizontal"
   case dimensions
+  case rotateRectangle = "rotate-rectangle"
   case x
   case check
   case heart
@@ -29,6 +30,7 @@ enum Glyph: String {
   case cards
   case clock
   case send
+  case dots
   case share = "share-2"
   case sidebarRightExpand = "layout-sidebar-right-expand"
   case sidebarRightCollapse = "layout-sidebar-right-collapse"
