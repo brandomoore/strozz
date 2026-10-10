@@ -8,7 +8,25 @@ enum MobilePlayerLayout: Equatable {
                       showPhoneLandscapeChat: Bool = false) -> Self {
     if isPhone && phoneLandscape { return showPhoneLandscapeChat ? .sideBySide : .videoOnly }
     if hideChat { return .videoOnly }
-    return size.width >= 800 && size.width > size.height ? .sideBySide : .portrait
+    return !isPhone && size.width >= 800 && size.width > size.height ? .sideBySide : .portrait
+  }
+
+  static func sideChatWidth(in size: CGSize) -> CGFloat {
+    min(320, size.width / 3)
+  }
+
+  func videoFrame(in size: CGSize) -> CGRect {
+    switch self {
+    case .portrait:
+      return CGRect(x: 0, y: 0, width: size.width, height: min(size.width * 9 / 16, size.height * 0.42))
+    case .videoOnly:
+      return CGRect(origin: .zero, size: size)
+    case .sideBySide:
+      let columnWidth = size.width - Self.sideChatWidth(in: size)
+      let width = min(columnWidth, size.height * 16 / 9)
+      let height = width * 9 / 16
+      return CGRect(x: (columnWidth - width) / 2, y: (size.height - height) / 2, width: width, height: height)
+    }
   }
 }
 
@@ -147,10 +165,12 @@ struct MobilePlayerView: View {
     GeometryReader { geometry in
       let isPhone = UIDevice.current.userInterfaceIdiom == .phone
       let phoneLandscape = isPhone && verticalSizeClass == .compact
-      let canToggleChat = phoneLandscape || (!isPhone && geometry.size.width >= 800 && geometry.size.width > geometry.size.height)
+      let tabletLandscape = geometry.size.width > geometry.size.height + geometry.safeAreaInsets.bottom
+      let canToggleChat = phoneLandscape || (!isPhone && geometry.size.width >= 800 && tabletLandscape)
       let chatHidden = Binding(
         get: { isPhone ? !landscapeChatVisible : hideChat || fullscreen },
         set: { hidden in
+          if hidden { windowScene?.keyWindow?.endEditing(true) }
           if isPhone { landscapeChatVisible = !hidden }
           else { hideChat = hidden; if !hidden { fullscreen = false } }
         })
@@ -158,12 +178,12 @@ struct MobilePlayerView: View {
         size: CGSize(width: geometry.size.width, height: geometry.size.height + geometry.safeAreaInsets.bottom),
         isPhone: isPhone, hideChat: !isPhone && (hideChat || fullscreen),
         phoneLandscape: phoneLandscape, showPhoneLandscapeChat: landscapeChatVisible)
-      let sideChatWidth = min(380, geometry.size.width * (isPhone ? 0.4 : 0.36))
+      let sideChatWidth = MobilePlayerLayout.sideChatWidth(in: geometry.size)
       let chatWidth = layout == .sideBySide ? sideChatWidth : 0
-      let videoWidth = geometry.size.width - chatWidth
-      let videoHeight = layout == .videoOnly ? geometry.size.height
-        : min(videoWidth * 9 / 16, geometry.size.height * (layout == .sideBySide ? 0.75 : 0.42))
-      let expanded = CGRect(x: 0, y: 0, width: videoWidth, height: videoHeight)
+      let leftWidth = geometry.size.width - chatWidth
+      let expanded = layout.videoFrame(in: geometry.size)
+      let chatIsSide = layout != .portrait
+      let chatIsVisible = session.isExpanded && layout != .videoOnly
       let expandedWindowFrame = expanded.offsetBy(
         dx: geometry.frame(in: .global).minX, dy: geometry.frame(in: .global).minY)
       let restingCompact = MobileMiniPlayerLayout.frame(
@@ -175,44 +195,33 @@ struct MobilePlayerView: View {
       let progress = session.isExpanded ? collapseProgress : 1
       let videoFrame = MobileMiniPlayerLayout.interpolate(from: expanded, to: compact, progress: progress)
       ZStack(alignment: .topLeading) {
-        palette.chatSideSurface
-          .background(palette.playerBackdrop)
+        palette.playerBackdrop
           .ignoresSafeArea()
           .opacity(1 - progress)
           .allowsHitTesting(session.isExpanded)
         VStack(spacing: 0) {
-          if streamDetailsVisible && session.isExpanded && layout != .videoOnly {
+          if streamDetailsVisible && session.isExpanded && layout == .portrait {
             MobileStreamDetails(channel: channel, model: model)
             .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
           }
-          if layout == .portrait {
-            MobileChatView(service: model.chat, channel: channel.login,
-              composer: chatComposer, scroll: chatScroll, rewards: MobileChatRewardsSummary.snapshot(of: session.watchTracker),
-              isActive: session.isExpanded, isManipulating: collapseProgress > 0)
-              .equatable()
-          } else {
-            Spacer(minLength: 0)
-          }
+          // One timeline/composer moves between positions without remounting.
+          MobileChatView(service: model.chat, channel: channel.login,
+            composer: chatComposer, scroll: chatScroll, rewards: MobileChatRewardsSummary.snapshot(of: session.watchTracker),
+            isActive: chatIsVisible, isManipulating: collapseProgress > 0)
+            .equatable()
         }
+        .background(palette.chatSideSurface, ignoresSafeAreaEdges: [])
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: streamDetailsVisible)
-        .frame(width: videoWidth, height: max(0, geometry.size.height - videoHeight))
-        .offset(y: videoHeight + progress * 80)
+        .frame(width: chatIsSide ? sideChatWidth : geometry.size.width,
+          height: chatIsSide ? geometry.size.height : max(0, geometry.size.height - expanded.maxY))
+        .clipped()
+        .offset(x: chatIsSide ? leftWidth + progress * sideChatWidth : 0,
+          y: chatIsSide ? 0 : expanded.maxY + progress * 80)
         .opacity(layout == .videoOnly ? 0 : 1 - progress)
-        .allowsHitTesting(session.isExpanded && layout != .videoOnly)
-        .accessibilityHidden(!session.isExpanded || layout == .videoOnly)
-        if canToggleChat {
-          HStack(spacing: 0) {
-            MobileChatView(service: model.chat, channel: channel.login,
-              composer: chatComposer, scroll: chatScroll, rewards: MobileChatRewardsSummary.snapshot(of: session.watchTracker),
-              isActive: session.isExpanded && layout == .sideBySide, isManipulating: collapseProgress > 0)
-              .equatable()
-          }
-          .frame(width: sideChatWidth, height: geometry.size.height)
-          .offset(x: videoWidth + progress * sideChatWidth)
-          .opacity(layout == .sideBySide ? 1 - progress : 0)
-          .allowsHitTesting(session.isExpanded && layout == .sideBySide)
-          .accessibilityHidden(!session.isExpanded || layout != .sideBySide)
-        }
+        .allowsHitTesting(chatIsVisible)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("mobile-player-chat-region")
+        .accessibilityHidden(!chatIsVisible)
         // One mounted AVPlayerLayer changes geometry; neither animation nor native
         // background PiP reparents or replaces the playing surface.
         MobileVideoView(
@@ -236,7 +245,8 @@ struct MobilePlayerView: View {
             }
           },
           onControlsVisibilityChange: { streamDetailsVisible = $0 },
-          showsChatToggle: canToggleChat)
+          showsChatToggle: canToggleChat, showsLandscapeDetails: layout == .sideBySide,
+          onVideoTap: { windowScene?.keyWindow?.endEditing(true) })
           .frame(width: videoFrame.width, height: videoFrame.height)
           .clipShape(RoundedRectangle(cornerRadius: progress * 14))
           .overlay {
@@ -265,6 +275,10 @@ struct MobilePlayerView: View {
       }
       .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.9), value: session.isExpanded)
       .onChange(of: session.isExpanded) { _, _ in collapseProgress = 0 }
+      .onChange(of: layout) { _, _ in
+        collapseProgress = 0
+        windowScene?.keyWindow?.endEditing(true)
+      }
     }
     .alert("Picture in Picture", isPresented: Binding(
       get: { session.errorMessage != nil }, set: { if !$0 { session.errorMessage = nil } }
@@ -319,6 +333,7 @@ struct MobilePlayerView: View {
   }
 
   private func toggleFullscreen(exiting: Bool) {
+    windowScene?.keyWindow?.endEditing(true)
     fullscreen = !exiting
     hideChat = false
     landscapeChatVisible = false
@@ -351,6 +366,8 @@ struct MobileVideoView: View {
   let onLayout: (CGRect) -> Void
   var onControlsVisibilityChange: ((Bool) -> Void)? = nil
   var showsChatToggle = false
+  var showsLandscapeDetails = false
+  var onVideoTap: (() -> Void)? = nil
   @Environment(\.themePalette) private var palette
   @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -386,6 +403,7 @@ struct MobileVideoView: View {
       }
       Color.clear.contentShape(Rectangle())
         .onTapGesture {
+          onVideoTap?()
           if isMinimized && showsControls { onExpand() }
           else { controlsVisible.toggle(); interaction += 1 }
         }
@@ -457,7 +475,7 @@ struct MobileVideoView: View {
             showRoutes = presenting
             if presenting { model.prepareForAirPlay() }
           },
-          showsChatToggle: showsChatToggle)
+          showsChatToggle: showsChatToggle, landscapeChannel: showsLandscapeDetails ? channel : nil)
       }
     }
     .simultaneousGesture(DragGesture(minimumDistance: 12, coordinateSpace: .global)
@@ -577,31 +595,50 @@ final class MobileVideoController: UIViewController {
 struct MobileStreamDetails: View {
   let channel: FollowedChannel
   let model: MobilePlaybackModel
+  var isVideoOverlay = false
+  @Environment(\.themePalette) private var palette
+  private var secondaryText: Color {
+    isVideoOverlay ? palette.videoControlForeground.opacity(0.75) : palette.chatSidePrimaryText.opacity(0.65)
+  }
 
   var body: some View {
-    HStack(alignment: .top, spacing: 12) {
+    HStack(alignment: .top, spacing: isVideoOverlay ? 8 : 12) {
       CachedAsyncImage(url: channel.profileImageURL) { image in
         image.resizable().scaledToFill()
       } placeholder: { Circle().fill(.quaternary) }
-        .frame(width: 52, height: 52)
+        .frame(width: isVideoOverlay ? 32 : 52, height: isVideoOverlay ? 32 : 52)
         .clipShape(Circle())
         .accessibilityHidden(true)
-      VStack(alignment: .leading, spacing: 4) {
-        Text(channel.displayName).font(.headline)
-        Text(channel.title).font(.subheadline).lineLimit(2)
-        if !channel.gameName.isEmpty {
-          Text(channel.gameName).font(.caption).foregroundStyle(.secondary)
+      ViewThatFits(in: .vertical) {
+        VStack(alignment: .leading, spacing: 4) {
+          Text(channel.displayName).font(isVideoOverlay ? .subheadline.bold() : .headline)
+          Text(channel.title).font(isVideoOverlay ? .caption : .subheadline).lineLimit(2)
+          if !isVideoOverlay && !channel.gameName.isEmpty {
+            Text(channel.gameName).font(.caption).foregroundStyle(secondaryText)
+          }
+          playbackNotice
         }
-        if let notice = model.recoveryNotice {
-          Text(notice).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-        } else if let failure = model.nativeFailure {
-          Text("Using standard playback: \(failure)").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        if isVideoOverlay {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("\(Text(channel.displayName).bold()): \(channel.title)")
+              .font(.caption).lineLimit(1)
+            playbackNotice
+          }
         }
       }
     }
-    .padding(12)
+    .foregroundStyle(isVideoOverlay ? palette.videoControlForeground : palette.chatSidePrimaryText)
+    .padding(isVideoOverlay ? 0 : 12)
     .frame(maxWidth: .infinity, alignment: .leading)
     .accessibilityElement(children: .contain)
     .accessibilityIdentifier("mobile-stream-details")
+  }
+
+  @ViewBuilder private var playbackNotice: some View {
+    if let notice = model.recoveryNotice {
+      Text(notice).font(.caption).foregroundStyle(secondaryText).lineLimit(2)
+    } else if let failure = model.nativeFailure {
+      Text("Using standard playback: \(failure)").font(.caption).foregroundStyle(secondaryText).lineLimit(2)
+    }
   }
 }

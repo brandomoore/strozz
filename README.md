@@ -154,9 +154,12 @@ a connection status appears only while chat is reconnecting.
 Messages fade gently over the top 48 points of the chat viewport, without
 changing scroll insets or fading the composer. Reduce Transparency and Increase
 Contrast disable that fade.
+The floating Jump to present button uses native Liquid Glass on iOS 26 or later,
+with a standard bordered fallback on older systems or with Reduce Transparency.
 
-The video controls show one horizontal readout row: a red live dot with elapsed
-time, then a viewer icon and compact count, without chips or backplates. The red
+The video controls show one horizontal readout row: a viewer icon and compact
+count, then a red live dot with elapsed time, without chips or backplates. Each
+icon stays close to its value, with more space between the two groups. The red
 dot appears only at the live edge. The readouts
 hide with the controls; the Account > Overlays duration preference still applies.
 Playback quality
@@ -171,7 +174,14 @@ The iPhone rotation button uses a rotation glyph. The chat toggle appears only
 in landscape: iPhone starts video-only and can open or hide side-by-side chat;
 iPad offers the same toggle when its side-by-side layout is available. Portrait
 chat stays below the video without a misleading sideways collapse button.
+Side chat uses at most one third of the available width, capped at 320 points.
+The aspect-fitted video is centered vertically and horizontally in the left pane.
+Landscape profile details appear with the controls over the lower video area,
+so revealing them does not move or resize the video. One mounted chat view moves
+between portrait and landscape instead of rebuilding the timeline and composer.
 Drafts, in-flight sends, and the chat reading state are shared across those layouts.
+Tapping the video or rotating dismisses the keyboard without discarding a draft.
+The composer shows an upward arrow to send, or the settings dots when empty.
 Chat keeps its exact-height scrollback, but only emotes intersecting the viewport
 animate. Offscreen animation buffers are released, and all chat animation pauses
 during minimization, while chat is hidden, or in the background. Incoming chat

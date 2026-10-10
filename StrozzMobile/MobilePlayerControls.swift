@@ -14,12 +14,13 @@ struct MobilePlayerControls: View {
   let onInteraction: () -> Void
   let onRoutes: (Bool) -> Void
   var showsChatToggle = false
+  var landscapeChannel: FollowedChannel? = nil
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
   @AppStorage(PersistenceKey.showStreamDuration) private var showStreamDuration = true
 
   var body: some View {
     ZStack {
-      VStack {
+      VStack(spacing: landscapeChannel == nil ? 8 : 4) {
         HStack(spacing: 8) {
           Button(action: onCollapse) {
             Icon(glyph: .chevronRight, size: 22).rotationEffect(.degrees(90)).frame(width: 44, height: 44)
@@ -44,7 +45,23 @@ struct MobilePlayerControls: View {
             .accessibilityLabel("Close player")
             .modifier(MobileControlSurface(isVideoOverlay: true))
         }
-        Spacer(minLength: 12)
+        Color.clear
+          .frame(minHeight: 56, maxHeight: .infinity)
+          .overlay {
+            if model.presentationState == .ready {
+              Button {
+                onInteraction()
+                model.togglePlayPause()
+              } label: {
+                Icon(glyph: model.isPaused ? .playerPlayFilled : .playerPauseFilled, size: 30)
+                  .frame(width: 56, height: 56)
+              }
+              .accessibilityLabel(model.isPaused ? "Play" : "Pause")
+              .accessibilityIdentifier("mobile-play-pause")
+              .disabled(model.isLoading || model.errorMessage != nil)
+              .modifier(MobileControlSurface(isVideoOverlay: true))
+            }
+          }
         if model.presentationState == .ready {
           HStack(spacing: 8) {
             MobileStreamReadouts(state: model.liveStatus, startedAt: model.streamStartedAt,
@@ -89,24 +106,15 @@ struct MobilePlayerControls: View {
             .accessibilityIdentifier("mobile-rotate-player")
             .modifier(MobileControlSurface(isVideoOverlay: true))
           }
+          if let landscapeChannel {
+            MobileStreamDetails(channel: landscapeChannel, model: model, isVideoOverlay: true)
+              .allowsHitTesting(false)
+          }
         }
-      }
-      if model.presentationState == .ready {
-        Button {
-          onInteraction()
-          model.togglePlayPause()
-        } label: {
-          Icon(glyph: model.isPaused ? .playerPlayFilled : .playerPauseFilled, size: 30)
-            .frame(width: 56, height: 56)
-        }
-        .accessibilityLabel(model.isPaused ? "Play" : "Pause")
-        .accessibilityIdentifier("mobile-play-pause")
-        .disabled(model.isLoading || model.errorMessage != nil)
-        .modifier(MobileControlSurface(isVideoOverlay: true))
       }
     }
     .buttonStyle(.plain)
-    .padding(10)
+    .padding(landscapeChannel == nil ? 10 : 6)
     .background {
       MobilePlayerControlScrim(hasBottomControls: model.presentationState == .ready,
                                reduceTransparency: reduceTransparency)
