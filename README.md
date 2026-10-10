@@ -153,7 +153,8 @@ The keyboard's Send key also sends; pasted multiline text remains supported.
 The composer follows the selected theme and uses an opaque surface with Reduce
 Transparency. At the default system text size, the input is 44 points tall and
 the bottom bar is 52 points tall, excluding the device safe area. Send/settings
-keeps a 44-point touch target around its smaller visible circle. Multiline drafts
+keeps a 44-point touch target around its smaller visible circle, concentric with
+the rounded trailing corner and inset by 4 points. Multiline drafts
 and larger accessibility text can increase the height; resizing chat or changing
 chat message size does not scale the composer.
 

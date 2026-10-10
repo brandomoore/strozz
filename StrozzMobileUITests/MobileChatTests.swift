@@ -122,6 +122,8 @@ final class MobileChatTests: XCTestCase {
     XCTAssertEqual(capsule.frame.height, 44, accuracy: 0.5)
     XCTAssertGreaterThanOrEqual(settings.frame.width, 44)
     XCTAssertGreaterThanOrEqual(settings.frame.height, 44)
+    XCTAssertEqual(settings.frame.midX, capsule.frame.maxX - 22, accuracy: 0.5)
+    XCTAssertEqual(settings.frame.midY, capsule.frame.midY, accuracy: 0.5)
     XCTAssertFalse(send.exists)
     let latest = app.descendants(matching: .any).matching(identifier: "mobile-chat-latest-message").firstMatch
     let originalMessageHeight = latest.frame.height
@@ -161,6 +163,11 @@ final class MobileChatTests: XCTestCase {
     XCTAssertTrue(send.isEnabled)
     XCTAssertFalse(settings.exists)
     XCTAssertGreaterThan(field.frame.height, initialHeight)
+    XCTAssertGreaterThanOrEqual(send.frame.width, 44)
+    XCTAssertGreaterThanOrEqual(send.frame.height, 44)
+    XCTAssertEqual(send.frame.midX, capsule.frame.maxX - 22, accuracy: 0.5)
+    XCTAssertEqual(send.frame.midY, capsule.frame.maxY - 22, accuracy: 0.5,
+      "The Send circle must share the expanded composer's bottom-right corner center")
     XCTAssertEqual(field.value as? String, message)
     app.buttons["Change appearance"].tap()
     app.buttons["Reduce transparency"].tap()

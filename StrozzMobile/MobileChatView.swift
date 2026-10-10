@@ -434,10 +434,10 @@ struct MobileChatComposerInput: View {
         .disabled(sending)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: hasDraft)
       }
-      .padding(.horizontal, 4)
+      .padding(.leading, 4)
       .background { MobileChatComposerSurface(reduceTransparency: reduceTransparency) }
       .overlay {
-        RoundedRectangle(cornerRadius: 22, style: .continuous)
+        RoundedRectangle(cornerRadius: 22, style: .circular)
           .strokeBorder(palette.chromeOpaqueBorder, lineWidth: 0.5)
           .allowsHitTesting(false)
       }
@@ -452,7 +452,7 @@ private struct MobileChatComposerSurface: View {
   @Environment(\.themePalette) private var palette
 
   var body: some View {
-    let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
+    let shape = RoundedRectangle(cornerRadius: 22, style: .circular)
     if reduceTransparency {
       shape.fill(palette.chromeOpaqueSurface)
     } else if #available(iOS 26.0, *) {
