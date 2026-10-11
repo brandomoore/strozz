@@ -394,12 +394,21 @@ struct MobileViewerBadge: View {
 
 struct MobileStatusView: View {
   let message: String
+  var playerControls = false
   let retry: () -> Void
 
   var body: some View {
     VStack(spacing: 12) {
       Text(message).multilineTextAlignment(.center)
-      Button("Try again", action: retry).buttonStyle(.bordered)
+      if playerControls {
+        Button(action: retry) {
+          Text("Try again").padding(.horizontal, 16).frame(minHeight: 44)
+        }
+        .buttonStyle(.plain)
+        .modifier(MobilePlayerButtonSurface())
+      } else {
+        Button("Try again", action: retry).buttonStyle(.bordered)
+      }
     }
     .padding()
     .frame(maxWidth: .infinity)

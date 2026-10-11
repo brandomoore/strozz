@@ -20,7 +20,7 @@ struct MobilePlayerControls: View {
   @AppStorage(PersistenceKey.showStreamDuration) private var showStreamDuration = true
 
   var body: some View {
-    ZStack {
+    MobilePlayerGlassContainer {
       VStack(spacing: landscapeChannel == nil ? 8 : 4) {
         HStack(spacing: 4) {
           Button(action: onCollapse) {
@@ -28,26 +28,26 @@ struct MobilePlayerControls: View {
           }
             .accessibilityLabel("Minimize player")
             .accessibilityIdentifier("mobile-minimize-player")
-            .modifier(MobileControlSurface(isVideoOverlay: true))
+            .modifier(MobilePlayerButtonSurface())
           Spacer(minLength: 0)
           MobilePlaybackModeButton(model: model, onVideoSelection: { hideChat = false },
             onPresentation: onModePresentation)
-            .modifier(MobileControlSurface(isVideoOverlay: true))
+            .modifier(MobilePlayerButtonSurface())
           if model.presentationState == .ready {
             MobileAirPlayPicker(onPresentation: onRoutes)
               .frame(width: 44, height: 44)
-              .modifier(MobileControlSurface(isVideoOverlay: true))
+              .modifier(MobilePlayerButtonSurface())
             Button(action: onShare) { Icon(glyph: .share, size: 22).frame(width: 44, height: 44) }
               .accessibilityLabel("Share stream")
-              .modifier(MobileControlSurface(isVideoOverlay: true))
+              .modifier(MobilePlayerButtonSurface())
             Button(action: onQuality) { Icon(glyph: .settings, size: 22).frame(width: 44, height: 44) }
               .accessibilityLabel("Playback quality")
               .accessibilityValue(model.qualityLabel)
-              .modifier(MobileControlSurface(isVideoOverlay: true))
+              .modifier(MobilePlayerButtonSurface())
           }
           Button(action: onClose) { Icon(glyph: .x, size: 22).frame(width: 44, height: 44) }
             .accessibilityLabel("Close player")
-            .modifier(MobileControlSurface(isVideoOverlay: true))
+            .modifier(MobilePlayerButtonSurface())
         }
         Color.clear
           .frame(minHeight: 56, maxHeight: .infinity)
@@ -63,7 +63,7 @@ struct MobilePlayerControls: View {
               .accessibilityLabel(model.isPaused ? "Play" : "Pause")
               .accessibilityIdentifier("mobile-play-pause")
               .disabled(model.isLoading || model.errorMessage != nil)
-              .modifier(MobileControlSurface(isVideoOverlay: true))
+              .modifier(MobilePlayerButtonSurface())
             }
           }
         if model.presentationState == .ready {
@@ -82,25 +82,22 @@ struct MobilePlayerControls: View {
             }
             .accessibilityLabel(model.isMuted ? "Unmute" : "Mute")
             .accessibilityIdentifier("mobile-mute")
-            .modifier(MobileControlSurface(isVideoOverlay: true))
+            .modifier(MobilePlayerButtonSurface())
             if showsChatToggle {
               Button {
                 onInteraction()
                 hideChat.toggle()
               } label: {
-                Icon(glyph: hideChat ? .sidebarRightExpand : .sidebarRightCollapse, size: 22).frame(
+                Icon(glyph: hideChat ? .messages : .messagesOff, size: 22).frame(
                   width: 44, height: 44)
               }
               .accessibilityLabel(hideChat ? "Show chat" : "Hide chat")
               .accessibilityIdentifier("mobile-toggle-chat")
-              .modifier(MobileControlSurface(isVideoOverlay: true))
+              .modifier(MobilePlayerButtonSurface())
             }
             Button(action: onFullscreen) {
-              Icon(
-                glyph: UIDevice.current.userInterfaceIdiom == .phone
-                  ? .rotateRectangle
-                  : isFullscreen ? .dimensions : .arrowsMaximize, size: 22
-              ).frame(width: 44, height: 44)
+              Icon(glyph: isFullscreen ? .arrowsDiagonalMinimize : .arrowsDiagonal2, size: 22)
+                .frame(width: 44, height: 44)
             }
             .accessibilityLabel(
               UIDevice.current.userInterfaceIdiom == .phone
@@ -108,7 +105,7 @@ struct MobilePlayerControls: View {
                 : (isFullscreen ? "Exit fullscreen" : "Fullscreen")
             )
             .accessibilityIdentifier("mobile-rotate-player")
-            .modifier(MobileControlSurface(isVideoOverlay: true))
+            .modifier(MobilePlayerButtonSurface())
           }
           if let landscapeChannel {
             MobileStreamDetails(channel: landscapeChannel, model: model, isVideoOverlay: true)
@@ -122,6 +119,48 @@ struct MobilePlayerControls: View {
     .background {
       MobilePlayerControlScrim(hasBottomControls: model.presentationState == .ready,
                                reduceTransparency: reduceTransparency)
+    }
+  }
+}
+
+struct MobilePlayerGlassContainer<Content: View>: View {
+  @ViewBuilder let content: Content
+
+  var body: some View {
+    if #available(iOS 26.0, *) {
+      GlassEffectContainer(spacing: 8) { content }
+    } else {
+      content
+    }
+  }
+}
+
+struct MobilePlayerButtonSurface: ViewModifier {
+  @Environment(\.themePalette) private var palette
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+  func body(content: Content) -> some View {
+    content
+      .foregroundStyle(palette.chromeOnOpaque)
+      .contentShape(Capsule())
+      .modifier(MobilePlayerButtonAppearance(palette: palette, opaque: reduceTransparency))
+      .environment(\.colorScheme, palette.chromeColorScheme)
+  }
+}
+
+struct MobilePlayerButtonAppearance: ViewModifier {
+  let palette: ThemePalette
+  let opaque: Bool
+
+  func body(content: Content) -> some View {
+    if opaque {
+      content
+        .background(palette.chromeOpaqueSurface, in: Capsule())
+        .overlay { Capsule().strokeBorder(palette.chromeOpaqueBorder, lineWidth: 0.5).allowsHitTesting(false) }
+    } else if #available(iOS 26.0, *) {
+      content.glassEffect(.regular.interactive(), in: Capsule())
+    } else {
+      content.background(.regularMaterial, in: Capsule())
     }
   }
 }
@@ -245,14 +284,14 @@ struct MobileAirPlayPicker: UIViewRepresentable {
     view.prioritizesVideoDevices = true
     view.delegate = context.coordinator
     view.accessibilityLabel = "AirPlay"
-    view.tintColor = UIColor(palette.videoControlForeground)
-    view.activeTintColor = UIColor(palette.videoControlForeground)
+    view.tintColor = UIColor(palette.chromeOnOpaque)
+    view.activeTintColor = UIColor(palette.chromeOnOpaque)
     return view
   }
 
   func updateUIView(_ view: AVRoutePickerView, context: Context) {
-    view.tintColor = UIColor(palette.videoControlForeground)
-    view.activeTintColor = UIColor(palette.videoControlForeground)
+    view.tintColor = UIColor(palette.chromeOnOpaque)
+    view.activeTintColor = UIColor(palette.chromeOnOpaque)
     context.coordinator.onPresentation = onPresentation
   }
 

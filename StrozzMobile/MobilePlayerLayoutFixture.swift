@@ -8,6 +8,8 @@ struct MobilePlayerLayoutFixture: View {
   @State private var imageURL: URL?
   @State private var failure: String?
   @State private var statusBarState = "unknown"
+  private let theme = ProcessInfo.processInfo.environment["STROZZ_PLAYER_THEME"]
+    .flatMap(AppTheme.init(rawValue:)) ?? .dark
 
   var body: some View {
     ZStack {
@@ -20,8 +22,8 @@ struct MobilePlayerLayoutFixture: View {
       }
     }
     .environment(auth)
-    .environment(\.themePalette, .dark)
-    .preferredColorScheme(.dark)
+    .environment(\.themePalette, theme.palette(systemColorScheme: .light))
+    .preferredColorScheme(theme.preferredColorScheme)
     .overlay {
       GeometryReader { geometry in
         Color.clear
@@ -49,6 +51,17 @@ struct MobilePlayerLayoutFixture: View {
     }
     .task {
       do {
+        if let login = ProcessInfo.processInfo.environment["STROZZ_ZOOM_LIVE_CHANNEL"] {
+          let search = SearchService()
+          await search.search(login)
+          guard let channel = search.channelResults.first(where: { $0.login == login && $0.isLive }) else {
+            throw CocoaError(.fileNoSuchFile)
+          }
+          let player = MobilePlaybackSession(makeModel: { MobilePlaybackModel(muted: true) })
+          player.select(channel)
+          session = player
+          return
+        }
         if ProcessInfo.processInfo.environment["STROZZ_CHAT_WIDTH_FIXTURE_RESET"] == "1" {
           UserDefaults.standard.removeObject(forKey: PersistenceKey.mobileChatWidthValue)
         }

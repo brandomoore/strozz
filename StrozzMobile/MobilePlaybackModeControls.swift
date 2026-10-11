@@ -55,36 +55,45 @@ struct MobileChatOnlyControls: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack(spacing: 8) {
-        Button(action: onClose) { Icon(glyph: .x, size: 22).frame(width: 44, height: 44) }
-          .accessibilityLabel("Close player")
-        Text(channel.displayName).font(.headline).lineLimit(1)
-        Spacer(minLength: 0)
-        if model.mode == .audioOnly {
-          if model.isLoading {
-            ProgressView().accessibilityLabel("Loading audio")
-          } else {
-            Button { model.togglePlayPause() } label: {
-              Icon(glyph: model.isPaused ? .playerPlayFilled : .playerPauseFilled, size: 22)
-                .frame(width: 44, height: 44)
+      MobilePlayerGlassContainer {
+        HStack(spacing: 8) {
+          Button(action: onClose) { Icon(glyph: .x, size: 22).frame(width: 44, height: 44) }
+            .accessibilityLabel("Close player")
+            .modifier(MobilePlayerButtonSurface())
+          Text(channel.displayName).font(.headline).lineLimit(1)
+          Spacer(minLength: 0)
+          if model.mode == .audioOnly {
+            if model.isLoading {
+              ProgressView().accessibilityLabel("Loading audio")
+            } else {
+              Button { model.togglePlayPause() } label: {
+                Icon(glyph: model.isPaused ? .playerPlayFilled : .playerPauseFilled, size: 22)
+                  .frame(width: 44, height: 44)
+              }
+              .accessibilityLabel(model.isPaused ? "Play audio" : "Pause audio")
+              .accessibilityIdentifier("mobile-audio-play-pause")
+              .disabled(model.errorMessage != nil)
+              .modifier(MobilePlayerButtonSurface())
+              Button { model.toggleMute() } label: {
+                Icon(glyph: model.isMuted ? .volumeOff : .volume, size: 22).frame(width: 44, height: 44)
+              }
+              .accessibilityLabel(model.isMuted ? "Unmute audio" : "Mute audio")
+              .modifier(MobilePlayerButtonSurface())
             }
-            .accessibilityLabel(model.isPaused ? "Play audio" : "Pause audio")
-            .accessibilityIdentifier("mobile-audio-play-pause")
-            .disabled(model.errorMessage != nil)
-            Button { model.toggleMute() } label: {
-              Icon(glyph: model.isMuted ? .volumeOff : .volume, size: 22).frame(width: 44, height: 44)
-            }
-            .accessibilityLabel(model.isMuted ? "Unmute audio" : "Mute audio")
           }
+          MobilePlaybackModeButton(model: model)
+            .modifier(MobilePlayerButtonSurface())
         }
-        MobilePlaybackModeButton(model: model)
       }
       .padding(.horizontal, 8)
       .padding(.vertical, 4)
       if let error = model.errorMessage {
         VStack(spacing: 8) {
           Text(error).font(.callout)
-          Button("Retry") { model.retry() }
+          Button { model.retry() } label: {
+            Text("Retry").padding(.horizontal, 16).frame(minHeight: 44)
+          }
+          .modifier(MobilePlayerButtonSurface())
         }
         .padding()
       }

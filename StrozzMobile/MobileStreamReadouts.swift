@@ -74,10 +74,12 @@ private struct MobileLiveReadout: View {
           }
           Icon(glyph: .playerPlayFilled, size: 14).accessibilityHidden(true)
         }
+        .padding(.horizontal, 10)
         .frame(minHeight: 44)
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
+      .modifier(MobilePlayerButtonSurface())
       .accessibilityLabel("Back to live")
       .accessibilityValue(recoveryStatus)
       .accessibilityHint("Resume at the live edge")
