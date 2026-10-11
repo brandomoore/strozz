@@ -477,6 +477,19 @@ struct MobileVideoView: View {
   @State private var showShare = false
   @State private var showRoutes = false
   @State private var showModes = false
+  @State private var zoom = MobileVideoZoom()
+  @State private var pinchStart: MobileVideoZoom?
+  @State private var pinchAnchor = CGPoint.zero
+  @State private var panStart: MobileVideoZoom?
+  @State private var videoViewport = CGSize.zero
+  @Environment(\.scenePhase) private var scenePhase
+
+  private var zoomEnabled: Bool {
+    !isMinimized && model.mode == .video && !model.isExternalPlayback
+      && model.presentationState == .ready && scenePhase == .active
+  }
+
+  private var videoSize: CGSize { model.player.currentItem?.presentationSize ?? .zero }
 
   private struct HideState: Equatable {
     let interaction: Int
@@ -491,6 +504,9 @@ struct MobileVideoView: View {
       palette.playerBackdrop
       MobilePlayerSurface(controller: videoController, onScene: onScene, onLayout: onLayout)
         .id(ObjectIdentifier(videoController))
+        .scaleEffect(zoomEnabled ? zoom.scale : 1)
+        .offset(zoomEnabled ? zoom.clamped(viewport: videoViewport, videoSize: videoSize).offset : .zero)
+        .clipped()
         .opacity(model.isLoading ? 0 : 1)
         .accessibilityIdentifier("mobile-video-surface")
         .allowsHitTesting(false)
@@ -510,8 +526,15 @@ struct MobileVideoView: View {
         .accessibilityLabel(isMinimized && showsControls ? "Expand player"
           : showsControls ? "Hide playback controls" : "Show playback controls")
         .accessibilityAddTraits(.isButton)
-        .accessibilityHint(isMinimized ? Text("Drag to move. Pinch to resize.") : Text(""))
-        .accessibilityHidden(model.mode != .video || (voiceOver && !isMinimized))
+        .accessibilityHint(isMinimized ? Text("Drag to move. Pinch to resize.")
+          : Text("Pinch to zoom. Drag to pan when zoomed."))
+        .accessibilityValue(isMinimized ? Text("") : Text("\(zoom.scale, format: .number.precision(.fractionLength(1)))× zoom"))
+        .accessibilityActions {
+          if !isMinimized && zoom.isZoomed {
+            Button("Reset video zoom") { resetZoom() }
+          }
+        }
+        .accessibilityHidden(model.mode != .video || (voiceOver && !isMinimized && !zoom.isZoomed))
         .accessibilityIdentifier(isMinimized ? "mobile-expand-player" : "mobile-controls-toggle")
       if model.mode == .video && model.presentationState == .loading {
         if isMinimized {
@@ -523,34 +546,36 @@ struct MobileVideoView: View {
         }
       }
       if let error = model.errorMessage, model.mode == .video, !isMinimized {
-        MobileStatusView(message: error) { model.retry() }
+        MobileStatusView(message: error, playerControls: true) { model.retry() }
           .background(palette.chromeOpaqueSurface)
       }
       if isMinimized && showsControls {
-        VStack {
-          HStack {
-            Button(action: onClose) { Icon(glyph: .x, size: 18).frame(width: 44, height: 44) }
-              .accessibilityLabel("Close player")
-              .modifier(MobileControlSurface(isVideoOverlay: true))
-            Spacer(minLength: 0)
-            Button {
-              controlsVisible = true
-              interaction += 1
-              model.togglePlayPause()
-            } label: {
-              Icon(glyph: model.isPaused ? .playerPlayFilled : .playerPauseFilled, size: 18)
-                .frame(width: 44, height: 44)
+        MobilePlayerGlassContainer {
+          VStack {
+            HStack {
+              Button(action: onClose) { Icon(glyph: .x, size: 18).frame(width: 44, height: 44) }
+                .accessibilityLabel("Close player")
+                .modifier(MobilePlayerButtonSurface())
+              Spacer(minLength: 0)
+              Button {
+                controlsVisible = true
+                interaction += 1
+                model.togglePlayPause()
+              } label: {
+                Icon(glyph: model.isPaused ? .playerPlayFilled : .playerPauseFilled, size: 18)
+                  .frame(width: 44, height: 44)
+              }
+              .accessibilityLabel(model.isPaused ? "Play" : "Pause")
+              .accessibilityIdentifier("mobile-mini-play-pause")
+              .disabled(model.isLoading || model.errorMessage != nil)
+              .modifier(MobilePlayerButtonSurface())
             }
-            .accessibilityLabel(model.isPaused ? "Play" : "Pause")
-            .accessibilityIdentifier("mobile-mini-play-pause")
-            .disabled(model.isLoading || model.errorMessage != nil)
-            .modifier(MobileControlSurface(isVideoOverlay: true))
-          }
-          Spacer(minLength: 0)
-          if let error = model.errorMessage {
-            Text(error).font(.caption).lineLimit(2).padding(4)
-              .modifier(MobileControlSurface(isVideoOverlay: true))
-              .allowsHitTesting(false)
+            Spacer(minLength: 0)
+            if let error = model.errorMessage {
+              Text(error).font(.caption).lineLimit(2).padding(4)
+                .modifier(MobileControlSurface(isVideoOverlay: true))
+                .allowsHitTesting(false)
+            }
           }
         }
         .padding(6)
@@ -583,10 +608,15 @@ struct MobileVideoView: View {
           })
       }
     }
-    .simultaneousGesture(DragGesture(minimumDistance: 12, coordinateSpace: .global)
-      .onChanged { onCollapseDragChanged($0.translation) }
-      .onEnded { onCollapseDragEnded($0.translation) },
-      including: isMinimized ? .subviews : .all)
+    .gesture(MobileVideoPinchGesture(enabled: zoomEnabled, onChange: handlePinch))
+    .gesture(MobileVideoDragGesture(enabled: !isMinimized, onChange: handleVideoDrag))
+    .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+      videoViewport = size
+      resetZoom()
+    }
+    .onChange(of: zoomEnabled) { _, enabled in
+      if !enabled { resetZoom() }
+    }
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: controlsVisible)
     .onChange(of: showsControls, initial: true) { _, visible in
       onControlsVisibilityChange?(visible)
@@ -599,8 +629,8 @@ struct MobileVideoView: View {
       controlsVisible = true
       interaction += 1
     }
-    .task(id: HideState(interaction: interaction, held: held)) {
-      guard !held else { return }
+    .task(id: HideState(interaction: interaction, held: held || pinchStart != nil || panStart != nil)) {
+      guard !held, pinchStart == nil, panStart == nil else { return }
       do { try await Task.sleep(for: .seconds(4)) } catch { return }
       controlsVisible = false
     }
@@ -612,6 +642,60 @@ struct MobileVideoView: View {
       MobileShareSheet(url: URL(string: "https://www.twitch.tv/")!.appendingPathComponent(channel.login))
         .presentationDetents([.medium, .large])
     }
+  }
+
+  private func handlePinch(_ phase: UIGestureRecognizer.State, _ scale: CGFloat, _ location: CGPoint) {
+    switch phase {
+    case .began:
+      pinchStart = zoom
+      pinchAnchor = location
+      onCollapseDragEnded(.zero)
+      onVideoTap?()
+    case .changed, .ended:
+      if let pinchStart {
+        zoom = pinchStart.magnified(scale, from: pinchAnchor, to: location,
+                                   viewport: videoViewport, videoSize: videoSize)
+      }
+      if phase == .ended {
+        pinchStart = nil
+        interaction += 1
+      }
+    case .cancelled, .failed:
+      if let pinchStart { zoom = pinchStart }
+      pinchStart = nil
+    default:
+      break
+    }
+  }
+
+  private func handleVideoDrag(_ phase: UIGestureRecognizer.State, _ translation: CGSize) {
+    switch phase {
+    case .began:
+      panStart = zoomEnabled && zoom.isZoomed ? zoom : nil
+    case .changed, .ended:
+      if let panStart {
+        zoom = panStart.panned(translation, viewport: videoViewport, videoSize: videoSize)
+      } else if pinchStart == nil && !zoom.isZoomed {
+        if phase == .ended { onCollapseDragEnded(translation) }
+        else { onCollapseDragChanged(translation) }
+      }
+      if phase == .ended {
+        panStart = nil
+        interaction += 1
+      }
+    case .cancelled, .failed:
+      if let panStart { zoom = panStart }
+      panStart = nil
+      onCollapseDragEnded(.zero)
+    default:
+      break
+    }
+  }
+
+  private func resetZoom() {
+    zoom = MobileVideoZoom()
+    pinchStart = nil
+    panStart = nil
   }
 }
 

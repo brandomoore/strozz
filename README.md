@@ -170,12 +170,20 @@ changing scroll insets or fading the composer. Reduce Transparency and Increase
 Contrast disable that fade.
 The floating Jump to present button uses native Liquid Glass on iOS 26 or later,
 with a standard bordered fallback on older systems or with Reduce Transparency.
+Player buttons use native interactive Liquid Glass, with adjacent top-right and
+bottom-right actions sharing one continuous glass capsule per group, not separate
+circles. Audio-mode actions use the same grouping. Each action retains its own
+44-point touch target. On iOS 26 or later, glass containers render the groups
+together. Reduce Transparency uses opaque theme-aware
+surfaces, and older systems use regular material. This includes mini-player and
+audio/chat-mode controls; controls elsewhere in the app retain their existing style.
 
 The video controls show one horizontal readout row: a viewer icon and compact
 count, then a red live dot with elapsed time, without chips or backplates. Each
 icon stays close to its value, with more space between the two groups. The red
 dot appears only at the live edge. The readouts
 hide with the controls; the Account > Overlays duration preference still applies.
+The actionable Back to live control uses the same glass treatment as the buttons.
 Playback quality
 remains in the quality menu rather than repeating below the profile. Channel
 points appear as a compact balance and the channel's own 18-point currency icon
@@ -184,12 +192,18 @@ when no image is available). Tap it for the streamer's currency name, exact
 balance, watch streak, and any rewards errors; opening it does not spend points.
 Only a loaded balance is shown, never a guessed zero.
 
-The iPhone rotation button uses a rotation glyph. The chat toggle appears only
+Fullscreen/rotation uses diagonal expand/contract arrows. Chat visibility uses
+the messages/messages-off glyphs. The chat toggle appears only
 in landscape: iPhone starts video-only and can open or hide side-by-side chat;
 iPad offers the same toggle when its side-by-side layout is available. Portrait
 chat stays below the video without a misleading sideways collapse button.
 Fullscreen video hides the system status bar; leaving fullscreen or minimizing
 restores the normal system appearance.
+Pinch an expanded live video to zoom continuously from 1x to 4x, then drag to pan
+within the picture. Controls and chat do not scale. Pinch back to 1x to reset;
+minimizing, backgrounding, switching playback modes, or changing the video layout
+also resets the zoom. Native PiP remains uncropped, and the in-app mini-player
+keeps its existing move/resize gestures rather than content zoom.
 By default, side chat uses at most one third of the available width, capped at 320 points.
 Drag the divider beside the video, or use **Chat settings > Side chat > Width**,
 to make it narrower or wider. The saved width is local to the mobile app and

@@ -30,7 +30,9 @@ final class MobileChatPresentationTests: XCTestCase {
           if pixels[offset] > 150 && pixels[offset + 1] < 80 && pixels[offset + 2] < 80 { redPixels += 1 }
           if pixels[offset] < 30 && pixels[offset + 1] < 30 && pixels[offset + 2] < 30 { darkPlatePixels += 1 }
         }
-        XCTAssertEqual(darkPlatePixels, 0, "Readouts use the same clear surface as the other video icons")
+        if state == .live || state == .checking {
+          XCTAssertEqual(darkPlatePixels, 0, "Noninteractive readouts remain unboxed")
+        }
         if state == .live { XCTAssertGreaterThan(redPixels, 10) }
         else { XCTAssertEqual(redPixels, 0, "Never imply live playback while checking, paused, or behind") }
       }

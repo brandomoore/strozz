@@ -5,6 +5,20 @@ import XCTest
 
 @MainActor
 final class MobileLoadingPresentationTests: XCTestCase {
+  func testOpaquePlayerButtonFallbackHasContrastInEveryTheme() throws {
+    for theme in AppTheme.allCases {
+      let palette = theme.palette(systemColorScheme: .light)
+      let image = try render(
+        Rectangle().fill(palette.chromeOnOpaque).frame(width: 8, height: 8)
+          .frame(width: 44, height: 44)
+          .modifier(MobilePlayerButtonAppearance(palette: palette, opaque: true)))
+      let background = try luminance(image, x: 4, y: 22)
+      let foreground = try luminance(image, x: 22, y: 22)
+      XCTAssertGreaterThanOrEqual((max(background, foreground) + 0.05) / (min(background, foreground) + 0.05),
+                                 4.5, "Opaque player button contrast in \(theme)")
+    }
+  }
+
   func testVideoOverlayGlyphsAreWhiteWithoutIndividualBackplates() throws {
     for theme in AppTheme.allCases {
       let image = try render(

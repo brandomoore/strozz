@@ -19,7 +19,8 @@ enum Glyph: String {
   case minus
   case adjustmentsHorizontal = "adjustments-horizontal"
   case dimensions
-  case rotateRectangle = "rotate-rectangle"
+  case arrowsDiagonal2 = "arrows-diagonal-2"
+  case arrowsDiagonalMinimize = "arrows-diagonal-minimize"
   case x
   case check
   case heart
@@ -35,6 +36,8 @@ enum Glyph: String {
   case share = "share-2"
   case sidebarRightExpand = "layout-sidebar-right-expand"
   case sidebarRightCollapse = "layout-sidebar-right-collapse"
+  case messages
+  case messagesOff = "messages-off"
   case circleCheckFilled = "circle-check-filled"
   case playerPlayFilled = "player-play-filled"
   case playerPauseFilled = "player-pause-filled"

@@ -3,6 +3,126 @@ import XCTest
 
 @MainActor
 final class MobilePlayerChromeTests: XCTestCase {
+  func testGlassPlayerControlsRemainUsableInLightAppearance() throws {
+    XCUIDevice.shared.orientation = .landscapeLeft
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
+    app.launchEnvironment["STROZZ_PLAYER_PAUSED_FIXTURE"] = "1"
+    app.launchEnvironment["STROZZ_PLAYER_THEME"] = "light"
+    app.launch()
+    defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
+    XCTAssertTrue(app.buttons["mobile-play-pause"].waitForExistence(timeout: 10))
+    showSideChat(app)
+    capture(app, "Native grouped glass player controls in light appearance")
+    let topGroup = app.otherElements["mobile-player-top-actions"]
+    let bottomGroup = app.otherElements["mobile-player-bottom-actions"]
+    XCTAssertEqual(topGroup.frame.height, 44, accuracy: 1)
+    XCTAssertEqual(topGroup.frame.minX, app.buttons["mobile-playback-mode"].frame.minX, accuracy: 1)
+    XCTAssertEqual(topGroup.frame.maxX, topGroup.buttons["Close player"].frame.maxX, accuracy: 1)
+    XCTAssertEqual(bottomGroup.frame.height, 44, accuracy: 1)
+    XCTAssertEqual(bottomGroup.frame.minX, app.buttons["mobile-mute"].frame.minX, accuracy: 1)
+    XCTAssertEqual(bottomGroup.frame.maxX, app.buttons["mobile-rotate-player"].frame.maxX, accuracy: 1)
+    for identifier in ["mobile-minimize-player", "mobile-mute", "mobile-toggle-chat",
+                       "mobile-rotate-player", "mobile-playback-mode"] {
+      let button = app.buttons[identifier]
+      XCTAssertTrue(button.exists)
+      XCTAssertGreaterThanOrEqual(button.frame.width, 44)
+      XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+      try assertDarkGlyphVisible(button)
+    }
+    let mute = app.buttons["mobile-mute"]
+    let previousMuteLabel = mute.label
+    mute.tap()
+    XCTAssertNotEqual(mute.label, previousMuteLabel)
+    app.buttons["mobile-playback-mode"].tap()
+    XCTAssertTrue(app.navigationBars["Playback mode"].waitForExistence(timeout: 3))
+    app.buttons["Done"].tap()
+    app.buttons["Playback quality"].tap()
+    XCTAssertTrue(app.navigationBars["Playback quality"].waitForExistence(timeout: 3))
+    app.buttons["Done"].tap()
+    app.buttons["mobile-minimize-player"].tap()
+    XCTAssertTrue(app.buttons["mobile-expand-player"].waitForExistence(timeout: 3))
+    capture(app, "Mini-player glass buttons in light appearance")
+  }
+
+  func testOptInPinchZoomKeepsActualLiveVideoVisible() throws {
+    guard let login = ProcessInfo.processInfo.environment["STROZZ_ZOOM_LIVE_CHANNEL"] else {
+      throw XCTSkip("Select a live channel to verify rendered video while pinching.")
+    }
+    XCUIDevice.shared.orientation = .landscapeLeft
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
+    app.launchEnvironment["STROZZ_ZOOM_LIVE_CHANNEL"] = login
+    app.launch()
+    defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
+    let viewport = app.buttons["mobile-controls-toggle"]
+    let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+    XCTAssertTrue(viewport.waitForExistence(timeout: 15))
+    expectation(for: NSPredicate { _, _ in
+      !app.otherElements["mobile-video-loading"].exists && app.buttons["mobile-play-pause"].exists
+    }, evaluatedWith: app)
+    waitForExpectations(timeout: 40)
+    tapVideo(app)
+    capture(app, "Actual live picture before content zoom")
+    let original = video.frame
+    viewport.pinch(withScale: 2, velocity: 1)
+    XCTAssertGreaterThan(video.frame.width, original.width * 1.5)
+    XCTAssertFalse(app.buttons["mobile-expand-player"].exists)
+    capture(app, "Actual live picture at two-times content zoom")
+    let from = viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5))
+    from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 65, dy: 0)))
+    capture(app, "Actual live picture after panning")
+    viewport.pinch(withScale: 0.3, velocity: -1)
+    XCTAssertEqual(video.frame.width, original.width, accuracy: 1)
+  }
+
+  func testExpandedVideoPinchZoomAndPanLeaveControlsAndChatUnscaled() {
+    let app = launch(paused: true)
+    defer { app.terminate() }
+    let viewport = app.buttons["mobile-controls-toggle"]
+    let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+    XCTAssertTrue(viewport.waitForExistence(timeout: 10))
+    let viewportFrame = viewport.frame
+    let chatFrame = app.otherElements["mobile-player-chat-region"].frame
+    let pauseFrame = app.buttons["mobile-play-pause"].frame
+    let originalVideo = video.frame
+    viewport.pinch(withScale: 2, velocity: 1)
+    XCTAssertFalse(app.buttons["mobile-expand-player"].exists, "Pinching video must not minimize it")
+    XCTAssertEqual(viewport.frame, viewportFrame)
+    XCTAssertEqual(app.otherElements["mobile-player-chat-region"].frame, chatFrame)
+    XCTAssertEqual(app.buttons["mobile-play-pause"].frame, pauseFrame)
+    XCTAssertGreaterThan(video.frame.width, originalVideo.width * 1.5)
+    let zoomed = video.frame
+    let start = viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.4))
+    start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 45, dy: 25)))
+    XCTAssertEqual(viewport.frame, viewportFrame)
+    XCTAssertFalse(app.buttons["mobile-expand-player"].exists, "Panning must not minimize the player")
+    XCTAssertGreaterThan(video.frame.minX, zoomed.minX + 20)
+    capture(app, "Pinched video with unscaled player controls and chat")
+    viewport.pinch(withScale: 0.3, velocity: -1)
+    XCTAssertEqual(video.frame.width, originalVideo.width, accuracy: 1)
+    XCTAssertEqual(video.frame.minX, originalVideo.minX, accuracy: 1)
+
+    viewport.pinch(withScale: 2, velocity: 1)
+    app.buttons["mobile-minimize-player"].tap()
+    let mini = app.buttons["mobile-expand-player"]
+    XCTAssertTrue(mini.waitForExistence(timeout: 3))
+    XCTAssertEqual(video.frame.width, mini.frame.width, accuracy: 1, "Mini-player must show the full picture")
+    let miniWidth = mini.frame.width
+    mini.pinch(withScale: 1.3, velocity: 1)
+    XCTAssertGreaterThan(mini.frame.width, miniWidth + 10, "Existing mini-player resize gesture remains available")
+    XCTAssertEqual(video.frame.width, mini.frame.width, accuracy: 1)
+    mini.tap()
+    XCTAssertTrue(viewport.waitForExistence(timeout: 3))
+    XCTAssertEqual(video.frame.width, originalVideo.width, accuracy: 1)
+    viewport.pinch(withScale: 2, velocity: 1)
+    XCUIDevice.shared.press(.home)
+    app.activate()
+    XCTAssertTrue(viewport.waitForExistence(timeout: 5))
+    XCTAssertEqual(video.frame.width, originalVideo.width, accuracy: 1, "Background playback must not retain a crop")
+    capture(app, "Expanded player after resetting zoom through minimization")
+  }
+
   func testFullscreenHidesStatusBarAndLeavingRestoresIt() {
     let app = XCUIApplication()
     app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
@@ -107,6 +227,29 @@ final class MobilePlayerChromeTests: XCTestCase {
     app.buttons["chat-setting-width-reset"].tap()
     app.buttons["Done"].tap()
     XCTAssertEqual(chat.frame.width, originalWidth, accuracy: 2)
+  }
+
+  private func assertDarkGlyphVisible(_ button: XCUIElement) throws {
+    let image = try XCTUnwrap(button.screenshot().image.cgImage)
+    let width = image.width
+    let height = image.height
+    var pixels = [UInt8](repeating: 0, count: width * height * 4)
+    try pixels.withUnsafeMutableBytes { buffer in
+      let context = try XCTUnwrap(CGContext(data: buffer.baseAddress, width: width, height: height,
+        bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+      context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+    }
+    var darkPixels = 0
+    for y in (height / 4)..<(height * 3 / 4) {
+      for x in (width / 4)..<(width * 3 / 4) {
+        let offset = (y * width + x) * 4
+        if pixels[offset + 3] > 200 && pixels[offset] < 80
+          && pixels[offset + 1] < 80 && pixels[offset + 2] < 80 { darkPixels += 1 }
+      }
+    }
+    XCTAssertGreaterThan(darkPixels, max(3, width * height / 200),
+      "The light-theme glyph must remain visible above, not behind, the shared glass")
   }
 
   private func showSideChat(_ app: XCUIApplication) {
