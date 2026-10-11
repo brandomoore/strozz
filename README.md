@@ -170,8 +170,11 @@ changing scroll insets or fading the composer. Reduce Transparency and Increase
 Contrast disable that fade.
 The floating Jump to present button uses native Liquid Glass on iOS 26 or later,
 with a standard bordered fallback on older systems or with Reduce Transparency.
-Player buttons use native interactive Liquid Glass, with related controls sharing
-glass containers on iOS 26 or later. Reduce Transparency uses opaque theme-aware
+Player buttons use native interactive Liquid Glass, with adjacent top-right and
+bottom-right actions sharing one continuous glass capsule per group, not separate
+circles. Audio-mode actions use the same grouping. Each action retains its own
+44-point touch target. On iOS 26 or later, glass containers render the groups
+together. Reduce Transparency uses opaque theme-aware
 surfaces, and older systems use regular material. This includes mini-player and
 audio/chat-mode controls; controls elsewhere in the app retain their existing style.
 

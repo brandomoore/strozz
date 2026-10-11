@@ -3,7 +3,7 @@ import XCTest
 
 @MainActor
 final class MobilePlayerChromeTests: XCTestCase {
-  func testGlassPlayerControlsRemainUsableInLightAppearance() {
+  func testGlassPlayerControlsRemainUsableInLightAppearance() throws {
     XCUIDevice.shared.orientation = .landscapeLeft
     let app = XCUIApplication()
     app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
@@ -14,12 +14,21 @@ final class MobilePlayerChromeTests: XCTestCase {
     XCTAssertTrue(app.buttons["mobile-play-pause"].waitForExistence(timeout: 10))
     showSideChat(app)
     capture(app, "Native grouped glass player controls in light appearance")
+    let topGroup = app.otherElements["mobile-player-top-actions"]
+    let bottomGroup = app.otherElements["mobile-player-bottom-actions"]
+    XCTAssertEqual(topGroup.frame.height, 44, accuracy: 1)
+    XCTAssertEqual(topGroup.frame.minX, app.buttons["mobile-playback-mode"].frame.minX, accuracy: 1)
+    XCTAssertEqual(topGroup.frame.maxX, topGroup.buttons["Close player"].frame.maxX, accuracy: 1)
+    XCTAssertEqual(bottomGroup.frame.height, 44, accuracy: 1)
+    XCTAssertEqual(bottomGroup.frame.minX, app.buttons["mobile-mute"].frame.minX, accuracy: 1)
+    XCTAssertEqual(bottomGroup.frame.maxX, app.buttons["mobile-rotate-player"].frame.maxX, accuracy: 1)
     for identifier in ["mobile-minimize-player", "mobile-mute", "mobile-toggle-chat",
                        "mobile-rotate-player", "mobile-playback-mode"] {
       let button = app.buttons[identifier]
       XCTAssertTrue(button.exists)
       XCTAssertGreaterThanOrEqual(button.frame.width, 44)
       XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+      try assertDarkGlyphVisible(button)
     }
     let mute = app.buttons["mobile-mute"]
     let previousMuteLabel = mute.label
@@ -218,6 +227,29 @@ final class MobilePlayerChromeTests: XCTestCase {
     app.buttons["chat-setting-width-reset"].tap()
     app.buttons["Done"].tap()
     XCTAssertEqual(chat.frame.width, originalWidth, accuracy: 2)
+  }
+
+  private func assertDarkGlyphVisible(_ button: XCUIElement) throws {
+    let image = try XCTUnwrap(button.screenshot().image.cgImage)
+    let width = image.width
+    let height = image.height
+    var pixels = [UInt8](repeating: 0, count: width * height * 4)
+    try pixels.withUnsafeMutableBytes { buffer in
+      let context = try XCTUnwrap(CGContext(data: buffer.baseAddress, width: width, height: height,
+        bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+      context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+    }
+    var darkPixels = 0
+    for y in (height / 4)..<(height * 3 / 4) {
+      for x in (width / 4)..<(width * 3 / 4) {
+        let offset = (y * width + x) * 4
+        if pixels[offset + 3] > 200 && pixels[offset] < 80
+          && pixels[offset + 1] < 80 && pixels[offset + 2] < 80 { darkPixels += 1 }
+      }
+    }
+    XCTAssertGreaterThan(darkPixels, max(3, width * height / 200),
+      "The light-theme glyph must remain visible above, not behind, the shared glass")
   }
 
   private func showSideChat(_ app: XCUIApplication) {

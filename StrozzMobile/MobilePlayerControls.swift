@@ -30,24 +30,30 @@ struct MobilePlayerControls: View {
             .accessibilityIdentifier("mobile-minimize-player")
             .modifier(MobilePlayerButtonSurface())
           Spacer(minLength: 0)
-          MobilePlaybackModeButton(model: model, onVideoSelection: { hideChat = false },
-            onPresentation: onModePresentation)
-            .modifier(MobilePlayerButtonSurface())
-          if model.presentationState == .ready {
-            MobileAirPlayPicker(onPresentation: onRoutes)
-              .frame(width: 44, height: 44)
-              .modifier(MobilePlayerButtonSurface())
-            Button(action: onShare) { Icon(glyph: .share, size: 22).frame(width: 44, height: 44) }
+          HStack(spacing: 4) {
+            MobilePlaybackModeButton(model: model, onVideoSelection: { hideChat = false },
+              onPresentation: onModePresentation)
+            if model.presentationState == .ready {
+              MobileAirPlayPicker(onPresentation: onRoutes)
+                .frame(width: 44, height: 44)
+              Button(action: onShare) {
+                Icon(glyph: .share, size: 22).frame(width: 44, height: 44).contentShape(Rectangle())
+              }
               .accessibilityLabel("Share stream")
-              .modifier(MobilePlayerButtonSurface())
-            Button(action: onQuality) { Icon(glyph: .settings, size: 22).frame(width: 44, height: 44) }
+              Button(action: onQuality) {
+                Icon(glyph: .settings, size: 22).frame(width: 44, height: 44).contentShape(Rectangle())
+              }
               .accessibilityLabel("Playback quality")
               .accessibilityValue(model.qualityLabel)
-              .modifier(MobilePlayerButtonSurface())
-          }
-          Button(action: onClose) { Icon(glyph: .x, size: 22).frame(width: 44, height: 44) }
+            }
+            Button(action: onClose) {
+              Icon(glyph: .x, size: 22).frame(width: 44, height: 44).contentShape(Rectangle())
+            }
             .accessibilityLabel("Close player")
-            .modifier(MobilePlayerButtonSurface())
+          }
+          .modifier(MobilePlayerGroupSurface())
+          .accessibilityElement(children: .contain)
+          .accessibilityIdentifier("mobile-player-top-actions")
         }
         Color.clear
           .frame(minHeight: 56, maxHeight: .infinity)
@@ -74,38 +80,43 @@ struct MobilePlayerControls: View {
                 model.goLive()
               }
             Spacer(minLength: 0)
-            Button {
-              onInteraction()
-              model.toggleMute()
-            } label: {
-              Icon(glyph: model.isMuted ? .volumeOff : .volume, size: 22).frame(width: 44, height: 44)
-            }
-            .accessibilityLabel(model.isMuted ? "Unmute" : "Mute")
-            .accessibilityIdentifier("mobile-mute")
-            .modifier(MobilePlayerButtonSurface())
-            if showsChatToggle {
+            HStack(spacing: 8) {
               Button {
                 onInteraction()
-                hideChat.toggle()
+                model.toggleMute()
               } label: {
-                Icon(glyph: hideChat ? .messages : .messagesOff, size: 22).frame(
-                  width: 44, height: 44)
+                Icon(glyph: model.isMuted ? .volumeOff : .volume, size: 22)
+                  .frame(width: 44, height: 44).contentShape(Rectangle())
               }
-              .accessibilityLabel(hideChat ? "Show chat" : "Hide chat")
-              .accessibilityIdentifier("mobile-toggle-chat")
-              .modifier(MobilePlayerButtonSurface())
+              .accessibilityLabel(model.isMuted ? "Unmute" : "Mute")
+              .accessibilityIdentifier("mobile-mute")
+              if showsChatToggle {
+                Button {
+                  onInteraction()
+                  hideChat.toggle()
+                } label: {
+                  Icon(glyph: hideChat ? .messages : .messagesOff, size: 22).frame(
+                    width: 44, height: 44)
+                    .contentShape(Rectangle())
+                }
+                .accessibilityLabel(hideChat ? "Show chat" : "Hide chat")
+                .accessibilityIdentifier("mobile-toggle-chat")
+              }
+              Button(action: onFullscreen) {
+                Icon(glyph: isFullscreen ? .arrowsDiagonalMinimize : .arrowsDiagonal2, size: 22)
+                  .frame(width: 44, height: 44)
+                  .contentShape(Rectangle())
+              }
+              .accessibilityLabel(
+                UIDevice.current.userInterfaceIdiom == .phone
+                  ? (isFullscreen ? "Rotate to portrait" : "Rotate to landscape")
+                  : (isFullscreen ? "Exit fullscreen" : "Fullscreen")
+              )
+              .accessibilityIdentifier("mobile-rotate-player")
             }
-            Button(action: onFullscreen) {
-              Icon(glyph: isFullscreen ? .arrowsDiagonalMinimize : .arrowsDiagonal2, size: 22)
-                .frame(width: 44, height: 44)
-            }
-            .accessibilityLabel(
-              UIDevice.current.userInterfaceIdiom == .phone
-                ? (isFullscreen ? "Rotate to portrait" : "Rotate to landscape")
-                : (isFullscreen ? "Exit fullscreen" : "Fullscreen")
-            )
-            .accessibilityIdentifier("mobile-rotate-player")
-            .modifier(MobilePlayerButtonSurface())
+            .modifier(MobilePlayerGroupSurface())
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("mobile-player-bottom-actions")
           }
           if let landscapeChannel {
             MobileStreamDetails(channel: landscapeChannel, model: model, isVideoOverlay: true)
@@ -143,6 +154,19 @@ struct MobilePlayerButtonSurface: ViewModifier {
     content
       .foregroundStyle(palette.chromeOnOpaque)
       .contentShape(Capsule())
+      .modifier(MobilePlayerButtonAppearance(palette: palette, opaque: reduceTransparency))
+      .environment(\.colorScheme, palette.chromeColorScheme)
+  }
+}
+
+struct MobilePlayerGroupSurface: ViewModifier {
+  @Environment(\.themePalette) private var palette
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+  func body(content: Content) -> some View {
+    content
+      .foregroundStyle(palette.chromeOnOpaque)
+      // Keep individual button hit shapes; a group contentShape also expands VoiceOver frames.
       .modifier(MobilePlayerButtonAppearance(palette: palette, opaque: reduceTransparency))
       .environment(\.colorScheme, palette.chromeColorScheme)
   }
