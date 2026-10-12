@@ -238,6 +238,9 @@ Unchanged mobile message rows retain their rendered content as messages arrive.
 Chat badges, emotes, and GIFs use native image views backed by the same SDWebImage
 cache, avoiding per-image Combine publisher overhead during long sessions and
 resizing. Animation remains controlled by the viewport and accessibility settings.
+On both platforms, static WebP emotes also render with animations enabled.
+Animated and first-frame images use separate shared cache entries so turning
+animations back on cannot reuse a frozen preview.
 Development builds keep a bounded, local `Library/Caches/MobilePlaybackDiagnostics`
 record of player state, fresh decoded-frame age, PiP state, and video-layer
 attachment/visibility. Sampling is limited to once every two seconds and uses

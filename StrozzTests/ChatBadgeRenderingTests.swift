@@ -1,4 +1,5 @@
 import SDWebImage
+import SDWebImageWebPCoder
 import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
@@ -11,6 +12,112 @@ import XCTest
 
 @MainActor
 final class ChatBadgeRenderingTests: XCTestCase {
+  func testOptInBurnEmotesRenderFromTheCompleteCatalog() async throws {
+    guard ProcessInfo.processInfo.environment["STROZZ_EMOTE_LIVE_TESTS"] == "1" else {
+      throw XCTSkip("Opt in to verify current provider assets.")
+    }
+    let catalog = await EmoteCatalogService().snapshot(for: "burn", refreshChannelEmotes: true)
+    let names = ["CAUGHT", "xdd"]
+    let urls = try names.map { try XCTUnwrap(catalog.urls[$0], "Missing \($0) from the assembled catalog") }
+    let segments = ChatLineTokenizer.segments(text: names.joined(separator: " "),
+      twitchEmoteURLs: [:], youtubeEmoteURLs: [:], globalEmoteURLs: catalog.urls,
+      cheermotes: [], shouldRenderCheers: false)
+    XCTAssertEqual(segments.filter {
+      if case .emote = $0 { return true }
+      return false
+    }.count, names.count)
+    let details = XCTAttachment(string: zip(names, urls).map { "\($0): \($1)" }.joined(separator: "\n"))
+    details.name = "Resolved Burn emote URLs"
+    details.lifetime = .keepAlways
+    add(details)
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let previous = scene.keyWindow
+    var loaded: [URL: CGSize] = [:]
+    let host = UIHostingController(rootView: VStack {
+      ForEach(urls, id: \.self) { url in
+        ChatEmoteImage(url: url, animated: true, active: true, isGIF: false) { size in
+          if let size { loaded[url] = size }
+        }
+        .frame(width: 122, height: 64)
+      }
+    })
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = host
+    window.makeKeyAndVisible()
+    defer {
+      window.isHidden = true
+      window.rootViewController = nil
+      previous?.makeKey()
+    }
+    host.view.layoutIfNeeded()
+    for _ in 0..<200 {
+      if loaded.count == urls.count { break }
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    for (name, url) in zip(names, urls) {
+      XCTAssertNotNil(loaded[url], "\(name) was in the catalog but did not render")
+    }
+  }
+
+  func testStaticWebPRendersWithColdAndWarmAnimationPreferences() async throws {
+    try await checkWebPRendering(animated: false)
+  }
+
+  func testAnimatedWebPRemainsAnimatedAfterFirstFrameCacheHits() async throws {
+    try await checkWebPRendering(animated: true)
+  }
+
+  private func checkWebPRendering(animated: Bool) async throws {
+    let frames = [UIColor.systemOrange, .systemBlue].map { color in
+      SDImageFrame(image: UIGraphicsImageRenderer(size: CGSize(width: 160, height: 40)).image {
+        color.setFill()
+        $0.fill(CGRect(x: 0, y: 0, width: 160, height: 40))
+      }, duration: 0.1)
+    }
+    let source = animated ? try XCTUnwrap(SDImageCoderHelper.animatedImage(with: frames)) : frames[0].image
+    let data = try XCTUnwrap(SDImageWebPCoder.shared.encodedData(with: source, format: .webP, options: nil))
+    for initiallyAnimated in [true, false] {
+      let url = FileManager.default.temporaryDirectory.appendingPathComponent("emote-\(UUID()).webp")
+      try data.write(to: url)
+      defer {
+        do { try FileManager.default.removeItem(at: url) }
+        catch { XCTFail("Could not remove owned emote fixture: \(error)") }
+      }
+      // A badge or preview may already have cached a nonanimated image for this URL.
+      await SDImageCache.shared.store(frames[0].image, forKey: url.absoluteString, toDisk: false)
+      defer { SDImageCache.shared.removeImage(forKey: url.absoluteString, fromDisk: false) }
+      let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+      let previous = scene.keyWindow
+      let state = BadgeRenderingState(url: url)
+      state.animated = initiallyAnimated
+      let host = UIHostingController(rootView: EmoteRenderingHarness(state: state))
+      let window = UIWindow(windowScene: scene)
+      window.rootViewController = host
+      window.makeKeyAndVisible()
+      defer {
+        window.isHidden = true
+        window.rootViewController = nil
+        previous?.makeKey()
+      }
+      for preference in [initiallyAnimated, !initiallyAnimated, initiallyAnimated, !initiallyAnimated] {
+        state.animated = preference
+        try await Task.sleep(for: .milliseconds(80))
+        host.view.layoutIfNeeded()
+        try await waitUntil {
+          guard let view = self.imageView(in: host.view) else { return false }
+          return view.image != nil && view.isAnimating == (animated && preference)
+        }
+        let view = try XCTUnwrap(imageView(in: host.view))
+        XCTAssertNotNil(view.window)
+        XCTAssertEqual(view.bounds.width, 104, accuracy: 1)
+        XCTAssertEqual(view.bounds.height, 26, accuracy: 1)
+        if animated && preference {
+          XCTAssertTrue(view.image is SDAnimatedImage, "Keep lazy, bounded frame decoding")
+        }
+      }
+    }
+  }
+
   func testWideEmoteKeepsItsAspectRatioWhenAnimationIsToggled() async throws {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("wide-emote-\(UUID()).gif")
     let output = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.gif.identifier as CFString, 2, nil))

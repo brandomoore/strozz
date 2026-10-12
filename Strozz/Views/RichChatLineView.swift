@@ -511,6 +511,11 @@ struct ChatEmoteImage: UIViewRepresentable {
     let isGIF: Bool
     let onLoad: (CGSize?) -> Void
 
+    // First-frame cache hits must not freeze a later animated request. Keep
+    // both variants shared across chat rows, separate from other image views.
+    private static let animatedCacheKey = SDWebImageCacheKeyFilter { "chat-emote:animated:\($0.absoluteString)" }
+    private static let staticCacheKey = SDWebImageCacheKeyFilter { "chat-emote:static:\($0.absoluteString)" }
+
     final class Coordinator {
         var request = UUID()
         var animated: Bool?
@@ -536,11 +541,16 @@ struct ChatEmoteImage: UIViewRepresentable {
             coordinator.request = UUID()
             coordinator.animated = animated
             let request = coordinator.request
-            var imageContext: [SDWebImageContextOption: Any] = [.animatedImageClass: SDAnimatedImage.self]
+            var imageContext: [SDWebImageContextOption: Any] = [
+                .animatedImageClass: SDAnimatedImage.self,
+                .cacheKeyFilter: animated ? Self.animatedCacheKey : Self.staticCacheKey,
+            ]
             if isGIF { imageContext[.imageThumbnailPixelSize] = CGSize(width: 360, height: 240) }
+            // Single-frame WebP can decode as UIImage but not SDAnimatedImage.
+            // Allow that fallback without requiring an animated image class.
             view.sd_setImage(with: url, placeholderImage: nil,
-                            options: animated ? [.matchAnimatedImageClass] : [.decodeFirstFrameOnly],
-                            context: imageContext, progress: nil) { image, _, _, _ in
+                            options: animated ? [] : [.decodeFirstFrameOnly],
+                            context: imageContext, progress: nil) { [weak view] image, _, _, _ in
                 let size = image?.size
                 // Cache hits and cancelled loads can complete during a view update.
                 DispatchQueue.main.async { [weak view] in
