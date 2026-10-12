@@ -140,8 +140,10 @@ Dismiss the sheet to return to chat without stopping playback.
 
 The smile button in the mobile chat bar opens a native emote browser. Search
 the current channel's and global emotes, or filter by Twitch, 7TV, BetterTTV,
-or FrankerFaceZ. Tapping an emote inserts its exact code at the draft's cursor
-(or replaces selected text), with spacing, without sending the message.
+or FrankerFaceZ using the one-tap **All / Twitch / 7TV / BTTV / FFZ** row.
+Switching providers keeps the current search. Tapping an emote inserts its exact
+code at the draft's cursor (or replaces selected text), with spacing, without
+sending the message.
 Touch and hold for **Copy emote name** or a larger preview. The existing
 inline-emote preview also offers Copy. Anonymous viewers can browse and copy
 without signing in. Emote thumbnails load as they become visible and honor

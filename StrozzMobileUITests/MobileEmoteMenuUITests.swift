@@ -57,18 +57,35 @@ final class MobileEmoteMenuUITests: XCTestCase {
     app.buttons["mobile-chat-emotes"].tap()
     let done = app.buttons["emote-menu-done"]
     XCTAssertTrue(done.waitForExistence(timeout: 5))
-    for (provider, name) in [("Twitch", "Kappa"), ("BetterTTV", "FeelsGoodMan"), ("FrankerFaceZ", "FrankerZ")] {
-      app.buttons["emote-menu-provider"].tap()
-      app.buttons[provider].tap()
+    let providers = app.segmentedControls["emote-menu-provider"]
+    XCTAssertTrue(providers.waitForExistence(timeout: 5))
+    let all = providers.buttons["All"]
+    XCTAssertTrue(all.isSelected)
+    for label in ["All", "Twitch", "7TV", "BTTV", "FFZ"] {
+      let button = providers.buttons[label]
+      XCTAssertTrue(button.isHittable, "\(label) must be directly tappable without opening a menu")
+      XCTAssertEqual(button.frame.midY, all.frame.midY, accuracy: 1)
+    }
+    for (provider, name) in [("Twitch", "Kappa"), ("BTTV", "FeelsGoodMan"), ("FFZ", "FrankerZ")] {
+      providers.buttons[provider].tap()
+      XCTAssertTrue(providers.buttons[provider].isSelected)
       XCTAssertTrue(app.buttons["emote-menu-item-\(name)"].waitForExistence(timeout: 3))
       XCTAssertEqual(app.staticTexts["emote-menu-count"].label, "1 emote")
     }
-    app.buttons["emote-menu-provider"].tap()
-    app.buttons["7TV"].tap()
+    all.tap()
+    XCTAssertTrue(all.isSelected)
+    XCTAssertEqual(app.staticTexts["emote-menu-count"].label, "205 emotes")
+    providers.buttons["7TV"].tap()
+    XCTAssertTrue(providers.buttons["7TV"].isSelected)
     let search = app.searchFields.firstMatch
     search.tap()
     search.typeText("xdd")
     let emote = app.buttons["emote-menu-item-xdd"]
+    XCTAssertTrue(emote.waitForExistence(timeout: 3))
+    providers.buttons["Twitch"].tap()
+    XCTAssertTrue(app.staticTexts["No matching emotes"].waitForExistence(timeout: 3))
+    XCTAssertEqual(search.value as? String, "xdd", "Provider switching must preserve the query")
+    providers.buttons["7TV"].tap()
     XCTAssertTrue(emote.waitForExistence(timeout: 3))
     emote.tap()
     XCTAssertEqual(app.staticTexts["emote-menu-feedback"].label, "Added xdd")

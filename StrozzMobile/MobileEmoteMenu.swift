@@ -6,6 +6,13 @@ enum MobileEmoteProvider: String, CaseIterable, Identifiable {
   case bttv = "BetterTTV"
   case ffz = "FrankerFaceZ"
   var id: Self { self }
+  var shortName: String {
+    switch self {
+    case .bttv: "BTTV"
+    case .ffz: "FFZ"
+    default: rawValue
+    }
+  }
 }
 
 enum MobileEmoteCatalog {
@@ -207,19 +214,10 @@ private struct MobileEmoteMenuHeader: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("\(channel)'s channel and global emotes")
-        .font(.subheadline).foregroundStyle(palette.chatSideSecondaryText)
-        .fixedSize(horizontal: false, vertical: true)
-      HStack {
-        Picker("Provider", selection: $provider) {
-          Text("All providers").tag(nil as MobileEmoteProvider?)
-          ForEach(MobileEmoteProvider.allCases) { provider in
-            Text(provider.rawValue).tag(Optional(provider))
-          }
-        }
-        .pickerStyle(.menu)
-        .tint(palette.chatSidePrimaryText)
-        .accessibilityIdentifier("emote-menu-provider")
+      HStack(alignment: .firstTextBaseline) {
+        Text("\(channel)'s channel and global emotes")
+          .font(.subheadline).foregroundStyle(palette.chatSideSecondaryText)
+          .fixedSize(horizontal: false, vertical: true)
         Spacer(minLength: 8)
         Group {
           if count == 1 { Text("1 emote") }
@@ -227,8 +225,18 @@ private struct MobileEmoteMenuHeader: View {
         }
           .font(.caption).monospacedDigit()
           .foregroundStyle(palette.chatSideSecondaryText)
+          .fixedSize()
           .accessibilityIdentifier("emote-menu-count")
       }
+      Picker("Provider", selection: $provider) {
+        Text("All").tag(nil as MobileEmoteProvider?)
+        ForEach(MobileEmoteProvider.allCases) { provider in
+          Text(provider.shortName).tag(Optional(provider))
+        }
+      }
+      .pickerStyle(.segmented)
+      .frame(minHeight: 44)
+      .accessibilityIdentifier("emote-menu-provider")
     }
     .padding(16)
   }
