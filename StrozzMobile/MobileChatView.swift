@@ -14,6 +14,7 @@ struct MobileChatView: View, Equatable {
   @Environment(\.scenePhase) private var scenePhase
   @State private var showAccount = false
   @State private var showSettings = false
+  @State private var showEmotes = false
   @State private var pausedMessages: [ChatMessage]?
 
   private var updatesActive: Bool { isActive && !isManipulating && scenePhase == .active }
@@ -39,7 +40,8 @@ struct MobileChatView: View, Equatable {
                          animationsActive: isActive && !isManipulating)
       Divider()
       if auth.isAuthenticated, sync?.isRestoringAccount != true {
-        MobileChatComposer(channel: channel, onSettings: { showSettings = true }, rewards: rewards, composer: composer)
+        MobileChatComposer(channel: channel, onSettings: { showSettings = true }, rewards: rewards,
+          composer: composer, onEmotes: { showEmotes = true })
       } else {
         HStack {
           if let rewards { MobileChatRewardsButton(summary: rewards) }
@@ -49,6 +51,7 @@ struct MobileChatView: View, Equatable {
             Button("Sign in to chat") { showAccount = true }
           }
           Spacer()
+          MobileEmoteMenuButton { showEmotes = true }
           Button { showSettings = true } label: {
             Icon(glyph: .dots, size: 22).frame(width: 44, height: 44)
           }
@@ -77,6 +80,10 @@ struct MobileChatView: View, Equatable {
           .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showSettings = false } } }
       }
       .environment(\.themePalette, palette)
+    }
+    .sheet(isPresented: $showEmotes) {
+      MobileChannelEmoteMenu(channel: channel, service: service, composer: composer)
+        .environment(\.themePalette, palette)
     }
   }
 }
@@ -341,6 +348,7 @@ struct MobileChatComposer: View {
   @Environment(TwitchAuthSession.self) private var auth
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
   let composer: MobileChatComposerState
+  var onEmotes: (() -> Void)? = nil
 
   var body: some View {
     @Bindable var composer = composer
@@ -349,7 +357,8 @@ struct MobileChatComposer: View {
       MobileChatComposerInput(text: $composer.text, sending: composer.sending,
         onSend: { Task { await composer.send { try await auth.sendChatMessage($0, toChannel: channel) } } },
         onSettings: onSettings,
-        reduceTransparency: reduceTransparency, rewards: rewards)
+        reduceTransparency: reduceTransparency, rewards: rewards,
+        selection: $composer.selection, onEmotes: onEmotes)
       if composer.text.count > 500 { Text("Messages can contain up to 500 characters.").font(.caption) }
     }
     .padding(.leading, rewards == nil ? 12 : 8)
@@ -362,8 +371,29 @@ struct MobileChatComposer: View {
 @Observable
 final class MobileChatComposerState {
   var text = ""
+  var selection: NSRange?
   private(set) var sending = false
   private(set) var errorMessage: String?
+
+  @discardableResult
+  func insertEmote(_ name: String) -> Bool {
+    guard !sending else { return false }
+    let range = selection.flatMap { Range($0, in: text) } ?? text.endIndex..<text.endIndex
+    let prefix = text[..<range.lowerBound]
+    let suffix = text[range.upperBound...]
+    let leading = prefix.last.map { $0.isWhitespace ? "" : " " } ?? ""
+    let trailing = suffix.first.map { $0.isWhitespace ? "" : " " } ?? " "
+    let insertion = leading + name + trailing
+    let updated = String(prefix) + insertion + suffix
+    guard updated.count <= 500 else {
+      errorMessage = String(localized: "Messages can contain up to 500 characters.")
+      return false
+    }
+    text = updated
+    selection = NSRange(location: prefix.utf16.count + insertion.utf16.count, length: 0)
+    errorMessage = nil
+    return true
+  }
 
   func send(_ action: (String) async throws -> Void) async {
     guard !sending else { return }
@@ -377,6 +407,7 @@ final class MobileChatComposerState {
     do {
       try await action(text)
       text = ""
+      selection = nil
     } catch {
       errorMessage = error.localizedDescription
     }
@@ -390,6 +421,8 @@ struct MobileChatComposerInput: View {
   let onSettings: () -> Void
   let reduceTransparency: Bool
   var rewards: MobileChatRewardsSummary? = nil
+  var selection: Binding<NSRange?>? = nil
+  var onEmotes: (() -> Void)? = nil
   @Environment(\.themePalette) private var palette
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -399,7 +432,7 @@ struct MobileChatComposerInput: View {
     HStack(alignment: .bottom, spacing: 8) {
       if let rewards { MobileChatRewardsButton(summary: rewards) }
       HStack(alignment: .bottom, spacing: 8) {
-        MobileChatTextInput(text: $text, sending: sending, onSend: onSend)
+        MobileChatTextInput(text: $text, sending: sending, onSend: onSend, selection: selection)
           .overlay(alignment: .topLeading) {
             if text.isEmpty {
               Text("Send a message")
@@ -411,6 +444,10 @@ struct MobileChatComposerInput: View {
             }
           }
           .padding(.leading, 14)
+        if let onEmotes {
+          MobileEmoteMenuButton(action: onEmotes)
+            .disabled(sending)
+        }
         Button(action: hasDraft ? onSend : onSettings) {
           ZStack {
             Circle().fill(palette.chatSidePrimaryText.opacity(canSend ? 1 : 0.08))

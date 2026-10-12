@@ -49,6 +49,7 @@ struct MobileEmoteDetailView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(\.themePalette) private var palette
   @AppStorage(PersistenceKey.chatAnimatedEmotes) private var animatedEmotes = true
+  @State private var copied = false
 
   var body: some View {
     NavigationStack {
@@ -67,6 +68,17 @@ struct MobileEmoteDetailView: View {
               .foregroundStyle(.secondary)
               .accessibilityIdentifier("emote-detail-provider")
           }
+          if !emote.isGIF {
+            Button {
+              MobileEmoteClipboard.copy(emote)
+              copied = true
+            } label: {
+              if copied { Text("Copied") }
+              else { Text("Copy emote name") }
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("emote-detail-copy")
+          }
         }
         .padding(24)
         .frame(maxWidth: .infinity)
@@ -82,7 +94,7 @@ struct MobileEmoteDetailView: View {
         }
       }
     }
-    .presentationDetents([.height(460), .large])
+    .presentationDetents([.height(emote.isGIF ? 460 : 520), .large])
     .presentationDragIndicator(.visible)
     .presentationBackground(palette.chatSideSurface)
     .accessibilityIdentifier("emote-detail")
