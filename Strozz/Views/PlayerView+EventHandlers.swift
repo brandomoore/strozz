@@ -317,7 +317,6 @@ extension PlayerView {
       multiviewFocusTask?.cancel()
       chatSyncSendClearTask?.cancel()
       outgoingRaidFollowTask?.cancel()
-      chatExitFocusTask?.cancel()
       model.resetChatReading()
       trackpad.stop()
       sleepTimerTask?.cancel()

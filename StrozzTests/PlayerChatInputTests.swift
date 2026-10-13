@@ -7,6 +7,88 @@ import XCTest
 
 @MainActor
 final class PlayerChatInputTests: XCTestCase {
+  func testChatScrollHandoffsNeverBrieflyFocusPlaybackControls() async throws {
+    for theme in AppTheme.allCases {
+      for opaque in [false, true] {
+        for signedIn in [false, true] {
+          try await assertStableChatHandoffs(theme: theme, opaque: opaque, signedIn: signedIn)
+        }
+      }
+    }
+  }
+
+  private func assertStableChatHandoffs(theme: AppTheme, opaque: Bool, signedIn: Bool) async throws {
+    let probe = InputProbe()
+    let context = "\(theme.rawValue), opaque=\(opaque), signedIn=\(signedIn)"
+    try await withPlayer(isVOD: false, probe: probe, theme: theme, opaque: opaque, signedIn: signedIn) { view, _ in
+      view.stepToChatInput(from: .quality)
+      try await settle()
+      XCTAssertEqual(view.focus, .chatInput)
+      let chatFocus = try XCTUnwrap(probe.nativeFocus.last ?? nil)
+
+      for exit in 0..<3 {
+        probe.nativeFocus.removeAll()
+        probe.focusChanges.removeAll()
+        view.chatInputFocusedAt = .distantPast
+        view.handleChatUpPress()
+        try await settle()
+        XCTAssertNotNil(view.chatSoftPauseRemaining)
+        view.handleChatUpPress()
+        try await settle()
+        XCTAssertTrue(view.isChatScrolling)
+        XCTAssertEqual(view.focus, .chatInput)
+        XCTAssertTrue(probe.nativeFocus.allSatisfy { $0 == chatFocus },
+          "\(context): Native focus changed while entering scroll: \(probe.nativeFocus)")
+        XCTAssertTrue(probe.focusChanges.allSatisfy { $0 == .chatInput },
+          "\(context): SwiftUI focus changed while entering scroll: \(probe.focusChanges)")
+
+        probe.nativeFocus.removeAll()
+        probe.focusChanges.removeAll()
+        switch exit {
+        case 0: view.handleChatDownPress()
+        case 1: view.handlePlayerExitCommand()
+        default: XCTAssertFalse(view.applyScrollDelta(100))
+        }
+        try await settle()
+        XCTAssertFalse(view.isChatScrolling)
+        XCTAssertNil(view.chatFrozenMessages)
+        XCTAssertEqual(view.focus, .chatInput)
+        XCTAssertTrue(probe.nativeFocus.allSatisfy { $0 == chatFocus },
+          "\(context): Native focus changed while leaving scroll: \(probe.nativeFocus)")
+        XCTAssertTrue(probe.focusChanges.allSatisfy { $0 == .chatInput },
+          "\(context): SwiftUI focus changed while leaving scroll: \(probe.focusChanges)")
+      }
+
+      // A deliberate exit is still honored; no delayed correction steals it back.
+      view.exitChatComposerLeft()
+      try await settle()
+      XCTAssertEqual(view.focus, .chatToggle)
+      view.requestSeekBarFocus()
+      try await settle()
+      XCTAssertEqual(view.focus, .rewindScrubber)
+      XCTAssertTrue(view.scrubberOwnsInput)
+    }
+  }
+
+  func testVODScrollExitReenablesControlsWithoutRepausingChat() async throws {
+    try await withPlayer(isVOD: true) { view, _ in
+      view.stepToChatInput(from: .quality)
+      try await settle()
+      view.chatFrozenMessages = view.chat.messages
+      view.chatInputFocusedAt = .distantPast
+      view.handleChatUpPress()
+      try await settle()
+      XCTAssertTrue(view.isChatScrolling)
+      view.handlePlayerExitCommand()
+      try await settle()
+      XCTAssertEqual(view.focus, .chatToggle)
+      XCTAssertFalse(view.chatIsFrozen)
+      view.requestSeekBarFocus()
+      try await settle()
+      XCTAssertTrue(view.scrubberOwnsInput)
+    }
+  }
+
   func testChatFocusRejectsDiscreteAndAnalogSeekingForLiveAndVOD() async throws {
     for isVOD in [false, true] {
       try await withPlayer(isVOD: isVOD) { view, item in
@@ -134,6 +216,10 @@ final class PlayerChatInputTests: XCTestCase {
 
   private func withPlayer(
     isVOD: Bool,
+    probe: InputProbe = InputProbe(),
+    theme: AppTheme = .dark,
+    opaque: Bool = false,
+    signedIn: Bool = false,
     body: (PlayerView, InputTrackingItem) async throws -> Void
   ) async throws {
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
@@ -150,8 +236,9 @@ final class PlayerChatInputTests: XCTestCase {
         "@id=message-\(index);display-name=Viewer :viewer!viewer@host PRIVMSG #fixture :Message \(index)"
       ))
     }
-    let probe = InputProbe()
-    var player = PlayerView(channel: "fixture", auth: TwitchAuthSession(),
+    let auth = TwitchAuthSession()
+    auth.isAuthenticated = signedIn
+    var player = PlayerView(channel: "fixture", auth: auth,
       vod: isVOD ? .init(id: "fixture", title: "Fixture") : nil, model: model)
     player.inputTestContent = { view in
       probe.view = view
@@ -162,6 +249,7 @@ final class PlayerChatInputTests: XCTestCase {
         }
         .padding(40)
       ))
+      .onChange(of: view.focus) { _, value in probe.focusChanges.append(value) }
       .onAppear {
         view.showControls = true
         view.showChat = true
@@ -173,16 +261,19 @@ final class PlayerChatInputTests: XCTestCase {
     defaults.set(true, forKey: PersistenceKey.icloudAccountSignedOut)
     let environment = AppEnvironment()
     defaults.set(previousSignOut, forKey: PersistenceKey.icloudAccountSignedOut)
-    let host = UIHostingController(rootView: player
+    let host = InputHostingController(rootView: player
       .environment(environment)
-      .environment(\.themePalette, AppTheme.dark.palette(systemColorScheme: .dark)))
+      .environment(\.themePalette, theme.palette(systemColorScheme: .dark))
+      .environment(\.glassDisabled, opaque))
+    host.onFocusUpdate = { view in
+      probe.nativeFocus.append(view.map(ObjectIdentifier.init))
+    }
     window.rootViewController = host
     host.view.layoutIfNeeded()
     defer {
       probe.view?.stopScrubInput()
       probe.view?.hideTask?.cancel()
       probe.view?.focusRecoveryTask?.cancel()
-      probe.view?.chatExitFocusTask?.cancel()
       model.scrubCommitTask?.cancel()
       model.resetChatReading()
       model.player.replaceCurrentItem(with: nil)
@@ -209,6 +300,18 @@ final class PlayerChatInputTests: XCTestCase {
 @MainActor
 private final class InputProbe {
   var view: PlayerView?
+  var focusChanges: [PlayerView.Focusable?] = []
+  var nativeFocus: [ObjectIdentifier?] = []
+}
+
+@MainActor
+private final class InputHostingController<Content: View>: UIHostingController<Content> {
+  var onFocusUpdate: ((UIView?) -> Void)?
+
+  override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+    super.didUpdateFocus(in: context, with: coordinator)
+    onFocusUpdate?(context.nextFocusedView)
+  }
 }
 
 private final class InputTrackingItem: AVPlayerItem, @unchecked Sendable {

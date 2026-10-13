@@ -68,19 +68,6 @@ extension PlayerView {
     return controlOrder.contains(f)
   }
 
-  /// Whether `button` is dropped from the focus engine right now. The control
-  /// buttons are natively focusable together so tvOS's focus engine moves focus
-  /// between them instantly and reliably on every press (no programmatic stepping,
-  /// no throttle, no dropped or delayed moves). They are removed *only* while chat
-  /// is being scrolled, when focus is trapped on the composer. The row is wrapped
-  /// in a `.focusSection()` so a swipe can roam the buttons but can't escape to the
-  /// chat pane; the seek bar and composer keep their own gates. Expressed as
-  /// "removed" so we apply `.focusable(false)` (never `.focusable(true)`, which
-  /// hijacks a Button's Select press on tvOS).
-  func controlButtonRemoved(_ button: Focusable) -> Bool {
-    isChatScrolling
-  }
-
   /// Whether the chat composer (and its send button) should be dropped from the
   /// focus engine. Besides the rewind-bar case, we remove it whenever focus sits
   /// on a control button UNLESS we've just armed a deliberate hop into it

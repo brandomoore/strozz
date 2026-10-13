@@ -648,6 +648,8 @@ Pausing or scrolling still exposes the full retained history.
 On Apple TV, chat reading owns the remote: left/right input and trackpad motion
 cannot seek the video while chat is focused or scrolling. Return to the playback
 controls and press Up to use the timeline again.
+Playback controls stay mounted while chat enters or leaves scrolling, so returning
+to the message field does not briefly focus the quality or channel button.
 Twitch chat checks the join handshake and sends a heartbeat every thirty seconds
 after joining. A missing join acknowledgement, failed send, missing heartbeat
 reply, or server reconnect request enters the existing backoff/rejoin loop

@@ -82,15 +82,6 @@ extension PlayerView {
         .StrozzControlButtonStyle()
         .accessibilityLabel("Channel info")
         .accessibilityHint("Opens the channel page")
-        // While the viewer is scrolling chat, lift every control-row button out
-        // of the focus engine (the scrubber does the same via its
-        // `scrubberFocusable` gate). Focus is held on the composer; without this
-        // the engine treats these as neighbors and a left press jumps here —
-        // flashing a focused button and an audible tick — before our trap reverts
-        // it. We remove rather than `.focusable(false/true)`-toggle so the button
-        // keeps its own native focus styling when it IS reachable. Exit via Back
-        // or by scrolling to the live bottom, which re-enables the row.
-        .focusRemoved(controlButtonRemoved(.streamInfo))
         .focused($focus, equals: .streamInfo)
         .onMoveCommand { direction in
           if direction == .up { requestSeekBarFocus() }
@@ -130,6 +121,8 @@ extension PlayerView {
             isQualityMenuPresented = false
             focusRecoveryTask?.cancel()
             guard !isMultiviewCompact, showControls else { return }
+            guard !chatIsFrozen, !showChatSettings,
+              focus == .quality || (focus == nil && lastControlFocus == .quality) else { return }
             // If selecting a (short) sleep timer already surfaced the
             // still-watching banner or the sleeping overlay, don't yank focus
             // back to the quality button — let those own it.
@@ -192,7 +185,6 @@ extension PlayerView {
           }
         )
         .equatable()
-        .focusRemoved(controlButtonRemoved(.quality))
         .focused($focus, equals: .quality)
         .onMoveCommand { direction in
           if direction == .up { requestSeekBarFocus() }
@@ -207,7 +199,6 @@ extension PlayerView {
             Icon(glyph: .giftFilled)
           }
           .accessibilityLabel("Polls and channel rewards")
-          .focusRemoved(controlButtonRemoved(.rewards))
           .focused($focus, equals: .rewards)
           .onMoveCommand { direction in
             if direction == .up { requestSeekBarFocus() }
@@ -228,7 +219,6 @@ extension PlayerView {
               .frame(minWidth: 52)
               .accessibilityLabel("Playback Speed")
           }
-          .focusRemoved(controlButtonRemoved(.quality))
           .focused($focus, equals: .quality)
           .onMoveCommand { direction in
             if direction == .up { requestSeekBarFocus() }
@@ -241,7 +231,6 @@ extension PlayerView {
           Icon(glyph: showChatSettings ? .x : .adjustmentsHorizontal)
             .accessibilityLabel("Chat Settings")
         }
-        .focusRemoved(controlButtonRemoved(.chatSettingsButton))
         .focused($focus, equals: .chatSettingsButton)
         .onMoveCommand { direction in
           if direction == .up { requestSeekBarFocus() }
@@ -257,7 +246,6 @@ extension PlayerView {
           Icon(glyph: showChat ? .sidebarRightCollapse : .sidebarRightExpand)
             .accessibilityLabel(showChat ? "Hide Chat" : "Show Chat")
         }
-        .focusRemoved(controlButtonRemoved(.chatToggle))
         .accessibilityIdentifier("player-chat-toggle")
         .focused($focus, equals: .chatToggle)
         .onMoveCommand { direction in
@@ -283,6 +271,10 @@ extension PlayerView {
       )
       .focusSection()
     }
+    // Keep the native controls mounted across chat read/scroll transitions.
+    // Conditional focus wrappers recreate them, firing Menu's dismissal callback
+    // and briefly giving the quality/channel buttons focus.
+    .disabled(isChatScrolling)
     .frame(maxWidth: .infinity, alignment: .leading)
     .onPreferenceChange(ControlButtonsHeightKey.self) { height in
       controlButtonsHeight = height

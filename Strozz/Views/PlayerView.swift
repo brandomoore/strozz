@@ -407,9 +407,6 @@ struct PlayerView: View {
   /// row's `.defaultFocus` from this lets a reveal land directly on the intended
   /// button (quality on up, channel on left, etc.) with no leftmost detour.
   @State var pendingControlFocus: Focusable = .quality
-  /// Reasserts focus onto the composer after leaving a chat scroll; see
-  /// `resumeChatLive(restoreFocus:)`.
-  @State var chatExitFocusTask: Task<Void, Never>?
   /// Set for the duration of a deliberate, throttled hop from the collapse button
   /// into the chat input, which momentarily admits the composer to the focus
   /// engine. Cleared as soon as focus returns to a control button so a plain swipe
