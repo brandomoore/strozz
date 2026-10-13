@@ -449,8 +449,23 @@ extension PlayerView {
   /// controls, chat, the chat-settings panel, and the rewind scrubber.
   func focusManagementHandler(_ content: some View) -> some View {
     content
+    .onChange(of: scrubberOwnsInput) { _, ownsInput in
+      // Chat and overlays can take input before a focus correction is delivered.
+      if ownsInput { startScrubInput() }
+      else { stopScrubInput() }
+    }
     .onChange(of: focus) { oldFocus, newFocus in
       guard !isMultiviewCompact, !showRewards, errorMessage == nil else { return }
+      // Reject stray targets before running their focus side effects, especially
+      // VOD's resume-on-departure handling. Banners deliberately release chat.
+      if isChatScrolling, let newFocus, newFocus != chatFocusAnchor, newFocus != .video {
+        if isBannerFocus(newFocus) {
+          resumeChatLive()
+        } else {
+          focus = chatFocusAnchor
+          return
+        }
+      }
       // Disarm the chat-input hop the moment focus is back on a control button, so
       // the composer drops out of the engine again and a plain swipe can't reach it.
       if isControlRowButton(newFocus), chatInputArmed {
@@ -461,14 +476,6 @@ extension PlayerView {
       // it can't be a vertical magnet on the next swipe.
       if oldFocus == .rewindScrubber, newFocus != .rewindScrubber, seekBarRequested {
         seekBarRequested = false
-      }
-      // Start/stop precision trackpad scrubbing as the rewind bar gains/loses
-      // focus. The analog jog (GameController + display link) only runs while the
-      // bar is focused so it never competes with normal control navigation.
-      if newFocus == .rewindScrubber, oldFocus != .rewindScrubber {
-        startScrubInput()
-      } else if oldFocus == .rewindScrubber, newFocus != .rewindScrubber {
-        stopScrubInput()
       }
       // Track when the composer becomes focused so an up-swipe that rides in on
       // a diagonal move from the chat-toggle button can't accidentally pause.
@@ -486,25 +493,7 @@ extension PlayerView {
           if isChatScrolling || chatSoftPauseRemaining != nil { resumeChatLive() }
         }
       }
-      // Keep the swipe target stable while chat is held.
-      if isChatScrolling {
-        // Active scroll traps focus on the composer so a stray diagonal swipe
-        // can't jump to a control and silently end the scroll. The only
-        // exception is `.video`, which is the page-level handler that drives
-        // scrolling while the chrome is hidden. Exit is via Back or scrolling
-        // back to the bottom.
-        if let newFocus, newFocus != chatFocusAnchor, newFocus != .video {
-          if isBannerFocus(newFocus) {
-            // A bottom banner (go-live / outgoing raid) deliberately claimed
-            // focus. Don't fight it back to the composer — that would leave the
-            // banner unreachable and, worse, strand chat frozen. Resume the live
-            // feed so auto-scroll re-enables, and let focus rest on the banner.
-            resumeChatLive()
-          } else {
-            focus = chatFocusAnchor
-          }
-        }
-      } else if chatSoftPauseRemaining != nil {
+      if !isChatScrolling, chatSoftPauseRemaining != nil {
         // Lightweight read pause: navigating away to a real control (or a bottom
         // banner claiming focus) resumes live so the frozen state can't get stranded.
         if let newFocus, newFocus != chatFocusAnchor,

@@ -14,45 +14,29 @@ extension PlayerView {
 
       if rewindAvailable {
         Button {
-          toggleRewindPlayPause()
+          if scrubberOwnsInput { toggleRewindPlayPause() }
         } label: {
           RewindScrubBar(readout: rewindReadout, isFocused: focus == .rewindScrubber)
         }
         .buttonStyle(ScrubBarButtonStyle())
-        // Mutually exclusive focusability with the chat composer: while a chat
-        // field is focused the bar removes itself from the focus engine, so a
-        // left-press out of chat can't land here (it goes to the collapse
-        // button instead). Combined with the composer doing the reverse, the
-        // engine never treats the two as neighbors — no sideways escape, no
-        // focus flash, no after-the-fact reverts.
-        .focusable(scrubberFocusable)
+        // Keep the native Button as the focus target, just like the composer.
+        // Adding `.focusable(true)` would intercept its Select action on tvOS.
+        // Chat ownership removes the bar from the focus engine entirely.
+        .disabled(!scrubberFocusable)
         .focused($focus, equals: .rewindScrubber)
         .accessibilityLabel(rewindReadout.isVOD ? "Timeline" : "Live timeline")
         .accessibilityIdentifier("player-live-timeline")
         .accessibilityValue(rewindAccessibilityValue)
         .accessibilityHint("Swipe up or down to seek ten seconds")
         .accessibilityAdjustableAction { direction in
-          guard !isScrubbing else { return }
+          guard scrubberOwnsInput, !isScrubbing else { return }
           switch direction {
           case .increment: rewindStep(rewindStepSeconds)
           case .decrement: rewindStep(-rewindStepSeconds)
           @unknown default: break
           }
         }
-        .onMoveCommand { direction in
-          // Left/right step the timeline. Down drops to the control row (the bar
-          // now sits *above* the buttons); up is left to the focus engine.
-          switch direction {
-          case .left:
-            if !isScrubbing { rewindStep(-rewindStepSeconds) }
-          case .right:
-            if !isScrubbing { rewindStep(rewindStepSeconds) }
-          case .down:
-            activateControl(.quality)
-          default:
-            break
-          }
-        }
+        .onMoveCommand { handleScrubberMoveCommand($0) }
         .focusSection()
         .frame(maxWidth: .infinity)
       }
