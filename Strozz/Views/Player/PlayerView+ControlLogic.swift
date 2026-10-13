@@ -47,7 +47,16 @@ extension PlayerView {
   /// the control row — so a horizontal swipe that carries a little upward drift
   /// can't fling focus onto it, and from rest/chat it isn't a magnet either.
   var scrubberFocusable: Bool {
-    focus == .rewindScrubber || seekBarRequested
+    guard !chatIsFrozen, focus != .chatInput, focus != .chatSend, focus != .chatScroller else {
+      return false
+    }
+    return focus == .rewindScrubber || seekBarRequested
+  }
+
+  var scrubberOwnsInput: Bool {
+    rewindAvailable && showControls && focus == .rewindScrubber && !chatIsFrozen
+      && !isMultiviewCompact && !showChatSettings && !showRewards
+      && !isSleeping && errorMessage == nil
   }
 
   /// Control-row buttons in left-to-right visual order. Drives the row-membership
@@ -57,19 +66,6 @@ extension PlayerView {
   func isControlRowButton(_ f: Focusable?) -> Bool {
     guard let f else { return false }
     return controlOrder.contains(f)
-  }
-
-  /// Whether `button` is dropped from the focus engine right now. The control
-  /// buttons are natively focusable together so tvOS's focus engine moves focus
-  /// between them instantly and reliably on every press (no programmatic stepping,
-  /// no throttle, no dropped or delayed moves). They are removed *only* while chat
-  /// is being scrolled, when focus is trapped on the composer. The row is wrapped
-  /// in a `.focusSection()` so a swipe can roam the buttons but can't escape to the
-  /// chat pane; the seek bar and composer keep their own gates. Expressed as
-  /// "removed" so we apply `.focusable(false)` (never `.focusable(true)`, which
-  /// hijacks a Button's Select press on tvOS).
-  func controlButtonRemoved(_ button: Focusable) -> Bool {
-    isChatScrolling
   }
 
   /// Whether the chat composer (and its send button) should be dropped from the
@@ -106,7 +102,7 @@ extension PlayerView {
   /// `seekBarRequested` makes the bar focusable for this assignment (it's
   /// otherwise kept out of the engine so it can't be a vertical magnet).
   func requestSeekBarFocus() {
-    guard rewindAvailable else { return }
+    guard rewindAvailable, isControlRowButton(focus), !chatIsFrozen else { return }
     seekBarRequested = true
     focus = .rewindScrubber
   }

@@ -163,7 +163,6 @@ extension PlayerView {
   /// don't fight VOD playback (latency rate-forcing, stall watchdog, EventSub,
   /// Hermes, IRC chat). Chat replay + the VOD time observer take over.
   private func teardownLiveForHandoff() {
-    chatExitFocusTask?.cancel()
     model.resetChatReading()
     chatReplayStartMessageID = nil
     resetAltSourceWork()
@@ -179,7 +178,6 @@ extension PlayerView {
   /// Rebuilds the live pipeline and reconnects live chat / EventSub / Hermes, then
   /// reloads the stream near the true edge for a VOD→live return.
   private func restoreLiveAfterHandoff(reason: String) async {
-    chatExitFocusTask?.cancel()
     model.resetChatReading()
     chatReplayStartMessageID = nil
     // The retained DVR history is stale after the time spent in the VOD; start the

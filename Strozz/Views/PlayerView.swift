@@ -173,6 +173,10 @@ struct PlayerView: View {
   /// monitoring boxes. The engine members are reached by their original names via
   /// the forwarding accessors in `PlayerModel.swift`.
   @State var model = PlayerModel()
+  #if DEBUG
+  /// Mount real input surfaces without starting playback/network services in tests.
+  var inputTestContent: ((PlayerView) -> AnyView)? = nil
+  #endif
   /// Periodic player time observer used in VOD mode to sync chat replay + the
   /// seek readout to the playhead. (vodTimeObserver now on PlayerModel.)
   /// Debug-only cursor for the "Simulate Interactive Moment" cycle button.
@@ -403,9 +407,6 @@ struct PlayerView: View {
   /// row's `.defaultFocus` from this lets a reveal land directly on the intended
   /// button (quality on up, channel on left, etc.) with no leftmost detour.
   @State var pendingControlFocus: Focusable = .quality
-  /// Reasserts focus onto the composer after leaving a chat scroll; see
-  /// `resumeChatLive(restoreFocus:)`.
-  @State var chatExitFocusTask: Task<Void, Never>?
   /// Set for the duration of a deliberate, throttled hop from the collapse button
   /// into the chat input, which momentarily admits the composer to the focus
   /// engine. Cleared as soon as focus returns to a control button so a plain swipe
@@ -877,7 +878,20 @@ struct PlayerView: View {
     }
   }
 
+  @ViewBuilder
   var body: some View {
+    #if DEBUG
+    if let inputTestContent {
+      inputTestContent(self)
+    } else {
+      playbackContent
+    }
+    #else
+    playbackContent
+    #endif
+  }
+
+  private var playbackContent: some View {
     // `body` is deliberately a short pipeline. The player has ~30 lifecycle
     // and event modifiers; as one chain they exceed the Swift type-checker's
     // solver budget ("unable to type-check this expression in reasonable

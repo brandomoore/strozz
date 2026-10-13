@@ -81,18 +81,16 @@ final class ChatReliabilityTests: XCTestCase {
     XCTAssertEqual(model.lastSentScrollIndex, -1)
   }
 
-  func testFocusHandoffCanKeepScrollGateButNeverFrozenData() throws {
+  func testFocusHandoffClearsScrollGateTogetherWithFrozenData() throws {
     let model = PlayerModel()
     model.chatFrozenMessages = [try message("old")]
     model.isChatScrolling = true
 
-    model.resetChatReading(preservingScrollMode: true)
+    model.resetChatReading()
 
-    XCTAssertTrue(model.isChatScrolling)
+    XCTAssertFalse(model.isChatScrolling)
     XCTAssertNil(model.chatFrozenMessages)
     XCTAssertNil(model.chatScrollTarget)
-    model.isChatScrolling = false
-    XCTAssertFalse(model.isChatScrolling)
   }
 
   func testChatTextCannotImpersonateConnectionControlLines() async {

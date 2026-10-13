@@ -103,7 +103,6 @@ extension PlayerView {
     isScrubbing = false
     scrubCommitTask?.cancel()
     scrubTargetSeconds = nil
-    chatExitFocusTask?.cancel()
     model.resetChatReading()
     chatReplayStartMessageID = nil
     raidBannerDismissTask?.cancel()

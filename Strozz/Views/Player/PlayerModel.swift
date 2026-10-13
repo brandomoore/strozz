@@ -370,7 +370,7 @@ final class PlayerModel {
     chatSoftPauseRemaining = nil
   }
 
-  func resetChatReading(preservingScrollMode: Bool = false) {
+  func resetChatReading() {
     cancelChatSoftPause()
     trackpadScrollTask?.cancel()
     trackpadScrollTask = nil
@@ -383,7 +383,7 @@ final class PlayerModel {
     lastSentScrollIndex = -1
     lastGestureScrollAt = .distantPast
     lastHoldRepeatAt = .distantPast
-    if !preservingScrollMode { isChatScrolling = false }
+    isChatScrolling = false
   }
 }
 
