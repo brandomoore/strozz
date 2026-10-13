@@ -720,11 +720,11 @@ actor NativeHLSOrigin {
     return completed.first(where: { $0.sequence == requestedSequence }) ?? completed.last
   }
 
-  private static func completedMetadata(_ entries: [NativeCMAF.Entry]) -> [Segment] {
+  private static func completedMetadata(_ entries: [NativeCMAF.Entry], inferredDiscontinuities: Int = 0) -> [Segment] {
     entries.compactMap { entry in
       guard let date = entry.date, let duration = entry.duration else { return nil }
       return Segment(sequence: entry.sequence, url: entry.url, date: date,
-        initialization: entry.initialization, discontinuity: entry.discontinuity, tags: entry.tags,
+        initialization: entry.initialization, discontinuity: entry.discontinuity + inferredDiscontinuities, tags: entry.tags,
         complete: true, declaredDuration: duration)
     }
   }
@@ -757,6 +757,11 @@ actor NativeHLSOrigin {
     do {
       guard let url = sources[index]?.url else { return }
       var next: Int? = sources[index]?.segments.last.map { $0.sequence + 1 }
+      if let requestedSequence, let cachedNext = next, requestedSequence > cachedNext {
+        // A retired rendition must resume at the client's position, not put
+        // obsolete media downloads ahead of its blocking reload.
+        next = nil
+      }
       var map: URL?
       var disc: Int?
       var track: NativeCMAF.Track?
@@ -776,8 +781,13 @@ actor NativeHLSOrigin {
           // Starting its playlist at a newer upstream window rebases AVPlayer's
           // time mapping during an adaptive switch, even as new parts arrive.
           let metadata = Self.retainedMetadata(
-            (sources[index]?.reportedSegments ?? []) + Self.completedMetadata(completed), history: history)
-          sources[index]?.segments = metadata.filter { $0.sequence < first.sequence }
+            ((sources[index]?.reportedSegments ?? [])
+              + Self.completedMetadata(completed, inferredDiscontinuities: sources[index]?.inferredDiscontinuities ?? 0)
+              + (sources[index]?.segments ?? [])).filter { $0.sequence < first.sequence }, history: history)
+          if let segments = sources[index]?.segments {
+            cachedMediaBytes -= segments.reduce(0) { $0 + $1.parts.reduce(0) { $0 + ($1.media?.count ?? 0) } }
+          }
+          sources[index]?.segments = metadata
           next = first.sequence
         }
         guard let expected = next, let first = manifest.entries.first else { throw NativeHLSError.invalidMedia }

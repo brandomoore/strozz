@@ -218,6 +218,123 @@ final class NativeRenditionReportTests: XCTestCase {
     catch { XCTAssertTrue(error is CancellationError) }
   }
 
+  func testResumedRenditionStartsAtRequestedSequenceWithoutDownloadingOldBacklog() async throws {
+    try await checkResumedRendition(requested: 25, expected: 25)
+  }
+
+  func testResumeAtCachedNextKeepsCachedPartsAvailable() async throws {
+    try await checkResumedRendition(requested: 12, expected: 12, keepsCache: true)
+  }
+
+  func testForwardResumeUsesRequestedPositionEvenBeforeTheLatestCompletedSegment() async throws {
+    try await checkResumedRendition(requested: 13, expected: 13)
+    try await checkResumedRendition(requested: 18, expected: 18, history: 12, prefixStart: 12)
+  }
+
+  func testResumeAtCachedDVRPositionReturnsItsPlaylistWithoutDiscardingMedia() async throws {
+    try await checkResumedRendition(requested: 7, expected: 12, keepsCache: true)
+  }
+
+  func testResumedPrefetchOrFutureRequestStartsFromTheLastCompletedSegment() async throws {
+    for requested in [26, 100] {
+      try await checkResumedRendition(requested: requested, expected: 25, prefetch: true)
+    }
+  }
+
+  func testResumedRequestOutsideUpstreamWindowDoesNotBridgeMissingTimelineMetadata() async throws {
+    try await checkResumedRendition(requested: 13, expected: 25, upstream: 20...25, prefixStart: 20)
+  }
+
+  func testResumedRenditionStillBoundsRetainedHistoryAndReleasesOldPartBytes() async throws {
+    try await checkResumedRendition(requested: 25, expected: 25, history: 12, prefixStart: 19)
+  }
+
+  func testForwardResumePreservesInferredPeriodsAcrossOverlappingMetadataAndUpstreamDiscontinuities() async throws {
+    for requested in [13, 25] {
+      try await checkResumedRendition(requested: requested, expected: requested, upstream: 6...25,
+        upstreamDiscontinuity: 4, inferredDiscontinuities: 1, inferredStart: 11, periodChange: 20)
+    }
+  }
+
+  private func checkResumedRendition(requested: Int, expected: Int, upstream: ClosedRange<Int> = 12...25,
+                                   prefetch: Bool = false, history: Double = 1800, prefixStart: Int = 0,
+                                   keepsCache: Bool = false, upstreamDiscontinuity: Int = 0,
+                                   inferredDiscontinuities: Int = 0, inferredStart: Int = 0,
+                                   periodChange: Int? = nil) async throws {
+    let root = URL(string: "https://example.test/current.m3u8")!
+    let fixture = ResumeCursorFixture(upstream: upstream, prefetch: prefetch,
+      discontinuity: upstreamDiscontinuity, periodChange: periodChange)
+    let origin = NativeHLSOrigin(root: root, headers: [:], history: history,
+      loadData: { try await fixture.load($0) }) { _ in
+      XCTFail("Stopping a held resume must not fail playback")
+    }
+    let part = NativeHLSOrigin.Part(offset: 0, length: 188, duration: 0.4,
+      independent: true, media: Data([1, 2, 3]))
+    let old = (0..<12).map { sequence in
+      NativeHLSOrigin.Segment(sequence: sequence, url: root,
+        date: Date(timeIntervalSince1970: Double(1000 + sequence * 2)),
+        discontinuity: upstreamDiscontinuity + (sequence >= inferredStart ? inferredDiscontinuities : 0),
+        tags: [], parts: Array(repeating: part, count: 5), complete: true)
+    }
+    _ = try await origin.renderForTesting(old, otherRenditions: [
+      1: .init(url: URL(string: "https://example.test/resumed.m3u8")!, segments: old,
+        inferredDiscontinuities: inferredDiscontinuities)
+    ], readyToServe: true)
+    let cachedResponse = keepsCache && requested < 11 ? expectation(description: "Cached DVR responds while initialization is held") : nil
+    let request = Task {
+      let response = try await origin.response(
+        URL(string: "strozz-native-ll://fixture/media/1.m3u8?_HLS_msn=\(requested)&_HLS_part=0")!)
+      cachedResponse?.fulfill()
+      return response
+    }
+    defer { request.cancel(); Task { await origin.stop() } }
+    for _ in 0..<100 {
+      if await fixture.initializationSequence != nil { break }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    let selected = await fixture.initializationSequence
+    XCTAssertEqual(selected, expected, "A resumed variant must serve the requested position, not download obsolete media first")
+    let timeline = await origin.timelineDiagnostics().filter { $0["rendition"] == "1" }
+    XCTAssertEqual(timeline.first?["sequence"], String(prefixStart), "Retain verified consecutive timeline metadata")
+    for row in timeline {
+      let sequence = try XCTUnwrap(row["sequence"].flatMap(Int.init))
+      let changed = periodChange.map { sequence >= $0 } ?? false
+      let inferred = sequence >= inferredStart ? inferredDiscontinuities : 0
+      XCTAssertEqual(row["period"], String(upstreamDiscontinuity + inferred + (changed ? 1 : 0)),
+        "Retain the indexer's period offset, including where upstream metadata overlaps cached media")
+    }
+    let snapshot = await origin.snapshot()
+    XCTAssertEqual(snapshot.cachedMediaBytes, keepsCache ? 360 : 180,
+      "Keep cached-position media; release bytes replaced by forward-resume metadata")
+    if keepsCache {
+      let media = await origin.media("/part/1/11/0.ts")
+      XCTAssertEqual(media, part.media)
+      XCTAssertEqual(timeline.first?["history_count"], "12")
+      if requested < 11 {
+        await fulfillment(of: [try XCTUnwrap(cachedResponse)], timeout: 0.3)
+        guard case .playlist(let data) = try await request.value else { return XCTFail("Expected cached DVR playlist") }
+        let text = String(decoding: data, as: UTF8.self)
+        XCTAssertTrue(text.contains("#EXT-X-PART:"))
+        XCTAssertTrue(text.contains("#EXT-X-MEDIA-SEQUENCE:0"))
+      }
+    } else {
+      XCTAssertEqual(timeline.last?["sequence"], String(expected - 1))
+      XCTAssertEqual(timeline.first?["history_count"], String(expected - prefixStart))
+      XCTAssertEqual(timeline.first?["history_duration"], String(Double((expected - prefixStart) * 2)))
+      XCTAssertTrue(timeline.allSatisfy { $0["parts"] == "" && $0["complete"] == "true" })
+    }
+    XCTAssertTrue(timeline.allSatisfy { $0["reached_live"] == "false" },
+      "Rebuilding metadata alone is not proof of a current live edge")
+    request.cancel()
+    await origin.stop()
+    do { _ = try await request.value }
+    catch { XCTAssertTrue(error is CancellationError) }
+    let cancelled = await fixture.initializationWasCancelled
+    XCTAssertTrue(cancelled, "Stopping must cancel and drain the held restart")
+    let stopped = await origin.snapshot()
+    XCTAssertEqual(stopped.cachedMediaBytes, 0)
+  }
+
   func testColdRenditionMetadataPreservesEarlierTimelineWithoutRetainingMedia() {
     let url = URL(string: "https://example.test/live.m3u8")!
     let part = NativeHLSOrigin.Part(offset: 0, length: 188, duration: 2,
@@ -490,6 +607,50 @@ private actor MasterTargetFixture {
     }
     return (Data(text.utf8),
       try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)))
+  }
+}
+
+private actor ResumeCursorFixture {
+  private(set) var initializationSequence: Int?
+  private(set) var initializationWasCancelled = false
+  private let upstream: ClosedRange<Int>
+  private let prefetch: Bool
+  private let discontinuity: Int
+  private let periodChange: Int?
+
+  init(upstream: ClosedRange<Int> = 12...25, prefetch: Bool = false,
+       discontinuity: Int = 0, periodChange: Int? = nil) {
+    self.upstream = upstream
+    self.prefetch = prefetch
+    self.discontinuity = discontinuity
+    self.periodChange = periodChange
+  }
+
+  func load(_ request: URLRequest) async throws -> (Data, URLResponse) {
+    let url = try XCTUnwrap(request.url)
+    if url.pathExtension == "mp4" {
+      initializationSequence = Int(url.deletingPathExtension().lastPathComponent)
+      do { try await Task.sleep(for: .seconds(60)) }
+      catch {
+        initializationWasCancelled = error is CancellationError
+        throw error
+      }
+      throw URLError(.timedOut)
+    }
+    let text = """
+      #EXTM3U
+      #EXT-X-TARGETDURATION:2
+      #EXT-X-MEDIA-SEQUENCE:\(upstream.lowerBound)
+      #EXT-X-DISCONTINUITY-SEQUENCE:\(discontinuity)
+      #EXT-X-PROGRAM-DATE-TIME:\(Date(timeIntervalSince1970: Double(1000 + upstream.lowerBound * 2)).ISO8601Format())
+      """ + "\n" + upstream.map { sequence in
+        (sequence == periodChange ? "#EXT-X-DISCONTINUITY\n" : "")
+          + "#EXT-X-PROGRAM-DATE-TIME:\(Date(timeIntervalSince1970: Double(1000 + sequence * 2)).ISO8601Format())\n"
+          + "#EXT-X-MAP:URI=\"\(sequence).mp4\"\n#EXTINF:2,\n\(sequence).m4s"
+      }.joined(separator: "\n")
+      + (prefetch ? "\n#EXT-X-TWITCH-PREFETCH:\(upstream.upperBound + 1).m4s" : "")
+    return (Data(text.utf8), try XCTUnwrap(HTTPURLResponse(
+      url: url, statusCode: 200, httpVersion: nil, headerFields: nil)))
   }
 }
 
