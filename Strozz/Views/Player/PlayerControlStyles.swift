@@ -16,21 +16,6 @@ extension View {
     modifier(StrozzControlButtonStyleModifier(shape: shape))
   }
 
-  /// Removes the view from the focus engine while `removed` is true, leaving it
-  /// completely untouched otherwise. Used to lift the control row out of focus
-  /// while the viewer scrolls chat. Unlike an always-on `.focusable(true)` this
-  /// doesn't suppress a Button's own focus styling (which reads the environment
-  /// `isFocused` / the system focus effect), and unlike `.disabled` it never
-  /// dims the native-glass buttons.
-  @ViewBuilder
-  func focusRemoved(_ removed: Bool) -> some View {
-    if removed {
-      self.focusable(false)
-    } else {
-      self
-    }
-  }
-
   /// Native Liquid Glass for the compact chat-settings controls: the exact same
   /// `.glass` / `.glassProminent` button styles the app's main SettingsView
   /// uses, so these pills/rows look and focus identically to the rest of the

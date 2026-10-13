@@ -4,6 +4,20 @@ import SwiftUI
 // Stream Rewind (DVR) + precision scrubbing: reads the seekable window, drives
 // the rewind readout, and handles stepped/analog seeking and seek commit.
 extension PlayerView {
+  func handleScrubberMoveCommand(_ direction: MoveCommandDirection) {
+    guard scrubberOwnsInput else { return }
+    switch direction {
+    case .left:
+      if !isScrubbing { rewindStep(-rewindStepSeconds) }
+    case .right:
+      if !isScrubbing { rewindStep(rewindStepSeconds) }
+    case .down:
+      activateControl(.quality)
+    default:
+      break
+    }
+  }
+
   /// The live `seekableTimeRanges` window the proxy keeps growing as history is
   /// retained. Returns the start/end (seconds, player timeline) of the last
   /// seekable range plus the current playhead, or `nil` when no window exists.
@@ -252,7 +266,7 @@ extension PlayerView {
   /// actually moves (not where it rests) and reports per-frame displacement plus a
   /// momentum tail on release, which we translate into a smooth scrub.
   func startScrubInput() {
-    guard rewindAvailable else { return }
+    guard scrubberOwnsInput else { return }
     scrubInput.onScrubBegan = { [self] in
       beginScrub()
     }
@@ -276,6 +290,7 @@ extension PlayerView {
   /// A real swipe has started (finger moved past the tap threshold). Pause the
   /// live video entirely so scrubbing never fights playback, and anchor the orb.
   func beginScrub() {
+    guard scrubberOwnsInput else { return }
     cancelNativeStartup()
     cancelNativeCatchUp(reason: "manual_scrub")
     model.nativePositionIntent = UUID()
@@ -320,7 +335,7 @@ extension PlayerView {
   /// window*, advance the intended position, move the orb instantly, and issue a
   /// throttled tolerant seek.
   func handleScrubTick(_ deltaUnits: Double) {
-    guard let window = currentSeekWindow() else { return }
+    guard scrubberOwnsInput, let window = currentSeekWindow() else { return }
     let span = max(window.end - window.start, 0.001)
     let deltaSeconds = deltaUnits * (span / scrubFullWindowTravelUnits)
     let liveCap = isVOD ? window.end : max(window.end - targetLiveEdgeSeconds, window.start)

@@ -14,45 +14,29 @@ extension PlayerView {
 
       if rewindAvailable {
         Button {
-          toggleRewindPlayPause()
+          if scrubberOwnsInput { toggleRewindPlayPause() }
         } label: {
           RewindScrubBar(readout: rewindReadout, isFocused: focus == .rewindScrubber)
         }
         .buttonStyle(ScrubBarButtonStyle())
-        // Mutually exclusive focusability with the chat composer: while a chat
-        // field is focused the bar removes itself from the focus engine, so a
-        // left-press out of chat can't land here (it goes to the collapse
-        // button instead). Combined with the composer doing the reverse, the
-        // engine never treats the two as neighbors — no sideways escape, no
-        // focus flash, no after-the-fact reverts.
-        .focusable(scrubberFocusable)
+        // Keep the native Button as the focus target, just like the composer.
+        // Adding `.focusable(true)` would intercept its Select action on tvOS.
+        // Chat ownership removes the bar from the focus engine entirely.
+        .disabled(!scrubberFocusable)
         .focused($focus, equals: .rewindScrubber)
         .accessibilityLabel(rewindReadout.isVOD ? "Timeline" : "Live timeline")
         .accessibilityIdentifier("player-live-timeline")
         .accessibilityValue(rewindAccessibilityValue)
         .accessibilityHint("Swipe up or down to seek ten seconds")
         .accessibilityAdjustableAction { direction in
-          guard !isScrubbing else { return }
+          guard scrubberOwnsInput, !isScrubbing else { return }
           switch direction {
           case .increment: rewindStep(rewindStepSeconds)
           case .decrement: rewindStep(-rewindStepSeconds)
           @unknown default: break
           }
         }
-        .onMoveCommand { direction in
-          // Left/right step the timeline. Down drops to the control row (the bar
-          // now sits *above* the buttons); up is left to the focus engine.
-          switch direction {
-          case .left:
-            if !isScrubbing { rewindStep(-rewindStepSeconds) }
-          case .right:
-            if !isScrubbing { rewindStep(rewindStepSeconds) }
-          case .down:
-            activateControl(.quality)
-          default:
-            break
-          }
-        }
+        .onMoveCommand { handleScrubberMoveCommand($0) }
         .focusSection()
         .frame(maxWidth: .infinity)
       }
@@ -98,15 +82,6 @@ extension PlayerView {
         .StrozzControlButtonStyle()
         .accessibilityLabel("Channel info")
         .accessibilityHint("Opens the channel page")
-        // While the viewer is scrolling chat, lift every control-row button out
-        // of the focus engine (the scrubber does the same via its
-        // `scrubberFocusable` gate). Focus is held on the composer; without this
-        // the engine treats these as neighbors and a left press jumps here —
-        // flashing a focused button and an audible tick — before our trap reverts
-        // it. We remove rather than `.focusable(false/true)`-toggle so the button
-        // keeps its own native focus styling when it IS reachable. Exit via Back
-        // or by scrolling to the live bottom, which re-enables the row.
-        .focusRemoved(controlButtonRemoved(.streamInfo))
         .focused($focus, equals: .streamInfo)
         .onMoveCommand { direction in
           if direction == .up { requestSeekBarFocus() }
@@ -146,6 +121,8 @@ extension PlayerView {
             isQualityMenuPresented = false
             focusRecoveryTask?.cancel()
             guard !isMultiviewCompact, showControls else { return }
+            guard !chatIsFrozen, !showChatSettings,
+              focus == .quality || (focus == nil && lastControlFocus == .quality) else { return }
             // If selecting a (short) sleep timer already surfaced the
             // still-watching banner or the sleeping overlay, don't yank focus
             // back to the quality button — let those own it.
@@ -208,7 +185,6 @@ extension PlayerView {
           }
         )
         .equatable()
-        .focusRemoved(controlButtonRemoved(.quality))
         .focused($focus, equals: .quality)
         .onMoveCommand { direction in
           if direction == .up { requestSeekBarFocus() }
@@ -223,7 +199,6 @@ extension PlayerView {
             Icon(glyph: .giftFilled)
           }
           .accessibilityLabel("Polls and channel rewards")
-          .focusRemoved(controlButtonRemoved(.rewards))
           .focused($focus, equals: .rewards)
           .onMoveCommand { direction in
             if direction == .up { requestSeekBarFocus() }
@@ -244,7 +219,6 @@ extension PlayerView {
               .frame(minWidth: 52)
               .accessibilityLabel("Playback Speed")
           }
-          .focusRemoved(controlButtonRemoved(.quality))
           .focused($focus, equals: .quality)
           .onMoveCommand { direction in
             if direction == .up { requestSeekBarFocus() }
@@ -257,7 +231,6 @@ extension PlayerView {
           Icon(glyph: showChatSettings ? .x : .adjustmentsHorizontal)
             .accessibilityLabel("Chat Settings")
         }
-        .focusRemoved(controlButtonRemoved(.chatSettingsButton))
         .focused($focus, equals: .chatSettingsButton)
         .onMoveCommand { direction in
           if direction == .up { requestSeekBarFocus() }
@@ -273,7 +246,6 @@ extension PlayerView {
           Icon(glyph: showChat ? .sidebarRightCollapse : .sidebarRightExpand)
             .accessibilityLabel(showChat ? "Hide Chat" : "Show Chat")
         }
-        .focusRemoved(controlButtonRemoved(.chatToggle))
         .accessibilityIdentifier("player-chat-toggle")
         .focused($focus, equals: .chatToggle)
         .onMoveCommand { direction in
@@ -299,6 +271,10 @@ extension PlayerView {
       )
       .focusSection()
     }
+    // Keep the native controls mounted across chat read/scroll transitions.
+    // Conditional focus wrappers recreate them, firing Menu's dismissal callback
+    // and briefly giving the quality/channel buttons focus.
+    .disabled(isChatScrolling)
     .frame(maxWidth: .infinity, alignment: .leading)
     .onPreferenceChange(ControlButtonsHeightKey.self) { height in
       controlButtonsHeight = height
