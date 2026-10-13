@@ -65,14 +65,6 @@ struct HomeView: View {
   @State private var youtubePlayback: YouTubePlaybackTarget?
   @AppStorage(YouTubePreferences.showSubscriptionsKey) private var showYouTubeSubscriptions = true
   @State private var refreshToast: RefreshToastState?
-  /// True once the initial `.task` load has finished, so the launch-time
-  /// `.inactive` → `.active` scene transition can't race it with a second load.
-  /// Gating on this rather than on "was backgrounded" means every later
-  /// activation refreshes — including the screensaver's `.active` → `.inactive`
-  /// → `.active` cycle, which never reaches `.background` and would otherwise
-  /// leave overnight-stale cards up if the viewer started navigating right away
-  /// (their first move restamps the idle clock, so the watchdog wouldn't fire).
-  @State private var hasCompletedInitialLoad = false
   /// When the viewer last did anything on Home (moved focus, switched tabs,
   /// opened or closed a cover). Drives the idle auto-refresh so the rails never
   /// change under someone who is actually navigating. Held as a reference so
@@ -324,17 +316,22 @@ struct HomeView: View {
     }
     #endif
     .task {
-      await environment.accountSync.start(auth: auth, rewards: environment.watchRewards)
+      guard !homeRefresh.hasCompletedInitialLoad else { return }
+      await homeRefresh.start(
+        account: { HomeAccountIdentity(auth) },
+        restore: {
+          await environment.accountSync.start(auth: auth, rewards: environment.watchRewards)
+          guard !Task.isCancelled else { return }
+          youtubeAuth.restore()
+          goLive.start(using: auth)
+          promptFirstLaunchSignInIfNeeded()
+        },
+        load: { await refreshHomeSections(force: true) })
       guard !Task.isCancelled else { return }
-      youtubeAuth.restore()
-      goLive.start(using: auth)
-      promptFirstLaunchSignInIfNeeded()
-      await refreshHomeSections(force: true)
       requestFocusIfPossible(force: true)
       openDeepLinkedChannelIfNeeded(deepLinkRouter.pendingChannelLogin)
       await youtubeSubscriptions.refresh(using: youtubeAuth)
       await refreshYouTubeSubscriptionLiveness()
-      hasCompletedInitialLoad = true
       promptGoLiveSetupIfNeeded()
     }
     .task {
@@ -342,13 +339,13 @@ struct HomeView: View {
     }
     .onChange(of: scenePhase) { _, phase in
       isForeground = phase == .active
-      guard phase == .active else { return }
+      guard phase == .active, homeRefresh.hasCompletedInitialLoad else { return }
       Task {
         await environment.accountSync.synchronize()
         await auth.validateSessionIfNeeded()
         // Account recovery must finish before an expired Following request can
         // attempt renewal. A failed refresh is retryable, not five-minute fresh data.
-        guard hasCompletedInitialLoad, isForeground, !Task.isCancelled else { return }
+        guard isForeground, !Task.isCancelled else { return }
         promptGoLiveSetupIfNeeded()
         await refreshHomeSections(force: false)
         await youtubeSubscriptions.refresh(using: youtubeAuth)
@@ -369,30 +366,32 @@ struct HomeView: View {
     .onChange(of: personalized.channels) { _, _ in
       recomputeTopStreams()
     }
-    .onChange(of: auth.isAuthenticated) { _, _ in
+    .onChange(of: HomeAccountIdentity(auth)) { _, _ in
+      follows.accountChanged(using: auth)
+      guard homeRefresh.hasCompletedInitialLoad else { return }
       // Re-seed the go-live baseline against the new account's follows.
       goLive.start(using: auth)
       Task {
-        await refreshHomeSections(force: true)
+        await homeRefresh.accountChanged {
+          await runHomeRefreshChain(force: true)
+        }
         requestFocusIfPossible(force: true)
       }
     }
-    .onChange(of: auth.userID) { _, _ in
-      follows.accountChanged(using: auth)
-      Task { await refreshHomeSections(force: true) }
-    }
     .onChange(of: auth.accessToken) { _, _ in
-      guard auth.isAuthenticated, follows.errorMessage != nil || follows.isUsingDemoData else { return }
+      guard homeRefresh.hasCompletedInitialLoad, auth.isAuthenticated,
+            follows.errorMessage != nil || follows.isUsingDemoData else { return }
       Task { await refreshHomeSections(force: true) }
     }
     .onChange(of: youtubeAuth.isAuthenticated) { _, _ in
+      guard homeRefresh.hasCompletedInitialLoad else { return }
       Task {
         await youtubeSubscriptions.refresh(using: youtubeAuth, force: true)
         await refreshYouTubeSubscriptionLiveness(force: true)
       }
     }
     .onChange(of: selectedSidebarTab) { _, tab in
-      guard tab == .home else { return }
+      guard tab == .home, homeRefresh.hasCompletedInitialLoad else { return }
       promptGoLiveSetupIfNeeded()
       Task {
         await refreshHomeSections(force: false)
@@ -699,7 +698,7 @@ struct HomeView: View {
   }
 
   private func promptGoLiveSetupIfNeeded() {
-    guard hasCompletedInitialLoad, isForeground, auth.isAuthenticated,
+    guard homeRefresh.hasCompletedInitialLoad, isForeground, auth.isAuthenticated,
       selectedSidebarTab == .home, homePath.isEmpty, !showingFollowingDirectory,
       !isPresentingCover, pendingWatchChannel == nil,
       deepLinkRouter.pendingChannelLogin == nil, !goLiveSettings.hasPrompted else { return }
@@ -801,6 +800,7 @@ struct HomeView: View {
   }
 
   private var canIdleAutoRefresh: Bool {
+    guard homeRefresh.hasCompletedInitialLoad else { return false }
     guard isForeground else { return false }
     guard selectedSidebarTab == .home, homePath.isEmpty else { return false }
     guard !isPresentingCover, !showingFollowingDirectory else { return false }
@@ -809,28 +809,12 @@ struct HomeView: View {
     return Date().timeIntervalSince(interactionClock.lastInteractionAt) >= idleAutoRefreshDelay
   }
 
-  /// Refreshes every Home rail, one chain at a time. Initial load, tab/player
-  /// return, foreground, idle watchdog and the header Refresh button can all
-  /// start a refresh, so overlap is genuinely reachable and each kind is
-  /// harmful: a second unforced chain would skip the in-flight follows fetch (on
-  /// its `isLoading` guard) and then build personalized recommendations from the
-  /// *old* follows, while a forced manual refresh bypasses those guards entirely
-  /// and can race a running fetch — last writer wins, so the older payload can
-  /// land while `lastUpdatedAt` is stamped anyway, suppressing auto-refresh for
-  /// another five minutes.
-  ///
-  /// Queuing rather than dropping keeps this simple and self-limiting: by the
-  /// time a queued chain runs, the one ahead of it has just refreshed, so its
-  /// staleness guards skip everything and it costs nothing.
+  /// Keep metadata complete before building personalized recommendations.
+  /// Manual/account refreshes still queue; restoration events belong to startup.
   private func refreshHomeSections(force: Bool) async {
-    let previous = homeRefresh.inFlight
-    let chain = Task {
-      await previous?.value
+    await homeRefresh.refresh {
       await runHomeRefreshChain(force: force)
     }
-    homeRefresh.inFlight = chain
-    await chain.value
-    if homeRefresh.inFlight == chain { homeRefresh.inFlight = nil }
   }
 
   /// Followed channels and (anonymous) recommendations are independent, so they
@@ -1020,7 +1004,72 @@ final class InteractionClock {
 /// `InteractionClock`: `body` never reads it, so it must not invalidate.
 @MainActor
 final class HomeRefreshCoordinator {
-  var inFlight: Task<Void, Never>?
+  private var inFlight: Task<Void, Never>?
+  private var startup: Task<Void, Never>?
+  private(set) var hasCompletedInitialLoad = false
+
+  func start(
+    account: @escaping @MainActor () -> HomeAccountIdentity,
+    restore: @escaping @MainActor () async -> Void,
+    load: @escaping @MainActor () async -> Void
+  ) async {
+    guard !hasCompletedInitialLoad else { return }
+    if let startup {
+      await startup.value
+      return
+    }
+    let task = Task {
+      await restore()
+      guard !Task.isCancelled else { return }
+      // Restoration changes are already included. A real account switch during
+      // the first fetch needs a new pass, not a result from the previous account.
+      var loadedAccount: HomeAccountIdentity
+      repeat {
+        loadedAccount = account()
+        await load()
+        guard !Task.isCancelled else { return }
+      } while loadedAccount != account()
+      hasCompletedInitialLoad = true
+    }
+    startup = task
+    await withTaskCancellationHandler {
+      await task.value
+    } onCancel: {
+      task.cancel()
+    }
+    if startup == task { startup = nil }
+  }
+
+  func refresh(_ load: @escaping @MainActor () async -> Void) async {
+    let previous = inFlight
+    let chain = Task {
+      await previous?.value
+      guard !Task.isCancelled else { return }
+      await load()
+    }
+    inFlight = chain
+    await withTaskCancellationHandler {
+      await chain.value
+    } onCancel: {
+      chain.cancel()
+    }
+    if inFlight == chain { inFlight = nil }
+  }
+
+  func accountChanged(_ load: @escaping @MainActor () async -> Void) async {
+    guard hasCompletedInitialLoad else { return }
+    await refresh(load)
+  }
+}
+
+struct HomeAccountIdentity: Equatable {
+  let userID: String?
+  let authenticated: Bool
+
+  @MainActor init(_ auth: TwitchAuthSession) {
+    userID = auth.userID
+    authenticated = auth.isAuthenticated
+  }
 }
 
 /// One multiview session launch — wraps the chosen roster so the cover can be

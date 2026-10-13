@@ -167,7 +167,7 @@ struct MobileHomeView: View {
                 MobileLiveFeedContent(
                   channels: homeChannels,
                   isLoading: personalFeed ? (personalLoading || (auth.isAuthenticated
-                    && (follows.isLoading || (follows.lastUpdatedAt == nil && follows.errorMessage == nil))))
+                    && (follows.isRefreshing || (follows.lastUpdatedAt == nil && follows.errorMessage == nil))))
                     : (category == nil ? recommendations.isLoading || recommendations.lastUpdatedAt == nil
                       : categoryStreams.isLoadingStreams),
                   errorMessage: personalFeed ? nil

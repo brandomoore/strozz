@@ -610,6 +610,12 @@ A temporary Following failure preserves that account's previous channels and
 shows a retryable error; it never replaces them with Trending or marks the failed
 attempt as fresh. Trending is for signed-out browsing only. Late or cancelled
 requests cannot overwrite a newer refresh or another account's directory.
+Apple TV startup restores the account before one coordinated Home load;
+restoration callbacks do not queue additional forced loads or replace the
+recommendation row repeatedly. Later account changes and manual refresh still
+reload Home. Following's loading indicator finishes when its live cards and
+avatars arrive, while category metadata continues for personalization without
+keeping the visible row in a loading state.
 
 On Apple TV, selecting a stream requests exclusive playback audio. If another
 app interrupts that initial handoff, Strozz makes one bounded reactivation
