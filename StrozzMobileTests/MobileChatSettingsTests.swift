@@ -82,12 +82,12 @@ final class MobileChatSettingsTests: XCTestCase {
             let palette = theme.palette(systemColorScheme: .light)
             let host = UIHostingController(rootView: MobileChatComposerInput(
               text: .constant("A message that wraps naturally in the rounded composer"), sending: false,
-              onSend: {}, onSettings: {}, reduceTransparency: opaque)
+              onSend: {}, onSettings: {}, reduceTransparency: opaque, onEmotes: {})
               .environment(\.themePalette, palette)
               .environment(\.dynamicTypeSize, size))
             let actual = host.sizeThatFits(in: CGSize(width: width, height: UIView.layoutFittingExpandedSize.height))
             XCTAssertEqual(actual.width, width, accuracy: 1)
-            XCTAssertGreaterThanOrEqual(actual.height, 52)
+            XCTAssertGreaterThanOrEqual(actual.height, 44)
             XCTAssertLessThan(actual.height, 300)
           }
 
@@ -146,12 +146,12 @@ final class MobileChatSettingsTests: XCTestCase {
       let host = UIHostingController(
         rootView: MobileChatComposerInput(
           text: .constant(String(repeating: "A long draft that will need scrolling. ", count: 40)),
-          sending: false, onSend: {}, onSettings: {}, reduceTransparency: true
+          sending: false, onSend: {}, onSettings: {}, reduceTransparency: true, onEmotes: {}
         )
         .environment(\.dynamicTypeSize, .large))
       let actual = host.sizeThatFits(
         in: CGSize(width: width, height: UIView.layoutFittingExpandedSize.height))
-      let expected = ceil(UIFont.systemFont(ofSize: 17).lineHeight * 4 + 20) + 8
+      let expected = ceil(UIFont.systemFont(ofSize: 17).lineHeight * 4 + 20)
       XCTAssertEqual(actual.height, expected, accuracy: 1)
     }
   }

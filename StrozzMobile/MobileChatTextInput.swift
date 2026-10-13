@@ -5,6 +5,7 @@ struct MobileChatTextInput: UIViewRepresentable {
   @Binding var text: String
   let sending: Bool
   let onSend: () -> Void
+  var selection: Binding<NSRange?>? = nil
   @Environment(\.themePalette) private var palette
   @ScaledMetric(relativeTo: .body) private var fontSize = 17
 
@@ -28,7 +29,13 @@ struct MobileChatTextInput: UIViewRepresentable {
 
   func updateUIView(_ view: UITextView, context: Context) {
     context.coordinator.parent = self
+    context.coordinator.updating = true
+    defer { context.coordinator.updating = false }
     if view.text != text { view.text = text }
+    if view.markedTextRange == nil, let range = selection?.wrappedValue,
+       Range(range, in: text) != nil, view.selectedRange != range {
+      view.selectedRange = range
+    }
     view.font = .systemFont(ofSize: fontSize)
     view.textColor = UIColor(palette.chatSidePrimaryText)
     view.tintColor = UIColor(palette.chatSidePrimaryText)
@@ -45,11 +52,19 @@ struct MobileChatTextInput: UIViewRepresentable {
 
   final class Coordinator: NSObject, UITextViewDelegate {
     var parent: MobileChatTextInput
+    var updating = false
 
     init(_ parent: MobileChatTextInput) { self.parent = parent }
 
     func textViewDidChange(_ textView: UITextView) {
+      guard !updating else { return }
       parent.text = textView.text
+      parent.selection?.wrappedValue = textView.selectedRange
+    }
+
+    func textViewDidChangeSelection(_ textView: UITextView) {
+      guard !updating, textView.text == parent.text else { return }
+      parent.selection?.wrappedValue = textView.selectedRange
     }
 
     func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange,

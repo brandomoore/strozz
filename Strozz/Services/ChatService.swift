@@ -94,6 +94,7 @@ final class ChatService {
   var isConnected = false
   private(set) var emoteURLs: [String: URL] = [:]
   private(set) var emoteCatalogNeedsRetry = false
+  private(set) var isLoadingEmoteCatalog = false
   @ObservationIgnored var emoteCatalogTask: Task<Void, Never>?
   private(set) var badgeURLs: [String: URL] = [:]
   private(set) var cheermotes: [Cheermote] = []
@@ -278,11 +279,14 @@ final class ChatService {
     wait: @escaping @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(60)) }
   ) {
     emoteCatalogTask?.cancel()
+    isLoadingEmoteCatalog = true
     let session = sessionID
     emoteCatalogTask = Task { [weak self] in
       while !Task.isCancelled {
+        self?.isLoadingEmoteCatalog = true
         let result = await catalog.snapshot(for: channel, refreshChannelEmotes: true)
         guard !Task.isCancelled, let self, self.sessionID == session else { return }
+        self.isLoadingEmoteCatalog = false
         self.emoteCatalogNeedsRetry = result.needsRetry
         // Keep known emotes during a provider outage; a complete refresh also
         // removes aliases that the channel no longer has enabled.
@@ -397,6 +401,7 @@ final class ChatService {
     emoteCatalogTask?.cancel()
     emoteCatalogTask = nil
     emoteCatalogNeedsRetry = false
+    isLoadingEmoteCatalog = false
     ircTransportID = UUID()
     ircHealthTask?.cancel()
     ircHealthTask = nil

@@ -33,6 +33,7 @@ enum Glyph: String {
   case send
   case arrowUp = "arrow-up"
   case dots
+  case moodSmile = "mood-smile"
   case share = "share-2"
   case sidebarRightExpand = "layout-sidebar-right-expand"
   case sidebarRightCollapse = "layout-sidebar-right-collapse"

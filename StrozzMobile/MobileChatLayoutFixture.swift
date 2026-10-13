@@ -170,4 +170,86 @@ struct MobileEmoteInspectionFixture: View {
     return message
   }
 }
+struct MobileEmoteMenuFixture: View {
+  @State private var composer = MobileChatComposerState()
+  @State private var urls: [String: URL] = [:]
+  @State private var showEmotes = false
+  @State private var theme = AppTheme.light
+  @State private var opaque = false
+  @State private var submitted = ""
+  @State private var failure: String?
+  @State private var cacheKeys: [String] = []
+  private var readOnly: Bool { ProcessInfo.processInfo.environment["STROZZ_EMOTE_MENU_READ_ONLY"] == "1" }
+  private var insert: ((String) -> Bool)? {
+    guard !readOnly else { return nil }
+    return { composer.insertEmote($0) }
+  }
+
+  var body: some View {
+    @Bindable var composer = composer
+    let palette = theme.palette(systemColorScheme: .light)
+    VStack {
+      HStack {
+        Button("Change appearance") { theme = theme == .light ? .oled : .light }
+        Button("Reduce transparency") { opaque.toggle() }
+      }
+      if let failure { Text(failure) }
+      Text(submitted).accessibilityIdentifier("composer-submitted")
+      Text("\(urls.count)").accessibilityIdentifier("emote-fixture-ready")
+      Spacer()
+      MobileChatComposerInput(text: $composer.text, sending: false,
+        onSend: { submitted = composer.text; composer.text = ""; composer.selection = nil },
+        onSettings: {}, reduceTransparency: opaque,
+        selection: $composer.selection, onEmotes: { showEmotes = true })
+        .padding(12)
+    }
+    .background(palette.chatSideSurface)
+    .environment(\.themePalette, palette)
+    .preferredColorScheme(theme.preferredColorScheme)
+    .sheet(isPresented: $showEmotes) {
+      MobileEmoteMenu(channel: ProcessInfo.processInfo.environment["STROZZ_EMOTE_MENU_LIVE"] == "1" ? "burn" : "fixture",
+        urls: urls, isLoading: false,
+        needsRetry: ProcessInfo.processInfo.environment["STROZZ_EMOTE_MENU_PARTIAL"] == "1",
+        insertionError: composer.errorMessage,
+        onInsert: insert, onRetry: {})
+        .environment(\.themePalette, palette)
+    }
+    .task {
+      do {
+        if ProcessInfo.processInfo.environment["STROZZ_EMOTE_MENU_LIVE"] == "1" {
+          let catalog = await EmoteCatalogService.shared.snapshot(for: "burn", refreshChannelEmotes: true)
+          urls = catalog.urls
+          if catalog.needsRetry { failure = "A live emote provider is unavailable." }
+          return
+        }
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 96, height: 64)).image {
+          UIColor.systemGreen.setFill()
+          $0.fill(CGRect(x: 0, y: 0, width: 96, height: 64))
+          UIColor.systemBlue.setFill()
+          $0.fill(CGRect(x: 20, y: 8, width: 56, height: 48))
+        }
+        guard let data = image.pngData() else { throw CocoaError(.fileWriteUnknown) }
+        for (name, host) in [
+          ("Kappa", "static-cdn.jtvnw.net"), ("xdd", "cdn.7tv.app"),
+          ("CAUGHT", "cdn.7tv.app"), ("FeelsGoodMan", "cdn.betterttv.net"),
+          ("FrankerZ", "cdn.frankerfacez.com"),
+        ] {
+          let url = URL(string: "https://\(host)/strozz-fixture/\(UUID()).png")!
+          urls[name] = url
+          for prefix in ["", "chat-emote:animated:", "chat-emote:static:"] {
+            let key = prefix + url.absoluteString
+            cacheKeys.append(key)
+            SDImageCache.shared.storeImageData(toDisk: data, forKey: key)
+          }
+        }
+        for index in 0..<200 { urls["Extra\(index)"] = urls["xdd"] }
+      } catch {
+        failure = "Fixture setup failed: \((error as NSError).code)"
+      }
+    }
+    .onDisappear {
+      for key in cacheKeys { SDImageCache.shared.removeImage(forKey: key) }
+    }
+  }
+}
 #endif

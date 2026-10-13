@@ -206,6 +206,7 @@ final class EmoteCatalogTests: XCTestCase {
         chat.startEmoteCatalogLoading(for: "burn", catalog: service) {
             try await Task.sleep(for: .milliseconds(30))
         }
+        XCTAssertTrue(chat.isLoadingEmoteCatalog)
         try await waitFor { chat.emoteURLs["Existing"] != nil }
         await transport.setNames(["Existing", "AUUUGGHHH"])
         try await waitFor {
@@ -246,6 +247,7 @@ final class EmoteCatalogTests: XCTestCase {
         }
         try await waitFor { await transport.blocked }
         let task = try XCTUnwrap(chat.emoteCatalogTask)
+        XCTAssertTrue(chat.isLoadingEmoteCatalog)
         chat.disconnect()
         await transport.release()
         await task.value
@@ -254,6 +256,7 @@ final class EmoteCatalogTests: XCTestCase {
         XCTAssertTrue(chat.emoteURLs.isEmpty)
         XCTAssertFalse(chat.emoteCatalogNeedsRetry)
         let before = await transport.sevenTVRequests
+        XCTAssertFalse(chat.isLoadingEmoteCatalog)
         try await Task.sleep(for: .milliseconds(50))
         let after = await transport.sevenTVRequests
         XCTAssertEqual(after, before)

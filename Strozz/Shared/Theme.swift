@@ -125,6 +125,7 @@ struct ThemePalette: Equatable {
   let chatSideSurface: Color
   /// Primary message text on the side-layout chat panel.
   let chatSidePrimaryText: Color
+  var chatSideSecondaryText: Color { chatSidePrimaryText.opacity(0.7) }
   /// Optional brand-purple glow painted at the top-center of the app
   /// background. `nil` disables it (e.g. OLED stays pure black).
   let topGlow: Color?
