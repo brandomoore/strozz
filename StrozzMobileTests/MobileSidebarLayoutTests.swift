@@ -30,6 +30,20 @@ final class MobileSidebarLayoutTests: XCTestCase {
           XCTAssertEqual(size.width, width, accuracy: 1)
           XCTAssertGreaterThanOrEqual(size.height, 44)
           XCTAssertLessThan(size.height, 600, "Accessible text must wrap within the sidebar, not escape its column")
+          if !typeSize.isAccessibilitySize {
+            XCTAssertLessThanOrEqual(size.height, 60, "Normal sidebar rows use three text lines, not a separate viewer-count line")
+          }
+        }
+
+        func testNavigationRowsKeepCompactAccessibleTouchTargets() {
+          for typeSize in [DynamicTypeSize.large, .accessibility3] {
+            let host = UIHostingController(rootView:
+              MobileSidebarNavigationRow(title: "Account", glyph: .userCircle, selected: true, action: {})
+                .environment(\.dynamicTypeSize, typeSize))
+            let size = host.sizeThatFits(in: CGSize(width: 276, height: UIView.layoutFittingExpandedSize.height))
+            XCTAssertGreaterThanOrEqual(size.height, 44)
+            if !typeSize.isAccessibilitySize { XCTAssertLessThanOrEqual(size.height, 48) }
+          }
         }
       }
     }

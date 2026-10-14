@@ -125,7 +125,7 @@ struct MobileHomeView: View {
     GeometryReader { viewport in
       ScrollViewReader { proxy in
         ScrollView {
-          LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
+          LazyVStack(alignment: .leading, spacing: usesTabletNavigation ? 8 : 16, pinnedViews: [.sectionHeaders]) {
             if !usesTabletNavigation {
               Text("Strozz")
                 .font(.title2.bold())
@@ -163,8 +163,10 @@ struct MobileHomeView: View {
                                          skeletonCount: followedSkeletonCount)
                     .padding(.horizontal)
                 }
-                Text(personalFeed ? "For you" : "Popular live channels")
-                  .font(.title3.bold()).accessibilityAddTraits(.isHeader).padding(.horizontal)
+                if !usesTabletNavigation {
+                  Text(personalFeed ? "For you" : "Popular live channels")
+                    .font(.title3.bold()).accessibilityAddTraits(.isHeader).padding(.horizontal)
+                }
                 if personalFeed, let error = follows.errorMessage {
                   MobileStatusView(message: error) { Task { await follows.refresh(using: auth) } }
                     .padding(.horizontal)
@@ -181,14 +183,16 @@ struct MobileHomeView: View {
                   .padding(.horizontal)
               }
             } header: {
-              MobileHomeFeedTabs(feed: $feed)
-                .padding(.horizontal)
-                .background(palette.backgroundColors.last ?? palette.cardOpaqueSurface)
+              if !usesTabletNavigation {
+                MobileHomeFeedTabs(feed: $feed)
+                  .padding(.horizontal)
+                  .background(palette.backgroundColors.last ?? palette.cardOpaqueSurface)
+              }
             }
             .id(usesTabletNavigation ? "mobile-home-top" : "mobile-home-feed")
           }
           .animation(reduceMotion || feed != .live ? nil : .easeInOut(duration: 0.22), value: shortcutRows)
-          .padding(.top, 8)
+          .padding(.top, usesTabletNavigation ? 0 : 8)
           .padding(.bottom)
           .coordinateSpace(name: "mobile-home-content")
         }
@@ -216,9 +220,23 @@ struct MobileHomeView: View {
     .onAppear { preview.setEnabled(shouldPreview) }
     .onDisappear { preview.stop() }
     .background(palette.backgroundColors.last ?? palette.cardOpaqueSurface)
-    .navigationTitle("Home")
+    .navigationTitle(usesTabletNavigation ? "" : "Home")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(usesTabletNavigation ? .visible : .hidden, for: .navigationBar)
+    .toolbar {
+      if usesTabletNavigation {
+        if #available(iOS 26.0, *) {
+          ToolbarItem(placement: .topBarLeading) {
+            MobileHomeFeedTabs(feed: $feed).fixedSize(horizontal: true, vertical: false)
+          }
+          .sharedBackgroundVisibility(.hidden)
+        } else {
+          ToolbarItem(placement: .topBarLeading) {
+            MobileHomeFeedTabs(feed: $feed).fixedSize(horizontal: true, vertical: false)
+          }
+        }
+      }
+    }
     .onChange(of: auth.userID, initial: true) { _, accountID in
       followedSkeletonCount = MobileFollowedShortcutCount.cached(for: accountID)
     }

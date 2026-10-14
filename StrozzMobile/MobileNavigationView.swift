@@ -78,31 +78,13 @@ struct MobileBrowsingSidebar: View {
     // These controls switch independent tabs, not the split view's detail item.
     List {
       Section {
-        Button { selection = 0 } label: {
-          Label { Text("Home") } icon: { Icon(glyph: .home, size: 22) }
-            .frame(minHeight: 44)
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(selection == 0 ? palette.chromeOnOpaque.opacity(0.10) : .clear)
-        .accessibilityAddTraits(selection == 0 ? .isSelected : [])
+        MobileSidebarNavigationRow(title: "Home", glyph: .home, selected: selection == 0) { selection = 0 }
         .accessibilityIdentifier("sidebar-home")
         .accessibilityHidden(!isEnabled)
-        Button { selection = 1 } label: {
-          Label { Text("Browse") } icon: { Icon(glyph: .layoutGrid, size: 22) }
-            .frame(minHeight: 44)
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(selection == 1 ? palette.chromeOnOpaque.opacity(0.10) : .clear)
-        .accessibilityAddTraits(selection == 1 ? .isSelected : [])
+        MobileSidebarNavigationRow(title: "Browse", glyph: .layoutGrid, selected: selection == 1) { selection = 1 }
         .accessibilityIdentifier("sidebar-browse")
         .accessibilityHidden(!isEnabled)
-        Button { selection = 2 } label: {
-          Label { Text("Account") } icon: { Icon(glyph: .userCircle, size: 22) }
-            .frame(minHeight: 44)
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(selection == 2 ? palette.chromeOnOpaque.opacity(0.10) : .clear)
-        .accessibilityAddTraits(selection == 2 ? .isSelected : [])
+        MobileSidebarNavigationRow(title: "Account", glyph: .userCircle, selected: selection == 2) { selection = 2 }
         .accessibilityIdentifier("sidebar-account")
         .accessibilityHidden(!isEnabled)
       }
@@ -137,6 +119,7 @@ struct MobileBrowsingSidebar: View {
                 title: channel.title, viewers: channel.viewerCount, avatarURL: channel.profileImageURL)
             }
             .buttonStyle(.plain)
+            .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
             .accessibilityIdentifier("sidebar-stream-\(channel.channelKey)")
             .accessibilityHidden(!isEnabled)
           }
@@ -144,10 +127,35 @@ struct MobileBrowsingSidebar: View {
       }
     }
     .listStyle(.sidebar)
+    .listRowSpacing(2)
+    .environment(\.defaultMinListRowHeight, 44)
     .scrollContentBackground(.hidden)
     .background(palette.cardOpaqueSurface)
     .navigationTitle("Strozz")
     .accessibilityIdentifier("mobile-browsing-sidebar")
+  }
+}
+
+struct MobileSidebarNavigationRow: View {
+  let title: LocalizedStringKey
+  let glyph: Glyph
+  let selected: Bool
+  let action: () -> Void
+  @Environment(\.themePalette) private var palette
+
+  var body: some View {
+    Button(action: action) {
+      Label { Text(title).font(.body) } icon: { Icon(glyph: glyph, size: 20) }
+        .foregroundStyle(palette.chromeOnOpaque)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
+    .listRowBackground(
+      RoundedRectangle(cornerRadius: 10)
+        .fill(selected ? palette.chromeOnOpaque.opacity(0.10) : .clear))
+    .accessibilityAddTraits(selected ? .isSelected : [])
   }
 }
 
@@ -157,21 +165,28 @@ struct MobileSidebarChannelRow: View {
   let title: String
   let viewers: Int?
   let avatarURL: URL?
-  @Environment(\.themePalette) private var palette
   @Environment(\.dynamicTypeSize) private var typeSize
   @ScaledMetric(relativeTo: .body) private var avatarSize: CGFloat = 36
 
   var body: some View {
-    HStack(alignment: .top, spacing: 12) {
+    let header = typeSize.isAccessibilitySize
+      ? AnyLayout(VStackLayout(alignment: .leading, spacing: 3))
+      : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
+    HStack(alignment: .center, spacing: 10) {
       CachedAsyncImage(url: avatarURL) { image in
         image.resizable().scaledToFill()
       } placeholder: { Circle().fill(.quaternary) }
-      .frame(width: avatarSize, height: avatarSize)
+      .frame(width: min(avatarSize, 48), height: min(avatarSize, 48))
       .clipShape(Circle())
       .accessibilityHidden(true)
-      VStack(alignment: .leading, spacing: 3) {
-        Text(name).font(.body.weight(.semibold))
-          .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+      VStack(alignment: .leading, spacing: 2) {
+        header {
+          Text(name).font(.body.weight(.semibold))
+            .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
+          MobileSidebarViewerCount(viewers: viewers)
+        }
         if !category.isEmpty {
           Text(category).font(.caption).foregroundStyle(.secondary)
             .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
@@ -180,25 +195,33 @@ struct MobileSidebarChannelRow: View {
           Text(title).font(.caption).foregroundStyle(.secondary)
             .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
         }
-        HStack(spacing: 5) {
-          Circle().fill(palette.liveIndicator).frame(width: 6, height: 6).accessibilityHidden(true)
-          if let viewers {
-            Text(viewers, format: .number.notation(.compactName))
-              .accessibilityLabel("\(viewers) viewers")
-          } else {
-            Text("Live")
-          }
-        }
-        .font(.caption.monospacedDigit())
-        .foregroundStyle(.secondary)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .padding(.vertical, 4)
     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
     .contentShape(Rectangle())
     .accessibilityElement(children: .combine)
     .accessibilityHint("Open stream")
+  }
+}
+
+private struct MobileSidebarViewerCount: View {
+  let viewers: Int?
+  @Environment(\.themePalette) private var palette
+
+  var body: some View {
+    HStack(spacing: 5) {
+      Circle().fill(palette.liveIndicator).frame(width: 6, height: 6).accessibilityHidden(true)
+      if let viewers {
+        Text(viewers, format: .number.notation(.compactName))
+          .accessibilityLabel("\(viewers) viewers")
+      } else {
+        Text("Live")
+      }
+    }
+    .font(.caption.monospacedDigit())
+    .foregroundStyle(.secondary)
+    .fixedSize(horizontal: true, vertical: false)
   }
 }
 

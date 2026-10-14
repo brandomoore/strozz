@@ -136,6 +136,9 @@ and live followed channels available while browsing. Tap a live channel to open
 the full-width player; the sidebar stays out of playback. Home and the sidebar
 share one followed-channel list, so no extra follow fetch is needed. Narrow iPad
 windows retain compact tab navigation, and iPhone keeps its three-tab layout.
+The iPad sidebar uses compact rounded navigation rows and three-line channel
+summaries with inline viewer counts. Home's feed tabs share the native toolbar
+instead of stacking duplicate headings above the streams.
 
 Tap a chat emote on iPhone or iPad to open a larger preview with its name and,
 when recognized, its provider. Supported providers use higher-resolution artwork;

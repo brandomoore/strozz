@@ -72,6 +72,45 @@ final class MobileSidebarTests: XCTestCase {
     XCTAssertTrue(app.buttons["sidebar-browse"].isHittable)
   }
 
+  func testCompactSidebarDensityAndRealHomeContentStart() throws {
+    guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("iPad density") }
+    let fixture = launch()
+    defer { fixture.terminate(); XCUIDevice.shared.orientation = .portrait }
+    XCUIDevice.shared.orientation = .landscapeLeft
+    let home = fixture.buttons["sidebar-home"]
+    XCTAssertTrue(home.waitForExistence(timeout: 10))
+    XCTAssertGreaterThanOrEqual(home.frame.height, 44)
+    XCTAssertLessThanOrEqual(home.frame.height, 48, "List insets must not enlarge the navigation button")
+    let channel = fixture.buttons["sidebar-stream-navigation0"]
+    XCTAssertLessThanOrEqual(channel.frame.height, 72, "Live channels should fit compact three-line rows")
+    capture(fixture, name: "ipad-compact-sidebar-density")
+    fixture.terminate()
+
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_MUTE_PLAYBACK"] = "1"
+    app.launch()
+    defer { app.terminate() }
+    let feed = app.buttons["home-feed-live"]
+    XCTAssertTrue(feed.waitForExistence(timeout: 10))
+    XCTAssertTrue(app.navigationBars.buttons["home-feed-live"].exists, "Feed tabs belong in the existing toolbar")
+    let artwork = app.descendants(matching: .any)
+      .matching(NSPredicate(format: "identifier BEGINSWITH 'artwork-'")).firstMatch
+    XCTAssertTrue(artwork.waitForExistence(timeout: 45))
+    let filters = app.descendants(matching: .any).matching(identifier: "mobile-home-filters").firstMatch
+    let metrics = XCTAttachment(string:
+      "app=\(app.frame) nav=\(app.navigationBars.firstMatch.frame) feed=\(feed.frame) filters=\(filters.frame) artwork=\(artwork.frame)")
+    metrics.name = "Compact Home geometry"
+    metrics.lifetime = .keepAlways
+    add(metrics)
+    capture(app, name: "ipad-compact-real-home")
+    XCTAssertLessThanOrEqual(artwork.frame.minY - filters.frame.maxY, 8,
+      "Only the compact gutter, not duplicate Home/feed headings, separates filters and streams")
+    app.buttons["home-feed-following"].tap()
+    XCTAssertTrue(app.buttons["home-feed-following"].isSelected)
+    app.buttons["home-feed-live"].tap()
+    XCTAssertTrue(app.buttons["home-feed-live"].isSelected)
+  }
+
   func testSidebarLoadingSignedOutAndEmptyStates() throws {
     guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("iPad sidebar states") }
     for state in ["restoring", "signed-out", "empty", "failed"] {
