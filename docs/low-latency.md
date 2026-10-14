@@ -1424,6 +1424,32 @@ proof of physical TV recovery. A controlled hardware comparison is still
 outstanding; no additional buffering or fixed-Source Auto workaround is
 introduced by these changes.
 
+### Native multiview asset identity
+
+Twitch reuses quality-only `STABLE-VARIANT-ID` values such as `1080p60` across
+channels. These IDs are scoped to a multivariant playlist by HLS, so that reuse
+is not a Twitch standards violation. However, concurrent native AVPlayer assets
+exposed a client compatibility failure with those shared values.
+
+A controlled two-stream replay preserved the encoded video/audio and timestamps,
+used real rendering layers, and changed resource budgets and audio ownership.
+With shared IDs, one player stopped admitting video with about 0.09 seconds of
+buffer remaining while its media requests continued. Asset-scoped IDs restored
+165/165 fresh, render-ready steady-playback samples on both players; restoring
+the shared IDs reproduced the stall. The production rewrite passed the same
+replay with no waiting samples.
+
+Each native origin now gives existing stable variant IDs one immutable UUID
+namespace. It changes only those identifiers, not variant URIs, codec declarations,
+quality eligibility, encoded samples, player ownership, or buffering/latency
+targets. Master reloads retain the same IDs. Fixed-quality media playlists and
+masters without stable variant IDs retain their existing paths.
+
+This fixes the identity-triggered native-client reproduction without hiding a
+spinner or pinning Auto to Source. It is not a physical-TV verification: the TV
+remained untouched. If content steering or I-frame stable identities are added
+to this route, their coupled references must use the same namespace.
+
 ## Diagnostics overlay (how to gather data)
 
 Player → open chat settings (`slider.horizontal.3`) → **Playback**. Turn on the
