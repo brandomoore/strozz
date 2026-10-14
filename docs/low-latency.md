@@ -256,6 +256,19 @@ Unavailable reports are logged and removed rather than inventing their sequence.
 Shutdown rejects new requests and drains in-flight manifest fetches before
 invalidating their shared URLSession, including when a quality change cancels
 concurrent report refreshes.
+
+Retired renditions also honor the blocking reload's requested sequence. If that
+position is ahead of their retained cache, they index the requested completed
+segment directly instead of downloading obsolete intervening media. Earlier
+segments remain bounded, consecutive timeline metadata, including cached and
+inferred discontinuities; replaced part bytes are released. Requests at cached
+positions retain their media, and prefetch/future requests still warm from the
+latest completed segment. This does not exclude qualities, pin Auto, or increase
+the hold-back or buffer targets. A live Twitch indexer comparison returned the
+requested parts in 0.39-0.60 seconds instead of 1.12-1.48 seconds with six
+obsolete segments indexed first. This verifies the restart defect and repair, not
+that it explains every physical Apple TV stall.
+
 Diagnostics include the source's prefetch capability, live hold-back and edge age,
 reasons for stopping rate correction, and the last/maximum rendition-report
 refresh duration. The same report-blocking, failure, and cancellation regressions

@@ -131,6 +131,15 @@ emotes. Sign in through **Account > Sign in to Twitch**, open the Twitch link,
 approve the displayed code, then return to Strozz. Browsing, playback, and
 reading chat also work anonymously.
 
+On iPad, a collapsible native sidebar keeps **Home**, **Browse**, **Account**,
+and live followed channels available while browsing. Tap a live channel to open
+the full-width player; the sidebar stays out of playback. Home and the sidebar
+share one followed-channel list, so no extra follow fetch is needed. Narrow iPad
+windows retain compact tab navigation, and iPhone keeps its three-tab layout.
+The iPad sidebar uses compact rounded navigation rows and three-line channel
+summaries with inline viewer counts. Home's feed tabs share the native toolbar
+instead of stacking duplicate headings above the streams.
+
 Tap a chat emote on iPhone or iPad to open a larger preview with its name and,
 when recognized, its provider. Supported providers use higher-resolution artwork;
 if that image is unavailable, the sheet labels its fallback to the chat image
@@ -610,6 +619,12 @@ A temporary Following failure preserves that account's previous channels and
 shows a retryable error; it never replaces them with Trending or marks the failed
 attempt as fresh. Trending is for signed-out browsing only. Late or cancelled
 requests cannot overwrite a newer refresh or another account's directory.
+Apple TV startup restores the account before one coordinated Home load;
+restoration callbacks do not queue additional forced loads or replace the
+recommendation row repeatedly. Later account changes and manual refresh still
+reload Home. Following's loading indicator finishes when its live cards and
+avatars arrive, while category metadata continues for personalization without
+keeping the visible row in a loading state.
 
 On Apple TV, selecting a stream requests exclusive playback audio. If another
 app interrupts that initial handoff, Strozz makes one bounded reactivation

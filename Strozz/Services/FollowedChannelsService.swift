@@ -66,6 +66,7 @@ final class FollowedChannelsService {
     followedLogins = []
     isUsingDemoData = false
     isLoading = false
+    isRefreshing = false
     isLoadingDirectory = false
     errorMessage = nil
     directoryErrorMessage = nil
@@ -86,13 +87,15 @@ final class FollowedChannelsService {
   /// even a live follow beyond the first page of `/streams/followed`.
   private(set) var followedLogins: Set<String> = []
   private(set) var isLoading = false
+  /// Includes category/profile enrichment after the visible rail has loaded.
+  private(set) var isRefreshing = false
   private(set) var isUsingDemoData = false
   private(set) var errorMessage: String?
   /// Last successful refresh, never a failed attempt or cancelled request.
   private(set) var lastUpdatedAt: Date?
 
   func needsRefresh(staleAfter interval: TimeInterval, now: Date = Date()) -> Bool {
-    guard !isLoading else { return false }
+    guard !isRefreshing else { return false }
     guard errorMessage == nil, let lastUpdatedAt else { return true }
     return now.timeIntervalSince(lastUpdatedAt) >= interval
   }
@@ -144,9 +147,15 @@ final class FollowedChannelsService {
     let request = UUID()
     refreshID = request
     isLoading = true
+    isRefreshing = true
     errorMessage = nil
 
-    defer { if refreshID == request { isLoading = false } }
+    defer {
+      if refreshID == request {
+        isLoading = false
+        isRefreshing = false
+      }
+    }
     func isCurrent() -> Bool {
       !Task.isCancelled && refreshID == request && Account(auth) == account
     }
@@ -223,6 +232,7 @@ final class FollowedChannelsService {
       channels = loaded
       isUsingDemoData = false
       lastUpdatedAt = Date()
+      isLoading = false
       await refreshFollowedCategories(clientID: clientID, accessToken: auth.accessToken ?? initialAccessToken,
         userID: userID, isCurrent: isCurrent)
     } catch {

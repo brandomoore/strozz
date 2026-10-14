@@ -60,6 +60,7 @@ final class FollowingRecoveryTests: XCTestCase {
     XCTAssertTrue(service.channels.isEmpty)
     XCTAssertFalse(service.isUsingDemoData)
     XCTAssertFalse(service.isLoading)
+    XCTAssertFalse(service.isRefreshing)
     XCTAssertNil(service.lastUpdatedAt)
     XCTAssertNotNil(service.errorMessage)
     XCTAssertEqual(loader.paths, ["/helix/streams/followed"])
@@ -208,6 +209,67 @@ final class FollowingRecoveryTests: XCTestCase {
     XCTAssertTrue(service.followedCategories.isEmpty)
     XCTAssertTrue(service.followedLogins.isEmpty)
     XCTAssertTrue(service.channels.isEmpty)
+  }
+
+  func testVisibleFollowingFinishesBeforeCategoryEnrichment() async {
+    for path in ["/helix/channels/followed", "/helix/channels"] {
+      let auth = auth()
+      let loader = FollowingLoader()
+      loader.heldPath = path
+      let metadata = expectation(description: "Held background metadata")
+      loader.onHeld = { metadata.fulfill() }
+      let service = FollowedChannelsService(loadData: { try await loader.load($0) })
+      let request = Task { await service.refresh(using: auth) }
+      await fulfillment(of: [metadata], timeout: 2)
+      XCTAssertEqual(service.channels.count, 1)
+      XCTAssertNotNil(service.lastUpdatedAt)
+      XCTAssertFalse(service.isLoading, "The rendered Following rail is no longer loading")
+      XCTAssertTrue(service.isRefreshing, "Personalization must still await its metadata")
+      XCTAssertFalse(service.needsRefresh(staleAfter: 0), "Do not overlap an unfinished metadata pass")
+      loader.finish(0, json: path == "/helix/channels/followed" ? FollowingLoader.follows
+        : #"{"data":[{"broadcaster_id":"channel","game_name":"Game"}]}"#)
+      await request.value
+      XCTAssertFalse(service.isRefreshing)
+      XCTAssertFalse(service.isLoading)
+      XCTAssertEqual(service.followedLogins, ["followed"])
+      XCTAssertEqual(service.followedCategories, ["Game": 1])
+    }
+  }
+
+  func testCancelledMetadataKeepsLoadedRailAndClearsRefreshState() async {
+    let auth = auth()
+    let loader = FollowingLoader()
+    loader.heldPath = "/helix/channels"
+    let metadata = expectation(description: "Held category metadata")
+    loader.onHeld = { metadata.fulfill() }
+    let service = FollowedChannelsService(loadData: { try await loader.load($0) })
+    let request = Task { await service.refresh(using: auth) }
+    await fulfillment(of: [metadata], timeout: 2)
+    XCTAssertFalse(service.isLoading)
+    XCTAssertTrue(service.isRefreshing)
+    request.cancel()
+    loader.finish(0, json: #"{"data":[{"broadcaster_id":"channel","game_name":"Cancelled"}]}"#)
+    await request.value
+    XCTAssertEqual(service.channels.count, 1)
+    XCTAssertTrue(service.followedCategories.isEmpty)
+    XCTAssertNil(service.errorMessage)
+    XCTAssertFalse(service.isRefreshing)
+    XCTAssertFalse(service.isLoading)
+  }
+
+  func testFailedMetadataDoesNotHideTheSuccessfullyLoadedRail() async {
+    let auth = auth()
+    let loader = FollowingLoader()
+    let service = FollowedChannelsService(loadData: { try await loader.load($0) })
+    await service.refresh(using: auth)
+    loader.failurePath = "/helix/channels"
+    loader.title = "New live data"
+    await service.refresh(using: auth)
+    XCTAssertEqual(service.channels.first?.title, "New live data")
+    XCTAssertEqual(service.followedCategories, ["Game": 1])
+    XCTAssertNil(service.errorMessage)
+    XCTAssertFalse(service.isLoading)
+    XCTAssertFalse(service.isRefreshing)
   }
 
   func testEmptyFollowingIsSuccessfulAndSignedOutStillGetsTrending() async {
