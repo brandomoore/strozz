@@ -68,6 +68,9 @@ struct MobileHomeView: View {
   let preview: MobileHomePreview
   let previewsEnabled: Bool
   let history: WatchHistoryService
+  let follows: FollowedChannelsService
+  var usesTabletNavigation = false
+  var showsFollowedShortcuts = true
   let onSelect: (FollowedChannel) -> Void
   let onProfile: (FollowedChannel) -> Void
   let onAccount: () -> Void
@@ -83,8 +86,6 @@ struct MobileHomeView: View {
   @State private var category: TwitchCategory?
   @State private var recommendations = RecommendationsService()
   @State private var categoryStreams = BrowseService()
-  @State private var follows = FollowedChannelsService()
-  @State private var followsAccountID: String?
   @State private var followedSkeletonCount = MobileFollowedShortcutCount.limit
   @State private var affinity = StreamerAffinityService()
   @State private var personalChannels: [FollowedChannel] = []
@@ -125,12 +126,14 @@ struct MobileHomeView: View {
       ScrollViewReader { proxy in
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
-            Text("Strozz")
-              .font(.title2.bold())
-              .accessibilityAddTraits(.isHeader)
-              .accessibilityIdentifier("mobile-home-heading")
-              .padding(.horizontal)
-              .id("mobile-home-top")
+            if !usesTabletNavigation {
+              Text("Strozz")
+                .font(.title2.bold())
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("mobile-home-heading")
+                .padding(.horizontal)
+                .id("mobile-home-top")
+            }
             Section {
               MobileHomeFilters(categories: recommendations.categories, selection: $category)
               if feed == .following {
@@ -151,13 +154,15 @@ struct MobileHomeView: View {
                   MobileContinueWatchingSection(entries: Array(vodProgress.entries.prefix(4))) { selectedVideo = $0 }
                     .padding(.horizontal)
                 }
-                MobileFollowedShortcuts(channels: shortcutChannels, onSelect: onSelect,
-                                       onSeeAll: { feed = .following },
-                                       isLoading: shortcutsLoading,
-                                       authenticated: auth.isAuthenticated,
-                                       isRestoringAccount: sync.isRestoringAccount,
-                                       skeletonCount: followedSkeletonCount)
-                  .padding(.horizontal)
+                if showsFollowedShortcuts {
+                  MobileFollowedShortcuts(channels: shortcutChannels, onSelect: onSelect,
+                                         onSeeAll: { feed = .following },
+                                         isLoading: shortcutsLoading,
+                                         authenticated: auth.isAuthenticated,
+                                         isRestoringAccount: sync.isRestoringAccount,
+                                         skeletonCount: followedSkeletonCount)
+                    .padding(.horizontal)
+                }
                 Text(personalFeed ? "For you" : "Popular live channels")
                   .font(.title3.bold()).accessibilityAddTraits(.isHeader).padding(.horizontal)
                 if personalFeed, let error = follows.errorMessage {
@@ -180,6 +185,7 @@ struct MobileHomeView: View {
                 .padding(.horizontal)
                 .background(palette.backgroundColors.last ?? palette.cardOpaqueSurface)
             }
+            .id(usesTabletNavigation ? "mobile-home-top" : "mobile-home-feed")
           }
           .animation(reduceMotion || feed != .live ? nil : .easeInOut(duration: 0.22), value: shortcutRows)
           .padding(.top, 8)
@@ -210,14 +216,16 @@ struct MobileHomeView: View {
     .onAppear { preview.setEnabled(shouldPreview) }
     .onDisappear { preview.stop() }
     .background(palette.backgroundColors.last ?? palette.cardOpaqueSurface)
-    .toolbar(.hidden, for: .navigationBar)
+    .navigationTitle("Home")
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar(usesTabletNavigation ? .visible : .hidden, for: .navigationBar)
     .onChange(of: auth.userID, initial: true) { _, accountID in
       followedSkeletonCount = MobileFollowedShortcutCount.cached(for: accountID)
     }
     .onChange(of: follows.lastUpdatedAt) { _, updatedAt in
-      guard updatedAt != nil, auth.isAuthenticated, followsAccountID == auth.userID,
+      guard updatedAt != nil, auth.isAuthenticated,
             let count = MobileFollowedShortcutCount.remember(
-              follows.channels, for: followsAccountID, isDemo: follows.isUsingDemoData,
+              follows.channels, for: auth.userID, isDemo: follows.isUsingDemoData,
               errorMessage: follows.errorMessage)
       else { return }
       followedSkeletonCount = count
@@ -229,21 +237,6 @@ struct MobileHomeView: View {
     }
     .task(id: liveCategoryID) {
       if feed == .live, !personalFeed, let category { await categoryStreams.loadStreams(for: category) }
-    }
-    .task(id: auth.isAuthenticated ? auth.userID : nil) {
-      guard !Task.isCancelled else { return }
-      // A previous account's in-flight refresh may only update its old service.
-      let accountID = auth.isAuthenticated ? auth.userID : nil
-      if followsAccountID != accountID {
-        follows = FollowedChannelsService()
-        followsAccountID = accountID
-      }
-      let current = follows
-      if auth.isAuthenticated { await current.refresh(using: auth) }
-    }
-    .onChange(of: auth.accessToken) { _, _ in
-      guard auth.isAuthenticated, follows.errorMessage != nil else { return }
-      Task { await follows.refresh(using: auth) }
     }
     .task(id: "\(auth.userID ?? "")-\(feed == .following)") {
       if feed == .following { await follows.loadDirectory(using: auth) }

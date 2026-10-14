@@ -29,6 +29,8 @@ struct StrozzMobileApp: App {
         MobileEmoteMenuFixture()
       } else if ProcessInfo.processInfo.environment["STROZZ_LAYOUT_FIXTURE"] == "player-chrome" {
         MobilePlayerLayoutFixture()
+      } else if ProcessInfo.processInfo.environment["STROZZ_LAYOUT_FIXTURE"] == "navigation" {
+        MobileNavigationLayoutFixture()
       } else {
         appContent
       }
@@ -64,6 +66,7 @@ struct MobileRootView: View {
   @Environment(ThemeManager.self) private var theme
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.scenePhase) private var scenePhase
+  @Environment(\.horizontalSizeClass) private var horizontalSizeClass
   @Environment(MobilePlaybackSession.self) private var playback
   @Environment(TwitchAuthSession.self) private var auth
   @Environment(TwitchAccountSync.self) private var accountSync
@@ -75,6 +78,9 @@ struct MobileRootView: View {
   @State private var homeProfile: FollowedChannel?
   @State private var browseProfile: FollowedChannel?
   @State private var returnRefresh = PlaybackReturnRefreshCoordinator()
+  @State private var follows = FollowedChannelsService()
+  @State private var sidebarVisibility = NavigationSplitViewVisibility.all
+  @State private var compactColumn = NavigationSplitViewColumn.detail
 
   private enum PlayerVisibility {
     case closed, expanded, miniPlayer
@@ -92,26 +98,12 @@ struct MobileRootView: View {
   var body: some View {
     let palette = theme.theme.palette(systemColorScheme: colorScheme)
     let previewsEnabled = tab == 0 && playback.channel == nil && scenePhase == .active
-    TabView(selection: $tab) {
-      NavigationStack {
-        MobileHomeView(preview: preview, previewsEnabled: previewsEnabled, history: history,
-                       onSelect: select, onProfile: { homeProfile = $0 }, onAccount: { tab = 2 })
-          .navigationDestination(item: $homeProfile) { MobileChannelProfileView(channel: $0, onLive: select) }
-      }
-      .tabItem { Label { Text("Home") } icon: { Image("tb-home") } }
-      .tag(0)
-
-      NavigationStack {
-        MobileBrowseView(onSelect: select)
-          .navigationDestination(item: $browseProfile) { MobileChannelProfileView(channel: $0, onLive: select) }
-      }
-      .tabItem { Label { Text("Browse") } icon: { Image("tb-layout-grid") } }
-      .tag(1)
-
-      NavigationStack { MobileAccountView() }
-        .tabItem { Label { Text("Account") } icon: { Image("tb-user-circle") } }
-        .tag(2)
-    }
+    let isTablet = UIDevice.current.userInterfaceIdiom == .pad
+    let showsSidebar = isTablet && horizontalSizeClass == .regular && sidebarVisibility != .detailOnly
+    MobileRootTabs(selection: $tab, homeProfile: $homeProfile, browseProfile: $browseProfile,
+      sidebarVisibility: $sidebarVisibility, compactColumn: $compactColumn,
+      preview: preview, previewsEnabled: previewsEnabled, history: history, follows: follows,
+      isTablet: isTablet, showsSidebar: showsSidebar, isInteractive: !playback.isExpanded, onSelect: select)
     .allowsHitTesting(!playback.isExpanded)
     .accessibilityHidden(playback.isExpanded)
     .overlay {
@@ -128,6 +120,7 @@ struct MobileRootView: View {
       if previous == .expanded && current != .expanded
         || previous == .miniPlayer && current == .closed {
         returnRefresh.refreshThumbnails()
+        compactColumn = .detail
       }
     }
     .onChange(of: homeProfile) { previous, current in
@@ -137,6 +130,15 @@ struct MobileRootView: View {
       if previous != nil, current == nil { returnRefresh.refreshThumbnails() }
     }
     .onDisappear { preview.stop() }
+    .onChange(of: tab) { _, _ in compactColumn = .detail }
+    .task(id: auth.isAuthenticated ? auth.userID : nil) {
+      follows.accountChanged(using: auth)
+      if auth.isAuthenticated { await follows.refresh(using: auth) }
+    }
+    .onChange(of: auth.accessToken) { _, _ in
+      guard auth.isAuthenticated, follows.errorMessage != nil, !follows.isRefreshing else { return }
+      Task { await follows.refresh(using: auth) }
+    }
     .onChange(of: scenePhase, initial: true) { _, phase in playback.sceneChanged(phase) }
     .onChange(of: scenePhase) { _, phase in
       guard phase == .active else { return }
@@ -144,6 +146,9 @@ struct MobileRootView: View {
         await accountSync.synchronize()
         await auth.validateSessionIfNeeded()
         guard scenePhase == .active, !Task.isCancelled else { return }
+        if isTablet, tab != 0, auth.isAuthenticated, follows.needsRefresh(staleAfter: 60) {
+          await follows.refresh(using: auth)
+        }
         returnRefresh.refreshThumbnails()
       }
     }

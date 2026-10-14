@@ -131,6 +131,12 @@ emotes. Sign in through **Account > Sign in to Twitch**, open the Twitch link,
 approve the displayed code, then return to Strozz. Browsing, playback, and
 reading chat also work anonymously.
 
+On iPad, a collapsible native sidebar keeps **Home**, **Browse**, **Account**,
+and live followed channels available while browsing. Tap a live channel to open
+the full-width player; the sidebar stays out of playback. Home and the sidebar
+share one followed-channel list, so no extra follow fetch is needed. Narrow iPad
+windows retain compact tab navigation, and iPhone keeps its three-tab layout.
+
 Tap a chat emote on iPhone or iPad to open a larger preview with its name and,
 when recognized, its provider. Supported providers use higher-resolution artwork;
 if that image is unavailable, the sheet labels its fallback to the chat image
