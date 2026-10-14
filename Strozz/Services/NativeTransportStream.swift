@@ -116,10 +116,14 @@ struct NativeTransportStream {
       let bytes = Array(initialVideo)
       if bytes.count >= 4 {
         for i in 0..<(bytes.count - 3) {
-          if bytes[i] == 0, bytes[i + 1] == 0, bytes[i + 2] == 1, bytes[i + 3] & 31 == 5 {
-            hasInitialIDR = true
-            initialVideo.removeAll()
-            break
+          if bytes[i] == 0, bytes[i + 1] == 0, bytes[i + 2] == 1 {
+            let type = bytes[i + 3] & 31
+            if (1...4).contains(type) { throw NativeHLSError.transportKeyframe }
+            if type == 5 {
+              hasInitialIDR = true
+              initialVideo.removeAll()
+              break
+            }
           }
         }
       }

@@ -173,6 +173,98 @@ final class NativeRenditionReportTests: XCTestCase {
     await origin.stop()
   }
 
+  func testConcurrentAssetsDoNotShareUpstreamStableVariantIdentities() async throws {
+    let root = URL(string: "https://example.test/master.m3u8")!
+    let master = """
+      #EXTM3U
+      #EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,CODECS="avc1.64002A,mp4a.40.2",STABLE-VARIANT-ID="1080p60",IVS-NAME="1080p60"
+      high.m3u8
+      #EXT-X-STREAM-INF:BANDWIDTH=630000,RESOLUTION=640x360,CODECS="avc1.4D401F,mp4a.40.2",STABLE-VARIANT-ID="360p30",IVS-NAME="360p"
+      low.m3u8
+      """
+    let load: NativeHLSOrigin.DataLoader = { request in
+      let url = try XCTUnwrap(request.url)
+      let text = url == root ? master : """
+        #EXTM3U
+        #EXT-X-TARGETDURATION:2
+        #EXT-X-MEDIA-SEQUENCE:0
+        #EXT-X-PROGRAM-DATE-TIME:2026-10-14T00:00:00.000Z
+        #EXTINF:2,
+        segment.ts
+        """
+      return (Data(text.utf8), try XCTUnwrap(HTTPURLResponse(
+        url: url, statusCode: 200, httpVersion: nil, headerFields: nil)))
+    }
+    let first = NativeHLSOrigin(root: root, headers: [:], history: 30, loadData: load) { _ in
+      XCTFail("Valid metadata must not fail playback")
+    }
+    let second = NativeHLSOrigin(root: root, headers: [:], history: 30, loadData: load) { _ in
+      XCTFail("Valid metadata must not fail playback")
+    }
+    func read(_ origin: NativeHLSOrigin) async throws -> [[String: String]] {
+      guard case .playlist(let data) = try await origin.response(
+        URL(string: "strozz-native-ll://fixture/root.m3u8")!) else {
+        throw NativeHLSError.invalidMedia
+      }
+      return String(decoding: data, as: UTF8.self).components(separatedBy: .newlines)
+        .filter { $0.hasPrefix("#EXT-X-STREAM-INF:") }
+        .map { NativeCMAF.attributes(String($0.dropFirst("#EXT-X-STREAM-INF:".count))) }
+    }
+    async let firstRead = read(first)
+    async let secondRead = read(second)
+    let (a, b) = try await (firstRead, secondRead)
+    XCTAssertEqual(a.count, 2)
+    XCTAssertEqual(b.count, 2)
+    let firstIDs = Set(a.compactMap { $0["STABLE-VARIANT-ID"] })
+    let secondIDs = Set(b.compactMap { $0["STABLE-VARIANT-ID"] })
+    XCTAssertEqual(firstIDs.count, 2)
+    XCTAssertEqual(secondIDs.count, 2)
+    XCTAssertTrue(firstIDs.isDisjoint(with: secondIDs),
+      "Twitch reuses quality labels across channels; separate native assets must own separate identities")
+    let original = master.components(separatedBy: .newlines)
+      .filter { $0.hasPrefix("#EXT-X-STREAM-INF:") }
+      .map { NativeCMAF.attributes(String($0.dropFirst("#EXT-X-STREAM-INF:".count))) }
+    for (upstream, scoped) in zip(original, a) {
+      XCTAssertEqual(upstream.filter { $0.key != "STABLE-VARIANT-ID" },
+        scoped.filter { $0.key != "STABLE-VARIANT-ID" })
+    }
+    for _ in 0..<3 {
+      let repeated = try await read(first)
+      XCTAssertEqual(repeated, a, "An asset's identities must stay stable across reloads")
+    }
+    for (original, scoped) in zip(a, b) {
+      XCTAssertEqual(original.filter { $0.key != "STABLE-VARIANT-ID" },
+        scoped.filter { $0.key != "STABLE-VARIANT-ID" })
+    }
+    await first.stop()
+    await second.stop()
+  }
+
+  func testMalformedStableVariantIdentitiesFailExplicitly() async throws {
+    let root = URL(string: "https://example.test/master.m3u8")!
+    for identity in ["\"\"", "unquoted"] {
+      let origin = NativeHLSOrigin(root: root, headers: [:], history: 30, loadData: { request in
+        XCTAssertEqual(request.url, root, "Reject malformed identity metadata before starting variants")
+        let text = """
+          #EXTM3U
+          #EXT-X-STREAM-INF:BANDWIDTH=630000,RESOLUTION=640x360,STABLE-VARIANT-ID=\(identity)
+          low.m3u8
+          """
+        return (Data(text.utf8), try XCTUnwrap(HTTPURLResponse(
+          url: root, statusCode: 200, httpVersion: nil, headerFields: nil)))
+      }) { reason in
+        XCTAssertEqual(reason, .invalidMedia)
+      }
+      do {
+        _ = try await origin.response(URL(string: "strozz-native-ll://fixture/root.m3u8")!)
+        XCTFail("Do not advertise invalid or unscoped identities as successful native metadata")
+      } catch {
+        XCTAssertEqual(error as? NativeHLSError, .invalidMedia)
+      }
+      await origin.stop()
+    }
+  }
+
   func testColdIndexerRetainsTheTimelineSeenBeforeSelection() async throws {
     let root = URL(string: "https://example.test/current.m3u8")!
     let map = URL(string: "https://example.test/init.mp4")!

@@ -168,6 +168,7 @@ actor NativeHLSOrigin {
   let diagnostic: @Sendable (NativeHLSFailureDiagnostic) -> Void
   let session: URLSession
   private let loadData: DataLoader?
+  private let variantNamespace = UUID().uuidString
   private var master: String?
   private var preparationTask: Task<Void, Error>?
   private(set) var advertisedTargetDuration: Int?
@@ -457,7 +458,17 @@ actor NativeHLSOrigin {
       if line.hasPrefix("#EXT-X-STREAM-INF:") {
         awaitingVariant = true
         audioOnly = NativeCMAF.isAudioOnlyVariant(line)
-        if !audioOnly { output.append(line) }
+        if !audioOnly {
+          if let identity = NativeCMAF.attributes(String(line.dropFirst("#EXT-X-STREAM-INF:".count)))["STABLE-VARIANT-ID"] {
+            let attribute = "STABLE-VARIANT-ID=\"\(identity)\""
+            guard !identity.isEmpty, let range = line.range(of: attribute) else { throw NativeHLSError.invalidMedia }
+            // Twitch's quality labels must not alias another native asset's identity.
+            output.append(line.replacingCharacters(in: range,
+              with: "STABLE-VARIANT-ID=\"\(variantNamespace)-\(identity)\""))
+          } else {
+            output.append(line)
+          }
+        }
       }
       else if awaitingVariant, !line.isEmpty, !line.hasPrefix("#") {
         guard let url = URL(string: line, relativeTo: root)?.absoluteURL, url.scheme == "https",

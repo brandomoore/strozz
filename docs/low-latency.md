@@ -27,6 +27,9 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   standard playback after fallback; selection is not proof of activation.
 - The native engine now indexes both H.264/AAC MPEG-TS and CMAF. TS parts are
   packet-aligned, retain PAT/PMT initialization, and use measured PES timestamps.
+  The first video access unit must start with an IDR: a later keyframe cannot
+  make an earlier dependent frame independently decodable. Leading AUD/SPS/PPS/
+  SEI headers and packet-spanning start codes remain supported.
   Non-terminal TS cut points wait at least 382.5ms: 85% of the advertised 450ms
   part target. Cutting at 380ms produced invalid parts on 50fps feeds and caused
   AVPlayer playlist rejection (`CoreMediaErrorDomain -12642`).
@@ -1155,6 +1158,10 @@ identities of every AVPlayer, AVPlayerItem, and AVKit rendering controller as
 well as advancing video samples during the transition. Hidden panes stay live
 with lower adaptive quality preferences; attachments record their actual
 resolution and encoded-media cache use, since preferences are not hard limits.
+The adaptive check rejects fixed-quality selection, a Source decode-recovery
+attempt, or legacy fallback, including recovery before initial readiness.
+Advancing video after an automatic Source recovery is not evidence that Auto
+works.
 `STROZZ_MULTIVIEW_HOLD_SECONDS` can extend the expanded hold from 5 to 300 seconds.
 The separate, explicit physical check accepts only channels in the on-device
 live Following list and keeps its first stream as the sole audible pane.
@@ -1393,6 +1400,55 @@ lifecycle regressions passed, including overlapping-request rejection. A longer
 GronkhTV run recorded no stall/retry event over approximately 17 minutes before
 host CPU pressure stopped the lane during return-from-background coverage.
 That run is incomplete; its xQc portion never started.
+
+### October 14, 2026 Auto investigation
+
+Retained physical TV logs from build 2024 show repeated media-services resets
+during expanded Auto playback, followed by playback at manually selected
+1080p60 Source. Build 2028 contains the same playback implementation. The reset
+notifications identify a failure, not its cause; they do not establish network
+failure, decoder corruption, or an operating-system defect.
+
+A synthetic transport regression exposed a separate validation bug: a segment
+starting with a dependent frame could be marked independent when an IDR arrived
+later. The parser now rejects that start. Captured original Source, 720p60 and
+480p media still index successfully with full byte coverage, but their first
+video access units were already IDRs. This repair therefore does not establish
+the cause of the physical Auto resets.
+
+The same captured lower renditions decode on the Mac, while simulator
+AVAssetReader decoding fails outside the native origin as well. That makes
+those simulator failures unsuitable as proof of native packaging corruption.
+Mac native adaptive checks and parser regressions remain useful controls, not
+proof of physical TV recovery. A controlled hardware comparison is still
+outstanding; no additional buffering or fixed-Source Auto workaround is
+introduced by these changes.
+
+### Native multiview asset identity
+
+Twitch reuses quality-only `STABLE-VARIANT-ID` values such as `1080p60` across
+channels. These IDs are scoped to a multivariant playlist by HLS, so that reuse
+is not a Twitch standards violation. However, concurrent native AVPlayer assets
+exposed a client compatibility failure with those shared values.
+
+A controlled two-stream replay preserved the encoded video/audio and timestamps,
+used real rendering layers, and changed resource budgets and audio ownership.
+With shared IDs, one player stopped admitting video with about 0.09 seconds of
+buffer remaining while its media requests continued. Asset-scoped IDs restored
+165/165 fresh, render-ready steady-playback samples on both players; restoring
+the shared IDs reproduced the stall. The production rewrite passed the same
+replay with no waiting samples.
+
+Each native origin now gives existing stable variant IDs one immutable UUID
+namespace. It changes only those identifiers, not variant URIs, codec declarations,
+quality eligibility, encoded samples, player ownership, or buffering/latency
+targets. Master reloads retain the same IDs. Fixed-quality media playlists and
+masters without stable variant IDs retain their existing paths.
+
+This fixes the identity-triggered native-client reproduction without hiding a
+spinner or pinning Auto to Source. It is not a physical-TV verification: the TV
+remained untouched. If content steering or I-frame stable identities are added
+to this route, their coupled references must use the same namespace.
 
 ## Diagnostics overlay (how to gather data)
 
