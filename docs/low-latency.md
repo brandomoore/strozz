@@ -27,6 +27,9 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   standard playback after fallback; selection is not proof of activation.
 - The native engine now indexes both H.264/AAC MPEG-TS and CMAF. TS parts are
   packet-aligned, retain PAT/PMT initialization, and use measured PES timestamps.
+  The first video access unit must start with an IDR: a later keyframe cannot
+  make an earlier dependent frame independently decodable. Leading AUD/SPS/PPS/
+  SEI headers and packet-spanning start codes remain supported.
   Non-terminal TS cut points wait at least 382.5ms: 85% of the advertised 450ms
   part target. Cutting at 380ms produced invalid parts on 50fps feeds and caused
   AVPlayer playlist rejection (`CoreMediaErrorDomain -12642`).
@@ -1155,6 +1158,10 @@ identities of every AVPlayer, AVPlayerItem, and AVKit rendering controller as
 well as advancing video samples during the transition. Hidden panes stay live
 with lower adaptive quality preferences; attachments record their actual
 resolution and encoded-media cache use, since preferences are not hard limits.
+The adaptive check rejects fixed-quality selection, a Source decode-recovery
+attempt, or legacy fallback, including recovery before initial readiness.
+Advancing video after an automatic Source recovery is not evidence that Auto
+works.
 `STROZZ_MULTIVIEW_HOLD_SECONDS` can extend the expanded hold from 5 to 300 seconds.
 The separate, explicit physical check accepts only channels in the on-device
 live Following list and keeps its first stream as the sole audible pane.
@@ -1393,6 +1400,29 @@ lifecycle regressions passed, including overlapping-request rejection. A longer
 GronkhTV run recorded no stall/retry event over approximately 17 minutes before
 host CPU pressure stopped the lane during return-from-background coverage.
 That run is incomplete; its xQc portion never started.
+
+### October 14, 2026 Auto investigation
+
+Retained physical TV logs from build 2024 show repeated media-services resets
+during expanded Auto playback, followed by playback at manually selected
+1080p60 Source. Build 2028 contains the same playback implementation. The reset
+notifications identify a failure, not its cause; they do not establish network
+failure, decoder corruption, or an operating-system defect.
+
+A synthetic transport regression exposed a separate validation bug: a segment
+starting with a dependent frame could be marked independent when an IDR arrived
+later. The parser now rejects that start. Captured original Source, 720p60 and
+480p media still index successfully with full byte coverage, but their first
+video access units were already IDRs. This repair therefore does not establish
+the cause of the physical Auto resets.
+
+The same captured lower renditions decode on the Mac, while simulator
+AVAssetReader decoding fails outside the native origin as well. That makes
+those simulator failures unsuitable as proof of native packaging corruption.
+Mac native adaptive checks and parser regressions remain useful controls, not
+proof of physical TV recovery. A controlled hardware comparison is still
+outstanding; no additional buffering or fixed-Source Auto workaround is
+introduced by these changes.
 
 ## Diagnostics overlay (how to gather data)
 

@@ -121,6 +121,56 @@ final class NativeTransportStreamTests: XCTestCase {
     }())
   }
 
+  func testLaterIDRCannotMakeALeadingDependentFrameIndependent() throws {
+    var value = try parser()
+    XCTAssertThrowsError(try {
+      _ = try value.append(video(frame: 0, clock: 0))
+      for frame in 1..<30 {
+        _ = try value.append(video(frame: frame, clock: UInt64(frame * 1500), idr: frame == 1))
+      }
+    }()) {
+      XCTAssertEqual($0 as? NativeHLSError, .transportKeyframe)
+    }
+  }
+
+  func testInitialHeadersAndPacketSpanningIDRRemainValid() throws {
+    for zeros in [2, 3] {
+      var value = try parser()
+      let prefix: [UInt8] = [0, 0, 1, 0x09, 0xF0, 0, 0, 1, 0x67, 0x80,
+        0, 0, 1, 0x68, 0x80, 0, 0, 1, 0x06, 0x80] + Array(repeating: 0, count: zeros)
+      let pes: [UInt8] = [0, 0, 1, 0xE0, 0, 0, 0x80, 0x80, 5] + timestamp(0) + prefix
+      _ = try value.append(boundedVideoPacket(counter: 0, start: true, payload: pes))
+      _ = try value.append(boundedVideoPacket(counter: 1, start: false, payload: [1, 0x65, 0x80]))
+      var ranges: [NativeTransportStream.Range] = []
+      for frame in 1..<120 {
+        if let range = try value.append(video(frame: frame + 1, clock: UInt64(frame * 1500))) {
+          ranges.append(range)
+        }
+      }
+      ranges.append(try value.finish(expectedDuration: 2))
+      XCTAssertTrue(ranges.first?.independent == true)
+      XCTAssertEqual(ranges.reduce(0) { $0 + $1.duration }, 2, accuracy: 0.00001)
+      XCTAssertEqual(ranges.reduce(0) { $0 + $1.length }, value.byteCount)
+    }
+  }
+
+  func testPacketSpanningDependentStartCannotBeHiddenByALaterIDR() throws {
+    var value = try parser()
+    let pes: [UInt8] = [0, 0, 1, 0xE0, 0, 0, 0x80, 0x80, 5] + timestamp(0) + [0, 0]
+    _ = try value.append(boundedVideoPacket(counter: 0, start: true, payload: pes))
+    XCTAssertThrowsError(try value.append(
+      boundedVideoPacket(counter: 1, start: false, payload: [1, 0x41, 0x80]))) {
+      XCTAssertEqual($0 as? NativeHLSError, .transportKeyframe)
+    }
+  }
+
+  private func boundedVideoPacket(counter: Int, start: Bool, payload: [UInt8]) -> Data {
+    precondition(payload.count <= 182)
+    let length = 183 - payload.count
+    return Data([0x47, start ? 0x41 : 0x01, 0x01, UInt8(0x30 | (counter & 15)), UInt8(length), 0]
+      + Array(repeating: 0xFF, count: length - 1) + payload)
+  }
+
   func testParentDurationMustAgreeWithSourceManifest() throws {
     var value = try parser()
     for frame in 0..<60 {

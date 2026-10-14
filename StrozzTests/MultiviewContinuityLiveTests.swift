@@ -5,6 +5,35 @@ import XCTest
 
 @MainActor
 final class MultiviewContinuityLiveTests: XCTestCase {
+  func testAdaptiveVerificationRejectsFixedQualityAndDecodeRecovery() {
+    let channel = FollowedChannel(id: "auto-proof", login: "auto-proof", displayName: "Auto proof",
+      title: "", gameName: "", viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true)
+    let pane = MultiviewPane(channel: channel)
+    defer { pane.stop() }
+    pane.model.isUsingNativeHLS = true
+    XCTAssertTrue(isNativeAuto(pane))
+    pane.model.decodeRecoveryQualityID = "source"
+    XCTAssertFalse(isNativeAuto(pane), "Source decode recovery must never count as adaptive playback")
+    pane.model.decodeRecoveryQualityID = nil
+    pane.model.triedDecodeRecovery = true
+    XCTAssertFalse(isNativeAuto(pane), "A previous decode recovery must not be hidden by clearing its quality")
+    pane.model.triedDecodeRecovery = false
+    pane.presentation.quality = "1080p60 (Source)"
+    XCTAssertFalse(isNativeAuto(pane))
+    pane.presentation.quality = "Auto"
+    pane.model.nativeFallbackReason = "unsupported"
+    XCTAssertFalse(isNativeAuto(pane))
+    pane.model.nativeFallbackReason = nil
+    pane.model.isUsingNativeHLS = false
+    XCTAssertFalse(isNativeAuto(pane))
+  }
+
+  private func isNativeAuto(_ pane: MultiviewPane) -> Bool {
+    pane.presentation.quality == "Auto" && pane.presentation.profile == .nativeLowLatency
+      && pane.model.isUsingNativeHLS && pane.model.decodeRecoveryQualityID == nil
+      && !pane.model.triedDecodeRecovery && pane.model.nativeFallbackReason == nil
+  }
+
   func testOptInLiveZoomKeepsPlayersItemsAndAVKitSurfaces() async throws {
     #if targetEnvironment(simulator)
     let settings = ProcessInfo.processInfo.environment
@@ -79,7 +108,9 @@ final class MultiviewContinuityLiveTests: XCTestCase {
       let states = controller.panes.map { pane in
         ["channel": pane.channel.login, "native": String(pane.model.isUsingNativeHLS),
          "offline": String(pane.model.isOffline), "loading": String(pane.isLoading),
-         "error": String(pane.model.errorMessage != nil), "fallback": pane.model.nativeFallbackReason ?? "none"]
+         "error": String(pane.model.errorMessage != nil), "fallback": pane.model.nativeFallbackReason ?? "none",
+         "selected_quality": pane.presentation.quality,
+         "decode_recovery": pane.model.decodeRecoveryQualityID ?? "none"]
       }
       do {
         let data = try JSONSerialization.data(withJSONObject: states, options: [.sortedKeys])
@@ -232,6 +263,12 @@ final class MultiviewContinuityLiveTests: XCTestCase {
   private func ready(_ controller: MultiviewController, host: UIViewController,
                      audiblePaneID: String?) async throws {
     for _ in 0..<450 {
+      guard controller.panes.allSatisfy({
+        $0.presentation.quality == "Auto" && $0.model.decodeRecoveryQualityID == nil && !$0.model.triedDecodeRecovery
+      }) else {
+        XCTFail("Adaptive verification cannot start after pinning quality or recovering to Source")
+        throw URLError(.cannotDecodeContentData)
+      }
       XCTAssertTrue(controller.panes.allSatisfy { $0.player.isMuted == ($0.id != audiblePaneID) })
       let rendered = surfaces(in: host)
       if controller.panes.allSatisfy({ pane in
@@ -263,6 +300,7 @@ final class MultiviewContinuityLiveTests: XCTestCase {
       XCTAssertTrue(current.contains { $0 === original[ObjectIdentifier(pane.player)] },
                     "Zoom must preserve the actual AVKit surface")
       XCTAssertTrue(pane.model.isUsingNativeHLS)
+      XCTAssertTrue(isNativeAuto(pane), "Native Auto must remain adaptive without a fixed-quality decode recovery")
       XCTAssertEqual(pane.player.isMuted, pane.id != audiblePaneID, "Audio must remain with the authorized stream")
     }
     XCTAssertEqual(current.count, players.count, "No extra rendering owner may appear during zoom")
