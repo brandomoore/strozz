@@ -410,7 +410,9 @@ extension PlayerView {
             guard let telemetry, telemetry.sessionID == sessionID else { return }
             // A recovery may replace the engine before this main-actor event runs.
             // Keep the originating generation rather than dropping that evidence.
-            telemetry.recordEvent("native_hls_failure", level: .error,
+            let retrying = detail.attributes["operation"] == "manifest_retry"
+            telemetry.recordEvent(retrying ? "native_hls_manifest_retry" : "native_hls_failure",
+              level: retrying ? .warning : .error,
               attributes: detail.attributes.merging(["native_generation": generation.uuidString]) { _, new in new },
               metrics: detail.metrics, counters: detail.counters)
           }

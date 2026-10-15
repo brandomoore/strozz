@@ -270,6 +270,16 @@ playback buffer/hold-back targets nor quality selection. Regressions cover a
 128-callback burst, cancellation, shutdown, request reuse, and byte-exact delivery
 of a two-MiB segment to a slow consumer.
 
+An already-indexed, active rendition gets one in-place manifest retry after a
+network timeout or lost connection. The retry has a four-second wall deadline;
+shutdown cancels both its request and timer. Existing media, the next segment
+cursor, parser state, player/item, quality, and buffer targets remain intact.
+Cold or inactive renditions, rejected signed URLs, certificate failures, and
+invalid media retain their existing failure paths. A second failure still reaches
+bounded native recovery. TV telemetry distinguishes `native_hls_manifest_retry`
+from an engine failure/rebuild. This removes avoidable cold-start overhead, but
+cannot prevent a pause when incoming video stops longer than buffered media lasts.
+
 Retired renditions also honor the blocking reload's requested sequence. If that
 position is ahead of their retained cache, they index the requested completed
 segment directly instead of downloading obsolete intervening media. Earlier

@@ -186,6 +186,7 @@ actor NativeHLSOrigin {
   private var reportRefreshMaxSeconds: TimeInterval?
   private var inFlightRequests = 0
   private var requestDrainWaiters: [CheckedContinuation<Void, Never>] = []
+  private static let manifestRetrySeconds: TimeInterval = 4
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "native-hls")
   #if DEBUG
   private var capturesRequests = false
@@ -371,7 +372,7 @@ actor NativeHLSOrigin {
     return request
   }
 
-  private func data(_ url: URL) async throws -> Data {
+  private func data(_ url: URL, timeout: TimeInterval? = nil) async throws -> Data {
     try Task.checkCancellation()
     guard !stopped else { throw CancellationError() }
     inFlightRequests += 1
@@ -385,8 +386,10 @@ actor NativeHLSOrigin {
     }
     let data: Data
     let response: URLResponse
-    if let loadData { (data, response) = try await loadData(request(url)) }
-    else { (data, response) = try await session.data(for: request(url)) }
+    var request = request(url)
+    if let timeout { request.timeoutInterval = timeout }
+    if let loadData { (data, response) = try await loadData(request) }
+    else { (data, response) = try await session.data(for: request) }
     try Task.checkCancellation()
     guard !stopped else { throw CancellationError() }
     guard (response as? HTTPURLResponse)?.statusCode == 200 else {
@@ -761,12 +764,41 @@ actor NativeHLSOrigin {
     return Array(retained.reversed())
   }
 
+  func upstreamManifest(_ index: Int) async throws -> NativeCMAF.Manifest {
+    guard let url = sources[index]?.url else { throw CancellationError() }
+    let bytes: Data
+    do {
+      bytes = try await data(url)
+    } catch {
+      try Task.checkCancellation()
+      guard !stopped, index == lastActive,
+        sources[index]?.segments.contains(where: { !$0.parts.isEmpty }) == true,
+        let network = error as? URLError,
+        network.code == .timedOut || network.code == .networkConnectionLost else { throw error }
+      Self.logger.warning("Retrying active manifest in place: rendition \(index), code \(network.code.rawValue)")
+      diagnostic(.init(error: error, operation: "manifest_retry", rendition: index,
+        active: lastActive, fatal: false))
+      // Bound the whole retry, not just URLSession's inactivity timeout.
+      bytes = try await withThrowingTaskGroup(of: Data.self) { group in
+        group.addTask { try await self.data(url, timeout: Self.manifestRetrySeconds) }
+        group.addTask {
+          try await Task.sleep(for: .seconds(Self.manifestRetrySeconds))
+          throw URLError(.timedOut)
+        }
+        defer { group.cancelAll() }
+        guard let result = try await group.next() else { throw CancellationError() }
+        return result
+      }
+    }
+    return try NativeCMAF.manifest(String(decoding: bytes, as: UTF8.self), url: url)
+  }
+
   private func run(_ index: Int, startingAt requestedSequence: Int? = nil) async {
     let reader = NativeHLSChunkReader()
     defer { reader.stop() }
     var operation = "manifest"
     do {
-      guard let url = sources[index]?.url else { return }
+      guard sources[index] != nil else { return }
       var next: Int? = sources[index]?.segments.last.map { $0.sequence + 1 }
       if let requestedSequence, let cachedNext = next, requestedSequence > cachedNext {
         // A retired rendition must resume at the client's position, not put
@@ -781,7 +813,7 @@ actor NativeHLSOrigin {
         try Task.checkCancellation()
         if index != lastActive, let last = sources[index]?.lastMediaRequest, Date().timeIntervalSince(last) > 8 { break }
         operation = "manifest"
-        let manifest = try NativeCMAF.manifest(String(decoding: try await data(url), as: UTF8.self), url: url)
+        let manifest = try await upstreamManifest(index)
         sources[index]?.hasPrefetch = manifest.hasPrefetch
         sources[index]?.publicationDuration = manifest.entries.compactMap(\.duration).max()
         if next == nil {
