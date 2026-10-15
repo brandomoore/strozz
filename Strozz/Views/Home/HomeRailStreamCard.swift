@@ -36,6 +36,7 @@ struct HomeRailStreamCard: View {
       onTap()
     }
     .accessibilityAddTraits(.isButton)
+    .accessibilityIdentifier(itemID)
     .zIndex(isFocused ? 2 : 0)
   }
 }
