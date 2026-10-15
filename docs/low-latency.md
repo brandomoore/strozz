@@ -260,6 +260,16 @@ Shutdown rejects new requests and drains in-flight manifest fetches before
 invalidating their shared URLSession, including when a quality change cancels
 concurrent report refreshes.
 
+Media ingestion also applies backpressure to callbacks URLSession already queued
+before observing a task suspension. At the unchanged 32-chunk capacity, its
+delegate thread waits until the indexer acknowledges a chunk instead of dropping
+media and restarting playback. Acknowledgements belong to a specific request and
+chunk, so duplicate or retired acknowledgements cannot resume a successor.
+Cancellation and shutdown wake blocked delivery. This changes neither the
+playback buffer/hold-back targets nor quality selection. Regressions cover a
+128-callback burst, cancellation, shutdown, request reuse, and byte-exact delivery
+of a two-MiB segment to a slow consumer.
+
 Retired renditions also honor the blocking reload's requested sequence. If that
 position is ahead of their retained cache, they index the requested completed
 segment directly instead of downloading obsolete intervening media. Earlier

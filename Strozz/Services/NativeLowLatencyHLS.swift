@@ -883,10 +883,10 @@ actor NativeHLSOrigin {
         var cmafPending = Data()
         operation = "media"
         for try await chunk in chunks {
-          defer { reader.consumedChunk() }
+          defer { reader.consumedChunk(chunk) }
           try Task.checkCancellation()
           operation = "indexing"
-          buffer.append(chunk)
+          buffer.append(chunk.data)
           guard buffer.count < 32 * 1024 * 1024 else { throw NativeHLSError.invalidMedia }
           while !buffer.isEmpty {
             if track == nil {
