@@ -521,6 +521,11 @@ struct HomeView: View {
             channels: followingRowChannels,
             rail: rail,
             style: railStyle,
+            isLoading: follows.isLoading || environment.accountSync.isRestoringAccount
+              || (follows.lastUpdatedAt == nil && follows.errorMessage == nil),
+            isRestoringAccount: environment.accountSync.isRestoringAccount,
+            isUsingDemoData: follows.isUsingDemoData,
+            errorMessage: follows.errorMessage,
             showingFollowingDirectory: $showingFollowingDirectory,
             onRefresh: { performManualRefresh() },
             onWatch: { openFollowingChannel($0) },
@@ -706,14 +711,14 @@ struct HomeView: View {
   }
 
   private func requestFocusIfPossible(force: Bool) {
-    guard let first = follows.channels.first else { return }
-    if !force && firstFocusRequested { return }
+    guard follows.errorMessage == nil, let first = follows.channels.first else { return }
+    if !force && (firstFocusRequested || focusedItemID != nil) { return }
 
     firstFocusRequested = true
     Task {
       try? await Task.sleep(for: .milliseconds(150))
       await MainActor.run {
-        focusedItemID = "following-\(first.channelKey)"
+        focusedItemID = HomeFollowingFocus.card(first.channelKey)
       }
     }
   }
@@ -738,8 +743,10 @@ struct HomeView: View {
     Task {
       withAnimation(.easeOut(duration: 0.25)) { refreshToast = .refreshing }
       await refreshHomeSections(force: true)
-      requestFocusIfPossible(force: true)
-      withAnimation(.easeOut(duration: 0.25)) { refreshToast = .done }
+      guard !Task.isCancelled else { refreshToast = nil; return }
+      let failed = follows.errorMessage != nil || recommendations.errorMessage != nil
+      if !failed, focusedItemID == nil { requestFocusIfPossible(force: true) }
+      withAnimation(.easeOut(duration: 0.25)) { refreshToast = .finished(hadError: failed) }
       try? await Task.sleep(for: .seconds(1.6))
       withAnimation(.easeOut(duration: 0.25)) { refreshToast = nil }
     }

@@ -18,7 +18,17 @@ struct StrozzApp: App {
 
   var body: some Scene {
     WindowGroup {
-      HomeView(deepLinkRouter: deepLinkRouter)
+      Group {
+        #if DEBUG && targetEnvironment(simulator)
+        if ProcessInfo.processInfo.environment["STROZZ_HOME_ERROR_FIXTURE"] == "1" {
+          HomeFollowingErrorFixture()
+        } else {
+          HomeView(deepLinkRouter: deepLinkRouter)
+        }
+        #else
+        HomeView(deepLinkRouter: deepLinkRouter)
+        #endif
+      }
         .environment(environment)
         #if DEBUG
         .onAppear { AppEnvironment.playbackTestEnvironment = environment }
