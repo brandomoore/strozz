@@ -1,7 +1,11 @@
 import AVFoundation
 import XCTest
 
+#if os(tvOS)
 @testable import Strozz
+#else
+@testable import StrozzMobile
+#endif
 
 @MainActor
 final class PlaybackTelemetryTests: XCTestCase {
@@ -219,5 +223,85 @@ final class PlaybackTelemetryTests: XCTestCase {
     XCTAssertEqual(saved.last?.name, "session_ended")
     XCTAssertGreaterThan(try XCTUnwrap(saved.first?.sequence), 1)
     XCTAssertEqual(Set(saved.map(\.sequence)).count, saved.count)
+  }
+
+  func testConcurrentPaneWritersRetainEveryActiveSessionsLatestRecord() async throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let writers = (0..<6).map { _ in
+      PlaybackTelemetryWriter(directory: directory, maximumFileBytes: 1_024,
+        maximumFiles: 8, mirrorToSystemLog: false)
+    }
+    let sessions = writers.map { _ in UUID().uuidString.lowercased() }
+    for sequence in 1...40 {
+      for index in writers.indices {
+        writers[index].append(PlaybackTelemetryRecord(schemaVersion: 1, timestamp: Date(),
+          uptimeSeconds: Double(sequence), sessionID: sessions[index], sequence: sequence,
+          kind: "event", name: "pane_sample", level: .info, channel: "fixture\(index)",
+          playbackMode: "live", attributes: ["detail": String(repeating: "x", count: 300)],
+          metrics: [:], counters: [:], flags: [:]))
+      }
+    }
+    for writer in writers { await writer.flush() }
+    let saved = try records(in: directory)
+    for session in sessions {
+      XCTAssertEqual(saved.filter { $0.sessionID == session }.map(\.sequence).max(), 40,
+        "One pane rotating its log must not disable or unlink another pane's log")
+    }
+    let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+      .filter { $0.pathExtension == "jsonl" }
+    XCTAssertLessThanOrEqual(files.count, 8)
+    for file in files { XCTAssertFalse(try Data(contentsOf: file).isEmpty) }
+  }
+
+  func testRotationCannotUnlinkAQuietPanesOpenFile() async throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let quiet = PlaybackTelemetryWriter(directory: directory, maximumFileBytes: 1_024,
+      maximumFiles: 3, mirrorToSystemLog: false)
+    let busy = PlaybackTelemetryWriter(directory: directory, maximumFileBytes: 1_024,
+      maximumFiles: 3, mirrorToSystemLog: false)
+    let quietSession = UUID().uuidString
+    let busySession = UUID().uuidString
+    func write(_ writer: PlaybackTelemetryWriter, session: String, sequence: Int) {
+      writer.append(PlaybackTelemetryRecord(schemaVersion: 1, timestamp: Date(),
+        uptimeSeconds: Double(sequence), sessionID: session, sequence: sequence,
+        kind: "event", name: "sample", level: .info, channel: "fixture",
+        playbackMode: "live", attributes: ["detail": String(repeating: "x", count: 300)],
+        metrics: [:], counters: [:], flags: [:]))
+    }
+    write(quiet, session: quietSession, sequence: 1)
+    await quiet.flush()
+    for sequence in 1...20 {
+      write(busy, session: busySession, sequence: sequence)
+      await busy.flush()
+    }
+    write(quiet, session: quietSession, sequence: 2)
+    await quiet.flush()
+    let saved = try records(in: directory)
+    XCTAssertEqual(saved.filter { $0.sessionID == quietSession }.map(\.sequence).max(), 2)
+    XCTAssertEqual(saved.filter { $0.sessionID == busySession }.map(\.sequence).max(), 20)
+    let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+      .filter { $0.pathExtension == "jsonl" }
+    XCTAssertLessThanOrEqual(files.count, 3)
+  }
+
+  func testActiveWritersCannotExceedTheSharedFileBudget() async throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let writers = (0..<3).map { _ in
+      PlaybackTelemetryWriter(directory: directory, maximumFiles: 2, mirrorToSystemLog: false)
+    }
+    for (index, writer) in writers.enumerated() {
+      writer.append(PlaybackTelemetryRecord(schemaVersion: 1, timestamp: Date(), uptimeSeconds: 0,
+        sessionID: UUID().uuidString, sequence: 1, kind: "event", name: "session_started",
+        level: .info, channel: "fixture\(index)", playbackMode: "live",
+        attributes: [:], metrics: [:], counters: [:], flags: [:]))
+      await writer.flush()
+    }
+    let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+      .filter { $0.pathExtension == "jsonl" }
+    XCTAssertEqual(files.count, 2)
+    XCTAssertEqual(try records(in: directory).count, 2)
   }
 }

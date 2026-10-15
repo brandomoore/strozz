@@ -746,9 +746,11 @@ hourly during viewing. Expired or revoked rewards sessions require reconnecting.
 Strozz keeps a bounded, local JSONL playback log in its app cache so lag reports
 can be examined after the fact. Logging samples playback state about every two
 seconds and records noteworthy state changes, stalls, access/error-log updates,
-seeks, and recovery actions. It is diagnostic observation only; enabling it does
-not change playback tuning. Samples also include chat connection/read-pause
-flags, message-buffer counts, time since the last IRC frame, and reconnect
+seeks, and recovery actions. Multiview budget events record the old and applied
+resolution/bitrate limits and whether the pane is expanded. It is diagnostic
+observation only; enabling it does not change playback tuning. Samples also
+include chat connection/read-pause flags, message-buffer counts, time since the
+last IRC frame, and reconnect
 counts/reasons, current sync delay, and queued release/wake deadlines; they do
 not include chat text or chat participants. Watch-rewards diagnostics record
 report acknowledgements and server-returned streak counts, never access tokens
@@ -788,8 +790,12 @@ rotation parts, bounded native access/error-log backlog skips, and sessions that
 are still active are marked as partial evidence.
 
 The cache retains at most eight 4 MiB files across all sessions (about 32 MiB)
-and tvOS may reclaim it. It does not contain OAuth credentials, full URLs,
-request headers, server IP addresses, AVPlayer session IDs, SDK localized error
+and tvOS may reclaim it. Pane writers coordinate retention and protect each
+other's open files, including a quiet or hidden pane; one stream's rotation must
+not erase another stream's active diagnostics. File-capacity exhaustion is
+reported rather than exceeding the shared limit. It does not contain OAuth
+credentials, full URLs, request headers, server IP addresses, AVPlayer session
+IDs, SDK localized error
 prose, or error comments. Failures retain only structured evidence such as
 error domain/code, AVPlayer error-log status code, and an explicit HTTP status
 when AVFoundation includes one. YouTube resolution records the client/version

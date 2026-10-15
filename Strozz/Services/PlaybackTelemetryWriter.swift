@@ -1,9 +1,15 @@
 import Foundation
 import OSLog
 
-/// Queue-confined encoder and file state; only admission counters use the lock.
+/// Queue-confined encoding; retention coordinates open files across pane writers.
 /// Bounded admission never makes the player wait for disk or an overloaded queue.
 final class PlaybackTelemetryWriter: @unchecked Sendable {
+  private final class FileState: @unchecked Sendable {
+    let lock = NSLock()
+    var openFiles: Set<URL> = []
+  }
+  private enum PersistenceError: Error { case activeFileCapacity }
+  private static let files = FileState()
   private static let log = Logger(subsystem: "com.thatcube.Strozz", category: "PlaybackTelemetry")
   private let queue: DispatchQueue
   private let admissionLock = NSLock()
@@ -16,6 +22,7 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
   private let mirrorToSystemLog: Bool
   private let encoder: JSONEncoder
   private var handle: FileHandle?
+  private var partURL: URL?
   private var bytes = 0
   private var part = 0
   private var manifest: Manifest?
@@ -38,7 +45,7 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
     queue: DispatchQueue = DispatchQueue(label: "com.thatcube.Strozz.playback-telemetry", qos: .utility)
   ) {
     precondition(maximumFileBytes > 0 && maximumFiles > 0 && maximumPending > 0)
-    self.directory = directory
+    self.directory = directory.standardizedFileURL
     self.maximumFileBytes = maximumFileBytes
     self.maximumFiles = maximumFiles
     self.maximumPending = maximumPending
@@ -51,7 +58,18 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
     }
   }
 
-  deinit { try? handle?.close() }
+  deinit {
+    let handle = handle
+    let url = partURL
+    let state = Self.files
+    queue.async {
+      state.lock.lock()
+      defer { state.lock.unlock() }
+      do { try handle?.close() }
+      catch { PlaybackTelemetryWriter.log.error("Playback telemetry close failed (code \((error as NSError).code))") }
+      if let url { state.openFiles.remove(url) }
+    }
+  }
 
   func append(_ record: PlaybackTelemetryRecord) {
     admissionLock.lock()
@@ -72,6 +90,9 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
         pending -= 1
         admissionLock.unlock()
       }
+      // Panes have independent queues, but share the directory and retention limit.
+      Self.files.lock.lock()
+      defer { Self.files.lock.unlock() }
       var record = record
       record.attributes = record.attributes.filter { key, _ in
         let key = key.lowercased()
@@ -94,8 +115,7 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
           return
         }
         if manifest?.sessionID != record.sessionID {
-          try handle?.close()
-          handle = nil
+          try closePart()
           part = 0
           writeFailed = false
           manifest = Manifest(sessionID: record.sessionID, fileName: "", channel: record.channel,
@@ -111,15 +131,13 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
           manifest?.endedAt = record.timestamp
           try saveManifest()
           try handle?.synchronize()
-          try handle?.close()
-          handle = nil
+          try closePart()
         }
       } catch {
         writeFailed = true
         // Do not print NSError/userInfo or paths which might contain user data.
         Self.log.error("Playback telemetry persistence failed (code \((error as NSError).code)); retrying next session")
-        try? handle?.close()
-        handle = nil
+        try? closePart()
       }
     }
   }
@@ -137,8 +155,12 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
   }
 
   private func openPart() throws {
-    try handle?.close()
-    handle = nil
+    try closePart()
+    let active = Self.files.openFiles.filter { $0.deletingLastPathComponent() == directory }
+    guard active.count < maximumFiles else {
+      Self.log.error("Playback telemetry active-file capacity exhausted")
+      throw PersistenceError.activeFileCapacity
+    }
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     var directory = directory
     var values = URLResourceValues()
@@ -152,16 +174,29 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
       throw CocoaError(.fileWriteUnknown)
     }
     handle = try FileHandle(forWritingTo: url)
+    partURL = url
+    Self.files.openFiles.insert(url)
     bytes = 0
     manifest?.fileName = name
     try saveManifest()
     let files = try FileManager.default.contentsOfDirectory(
       at: directory, includingPropertiesForKeys: [.contentModificationDateKey]
-    ).filter { $0.lastPathComponent.hasPrefix("playback-") && $0.pathExtension == "jsonl" && $0 != url }
+    ).filter {
+      $0.lastPathComponent.hasPrefix("playback-") && $0.pathExtension == "jsonl"
+        && !Self.files.openFiles.contains($0)
+    }
     let dated = try files.map { ($0, try $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? .distantPast) }
-    for (old, _) in dated.sorted(by: { $0.1 > $1.1 }).dropFirst(maximumFiles - 1) {
+    for (old, _) in dated.sorted(by: { $0.1 > $1.1 }).dropFirst(maximumFiles - active.count - 1) {
       try FileManager.default.removeItem(at: old)
     }
+  }
+
+  private func closePart() throws {
+    let closing = handle
+    handle = nil
+    if let url = partURL { Self.files.openFiles.remove(url) }
+    partURL = nil
+    try closing?.close()
   }
 
   private func saveManifest() throws {

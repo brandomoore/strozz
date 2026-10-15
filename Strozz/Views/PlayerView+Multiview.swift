@@ -27,8 +27,17 @@ extension PlayerView {
 
   func applyMultiviewBudget() {
     guard let context = model.multiviewContext, let item = player.currentItem else { return }
+    let previousResolution = item.preferredMaximumResolution
+    let previousBitrate = item.preferredPeakBitRate
     item.preferredMaximumResolution = context.qualityTier.maximumResolution
     item.preferredPeakBitRate = Double(context.qualityTier.targetBitrate)
+    recordPlaybackEvent("multiview_budget_applied", metrics: [
+      "previous_maximum_height": previousResolution.height,
+      "previous_peak_bitrate_bps": previousBitrate,
+      "preferred_maximum_width": item.preferredMaximumResolution.width,
+      "preferred_maximum_height": item.preferredMaximumResolution.height,
+      "preferred_peak_bitrate_bps": item.preferredPeakBitRate,
+    ], flags: ["expanded": context.isExpanded])
   }
 
   func updateMultiviewPresentation() {
