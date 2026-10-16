@@ -526,8 +526,22 @@ final class MobilePlaybackModel {
         }
         let useNative = requestsNativePlayback
         if useNative {
+          #if DEBUG
+          let recorder = diagnostics
+          let sessionID = recorder.sessionID
+          let trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = { [weak recorder] detail in
+            Task { @MainActor in
+              guard let recorder, recorder.sessionID == sessionID else { return }
+              recorder.recordEvent(detail.event.rawValue,
+                attributes: detail.attributes.merging(["native_generation": request.uuidString]) { _, new in new },
+                metrics: detail.metrics, counters: detail.counters)
+            }
+          }
+          #else
+          let trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil
+          #endif
           engine = NativeLowLatencyHLS(sourceURL: url, headers: PlaybackService.streamHeaders,
-                                      history: 180) { [weak self] reason in
+                                      history: 180, trace: trace) { [weak self] reason in
             Task { @MainActor [weak self] in
               guard let self, self.isCurrent(request) else { return }
               self.recoverNative(reason)

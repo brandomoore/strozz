@@ -8,6 +8,7 @@ struct NativeTransportStream {
     let length: Int
     let duration: Double
     let independent: Bool
+    var timeline: [String: Double] = [:]
   }
 
   private(set) var byteCount = 0
@@ -26,8 +27,36 @@ struct NativeTransportStream {
   private var lastVideoPacket: Data?
   private var hasInitialIDR = false
   private var initialVideo = Data()
+  private let capturesDiagnostics: Bool
+  private var partPresentationClock: UInt64?
+  private var firstAudioClock: UInt64?
+  private var diagnosticTimestampErrors = 0
+  private var videoProfile: UInt8?
+  private var videoLevel: UInt8?
 
   private static let wrap: UInt64 = 1 << 33
+
+  init(capturesDiagnostics: Bool = false) { self.capturesDiagnostics = capturesDiagnostics }
+
+  private mutating func diagnosticTimestamp(_ data: Data, at offset: Int) -> UInt64? {
+    let value = try? Self.timestamp(data, at: offset)
+    if value == nil { diagnosticTimestampErrors += 1 }
+    return value
+  }
+
+  private func timeline(start: UInt64) -> [String: Double] {
+    guard capturesDiagnostics else { return [:] }
+    var values = ["video_decode_start_seconds": Double(start) / 90_000,
+      "diagnostic_timestamp_errors": Double(diagnosticTimestampErrors)]
+    values["video_presentation_start_seconds"] = partPresentationClock.map { Double($0) / 90_000 }
+    values["audio_first_presentation_seconds"] = firstAudioClock.map { Double($0) / 90_000 }
+    values["transport_first_decode_seconds"] = firstClock.map { Double($0) / 90_000 }
+    values["video_pid"] = videoPID.map(Double.init)
+    values["audio_pid"] = audioPID.map(Double.init)
+    values["avc_profile_idc"] = videoProfile.map(Double.init)
+    values["avc_level_idc"] = videoLevel.map(Double.init)
+    return values
+  }
 
   static func timestamp(_ data: Data, at offset: Int) throws -> UInt64 {
     guard offset >= 0, data.count - offset >= 5 else { throw NativeHLSError.invalidMedia }
@@ -67,6 +96,14 @@ struct NativeTransportStream {
       if pid == pmtPID, firstClock == nil { initializationLength = byteCount }
       return nil
     }
+    if capturesDiagnostics, pid == audioPID, start, firstAudioClock == nil {
+      if payload.count >= 14, payload.prefix(3) == Data([0, 0, 1]),
+        payload[7] >> 6 == 2 || payload[7] >> 6 == 3 {
+        firstAudioClock = diagnosticTimestamp(payload, at: 9)
+      } else {
+        diagnosticTimestampErrors += 1
+      }
+    }
     guard pid == videoPID else { return nil }
     let continuity = Int(b[3] & 15)
     if let lastContinuity, continuity != (lastContinuity + 1) % 16 {
@@ -86,6 +123,8 @@ struct NativeTransportStream {
       videoOffset = 9 + Int(payload[8])
       guard videoOffset <= payload.count else { throw NativeHLSError.invalidMedia }
       let clock = try Self.timestamp(payload, at: flags == 3 ? 14 : 9)
+      let startsPart = firstClock == nil || partClock.map { distance(clock, $0) >= 34_425 } == true
+      let presentation = capturesDiagnostics && startsPart ? diagnosticTimestamp(payload, at: 9) : nil
       if let previousClock {
         let interval = distance(clock, previousClock)
         guard interval > 0, interval <= 9000 else { throw NativeHLSFailureDetail.timestampInterval(interval) }
@@ -96,6 +135,7 @@ struct NativeTransportStream {
         guard audioPID != nil else { throw NativeHLSError.transportCodec }
         firstClock = clock
         partClock = clock
+        partPresentationClock = presentation
       }
       // LL-HLS requires non-terminal parts to reach 85% of the 0.45s target.
       if let partClock, distance(clock, partClock) >= 34_425 {
@@ -103,10 +143,11 @@ struct NativeTransportStream {
         let seconds = Double(distance(clock, partClock)) / 90_000
         guard seconds <= 0.45 else { throw NativeHLSError.partDuration }
         result = Range(offset: partOffset, length: offset - partOffset, duration: seconds,
-                       independent: partNumber == 0)
+                       independent: partNumber == 0, timeline: timeline(start: partClock))
         partNumber += 1
         partOffset = offset
         self.partClock = clock
+        partPresentationClock = presentation
         duration += seconds
       }
     }
@@ -118,6 +159,10 @@ struct NativeTransportStream {
         for i in 0..<(bytes.count - 3) {
           if bytes[i] == 0, bytes[i + 1] == 0, bytes[i + 2] == 1 {
             let type = bytes[i + 3] & 31
+            if capturesDiagnostics, type == 7, bytes.count > i + 6 {
+              videoProfile = bytes[i + 4]
+              videoLevel = bytes[i + 6]
+            }
             if (1...4).contains(type) { throw NativeHLSError.transportKeyframe }
             if type == 5 {
               hasInitialIDR = true
@@ -142,7 +187,7 @@ struct NativeTransportStream {
     guard tail > 0, tail <= 0.45, fullDuration <= 10 else { throw NativeHLSError.invalidMedia }
     duration = fullDuration
     return Range(offset: partOffset, length: byteCount - partOffset, duration: tail,
-                 independent: partNumber == 0)
+                 independent: partNumber == 0, timeline: timeline(start: partClock))
   }
 
   private mutating func readTable(_ payload: Data, pid: Int) throws {

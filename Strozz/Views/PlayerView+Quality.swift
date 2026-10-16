@@ -149,7 +149,18 @@ extension PlayerView {
     // Assign only on change: this runs every second, and rewriting the same
     // `@State` value still re-executes the player body (flashing focus).
     if resolvedQualityName != resolved {
+      let previous = resolvedQualityName
       resolvedQualityName = resolved
+      if preferredQuality == "Auto", model.isUsingNativeHLS,
+        let size = player.currentItem?.presentationSize, size.height > 0 {
+        var metrics = ["presentation_width": Double(size.width), "presentation_height": Double(size.height),
+          "player_rate": Double(player.rate)]
+        metrics["buffer_ahead_seconds"] = player.currentItem.flatMap { bufferAheadSeconds($0) }
+        metrics["video_frame_age_seconds"] = model.playbackTelemetry.videoFrameAge
+        recordPlaybackEvent("native_adaptive_quality_observed",
+          attributes: ["previous_quality": previous ?? "unknown", "resolved_quality": resolved ?? "unknown"],
+          metrics: metrics)
+      }
     }
   }
 

@@ -758,6 +758,15 @@ not include chat text or chat participants. Watch-rewards diagnostics record
 report acknowledgements and server-returned streak counts, never access tokens
 or activation codes.
 
+Debug native playback also records segment-boundary decode/presentation clocks,
+the first audio clock, packet IDs and codec profile/level when available, plus
+served rendition changes and their program-date mapping. Before changing active
+rendition or stopping an engine, it saves bounded recent rendition state and the
+last 16 resource-request timings. This is metadata only, not a media recording;
+signed URLs, credentials and headers are excluded.
+Native decoded-frame pulls also record paired begin/end events so a media-service
+reset can be correlated with sampling without changing or disabling the sampler.
+
 Pull the retained logs from the paired Apple TV and summarize the current or
 most recent session:
 

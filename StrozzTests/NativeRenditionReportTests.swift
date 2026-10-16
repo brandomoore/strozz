@@ -6,6 +6,45 @@ import XCTest
 #endif
 
 final class NativeRenditionReportTests: XCTestCase {
+  func testRenditionForensicsRecordServedHandoffAndSurviveStopWithoutURLs() async throws {
+    let capture = NativePlaybackCapture()
+    let root = URL(string: "https://example.test/master.m3u8?token=do-not-log")!
+    let origin = NativeHLSOrigin(root: root, headers: ["Authorization": "do-not-log"],
+      history: 30, trace: { capture.append($0) }) { _ in XCTFail("Tracing must not fail playback") }
+    let part = NativeHLSOrigin.Part(offset: 0, length: 188, duration: 0.4,
+      independent: true, media: Data([1, 2, 3]), timeline: ["video_decode_start_seconds": 42])
+    let segment = NativeHLSOrigin.Segment(sequence: 7, url: root, date: Date(timeIntervalSince1970: 1000),
+      discontinuity: 2, tags: [], parts: [part, part], complete: true)
+    _ = try await origin.renderForTesting([segment], otherRenditions: [
+      1: .init(url: root, segments: [segment], codecs: "avc1.64002A,mp4a.40.2",
+        bandwidth: 6_000_000, resolution: "1920x1080")
+    ], readyToServe: true)
+    for number in 20..<40 {
+      let missing = await origin.media("/part/1/7/\(number).ts")
+      XCTAssertNil(missing)
+    }
+    XCTAssertFalse(capture.values.contains { $0.event == .rendition })
+    let bytes = await origin.media("/part/1/7/0.ts")
+    XCTAssertEqual(bytes, Data([1, 2, 3]))
+    let handoff = try XCTUnwrap(capture.values.first { $0.event == .rendition })
+    XCTAssertEqual(handoff.counters["previous_rendition"], 0)
+    XCTAssertEqual(handoff.counters["rendition"], 1)
+    XCTAssertEqual(handoff.counters["sequence"], 7)
+    XCTAssertEqual(handoff.metrics["video_decode_start_seconds"], 42)
+    XCTAssertEqual(handoff.attributes["codecs"], "avc1.64002A,mp4a.40.2")
+    await origin.stop()
+    XCTAssertTrue(capture.values.contains { $0.event == .state && $0.attributes["reason"] == "stop" })
+    XCTAssertEqual(capture.values.filter {
+      $0.event == .request && $0.attributes["reason"] == "rendition_switch"
+    }.count, 16)
+    XCTAssertEqual(capture.values.filter {
+      $0.event == .request && $0.attributes["reason"] == "stop"
+    }.count, 16)
+    let text = capture.values.flatMap { $0.attributes.values }.joined()
+    XCTAssertFalse(text.contains("do-not-log"))
+    XCTAssertFalse(text.contains("https://"))
+  }
+
   func testTransientActiveManifestFailureRetainsCachedMediaAndRetriesInPlace() async throws {
     for code in [URLError.Code.timedOut, .networkConnectionLost] {
       let fixture = ResumeCursorFixture(upstream: 0...12, prefetch: true, manifestFailures: [code])
@@ -826,6 +865,13 @@ private final class NativeFailureCapture: @unchecked Sendable {
   private var storage: [NativeHLSFailureDiagnostic] = []
   var values: [NativeHLSFailureDiagnostic] { lock.withLock { storage } }
   func append(_ value: NativeHLSFailureDiagnostic) { lock.withLock { storage.append(value) } }
+}
+
+private final class NativePlaybackCapture: @unchecked Sendable {
+  private let lock = NSLock()
+  private var storage: [NativeHLSPlaybackDiagnostic] = []
+  var values: [NativeHLSPlaybackDiagnostic] { lock.withLock { storage } }
+  func append(_ value: NativeHLSPlaybackDiagnostic) { lock.withLock { storage.append(value) } }
 }
 
 private actor MasterTargetFixture {

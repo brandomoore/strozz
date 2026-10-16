@@ -407,6 +407,18 @@ extension PlayerView {
       let generation = model.nativeGeneration
       let telemetry = model.playbackTelemetry
       let sessionID = telemetry.sessionID
+      #if DEBUG
+      let trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = { [weak telemetry] detail in
+        Task { @MainActor in
+          guard let telemetry, telemetry.sessionID == sessionID else { return }
+          telemetry.recordEvent(detail.event.rawValue,
+            attributes: detail.attributes.merging(["native_generation": generation.uuidString]) { _, new in new },
+            metrics: detail.metrics, counters: detail.counters)
+        }
+      }
+      #else
+      let trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil
+      #endif
       let native = reuseNative ?? NativeLowLatencyHLS(sourceURL: url, headers: PlaybackService.streamHeaders,
         history: streamRewindEnabled ? rewindWindowSeconds : 12,
         diagnostic: { [weak telemetry] detail in
@@ -420,7 +432,7 @@ extension PlayerView {
               attributes: detail.attributes.merging(["native_generation": generation.uuidString]) { _, new in new },
               metrics: detail.metrics, counters: detail.counters)
           }
-        }) { reason in
+        }, trace: trace) { reason in
           Task { @MainActor in
             guard generation == model.nativeGeneration, model.isUsingNativeHLS else { return }
             recoverNativeHLS(reason)

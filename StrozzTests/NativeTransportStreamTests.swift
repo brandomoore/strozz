@@ -25,14 +25,67 @@ final class NativeTransportStreamTests: XCTestCase {
       + [0, 0, 1, idr ? 0x65 : 0x41, 0x80])
   }
 
-  private func parser() throws -> NativeTransportStream {
-    var value = NativeTransportStream()
+  private func parser(capturesDiagnostics: Bool = false) throws -> NativeTransportStream {
+    var value = NativeTransportStream(capturesDiagnostics: capturesDiagnostics)
     _ = try value.append(packet(pid: 0, counter: 0, payload:
       [0, 0, 0xB0, 13, 0, 1, 0xC1, 0, 0, 0, 1, 0xF0, 0, 0, 0, 0, 0]))
     _ = try value.append(packet(pid: 4096, counter: 0, payload:
       [0, 2, 0xB0, 23, 0, 1, 0xC1, 0, 0, 0xE1, 1, 0xF0, 0,
        0x1B, 0xE1, 1, 0xF0, 0, 0x0F, 0xE1, 0, 0xF0, 0, 0, 0, 0, 0]))
     return value
+  }
+
+  func testForensicTimingRecordsVideoAudioAndCodecWithoutChangingRanges() throws {
+    var traced = try parser(capturesDiagnostics: true)
+    var plain = try parser()
+    let base: UInt64 = 2_700_000
+    let audio = packet(pid: 256, counter: 0, payload:
+      [0, 0, 1, 0xC0, 0, 0, 0x80, 0x80, 5] + timestamp(base + 900))
+    _ = try traced.append(audio)
+    _ = try plain.append(audio)
+    var ranges: [NativeTransportStream.Range] = []
+    for frame in 0..<120 {
+      let bytes: Data
+      if frame == 0 {
+        bytes = packet(pid: 257, counter: 0, payload:
+          [0, 0, 1, 0xE0, 0, 0, 0x80, 0x80, 5] + timestamp(base)
+          + [0, 0, 1, 0x67, 0x64, 0, 0x2A, 0, 0, 1, 0x65, 0x80])
+      } else { bytes = video(frame: frame, clock: base + UInt64(frame * 1500)) }
+      let a = try traced.append(bytes)
+      let b = try plain.append(bytes)
+      XCTAssertEqual(a?.offset, b?.offset)
+      XCTAssertEqual(a?.length, b?.length)
+      XCTAssertEqual(a?.duration, b?.duration)
+      if let a { ranges.append(a) }
+    }
+    let a = try traced.finish(expectedDuration: 2)
+    let b = try plain.finish(expectedDuration: 2)
+    XCTAssertEqual(a.offset, b.offset)
+    XCTAssertEqual(a.length, b.length)
+    XCTAssertEqual(a.duration, b.duration)
+    let first = try XCTUnwrap(ranges.first)
+    XCTAssertEqual(first.timeline["video_decode_start_seconds"], 30)
+    XCTAssertEqual(first.timeline["video_presentation_start_seconds"], 30)
+    XCTAssertEqual(first.timeline["audio_first_presentation_seconds"], 30.01)
+    XCTAssertEqual(first.timeline["video_pid"], 257)
+    XCTAssertEqual(first.timeline["audio_pid"], 256)
+    XCTAssertEqual(first.timeline["avc_profile_idc"], 100)
+    XCTAssertEqual(first.timeline["avc_level_idc"], 42)
+    XCTAssertEqual(first.timeline["diagnostic_timestamp_errors"], 0)
+    XCTAssertTrue(b.timeline.isEmpty)
+  }
+
+  func testUnparseableDiagnosticAudioClockDoesNotRejectOtherwiseValidVideo() throws {
+    var value = try parser(capturesDiagnostics: true)
+    _ = try value.append(packet(pid: 256, counter: 0, payload:
+      [0, 0, 1, 0xC0, 0, 0, 0x80, 0x80, 5, 0, 0, 0, 0, 0]))
+    for frame in 0..<120 {
+      _ = try value.append(video(frame: frame, clock: UInt64(frame * 1500), idr: frame == 0))
+    }
+    let tail = try value.finish(expectedDuration: 2)
+    XCTAssertEqual(tail.timeline["diagnostic_timestamp_errors"], 1)
+    XCTAssertNil(tail.timeline["audio_first_presentation_seconds"])
+    XCTAssertEqual(value.duration, 2, accuracy: 0.00001)
   }
 
   func testRangesCoverUnmodifiedPacketsAndRetainInitialTables() throws {

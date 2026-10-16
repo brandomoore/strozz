@@ -75,6 +75,20 @@ struct NativeHLSFailureDiagnostic: Sendable {
   }
 }
 
+struct NativeHLSPlaybackDiagnostic: Sendable {
+  enum Event: String, Sendable {
+    case segment = "native_hls_segment_timing"
+    case rendition = "native_hls_rendition_switch"
+    case state = "native_hls_rendition_state"
+    case request = "native_hls_request"
+  }
+
+  let event: Event
+  let attributes: [String: String]
+  let metrics: [String: Double]
+  let counters: [String: Int]
+}
+
 /// Byte-level indexing only: encoded audio/video remains on Twitch's CDN.
 enum NativeCMAF {
   struct Box {

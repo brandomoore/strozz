@@ -263,14 +263,35 @@ extension PlayerView {
     }
 
     let itemTime = item.currentTime()
+    #if DEBUG
+    if model.isUsingNativeHLS {
+      recordPlaybackEvent("native_video_output_pull", level: .debug,
+        attributes: ["phase": "begin"], metrics: [
+          "playhead_seconds": itemTime.seconds, "presentation_width": size.width,
+          "presentation_height": size.height, "player_rate": Double(player.rate),
+        ])
+    }
+    #endif
     if output.hasNewPixelBuffer(forItemTime: itemTime) {
       // Consume the frame so the next poll's freshness check is meaningful, then
       // clear the freeze timer — the picture is genuinely advancing.
       let frame = output.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: nil)
+      #if DEBUG
+      if model.isUsingNativeHLS {
+        recordPlaybackEvent("native_video_output_pull", level: .debug,
+          attributes: ["phase": "end"], flags: ["has_new_frame": true, "received_frame": frame != nil])
+      }
+      #endif
       if frame != nil { model.playbackTelemetry.videoFrameObserved() }
       videoDecodeFrozenSince = nil
       return
     }
+    #if DEBUG
+    if model.isUsingNativeHLS {
+      recordPlaybackEvent("native_video_output_pull", level: .debug,
+        attributes: ["phase": "end"], flags: ["has_new_frame": false, "received_frame": false])
+    }
+    #endif
 
     // The clock advanced this sample but no new frame was produced.
     let now = Date()
