@@ -1,30 +1,29 @@
 # Low-Latency Playback — what we know
 
-Notes on the live-playback latency work: the local playlist-rewriting **proxy**
-(prefetch promotion) and the two **Auto profiles** that trade latency against
-quality on top of it. This file deliberately separates **verified facts** from
+Notes on native live playback and its earlier playlist-rewriting experiments.
+Local Twitch live video is now Native-only; legacy profile comparisons below
+are historical, not selectable modes or automatic failure fallbacks.
+This file deliberately separates **verified facts** from
 **open questions**. Only add something to "Established facts" once it is actually
 confirmed (by Apple docs, the HLS spec, the code itself, or a reproducible
 on-device observation). Hypotheses go under "Open questions" until proven.
 
 ## TL;DR
 
-- **Auto · Native Low Latency** is the new default Twitch profile. The original
-  **Auto · Low Latency**, **Auto · High Quality**, and fixed-quality options
-  remain available. Native source-CMAF indexing and original-CDN byte ranges
+- **Auto · Native Low Latency** is the only Twitch live Auto profile.
+  **Auto · Low Latency** and **Auto · High Quality** are removed; saved legacy
+  profile selections migrate to Native. Fixed video resolutions also stay Native.
+  Native source-CMAF indexing and original-CDN byte ranges
   now run in Swift in the app; no desktop helper or certificate is required.
-  The adaptive master is preserved. Transient failures retry native playback
-  before considering the existing player; fallback is explicit in the quality
-  menu/diagnostics.
-- Choose the old **Auto · Low Latency** row for an immediate comparison. Native
-  mode uses AVPlayer's LL-HLS timing, not the legacy variable-rate controller.
+  The adaptive master is preserved. Transient failures retry native playback;
+  unsupported formats or exhausted retries show a native error and Retry.
+- Native mode uses AVPlayer's LL-HLS timing, not the legacy variable-rate controller.
   Choosing native mode explicitly selects Twitch rather than a YouTube simulcast.
   Fixed video qualities retain the selected native engine and its buffer policy.
-  Explicit legacy profiles and Audio Only keep their existing standard paths.
+  Audio Only and explicit receiver/alternate-source transports remain separate.
 - Native mode is independent of the legacy Diagnostics **Prefetch Proxy**
-  kill-switch. Its fallback honors that legacy kill-switch, just like the legacy
-  profiles themselves. The quality menu and diagnostics explicitly identify
-  standard playback after fallback; selection is not proof of activation.
+  kill-switch. The switch cannot cause native failure to select standard playback.
+  There is no automatic standard-player fallback for local Twitch live video.
 - The native engine now indexes both H.264/AAC MPEG-TS and CMAF. TS parts are
   packet-aligned, retain PAT/PMT initialization, and use measured PES timestamps.
   The first video access unit must start with an IDR: a later keyframe cannot
@@ -46,7 +45,7 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   temporary origin, timeline, startup, or watchdog failures. Each retry resolves
   a fresh signed master and replaces the failed engine instead of reusing it.
   Verified unsupported formats skip those futile attempts; repeated failure
-  still permits a visible legacy fallback. Native drift is corrected by gentle
+  stops with a visible native error and Retry. Native drift is corrected by gentle
   rate adjustment rather than seeks; automatic seek-on-rebuffer is disabled
   once the initial native live start is established.
 - A quality-switch blocking reload can return its already-indexed parts before
@@ -75,9 +74,8 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   versus 29/29 reused warm connections after the change, removing repeated
   roughly 90ms connection setup without changing the latency target. This
   eliminates avoidable setup work, not arbitrary upstream delivery delays.
-- When native activation fails, its row disappears for that channel and the
-  checkmark moves to the actual fallback mode. The old **Auto · Low Latency**
-  label refers to the original prefetch engine, not native partial playback.
+- Native activation failure retains the Native choice and offers explicit Retry.
+  No high-latency Auto mode is silently selected.
 - Normal HLS discontinuities, initialization-map changes, and ad date ranges are
   now retained per segment rather than treated as fatal. The native decoder
   timeline resets at a period boundary; completed ad playlists without prefetch
@@ -92,7 +90,7 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   live edge are indexed. Idle renditions resume their retained timeline, and
   active media requests keep their indexer alive during adaptive switches.
 
-### Native-first recovery
+### Native-only recovery
 
 The native profile remains the default. Previously, the TV watchdog had a
 two-attempt recovery budget, but direct origin failures and failed-to-end events
@@ -100,7 +98,8 @@ could bypass it and downgrade immediately. These paths now use
 `NativePlaybackRecovery`, also shared by the mobile player. Brief unavailability,
 timeouts, discontinuity/timeline failures, incomplete keyframes and indexer
 overruns get bounded fresh-native attempts. Unsupported codecs/program tables
-and unsupported part durations can still fall back immediately.
+and unsupported part durations fail explicitly rather than selecting another
+engine.
 
 Duplicate callbacks coalesce during a TV source refresh. Startup waits follow a
 retry-owned replacement rather than launching a competing load. Pause/rewind
@@ -108,8 +107,8 @@ intent is retained, a newer pause remains paused, and discarded-source or
 dismissed-player completions cannot resurrect playback. A failed fresh source
 resolution reports an error rather than pretending standard playback was
 necessary. The default does not force unsupported media to play or promise
-unlimited retries; legacy playback is the last-resort stability path, not the
-first response to a transient engine error.
+unlimited retries. Manual retry or a manual resolution selection starts a new
+native attempt; neither silently selects a legacy engine.
 
 ### Isolating failures during native quality switches
 
@@ -308,8 +307,8 @@ inability to render that AustinShow feed also reproduced with the original repor
 wait restored; simulator clock progress was not counted as successful video.
 
 TV and mobile fixed-video selections now retain native playback, fresh-native
-recovery and pause/rewind intent. Audio Only, explicitly selected legacy modes,
-AirPlay receivers and genuine unsupported-format fallback remain separate.
+recovery and pause/rewind intent. Audio Only and explicitly requested AirPlay
+receivers retain separate transports; unsupported native video fails explicitly.
 Whole-segment input cannot provide bytes before Twitch publishes them, so it
 does not promise the same end-to-end latency as a true prefetch stream.
 
@@ -378,7 +377,10 @@ every-ad-transition reliability.
    no longer a user-facing toggle; an advanced **Prefetch Proxy** kill-switch
    lives under the Diagnostics overlay for troubleshooting only.
 
-## The two Auto profiles (`LivePlaybackPolicy`)
+## Historical legacy Auto profiles (removed)
+
+The following describes earlier experiments, not the current picker or recovery
+policy. Native is now the only local Twitch live-video engine.
 
 Both Auto rows stay on the adaptive master (ABR active) and keep prefetch
 promotion on; they differ only in how they trade quality for latency. The

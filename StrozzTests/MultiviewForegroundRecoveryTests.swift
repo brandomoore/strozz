@@ -162,9 +162,9 @@ final class MultiviewForegroundRecoveryTests: XCTestCase {
     let pane = controller.panes[0]
     let view = PlayerView(channel: pane.channel.login, auth: TwitchAuthSession(), model: pane.model)
     view.preferredQuality = "720p"
-    view.livePlaybackProfile = .lowerLatency
+    view.livePlaybackProfile = .nativeLowLatency
     XCTAssertEqual(pane.presentation.quality, "720p")
-    XCTAssertEqual(pane.presentation.profile, .lowerLatency)
+    XCTAssertEqual(pane.presentation.profile, .nativeLowLatency)
     XCTAssertEqual(UserDefaults.standard.string(forKey: PersistenceKey.preferredQuality), savedQuality)
     XCTAssertEqual(UserDefaults.standard.string(forKey: PersistenceKey.livePlaybackProfile), savedProfile)
     XCTAssertEqual(controller.panes[1].presentation.profile, .nativeLowLatency)

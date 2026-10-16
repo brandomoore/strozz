@@ -177,13 +177,25 @@ extension PlayerView {
           if model.audioInterrupted {
             Button("Resume playback") { resumeAfterAudioInterruption() }
               .focused($focus, equals: .audioResume)
+          } else if isNativeLiveVideo {
+            Button("Try Again") {
+              resetDiagnostics()
+              Task { await load(reason: "native user retry") }
+            }
+            .focused($focus, equals: .nativeRetry)
+            .accessibilityIdentifier("native-playback-retry")
           }
           Button("Back") { closePlayer() }
             .focused($focus, equals: .errorBack)
         }
         .padding(40)
-        .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 24))
-        .defaultFocus($focus, model.audioInterrupted ? .audioResume : .errorBack)
+        .foregroundStyle(glassDisabled ? palette.chromeOnOpaque : .primary)
+        .background {
+          if glassDisabled { RoundedRectangle(cornerRadius: 24).fill(palette.chromeOpaqueSurface) }
+          else { RoundedRectangle(cornerRadius: 24).fill(.regularMaterial) }
+        }
+        .defaultFocus($focus, model.audioInterrupted ? .audioResume
+          : (isNativeLiveVideo ? .nativeRetry : .errorBack))
       } else if showControls && !isMultiviewCompact {
         bottomOverlay
       }

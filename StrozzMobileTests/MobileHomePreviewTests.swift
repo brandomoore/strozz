@@ -82,7 +82,7 @@ final class MobileHomePreviewTests: XCTestCase {
     model.toggleMute()
     XCTAssertTrue(model.player.isMuted)
     model.prepareForAirPlay()
-    XCTAssertEqual(model.selection, .automatic)
+    XCTAssertEqual(model.selection, .receiver)
     XCTAssertEqual(model.recoveryNotice, "AirPlay uses standard playback.")
   }
 }

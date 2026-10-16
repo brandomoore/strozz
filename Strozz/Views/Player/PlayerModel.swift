@@ -65,6 +65,7 @@ final class PlayerModel {
   let lowLatencyProxy = LowLatencyHLSProxy(headers: PlaybackService.streamHeaders)
   @ObservationIgnored var nativeHLS: NativeLowLatencyHLS?
   @ObservationIgnored var nativeGeneration = UUID()
+  /// Terminal native error; never opts the live stream into standard playback.
   var nativeFallbackReason: String?
   var decodeRecoveryQualityID: String?
   @ObservationIgnored var triedDecodeRecovery = false

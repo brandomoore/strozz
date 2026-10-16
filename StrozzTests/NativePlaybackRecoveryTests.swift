@@ -293,13 +293,17 @@ final class NativeRecoveryIntegrationTests: XCTestCase {
     }
   }
 
-  func testUnsupportedAndRepeatedFailuresStillPermitExplicitFallback() async {
+  func testUnsupportedAndRepeatedFailuresStopWithNativeRetryInsteadOfStandardPlayback() async {
     await withModel { model, view in
       XCTAssertTrue(model.nativeRecovery.takeRetry(for: .unavailable))
       XCTAssertTrue(model.nativeRecovery.takeRetry(for: .timeout))
       view.recoverNativeHLS(.unavailable) { XCTFail("Budget exhausted"); throw URLError(.cancelled) }
       XCTAssertFalse(model.isUsingNativeHLS)
       XCTAssertEqual(model.nativeFallbackReason, NativeHLSError.unavailable.rawValue)
+      XCTAssertNil(model.player.currentItem)
+      XCTAssertNil(model.nativeHLS)
+      XCTAssertTrue(view.errorMessage?.contains("Native playback failed") == true)
+      XCTAssertEqual(view.qualityOptions, [LivePlaybackProfile.nativeLowLatency.pickerLabel])
     }
 
     await withModel { model, view in
@@ -307,6 +311,22 @@ final class NativeRecoveryIntegrationTests: XCTestCase {
       XCTAssertFalse(model.isUsingNativeHLS)
       XCTAssertEqual(model.nativeFallbackReason, NativeHLSError.transportCodec.rawValue)
       XCTAssertTrue(model.nativeRecovery.attempts.isEmpty)
+      XCTAssertNil(model.player.currentItem)
+      XCTAssertNotNil(view.errorMessage)
+    }
+  }
+
+  func testExplicitQualityChoiceRestartsNativeAfterTerminalFailure() async {
+    await withModel { model, view in
+      let url = URL(string: "https://example.invalid/manual-retry.m3u8")!
+      view.playback = StreamPlayback(master: url, qualities: [])
+      view.recoverNativeHLS(.unsupported)
+      XCTAssertNil(model.player.currentItem)
+      view.selectQuality(at: 0)
+      XCTAssertNil(model.nativeFallbackReason)
+      XCTAssertNil(view.errorMessage)
+      XCTAssertTrue(model.isUsingNativeHLS)
+      XCTAssertEqual((model.player.currentItem?.asset as? AVURLAsset)?.url.scheme, NativeLowLatencyHLS.scheme)
     }
   }
 }

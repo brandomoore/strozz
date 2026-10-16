@@ -125,7 +125,7 @@ model, tvOS version, and the stream where something went wrong helps a lot. See
 
 The mobile version includes personalized Twitch recommendations, a full followed
 channel directory, channel profiles, past broadcasts with local resume, category
-browsing, search, native low-latency live playback, standard Auto
+browsing, search, native low-latency live playback with Auto
 and fixed qualities (including audio-only), and live chat with Twitch/7TV/BTTV/FFZ
 emotes. Sign in through **Account > Sign in to Twitch**, open the Twitch link,
 approve the displayed code, then return to Strozz. Browsing, playback, and
@@ -279,10 +279,12 @@ a stream, edit its other channel handles or URLs and tap **Apply channel
 targets**; defaults use the Twitch handle, not automatic cross-platform account
 matching. Targets belong to the active stream session. Sending remains Twitch-only.
 
-Selecting a fixed video quality retains the native engine when native playback
-is selected, on both TV and mobile. Explicit standard playback, Audio Only, and
-AirPlay retain their standard paths; a genuine unsupported-format fallback is
-still reported rather than disguised as native playback.
+Twitch live video uses the native engine for both Auto and fixed resolutions on
+TV and mobile. The older Auto Low Latency/High Quality choices are removed, and
+saved legacy selections migrate to Native. Unsupported media or exhausted native
+retries show a clear failure and **Try Again**, never an automatic standard-player
+fallback. Audio Only, VOD, alternate video sources, and explicitly requested
+AirPlay receiver playback retain their separate transports.
 
 Home automatically previews one mostly visible stream at a time, nearest the
 middle of the screen. A small, leading-aligned heading scrolls with the feed
@@ -409,8 +411,8 @@ intent. Both targets use the same audio-session setup and bounded date-position
 restoration. Audio activation failures surface an error without exhausting the
 native stream retry budget; interruptions honor the system's resume permission.
 Transient native-engine failures get up to two fresh native attempts in a
-rolling minute before standard fallback; unsupported formats still fail over
-explicitly instead of leaving playback stuck.
+rolling minute. Unsupported formats or repeated failure stop with an explicit
+native error and Retry rather than switching to standard playback.
 If audio advances without decodable video, the mobile player makes one recovery
 attempt using the primary video rendition and displays the actual selected
 quality and a notice. A failed recovery shows an error instead of staying black.

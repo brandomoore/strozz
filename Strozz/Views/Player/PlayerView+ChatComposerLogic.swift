@@ -504,7 +504,7 @@ extension PlayerView {
     // Never calibrate a deliberately deep-buffered profile or an unverified
     // fallback as the normal low-latency baseline.
     let fallbackCalibration = nearEdge && diagStallCount == 0
-      && preferredQuality == "Auto" && livePlaybackProfile == .lowerLatency
+      && preferredQuality == "Auto" && isUsingAltSource
     model.chatSyncBaseline.observe(
       context: "\(channel.lowercased())/\(source)", itemID: itemID,
       playbackDate: item.currentDate(), playbackTime: item.currentTime().seconds,

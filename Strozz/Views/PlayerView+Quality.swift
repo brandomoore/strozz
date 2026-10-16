@@ -6,21 +6,32 @@ import SwiftUI
 extension PlayerView {
   /// The active latency-vs-quality profile, decoded from its stored raw value.
   var livePlaybackProfile: LivePlaybackProfile {
-    get { model.multiviewContext?.profile ?? LivePlaybackProfile(rawValue: livePlaybackProfileRaw) ?? .default }
+    get { model.multiviewContext?.profile ?? LivePlaybackProfile.restored(rawValue: livePlaybackProfileRaw) }
     nonmutating set {
       if let context = model.multiviewContext { context.profile = newValue }
       else { livePlaybackProfileRaw = newValue.rawValue }
     }
   }
 
+  func migrateNativeLiveProfile() {
+    if livePlaybackProfileRaw != LivePlaybackProfile.nativeLowLatency.rawValue {
+      livePlaybackProfileRaw = LivePlaybackProfile.nativeLowLatency.rawValue
+    }
+  }
+
+  var isNativeLiveVideo: Bool {
+    !isVOD && !isUsingAltSource && !isAudioOnlyActive && !player.isExternalPlaybackActive
+  }
+
   /// Concrete buffer / catch-up tuning for the current profile and pin state.
   /// A stream flagged chronically unstable overrides everything with the
   /// deep-buffer stability fallback (smoothness over latency).
   var activeLivePlaybackPolicy: LivePlaybackPolicy {
+    if isNativeLiveVideo {
+      return .live(profile: .nativeLowLatency, isPinned: preferredQuality != "Auto")
+    }
     if isStreamUnstable { return .stabilityFallback }
-    let profile = livePlaybackProfile == .nativeLowLatency && !model.isUsingNativeHLS
-      ? LivePlaybackProfile.lowerLatency : livePlaybackProfile
-    return LivePlaybackPolicy.live(profile: profile, isPinned: preferredQuality != "Auto")
+    return .standard(isPinned: preferredQuality != "Auto")
   }
 
   /// Applies the active policy to the live item without swapping the source —
@@ -50,29 +61,27 @@ extension PlayerView {
   }
 
   var qualityOptions: [String] {
-    LivePlaybackProfile.available(nativeAvailable: model.nativeFallbackReason == nil && !isStreamUnstable).map(\.pickerLabel)
+    LivePlaybackProfile.allCases.map(\.pickerLabel)
       + (playback?.qualities.map(\.name) ?? [])
   }
 
-  /// The option string the picker should show a checkmark against. While on the
-  /// adaptive master ("Auto") that's whichever profile row is active; a pinned
-  /// rendition selects itself.
+  /// Auto always uses the native row; a pinned rendition selects itself.
   var selectedQualityOption: String {
     preferredQuality == "Auto"
-      ? livePlaybackProfile.effectiveSelection(nativeAvailable: model.nativeFallbackReason == nil && !isStreamUnstable).pickerLabel
+      ? livePlaybackProfile.pickerLabel
       : preferredQuality
   }
 
   var qualityEngineStatus: String? {
-    guard !isUsingAltSource else { return nil }
+    guard !isUsingAltSource, !isVOD, !isAudioOnlyActive else { return nil }
     let notice = playback?.qualities.first(where: { $0.id == model.decodeRecoveryQualityID })
       .map { "A video rendition could not be decoded. Using \($0.name) instead." }
     guard livePlaybackProfile == .nativeLowLatency else { return notice }
     let status: String
-    if let reason = model.nativeFallbackReason { status = "Standard playback · \(reason)" }
+    if let reason = model.nativeFallbackReason { status = "Native playback unavailable · \(reason)" }
     else if model.nativeNeedsRefresh { status = "Reconnecting Native LL-HLS" }
     else if model.isUsingNativeHLS { status = model.nativeParts > 0 ? "Native LL-HLS" : "Preparing Native LL-HLS" }
-    else { status = "Standard playback" }
+    else { status = "Preparing Native LL-HLS" }
     return notice.map { "\(status) · \($0)" } ?? status
   }
 
@@ -179,42 +188,31 @@ extension PlayerView {
     return resolvedQualityName
   }
 
-  /// Display label for a quality option. The two Auto rows already carry their
-  /// full labels ("Auto · Low Latency" / "Auto · High Quality"), and a pinned
-  /// rendition shows its own name, so options are surfaced verbatim.
+  /// The native Auto row and pinned renditions carry their own labels.
   func qualityDisplayLabel(_ option: String) -> String {
     return option
   }
 
   func selectQuality(at index: Int) {
     guard qualityOptions.indices.contains(index) else { return }
+    model.nativeRecovery = NativePlaybackRecovery()
+    errorMessage = nil
     model.triedDecodeRecovery = false
     let option = qualityOptions[index]
     let previousQuality = preferredQuality
     let previousProfile = livePlaybackProfile.rawValue
     if let profile = LivePlaybackProfile.allCases.first(where: { $0.pickerLabel == option }) {
-      // One of the two Auto rows: stay on the adaptive master, just switch the
-      // latency-vs-quality profile and re-apply its buffer/catch-up policy.
       livePlaybackProfile = profile
+      model.nativeFallbackReason = nil
+      preferredQuality = "Auto"
       if isUsingAltSource {
-        if profile == .nativeLowLatency {
-          model.nativeFallbackReason = nil
-          preferredQuality = "Auto"
-          didManuallySelectSource = true
-          switchToTwitchSource()
-        }
-      } else if profile == .nativeLowLatency || previousProfile == LivePlaybackProfile.nativeLowLatency.rawValue {
-        model.nativeFallbackReason = nil
-        preferredQuality = "Auto"
+        didManuallySelectSource = true
+        switchToTwitchSource()
+      } else {
         if let playback {
           replacePlaybackItem(with: makeItem(url: playback.master))
           if shouldPlayAltSource { startPlayback() }
         }
-      } else if preferredQuality != "Auto" {
-        preferredQuality = "Auto"
-        applyQualityPreference("Auto")
-      } else {
-        applyActiveLivePlaybackPolicy()
       }
     } else {
       preferredQuality = option

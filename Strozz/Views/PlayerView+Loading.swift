@@ -79,6 +79,10 @@ extension PlayerView {
       )
       return
     }
+    if model.nativeFallbackReason != nil {
+      model.nativeFallbackReason = nil
+      model.nativeRecovery = NativePlaybackRecovery()
+    }
     stopPlaybackWatchdog()
     let telemetrySessionID = model.playbackTelemetry.sessionID
     let sourceGeneration = model.altRecovery.generation
@@ -149,6 +153,7 @@ extension PlayerView {
         if model.audioSessionActivationFailed { return }
 
         let started = await waitForPlaybackStart()
+        if model.nativeFallbackReason != nil { return }
         if model.audioSessionActivationFailed || model.audioInterrupted { return }
         guard telemetrySessionID == model.playbackTelemetry.sessionID,
           loadingChannel == activeChannel, sourceGeneration == model.altRecovery.generation else { return }
@@ -161,6 +166,7 @@ extension PlayerView {
               isLoading = false
               return
             }
+            if model.nativeFallbackReason != nil { return }
           }
           throw LoadTimeoutError.noPlaybackProgress
         }
@@ -262,6 +268,7 @@ extension PlayerView {
     var restartSerial = model.nativeRestartSerial
 
     while Date() < deadline {
+      if model.nativeFallbackReason != nil { return false }
       if model.audioSessionActivationFailed { return false }
       if model.audioInterrupted || model.mediaServicesUnavailable {
         guard !Task.isCancelled else { return false }
@@ -328,7 +335,7 @@ extension PlayerView {
   /// Replaces the current item only when the underlying source actually changes,
   /// comparing against the real (pre-proxy) source URL.
   func switchToSourceIfNeeded(_ url: URL) {
-    guard currentSourceURL != url else { return }
+    guard currentSourceURL != url || player.currentItem == nil else { return }
     let position = model.isUsingNativeHLS && (!pinnedToLive || isUserPaused)
       ? player.currentItem?.currentDate() : nil
     model.fallbackRestoreTask?.cancel()
@@ -351,8 +358,7 @@ extension PlayerView {
     currentSourceURL = url
     let nativeVideo = playback?.qualities.first(where: { $0.url == url })?.isAudioOnly != true
     let reuseNative = model.nativeHLS?.sourceURL == url && nativeVideo
-      && livePlaybackProfile == .nativeLowLatency && model.nativeFallbackReason == nil
-      && !isVOD && !isUsingAltSource && !isStreamUnstable
+      && !isVOD && !isUsingAltSource && !player.isExternalPlaybackActive
       ? model.nativeHLS : nil
     if reuseNative == nil { model.nativeHLS?.stop() }
     model.nativeHLS = nil
@@ -386,9 +392,7 @@ extension PlayerView {
     // `isStreamUnstable` we drop promotion and — when Rewind isn't holding the
     // proxy on for DVR — detach the proxy entirely and play the plain Twitch
     // playlist, exactly as a manual "LL proxy off" would.
-    let effectiveProfile = livePlaybackProfile.effectiveSelection(
-      nativeAvailable: model.nativeFallbackReason == nil)
-    let promotePrefetch = effectiveProfile.promotesPrefetch(
+    let promotePrefetch = livePlaybackProfile.promotesPrefetch(
       legacyEnabled: lowLatencyProxyEnabled, unstable: isStreamUnstable)
     let useProxy = promotePrefetch || streamRewindEnabled
     lowLatencyProxy.configure(
@@ -396,10 +400,10 @@ extension PlayerView {
       retainHistory: streamRewindEnabled,
       windowSeconds: rewindWindowSeconds
     )
-    let useNative = nativeVideo && livePlaybackProfile == .nativeLowLatency
-      && !isVOD && !isUsingAltSource && !isStreamUnstable
-      && model.nativeFallbackReason == nil
+    let useNative = nativeVideo && !isVOD && !isUsingAltSource && !player.isExternalPlaybackActive
+    let assetURL: URL
     if useNative {
+      model.nativeFallbackReason = nil
       let generation = model.nativeGeneration
       let telemetry = model.playbackTelemetry
       let sessionID = telemetry.sessionID
@@ -424,8 +428,10 @@ extension PlayerView {
         }
       model.nativeHLS = native
       model.isUsingNativeHLS = true
+      assetURL = native.assetURL
+    } else {
+      assetURL = useProxy ? lowLatencyProxy.proxyURL(for: url) : url
     }
-    let assetURL = model.nativeHLS?.assetURL ?? (useProxy ? lowLatencyProxy.proxyURL(for: url) : url)
     let asset = AVURLAsset(
       url: assetURL,
       options: ["AVURLAssetHTTPHeaderFieldsKey": PlaybackService.streamHeaders]
@@ -466,21 +472,21 @@ extension PlayerView {
     return item
   }
 
-  func fallbackFromNativeHLS(_ reason: NativeHLSError) {
+  func failNativeHLS(_ reason: NativeHLSError) {
     guard model.isUsingNativeHLS, !model.nativeNeedsRefresh, backgroundedAt == nil else { return }
-    let position = (!pinnedToLive || isUserPaused) ? player.currentItem?.currentDate() : nil
+    recordPlaybackEvent("native_hls_failed", level: .error, attributes: ["reason": reason.rawValue])
+    replacePlaybackItem(with: nil)
+    playerItemVideoOutput = nil
+    model.nativeRefreshTask = nil
     model.nativeFallbackReason = reason.rawValue
-    recordPlaybackEvent("native_hls_fallback", level: .warning, attributes: ["reason": reason.rawValue])
-    guard let source = currentSourceURL else { return }
-    let item = makeItem(url: source)
-    replacePlaybackItem(with: item)
-    let generation = model.nativeGeneration
-    if let position {
-      let intent = model.nativePositionIntent
-      model.fallbackRestoreTask = Task { @MainActor in
-        await restoreNativePosition(position, item: item, generation: generation, intent: intent)
-      }
-    } else if canResumeFallback(item: item, generation: generation) { startPlayback() }
+    errorMessage = String(localized: "Native playback failed. \(reason.rawValue) Try Again to reconnect.")
+    showChatSettings = false
+    showRewards = false
+    showControls = false
+    isLoading = false
+    player.pause()
+    stopLatencyMonitor()
+    stopPlaybackWatchdog()
   }
 
   func recoverNativeHLS(
@@ -495,7 +501,7 @@ extension PlayerView {
       return
     }
     guard model.nativeRecovery.takeRetry(for: reason) else {
-      fallbackFromNativeHLS(reason)
+      failNativeHLS(reason)
       return
     }
     model.nativeRestartSerial += 1

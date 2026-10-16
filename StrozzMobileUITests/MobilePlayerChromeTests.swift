@@ -3,6 +3,29 @@ import XCTest
 
 @MainActor
 final class MobilePlayerChromeTests: XCTestCase {
+  func testNativeFailureOffersRetryWithoutStandardAuto() throws {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
+    app.launchEnvironment["STROZZ_PLAYER_NATIVE_ERROR_FIXTURE"] = "1"
+    app.launch()
+    defer { app.terminate() }
+    let error = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Native playback failed")).firstMatch
+    XCTAssertTrue(error.waitForExistence(timeout: 10))
+    XCTAssertFalse(app.staticTexts.matching(
+      NSPredicate(format: "label BEGINSWITH %@", "Using standard playback")).firstMatch.exists)
+    let retry = app.buttons["Try again"]
+    XCTAssertTrue(retry.exists)
+    capture(app, "Native playback failure retains explicit retry")
+    retry.tap()
+    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: error)
+    waitForExpectations(timeout: 5)
+    XCTAssertTrue(app.buttons["mobile-play-pause"].waitForExistence(timeout: 5))
+    app.buttons["Playback quality"].tap()
+    XCTAssertTrue(app.buttons["Auto - Native Low Latency"].waitForExistence(timeout: 3))
+    XCTAssertFalse(app.buttons["Auto - Standard"].exists)
+    capture(app, "Native retry keeps the native-only quality menu")
+  }
+
   func testGlassPlayerControlsRemainUsableInLightAppearance() throws {
     XCUIDevice.shared.orientation = .landscapeLeft
     let app = XCUIApplication()
@@ -39,6 +62,11 @@ final class MobilePlayerChromeTests: XCTestCase {
     app.buttons["Done"].tap()
     app.buttons["Playback quality"].tap()
     XCTAssertTrue(app.navigationBars["Playback quality"].waitForExistence(timeout: 3))
+    XCTAssertTrue(app.buttons["Auto - Native Low Latency"].exists)
+    XCTAssertFalse(app.buttons["Auto - Standard"].exists)
+    XCTAssertFalse(app.buttons["Auto - Low Latency"].exists)
+    XCTAssertFalse(app.buttons["Auto - High Quality"].exists)
+    capture(app, "Native-only automatic playback menu")
     app.buttons["Done"].tap()
     app.buttons["mobile-minimize-player"].tap()
     XCTAssertTrue(app.buttons["mobile-expand-player"].waitForExistence(timeout: 3))

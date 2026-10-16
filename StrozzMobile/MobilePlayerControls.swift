@@ -262,10 +262,9 @@ struct MobileQualitySheet: View {
   var body: some View {
     NavigationStack {
       List {
-        if model.nativeFailure == nil && !model.isExternalPlayback {
+        if !model.isExternalPlayback {
           qualityRow("Auto - Native Low Latency", quality: .native)
         }
-        qualityRow("Auto - Standard", quality: .automatic)
         ForEach(model.qualities) { quality in
           qualityRow(quality.name, quality: quality.isAudioOnly ? .audioOnly : .fixed(quality.id))
         }

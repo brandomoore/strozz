@@ -108,7 +108,7 @@ extension PlayerView {
   private func recordInstabilityEvent() {
     // Native LL-HLS owns its live-offset recovery; legacy buffering must not
     // silently replace the selected engine.
-    guard !model.isUsingNativeHLS else { return }
+    guard !isNativeLiveVideo else { return }
     guard !isVOD, !isStreamUnstable else { return }
     let now = Date()
     lastStallAt = now
@@ -134,7 +134,7 @@ extension PlayerView {
   /// position. Recovery must never replay watched content to manufacture buffer.
   /// The policy stays latched until the viewer changes channel.
   func enterStreamStabilityMode() {
-    guard !model.isUsingNativeHLS, !isUsingAltSource, !isVOD, !isStreamUnstable,
+    guard !isNativeLiveVideo, !isUsingAltSource, !isVOD, !isStreamUnstable,
       !isUserPaused, !isScrubbing, backgroundedAt == nil else { return }
     streamUnstableSince = Date()
     recordPlaybackEvent(

@@ -16,13 +16,13 @@ enum MobilePlaybackMode: CaseIterable, Hashable {
 
 enum MobileQuality: Hashable {
   case native
-  case automatic
+  case receiver
   case audioOnly
   case fixed(String)
 
   func source(in playback: StreamPlayback) -> URL? {
     switch self {
-    case .native, .automatic: return playback.master
+    case .native, .receiver: return playback.master
     case .audioOnly: return playback.qualities.first { $0.isAudioOnly }?.url
     case .fixed(let id): return playback.qualities.first { $0.id == id }?.url
     }
@@ -123,7 +123,7 @@ final class MobilePlaybackModel {
   var qualityLabel: String {
     switch selection {
     case .native: return "Auto - Native Low Latency"
-    case .automatic: return "Auto - Standard"
+    case .receiver: return "AirPlay"
     case .audioOnly: return String(localized: "Audio only")
     case .fixed(let id): return qualities.first { $0.id == id }?.name ?? "Selected quality"
     }
@@ -136,7 +136,7 @@ final class MobilePlaybackModel {
   }
 
   var requestsNativePlayback: Bool {
-    mode == .video && prefersNativePlayback && nativeFailure == nil && !isAudioOnly && !isExternalPlayback
+    mode == .video && prefersNativePlayback && !isAudioOnly && !isExternalPlayback
   }
 
   var presentationState: PlaybackPresentationState {
@@ -161,6 +161,8 @@ final class MobilePlaybackModel {
     guard !isActive else { return }
     self.channel = channel
     isActive = true
+    nativeFailure = nil
+    nativeRecovery = NativePlaybackRecovery()
     #if DEBUG
     diagnostics.beginSession(channel: channel, playbackMode: "mobile")
     #endif
@@ -177,14 +179,15 @@ final class MobilePlaybackModel {
       selectMode(.audioOnly)
       return
     }
-    guard quality != selection || mode != .video,
-          quality != .native || (nativeFailure == nil && !isExternalPlayback) else { return }
+    guard quality != selection || mode != .video || nativeFailure != nil else { return }
+    guard quality != .native || !isExternalPlayback else { return }
     let position = mode == .chatOnly ? Position(shouldPlay: true, date: nil) : position()
     if mode == .video { lastVideoSelection = selection }
     mode = .video
     selection = quality
-    if quality == .native { prefersNativePlayback = true }
-    if quality == .automatic { prefersNativePlayback = false }
+    prefersNativePlayback = quality != .receiver
+    nativeFailure = nil
+    nativeRecovery = NativePlaybackRecovery()
     triedDecodeRecovery = false
     recoveryNotice = nil
     load(position: position)
@@ -211,8 +214,10 @@ final class MobilePlaybackModel {
       selection = .audioOnly
       load(position: position)
     case .video:
-      selection = lastVideoSelection == .native && (nativeFailure != nil || isExternalPlayback)
-        ? .automatic : lastVideoSelection
+      selection = lastVideoSelection == .receiver && !isExternalPlayback ? .native : lastVideoSelection
+      prefersNativePlayback = selection != .receiver
+      nativeFailure = nil
+      nativeRecovery = NativePlaybackRecovery()
       load(position: position)
     }
   }
@@ -251,12 +256,14 @@ final class MobilePlaybackModel {
   func prepareForAirPlay() {
     // A remote AirPlay receiver cannot fetch the native engine's loopback URLs.
     if requestsNativePlayback {
-      select(.automatic)
+      select(.receiver)
       recoveryNotice = "AirPlay uses standard playback."
     }
   }
 
   func retry() {
+    nativeFailure = nil
+    nativeRecovery = NativePlaybackRecovery()
     refreshStreamMetadata()
     load(position: Position(shouldPlay: true, date: nil))
   }
@@ -281,7 +288,7 @@ final class MobilePlaybackModel {
     chat.connect(to: channel)
     MobileChatSourcePreferences.apply(to: chat, channel: channel)
     refreshStreamMetadata()
-    load(position: position)
+    if nativeFailure == nil { load(position: position) }
   }
 
   func stop() {
@@ -376,6 +383,12 @@ final class MobilePlaybackModel {
 
   func handleMediaServicesLost() {
     guard isActive else { return }
+    if nativeFailure != nil {
+      mediaServicesUnavailable = true
+      needsFreshPlayer = true
+      audioSessionActive = false
+      return
+    }
     resetPosition = position()
     mediaServicesUnavailable = true
     mediaResetInProgress = false
@@ -393,6 +406,7 @@ final class MobilePlaybackModel {
     mediaServicesUnavailable = false
     needsFreshPlayer = true
     audioSessionActive = false
+    guard nativeFailure == nil else { return }
     Self.logger.warning("Recreating mobile playback after media services reset")
     if mode == .chatOnly { return }
     if suspendedPosition != nil {
@@ -411,7 +425,7 @@ final class MobilePlaybackModel {
   }
 
   private func handleAudioInterruption(type value: UInt?, options: UInt) {
-    guard isActive, let value,
+    guard isActive, nativeFailure == nil, let value,
       let type = AVAudioSession.InterruptionType(rawValue: value) else { return }
     switch type {
     case .began:
@@ -482,6 +496,7 @@ final class MobilePlaybackModel {
     invalidate()
     #if DEBUG
     if isLayoutFixture {
+      errorMessage = nil
       player.replaceCurrentItem(with: AVPlayerItem(asset: AVMutableComposition()))
       isPaused = !position.shouldPlay
       isReadyForDisplay = true
@@ -625,20 +640,17 @@ final class MobilePlaybackModel {
       && !mediaServicesUnavailable && request == generation && !Task.isCancelled
   }
 
-  private func fallback(_ reason: String, position: Position? = nil) {
+  private func failNative(_ reason: String) {
     guard requestsNativePlayback else { return }
-    let saved = position ?? self.position()
     nativeFailure = reason
-    if selection == .native { selection = .automatic }
-    Self.logger.warning("Native mobile playback fell back: \(reason, privacy: .public)")
-    load(position: saved)
+    fail(String(localized: "Native playback failed. \(reason) Try Again to reconnect."))
   }
 
   func recoverNative(_ reason: NativeHLSError, detail: String? = nil, position: Position? = nil) {
     guard isActive, suspendedPosition == nil, interruptedPosition == nil,
       !mediaServicesUnavailable, requestsNativePlayback else { return }
     guard nativeRecovery.takeRetry(for: reason) else {
-      fallback(detail ?? reason.rawValue, position: position)
+      failNative(detail ?? reason.rawValue)
       return
     }
     let saved = position ?? self.position()
@@ -649,6 +661,7 @@ final class MobilePlaybackModel {
 
   private func fail(_ message: String) {
     invalidate()
+    recoveryNotice = nil
     mediaResetInProgress = false
     resetPosition = nil
     errorMessage = message
