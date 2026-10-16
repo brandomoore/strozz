@@ -106,7 +106,7 @@ final class NativeLivePreview {
     player.actionAtItemEnd = .pause
     player.automaticallyWaitsToMinimizeStalling = true
     engine = NativeLowLatencyHLS(
-      sourceURL: url, headers: PlaybackService.streamHeaders, history: 30
+      sourceURL: url, headers: PlaybackService.streamHeaders, history: 30, controlledAuto: false
     ) {
       [weak self] error in
       Task { @MainActor in

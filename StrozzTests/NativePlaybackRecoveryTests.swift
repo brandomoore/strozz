@@ -225,6 +225,24 @@ final class NativeRecoveryIntegrationTests: XCTestCase {
     }
   }
 
+  func testControlledAutoQualityUsesDecoderPixelsRatherThanStaticMovieMetadata() async {
+    await withModel { model, view in
+      let master = URL(string: "https://example.invalid/master.m3u8")!
+      let low = StreamQuality(id: "480", name: "480p",
+        url: URL(string: "https://example.invalid/480.m3u8")!, isAudioOnly: false, bitrate: 1_400_000)
+      let source = StreamQuality(id: "source", name: "1080p60 (Source)",
+        url: URL(string: "https://example.invalid/source.m3u8")!, isAudioOnly: false, bitrate: 9_000_000)
+      view.playback = StreamPlayback(master: master, qualities: [low, source])
+      model.nativeControlledAuto = true
+      model.playbackTelemetry.beginSession(channel: "fixture", playbackMode: "live")
+      defer { model.playbackTelemetry.endSession(reason: "test") }
+      model.playbackTelemetry.videoFrameObserved(size: CGSize(width: 1920, height: 1080))
+      XCTAssertEqual(view.computeResolvedQualityName(), "1080p60")
+      model.playbackTelemetry.videoFrameObserved(size: CGSize(width: 852, height: 480))
+      XCTAssertEqual(view.computeResolvedQualityName(), "480p")
+    }
+  }
+
   func testDecodeRecoveryUsesNativeSourceWithoutPersistingQualityOrSpendingRetryBudget() async throws {
     try await withModel { model, view in
       let master = URL(string: "https://example.invalid/master.m3u8")!

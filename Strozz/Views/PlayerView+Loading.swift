@@ -371,6 +371,7 @@ extension PlayerView {
     if reuseNative == nil { model.nativeHLS?.stop() }
     model.nativeHLS = nil
     model.isUsingNativeHLS = false
+    model.nativeControlledAuto = false
     model.nativeParts = 0
     model.nativeLiveHoldBack = nil
     model.nativeSourceHasPrefetch = nil
@@ -429,14 +430,20 @@ extension PlayerView {
       #endif
       let native = reuseNative ?? NativeLowLatencyHLS(sourceURL: url, headers: PlaybackService.streamHeaders,
         history: streamRewindEnabled ? rewindWindowSeconds : 12,
+        initialBudget: .init(
+          maximumWidth: Int(model.multiviewContext?.qualityTier.maximumResolution.width ?? 0),
+          maximumHeight: Int(model.multiviewContext?.qualityTier.maximumResolution.height ?? 0),
+          maximumBitrate: model.multiviewContext?.qualityTier.targetBitrate ?? 0),
         diagnostic: { [weak telemetry] detail in
           Task { @MainActor in
             guard let telemetry, telemetry.sessionID == sessionID else { return }
             // A recovery may replace the engine before this main-actor event runs.
             // Keep the originating generation rather than dropping that evidence.
             let retrying = detail.attributes["operation"] == "manifest_retry"
-            telemetry.recordEvent(retrying ? "native_hls_manifest_retry" : "native_hls_failure",
-              level: retrying ? .warning : .error,
+            let probing = detail.attributes["operation"] == "capacity_probe"
+            telemetry.recordEvent(probing ? "native_hls_capacity_probe"
+              : retrying ? "native_hls_manifest_retry" : "native_hls_failure",
+              level: retrying || probing ? .warning : .error,
               attributes: detail.attributes.merging(["native_generation": generation.uuidString]) { _, new in new },
               metrics: detail.metrics, counters: detail.counters)
           }

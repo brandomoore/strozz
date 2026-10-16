@@ -1,4 +1,5 @@
 import AVKit
+import CoreVideo
 import SwiftUI
 import XCTest
 @testable import Strozz
@@ -197,8 +198,9 @@ final class NativeStreamMatrixLiveTests: XCTestCase {
       if clock.isFinite, clock > lastClock + 0.05 { advancing += 1 }
       lastClock = clock
       var frameTime = CMTime.invalid
-      if output.hasNewPixelBuffer(forItemTime: item.currentTime()),
-        output.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: &frameTime) != nil,
+      let decoded = output.hasNewPixelBuffer(forItemTime: item.currentTime())
+        ? output.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: &frameTime) : nil
+      if decoded != nil,
         frameTime.isNumeric, !lastFrameTime.isNumeric || frameTime > lastFrameTime {
         frames += 1
         lastFrameTime = frameTime
@@ -209,7 +211,8 @@ final class NativeStreamMatrixLiveTests: XCTestCase {
           add(try await NativePlaybackMetricCapture.originAttachment(origin, name: "\(channel) \(phase) first wait"))
         }
       }
-      let height = item.presentationSize.height
+      let height = decoded.map { CGFloat(CVPixelBufferGetHeight($0)) }
+        ?? (model.nativeControlledAuto ? 0 : item.presentationSize.height)
       if second >= 15, bestHeight >= 720, height > 0, height < 480 { severeDownshift += 1 }
       if second.isMultiple(of: 5) {
         let source = await model.nativeHLS?.origin.snapshot()

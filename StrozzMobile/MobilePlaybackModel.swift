@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreVideo
 import Observation
 import OSLog
 
@@ -59,6 +60,8 @@ final class MobilePlaybackModel {
   @ObservationIgnored private var generation = UUID()
   @ObservationIgnored private var engine: NativeLowLatencyHLS?
   @ObservationIgnored private var videoOutput: AVPlayerItemVideoOutput?
+  @ObservationIgnored private(set) var decodedVideoSize: CGSize?
+  @ObservationIgnored private(set) var controlledAutoActive = false
   @ObservationIgnored private var loadTask: Task<Void, Never>?
   @ObservationIgnored private var monitorTask: Task<Void, Never>?
   @ObservationIgnored private var metadataTask: Task<Void, Never>?
@@ -477,6 +480,8 @@ final class MobilePlaybackModel {
     #endif
     player.replaceCurrentItem(with: nil)
     videoOutput = nil
+    decodedVideoSize = nil
+    controlledAutoActive = false
     engine?.stop()
     engine = nil
     catchUp = NativeLiveCatchUp()
@@ -803,9 +808,10 @@ final class MobilePlaybackModel {
         let freshVideoFrame = videoOutput?.hasNewPixelBuffer(forItemTime: item.currentTime()) == true
         #endif
         if let videoOutput,
-           videoOutput.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) != nil {
+           let frame = videoOutput.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) {
+          decodedVideoSize = CGSize(width: CVPixelBufferGetWidth(frame), height: CVPixelBufferGetHeight(frame))
           #if DEBUG
-          if freshVideoFrame { diagnostics.videoFrameObserved() }
+          if freshVideoFrame { diagnostics.videoFrameObserved(size: decodedVideoSize) }
           #endif
           lastVideoFrame = uptime
           receivedVideoFrame = true
@@ -824,6 +830,16 @@ final class MobilePlaybackModel {
         }
         let target = await engine?.origin.liveTargetDate()
         let sourceBuffer = await engine?.origin.snapshot().forwardBuffer
+        do {
+          let controlled = try await engine?.origin.updateControlledPlayback(buffer: buffer, budget: .init()) ?? false
+          guard isCurrent(request), player.currentItem === item else { return }
+          controlledAutoActive = controlled
+        } catch {
+          guard isCurrent(request), player.currentItem === item, !(error is CancellationError) else { return }
+          Self.logger.error("Controlled playback feedback failed: \((error as NSError).domain) \((error as NSError).code)")
+          recoverNative(NativeHLSError.classify(error))
+          return
+        }
         guard isCurrent(request), player.currentItem === item else { return }
         baseline.observe(context: "\(channel)|\(selection)", itemID: request, playbackDate: item.currentDate(),
                          playbackTime: clock, liveTarget: target,
@@ -836,7 +852,8 @@ final class MobilePlaybackModel {
           delaySeconds: extraChatDelay ?? 0)
         let rate = catchUp.observe(.init(
           uptime: uptime, clock: clock, playbackDate: item.currentDate(), targetDate: target,
-          rendition: "\(item.presentationSize)", isPlaying: playing, buffer: buffer,
+          rendition: "\(controlledAutoActive ? decodedVideoSize ?? .zero : item.presentationSize)",
+          isPlaying: playing, buffer: buffer,
           allowed: followsLive && engine != nil && !isExternalPlayback && baseline.reference != .unavailable,
           hasFreshVideo: receivedVideoFrame && uptime - lastVideoFrame < 4,
           playbackRate: player.rate, normalOffset: baseline.nativeCushion ?? 0

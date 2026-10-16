@@ -368,7 +368,7 @@ extension PlayerView {
     }
 
     if let item = player.currentItem {
-      let size = item.presentationSize
+      let size = resolvedPlaybackSize ?? .zero
       if size.width > 0, size.height > 0 {
         lines.append(
           "Render: \(Int(size.width))×\(Int(size.height)) · Rate: \(diagFormat(Double(player.rate), decimals: 2))x"

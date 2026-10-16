@@ -1,4 +1,5 @@
 import AVKit
+import CoreVideo
 import SwiftUI
 
 // Playback diagnostics: formatting helpers and the sampling loop that powers the
@@ -282,7 +283,10 @@ extension PlayerView {
           attributes: ["phase": "end"], flags: ["has_new_frame": true, "received_frame": frame != nil])
       }
       #endif
-      if frame != nil { model.playbackTelemetry.videoFrameObserved() }
+      if let frame {
+        model.playbackTelemetry.videoFrameObserved(
+          size: CGSize(width: CVPixelBufferGetWidth(frame), height: CVPixelBufferGetHeight(frame)))
+      }
       videoDecodeFrozenSince = nil
       return
     }

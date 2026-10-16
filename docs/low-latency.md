@@ -10,6 +10,10 @@ on-device observation). Hypotheses go under "Open questions" until proven.
 
 ## TL;DR
 
+- A Debug-only **controlled Native Auto prototype** is available through the
+  `STROZZ_NATIVE_CONTROLLED_AUTO=1` launch environment. It is not enabled by a
+  normal launch or in Release. See the prototype section below for its supported
+  format, adaptation contract, and verification limits.
 - **Auto · Native Low Latency** is the only Twitch live Auto profile.
   **Auto · Low Latency** and **Auto · High Quality** are removed; saved legacy
   profile selections migrate to Native. Fixed video resolutions also stay Native.
@@ -110,7 +114,76 @@ necessary. The default does not force unsupported media to play or promise
 unlimited retries. Manual retry or a manual resolution selection starts a new
 native attempt; neither silently selects a legacy engine.
 
-### Isolating failures during native quality switches
+### Controlled Native Auto prototype
+
+The prototype keeps Apple's player but independently packages H.264/AAC TS as
+fragmented MP4. It does not re-encode. NAL/access-unit assembly spans PES
+boundaries: a new PES can begin with the tail or continuation slice of the
+previous picture, and its timestamp applies to the picture beginning inside it.
+AAC access units retain their source clocks and sample rate.
+
+One movie initialization contains every available video sample description and
+a stable audio track. The controller changes the sample-description index only
+at independent segment/keyframe boundaries. The shared decode timeline is
+derived from the GOP's presentation anchor; signed composition offsets change
+inversely, preserving source presentation times and compressed sample payloads.
+The 33-bit source clock is unwrapped consistently for live and historical media,
+with separate anchors across upstream discontinuities. Actual upstream period
+changes retain their discontinuity and movie initialization.
+
+Auto decisions use completed **upstream** media transfers, not AVPlayer's
+cached-loopback throughput or the wall time of an encoder-paced prefetch.
+Payload-transfer timing excludes request latency and actor work. A sharp probe
+drop that would lower the current quality gets an immediate fresh confirmation;
+an isolated delayed probe must not repeatedly cycle healthy video. Confirmed
+capacity loss lowers quality using a 75% capacity budget, rather than waiting
+for the buffer to become nearly empty. Upgrades require fresh evidence and
+hysteresis. Probe byte budgets scale down
+with measured capacity, and their two-second cadence is start-to-start rather
+than adding the preceding transfer duration. Dynamic grid/thumbnail budgets
+still apply. Every original video quality remains eligible. A budget below all
+available variants is explicitly logged and uses the lowest available rendition,
+as a preference cannot create a missing transcoding tier. A renderer's temporary
+wait is not treated as proof of insufficient network capacity.
+
+Normal live hold-back remains 1.5 seconds and the preferred buffer remains three
+seconds. Sources without incremental prefetch retain cadence-aware timing.
+Manifest timeouts retain one bounded in-place retry; definitive failures use the
+existing Native-only recovery budget. Rewind metadata is retained and evicted
+historical media can be remuxed on demand. An unavailable historical request is a
+resource-local failure, not permission to terminate healthy live production.
+Encoded media retention remains bounded.
+
+The experimental path applies to multi-rendition H.264/AAC TS Auto. Manual
+qualities, already-CMAF inputs, explicit receiver/audio/VOD paths, and previews
+retain their existing paths. Renditions currently need compatible AAC format
+descriptions within each upstream period; unsupported format changes fail
+explicitly rather than silently excluding a quality or changing playback engine.
+
+Multi-description movies may leave `AVPlayerItem.presentationSize` at their first
+description even after the decoder changes resolution. Quality labels and
+verification therefore use dimensions from consumed `CVPixelBuffer` frames.
+Diagnostics keep static `presentation_*` metadata separate from
+`decoded_video_*` evidence, reset decoded dimensions on item replacement, and
+mark `native_controlled_auto`.
+
+Controlled two-broadcaster replays of the live-capable engine have shown
+continuous 100-ms frame observations, sustained decoded 1080p after expansion,
+and genuine down/up adaptation during paced upstream bandwidth changes with the
+same player/item and normal latency policy. These results are not a physical-TV
+verification or a guarantee against arbitrary connectivity outages. A separate
+live-CDN run also retained continuous decoded frames with two independent
+players. No Source
+pin, removed quality, added normal buffer, or high-latency fallback counts as a
+successful Auto run.
+
+The design was compared with StreamNook
+[`5a60d04`](https://github.com/StreamNook/StreamNook/tree/5a60d045cc7aa78bcb86f8dff787c1864ff8d8b3),
+whose Rust origin currently transmuxes TS to fMP4 and feeds hls.js.
+StreamNook's source is noncommercial/source-available, not MIT/BSD; this prototype
+is independently implemented and copies none of that engine.
+
+### Native switching diagnostics and failure isolation
 
 A controlled TV Debug launch with `STROZZ_NATIVE_FRAME_OBSERVER=off` omits the
 main players' auxiliary `AVPlayerItemVideoOutput` observers. It does not change
@@ -130,6 +203,10 @@ rendering is unchanged. Telemetry labels `video_surface` as `player_layer` or
 `avkit_controller`. A renderer-only comparison must launch without the observer-off
 flag so decoded-frame monitoring is restored. This remains an unproven diagnostic
 control; Release ignores it and normal launches retain AVKit rendering.
+
+Both TV comparisons reproduced the existing media-service loss and track-teardown
+crash signature; neither is the repair. Controlled Native Auto retains normal
+AVKit rendering and decoded-frame monitoring.
 
 The October 15 local delivery controls are not fixes: smooth two-broadcaster
 replay produced 165/165 fresh post-startup frames per player, while whole-segment

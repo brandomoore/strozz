@@ -142,8 +142,13 @@ extension PlayerView {
     return Int(digits)
   }
 
-  /// Maps AVPlayer's current presentation size to the closest known variant
-  /// name while on the adaptive ("Auto") master playlist.
+  var resolvedPlaybackSize: CGSize? {
+    if model.nativeControlledAuto { return model.playbackTelemetry.decodedVideoSize }
+    return player.currentItem?.presentationSize
+  }
+
+  /// Multi-description movies keep static presentation metadata; use observed
+  /// decoder dimensions rather than reporting the first description forever.
   func updateResolvedQuality() {
     let resolved = computeResolvedQualityName()
     // Assign only on change: this runs every second, and rewriting the same
@@ -152,9 +157,13 @@ extension PlayerView {
       let previous = resolvedQualityName
       resolvedQualityName = resolved
       if preferredQuality == "Auto", model.isUsingNativeHLS,
-        let size = player.currentItem?.presentationSize, size.height > 0 {
-        var metrics = ["presentation_width": Double(size.width), "presentation_height": Double(size.height),
+        let size = resolvedPlaybackSize, size.height > 0 {
+        var metrics = ["resolved_video_width": Double(size.width), "resolved_video_height": Double(size.height),
           "player_rate": Double(player.rate)]
+        if let item = player.currentItem {
+          metrics["presentation_width"] = item.presentationSize.width
+          metrics["presentation_height"] = item.presentationSize.height
+        }
         metrics["buffer_ahead_seconds"] = player.currentItem.flatMap { bufferAheadSeconds($0) }
         metrics["video_frame_age_seconds"] = model.playbackTelemetry.videoFrameAge
         recordPlaybackEvent("native_adaptive_quality_observed",
@@ -179,7 +188,7 @@ extension PlayerView {
 
     // Preferred path: match the live adaptive resolution to the nearest named
     // variant so we keep its exact label (including frame rate).
-    if let size = player.currentItem?.presentationSize, size.height > 0 {
+    if let size = resolvedPlaybackSize, size.height > 0 {
       let height = Int(size.height.rounded())
       if let best = namedCandidates.min(by: { abs($0.0 - height) < abs($1.0 - height) }) {
         return best.1

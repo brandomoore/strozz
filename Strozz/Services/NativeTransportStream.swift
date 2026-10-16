@@ -38,6 +38,11 @@ struct NativeTransportStream {
 
   init(capturesDiagnostics: Bool = false) { self.capturesDiagnostics = capturesDiagnostics }
 
+  var mediaPIDs: (video: Int, audio: Int)? {
+    guard let videoPID, let audioPID else { return nil }
+    return (videoPID, audioPID)
+  }
+
   private mutating func diagnosticTimestamp(_ data: Data, at offset: Int) -> UInt64? {
     let value = try? Self.timestamp(data, at: offset)
     if value == nil { diagnosticTimestampErrors += 1 }

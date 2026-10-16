@@ -62,6 +62,31 @@ final class PlaybackTelemetryTests: XCTestCase {
     XCTAssertEqual(sample.stallKind, "decode_freeze")
   }
 
+  func testDecodedDimensionsFollowRealFramesAndResetWithItemOwnership() async throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let recorder = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(directory: directory, mirrorToSystemLog: false))
+    recorder.beginSession(channel: "fixture", playbackMode: "live")
+    let first = AVPlayerItem(url: URL(fileURLWithPath: "/nonexistent-first.mp4"))
+    let second = AVPlayerItem(url: URL(fileURLWithPath: "/nonexistent-second.mp4"))
+    recorder.trackItem(first)
+    recorder.videoFrameObserved(size: CGSize(width: 852, height: 480))
+    recorder.videoFrameObserved(size: CGSize(width: 1920, height: 1080))
+    XCTAssertEqual(recorder.decodedVideoSize, CGSize(width: 1920, height: 1080))
+    XCTAssertNotEqual(recorder.decodedVideoSize, first.presentationSize)
+    recorder.trackItem(second)
+    XCTAssertNil(recorder.decodedVideoSize)
+    XCTAssertNil(recorder.videoFrameAge)
+    recorder.videoFrameObserved(size: CGSize(width: -1, height: 0))
+    XCTAssertNil(recorder.decodedVideoSize)
+    XCTAssertNil(recorder.videoFrameAge)
+    recorder.endSession(reason: "test")
+    await recorder.flush()
+    let saved = try records(in: directory)
+    XCTAssertEqual(saved.filter { $0.name == "decoded_video_format_changed" }.count, 2)
+    XCTAssertEqual(saved.filter { $0.name == "invalid_decoded_frame_dimensions" }.count, 1)
+  }
+
   func testSanitizationFiniteMetricsAndSessionLifecycle() async throws {
     let directory = temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }

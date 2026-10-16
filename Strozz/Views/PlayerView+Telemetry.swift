@@ -158,6 +158,11 @@ extension PlayerView {
     snapshot.metrics["video_frame_age_seconds"] = model.playbackTelemetry.videoFrameAge
     snapshot.flags["using_alt_source"] = isUsingAltSource
     snapshot.flags["native_ll_hls"] = model.isUsingNativeHLS
+    snapshot.flags["native_controlled_auto"] = model.nativeControlledAuto
+    if let size = model.playbackTelemetry.decodedVideoSize {
+      snapshot.metrics["decoded_video_width"] = size.width
+      snapshot.metrics["decoded_video_height"] = size.height
+    }
     snapshot.flags["native_startup_complete"] = model.nativeStartupComplete
     snapshot.flags["playback_date_mapping_valid"] = wallClockLowConfidenceStreak < wallClockUnavailableSamples
     snapshot.flags["native_catch_up_active"] = model.nativeCatchUp.isActive

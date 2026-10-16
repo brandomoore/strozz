@@ -108,6 +108,7 @@ final class PlaybackTelemetryRecorder {
   var shortSessionID: String? { session.map { String($0.id.prefix(8)) } }
   var currentItemID: String { String(itemID) }
   var videoFrameAge: Double? { lastVideoFrameAt.map { ProcessInfo.processInfo.systemUptime - $0 } }
+  private(set) var decodedVideoSize: CGSize?
   var isSeekPending: Bool { pendingSeek != nil }
 
   func beginSession(
@@ -166,6 +167,7 @@ final class PlaybackTelemetryRecorder {
     pendingSeek = nil
     latestSeek = nil
     lastVideoFrameAt = nil
+    decodedVideoSize = nil
   }
 
   func recordEvent(
@@ -224,8 +226,19 @@ final class PlaybackTelemetryRecorder {
 
   /// Called by the existing video watchdog only after it consumes a fresh frame.
   /// A second consumer would interfere with its hasNewPixelBuffer checks.
-  func videoFrameObserved() {
+  func videoFrameObserved(size: CGSize? = nil) {
     guard session != nil else { return }
+    if let size {
+      guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 else {
+        recordEvent("invalid_decoded_frame_dimensions", level: .warning)
+        return
+      }
+      if decodedVideoSize != size {
+        decodedVideoSize = size
+        recordEvent("decoded_video_format_changed",
+          metrics: ["decoded_video_width": size.width, "decoded_video_height": size.height])
+      }
+    }
     if lastVideoFrameAt == nil {
       recordEvent("first_video_output_frame",
                   metrics: ["since_item_seconds": ProcessInfo.processInfo.systemUptime - itemStartedAt])

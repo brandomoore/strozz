@@ -1,11 +1,12 @@
 import AVKit
+import CoreVideo
 import SwiftUI
 import XCTest
 @testable import Strozz
 
 @MainActor
 final class MultiviewContinuityLiveTests: XCTestCase {
-  private enum Surface {
+  @MainActor private enum Surface {
     case avkit(AVPlayerViewController)
     case layer(PlayerLayerHostView)
 
@@ -206,17 +207,17 @@ final class MultiviewContinuityLiveTests: XCTestCase {
         try assertIdentity(controller, host: host, players: players, items: items,
           surfaces: surfacesByPlayer, audiblePaneID: audiblePaneID)
         let item = items[selectedIndex]
-        let height = item.presentationSize.height
+        let frame = output.hasNewPixelBuffer(forItemTime: item.currentTime())
+          ? output.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) : nil
+        let height = frame.map { CGFloat(CVPixelBufferGetHeight($0)) }
+          ?? (selected.model.nativeControlledAuto ? 0 : item.presentationSize.height)
         if second >= 15, height > 0, previousHeight > 0, height != previousHeight { qualityChanges += 1 }
         if let highest {
           if height >= CGFloat(highest), reachedHighestAt == nil { reachedHighestAt = second }
           if second >= 15, reachedHighestAt != nil, height < previousHeight { dropsAfterHighest += 1 }
         }
         previousHeight = height
-        if output.hasNewPixelBuffer(forItemTime: item.currentTime()),
-          output.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) != nil {
-          freshFrames += 1
-        }
+        if frame != nil { freshFrames += 1 }
         transitions.append(["channel": selected.channel.login, "phase": "expanded", "second": String(second),
           "height": String(Double(height)), "clock": String(item.currentTime().seconds),
           "peak_bitrate": String(item.preferredPeakBitRate), "fresh_frames": String(freshFrames),

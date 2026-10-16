@@ -267,6 +267,7 @@ enum NativeCMAF {
     var targetDuration = 6
     var duration: Double?
     var date: Date?
+    var explicitDate = false
     var entries: [Entry] = []
     var prefetch = false
     var ended = false
@@ -281,6 +282,7 @@ enum NativeCMAF {
       if line == "#EXT-X-DISCONTINUITY" {
         discontinuity += 1
         date = nil
+        explicitDate = false
       } else if line == "#EXT-X-ENDLIST" {
         ended = true
       } else if line.hasPrefix("#EXT-X-DATERANGE:") {
@@ -306,6 +308,7 @@ enum NativeCMAF {
           date = formatter.date(from: value)
         }
         guard date != nil else { throw NativeHLSError.invalidMedia }
+        explicitDate = true
       } else if line.hasPrefix("#EXTINF:") {
         duration = value.split(separator: ",").first.flatMap { Double($0) }
         guard let duration, duration.isFinite, duration > 0, duration <= 10 else { throw NativeHLSError.invalidMedia }
@@ -315,12 +318,13 @@ enum NativeCMAF {
         guard let number = sequence, let media = URL(string: path, relativeTo: url)?.absoluteURL,
           media.scheme == "https" else { throw NativeHLSError.invalidMedia }
         entries.append(Entry(sequence: number, url: media, duration: isPrefetch ? nil : duration,
-                             date: isPrefetch ? nil : date, initialization: map,
+                             date: isPrefetch && !explicitDate ? nil : date, initialization: map,
                              discontinuity: discontinuity, tags: tags))
         tags.removeAll()
         sequence = number + 1
         if let duration { date = date?.addingTimeInterval(duration) }
         duration = nil
+        explicitDate = false
         prefetch = prefetch || isPrefetch
       }
     }

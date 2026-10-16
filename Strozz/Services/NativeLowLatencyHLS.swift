@@ -13,12 +13,23 @@ final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unche
   private var stopped = false
   let queue = DispatchQueue(label: "strozz.native-hls.requests")
 
+  static var controlledAutoEnabled: Bool {
+    #if DEBUG
+    ProcessInfo.processInfo.environment["STROZZ_NATIVE_CONTROLLED_AUTO"] == "1"
+    #else
+    false
+    #endif
+  }
+
   init(sourceURL: URL, headers: [String: String], history: Double,
+       controlledAuto: Bool = NativeLowLatencyHLS.controlledAutoEnabled,
+       initialBudget: NativeAdaptiveRenditionPolicy.Budget = .init(),
        diagnostic: @escaping @Sendable (NativeHLSFailureDiagnostic) -> Void = { _ in },
        trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil,
        failure: @escaping @Sendable (NativeHLSError) -> Void) {
     self.sourceURL = sourceURL
     origin = NativeHLSOrigin(root: sourceURL, headers: headers, history: history,
+      controlledAuto: controlledAuto, initialBudget: initialBudget,
       diagnostic: diagnostic, trace: trace, failure: failure)
     super.init()
   }
@@ -97,6 +108,9 @@ final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unche
 
 actor NativeHLSOrigin {
   typealias DataLoader = @Sendable (URLRequest) async throws -> (Data, URLResponse)
+  typealias Snapshot = (parts: Int, renditions: Int, edgeAge: Double?, holdBack: Double?, hasPrefetch: Bool?,
+    forwardBuffer: Double?, reportRefreshSeconds: Double?, reportRefreshMaxSeconds: Double?,
+    inferredDiscontinuities: Int, cachedMediaBytes: Int)
 
   enum Response: Sendable {
     case playlist(Data)
@@ -190,6 +204,9 @@ actor NativeHLSOrigin {
   private var reportTask: Task<Void, Never>?
   private var reportRefreshSeconds: TimeInterval?
   private var reportRefreshMaxSeconds: TimeInterval?
+  private let controlledAuto: Bool
+  private var initialBudget: NativeAdaptiveRenditionPolicy.Budget
+  private var controlled: NativeControlledHLSOrigin?
   private var inFlightRequests = 0
   private var requestDrainWaiters: [CheckedContinuation<Void, Never>] = []
   private static let manifestRetrySeconds: TimeInterval = 4
@@ -199,11 +216,18 @@ actor NativeHLSOrigin {
   private var recentRequests: [[String: String]] = []
   private var traceRequests: [NativeHLSPlaybackDiagnostic] = []
 
-  func enableRequestDiagnostics() { capturesRequests = true }
-  func requestDiagnostics() -> [[String: String]] { recentRequests }
+  func enableRequestDiagnostics() async {
+    capturesRequests = true
+    await controlled?.enableRequestDiagnostics()
+  }
+  func requestDiagnostics() async -> [[String: String]] {
+    if let controlled { return await controlled.requestDiagnostics() }
+    return recentRequests
+  }
 
-  func timelineDiagnostics() -> [[String: String]] {
-    sources.sorted(by: { $0.key < $1.key }).flatMap { index, source in
+  func timelineDiagnostics() async -> [[String: String]] {
+    if let controlled { return await controlled.timelineDiagnostics() }
+    return sources.sorted(by: { $0.key < $1.key }).flatMap { index, source in
       let segments = source.publishedSegments
       let sampled = Array(segments.prefix(2)) + Array(segments.dropFirst(2).suffix(4))
       return sampled.map { segment in
@@ -271,10 +295,13 @@ actor NativeHLSOrigin {
   #endif
 
   init(root: URL, headers: [String: String], history: Double, loadData: DataLoader? = nil,
+       controlledAuto: Bool = false, initialBudget: NativeAdaptiveRenditionPolicy.Budget = .init(),
        diagnostic: @escaping @Sendable (NativeHLSFailureDiagnostic) -> Void = { _ in },
        trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil,
        failure: @escaping @Sendable (NativeHLSError) -> Void) {
     self.root = root; self.headers = headers; self.history = max(12, min(history, 1800))
+    self.controlledAuto = controlledAuto
+    self.initialBudget = initialBudget
     self.failure = failure
     self.diagnostic = diagnostic
     self.trace = trace
@@ -293,6 +320,7 @@ actor NativeHLSOrigin {
     traceState(reason: "stop")
     preparationTask?.cancel()
     preparationTask = nil
+    await controlled?.stop()
     for source in sources.values { source.task?.cancel() }
     reportTask?.cancel()
     sources.removeAll()
@@ -304,9 +332,8 @@ actor NativeHLSOrigin {
     session.invalidateAndCancel()
   }
 
-  func snapshot() -> (parts: Int, renditions: Int, edgeAge: Double?, holdBack: Double?, hasPrefetch: Bool?,
-                     forwardBuffer: Double?, reportRefreshSeconds: Double?, reportRefreshMaxSeconds: Double?,
-                     inferredDiscontinuities: Int, cachedMediaBytes: Int) {
+  func snapshot() async -> Snapshot {
+    if let controlled { return await controlled.snapshot() }
     let source = sources[lastActive]
     let tail = source?.segments.last
     return (publishedParts, sources.count,
@@ -315,12 +342,21 @@ actor NativeHLSOrigin {
       reportRefreshSeconds, reportRefreshMaxSeconds, source?.inferredDiscontinuities ?? 0, cachedMediaBytes)
   }
 
-  func liveTargetDate() -> Date? {
-    Self.liveTargetDate(in: sources, active: lastActive)
+  func liveTargetDate() async -> Date? {
+    if let controlled { return await controlled.liveTargetDate() }
+    return Self.liveTargetDate(in: sources, active: lastActive)
   }
 
-  func liveEdgeDate() -> Date? {
-    Self.liveEdgeDate(in: sources, active: lastActive)
+  func liveEdgeDate() async -> Date? {
+    if let controlled { return await controlled.liveEdgeDate() }
+    return Self.liveEdgeDate(in: sources, active: lastActive)
+  }
+
+  func updateControlledPlayback(buffer: Double, budget: NativeAdaptiveRenditionPolicy.Budget) async throws -> Bool {
+    initialBudget = budget
+    guard let controlled else { return false }
+    try await controlled.update(buffer: buffer, budget: budget)
+    return true
   }
 
   static func liveTargetDate(in sources: [Int: Rendition], active: Int) -> Date? {
@@ -358,6 +394,7 @@ actor NativeHLSOrigin {
   }
 
   func media(_ path: String) async -> Data? {
+    if let controlled { return await controlled.media(path) }
     #if DEBUG
     let started = Date()
     var servedBytes: Int?
@@ -548,6 +585,18 @@ actor NativeHLSOrigin {
     advertisedTargetDuration = manifests.values.map(\.targetDuration).max()
     sources = prepared
     reportsUpdatedAt = Date()
+    if controlledAuto, prepared.count > 1, manifests.values.allSatisfy({ $0.initialization == nil }) {
+      let values = try prepared.sorted(by: { $0.key < $1.key }).map { index, source in
+        guard let bitrate = source.bandwidth, let manifest = manifests[index] else { throw NativeHLSError.invalidMedia }
+        return NativeControlledHLSOrigin.Variant(id: index, url: source.url, bitrate: bitrate, manifest: manifest)
+      }
+      controlled = NativeControlledHLSOrigin(variants: values, headers: headers, history: history,
+        target: advertisedTargetDuration ?? 2, namespace: variantNamespace, budget: initialBudget,
+        loadData: loadData, diagnostic: diagnostic, trace: trace, failure: failure)
+      #if DEBUG
+      if capturesRequests { await controlled?.enableRequestDiagnostics() }
+      #endif
+    }
     master = output.joined(separator: "\n")
   }
 
@@ -618,6 +667,7 @@ actor NativeHLSOrigin {
       guard !stopped else { throw CancellationError() }
       try await prepare()
       guard !stopped else { throw CancellationError() }
+      if let controlled { return try await controlled.response(url) }
       if let error { throw error }
       if url.path == "/root.m3u8", let master, !master.isEmpty {
         #if DEBUG
@@ -690,6 +740,7 @@ actor NativeHLSOrigin {
       }
       throw CancellationError()
     } catch {
+      if controlled != nil { throw error }
       if (error as? URLError)?.code != .resourceUnavailable {
         fail(error, rendition: requestedRendition)
       }
