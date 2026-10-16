@@ -384,7 +384,8 @@ final class MultiviewContinuityLiveTests: XCTestCase {
       throw XCTSkip("The selected primary is no longer a source-CMAF stream")
     }
     settings["STROZZ_REQUIRE_CONTROLLED_AUTO"] = "1"
-    try await check(names: names, settings: settings, muted: true, environment: environment)
+    try await check(names: names, settings: settings,
+      muted: settings["STROZZ_MULTIVIEW_TEST_AUDIO"] != "audible", environment: environment)
     #endif
   }
 
@@ -614,6 +615,11 @@ final class MultiviewContinuityLiveTests: XCTestCase {
       XCTAssertTrue(pane.model.isUsingNativeHLS)
       XCTAssertTrue(isNativeAuto(pane), "Native Auto must remain adaptive without a fixed-quality decode recovery")
       XCTAssertEqual(pane.player.isMuted, pane.id != audiblePaneID, "Audio must remain with the authorized stream")
+      if pane.id == audiblePaneID {
+        XCTAssertGreaterThan(pane.player.volume, 0)
+        XCTAssertFalse(pane.model.audioInterrupted)
+        XCTAssertFalse(pane.model.audioSessionActivationFailed)
+      }
     }
     XCTAssertEqual(current.count, players.count, "No extra rendering owner may appear during zoom")
   }

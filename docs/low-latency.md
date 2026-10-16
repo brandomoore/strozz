@@ -218,6 +218,8 @@ selected live channel logins in `STROZZ_MATRIX_CHANNELS`, with a verified CMAF
 primary. It checks genuine controlled Auto on both panes, actual decoded
 quality, video/clock progress and retained player/item/surface identities
 through expansion and return. This also requires explicit hardware permission.
+`STROZZ_MULTIVIEW_TEST_AUDIO=audible` keeps only the primary stream audible and
+limits zoom verification to that stream; it does not change system volume.
 
 Multi-description movies may leave `AVPlayerItem.presentationSize` at their first
 description even after the decoder changes resolution. Quality labels and
