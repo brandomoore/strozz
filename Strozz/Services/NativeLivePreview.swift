@@ -1,6 +1,6 @@
 import AVFoundation
-import Observation
 import OSLog
+import Observation
 
 /// One muted live preview, with the same native origin and recovery policies as
 /// foreground playback. Its owner controls visibility and must call stop().
@@ -34,12 +34,11 @@ final class NativeLivePreview {
     task = Task { @MainActor [weak self] in
       guard let self else { return }
       var source = url
-      var native = true
       var triedSource = false
       var recovery = NativePlaybackRecovery()
       while isCurrent(request) {
         do {
-          try await play(source, native: native, request: request)
+          try await play(source, request: request)
           return
         } catch {
           guard isCurrent(request) else { return }
@@ -52,24 +51,23 @@ final class NativeLivePreview {
           if error is PreviewError, !triedSource {
             triedSource = true
             Self.logger.warning("Preview video unavailable; retrying the original video rendition")
-          } else if native {
+          } else {
             let reason = error as? NativeHLSError ?? .unavailable
             if !recovery.takeRetry(for: reason) {
-              native = false
               fallbackReason = reason.rawValue
-              Self.logger.warning("Native preview fell back to standard playback: \(reason.rawValue)")
+              errorMessage = "Native live preview unavailable."
+              Self.logger.error("Native preview failed: \(reason.rawValue)")
+              return
             }
-          } else {
-            errorMessage = "Live preview unavailable."
-            Self.logger.warning("Preview failed: \((error as NSError).domain) \((error as NSError).code)")
-            return
           }
           do {
             source = try await refresh(triedSource)
           } catch {
             guard isCurrent(request) else { return }
             errorMessage = "Live preview unavailable."
-            Self.logger.warning("Preview source refresh failed: \((error as NSError).domain) \((error as NSError).code)")
+            Self.logger.warning(
+              "Preview source refresh failed: \((error as NSError).domain) \((error as NSError).code)"
+            )
             return
           }
         }
@@ -97,9 +95,9 @@ final class NativeLivePreview {
     request == generation && !Task.isCancelled
   }
 
-  private func play(_ url: URL, native: Bool, request: UUID) async throws {
+  private func play(_ url: URL, request: UUID) async throws {
     failure = nil
-    isNative = native
+    isNative = true
     engineGeneration = UUID()
     let engineRequest = engineGeneration
     if player.status == .failed { player = AVPlayer() }
@@ -107,27 +105,30 @@ final class NativeLivePreview {
     player.allowsExternalPlayback = false
     player.actionAtItemEnd = .pause
     player.automaticallyWaitsToMinimizeStalling = true
-    if native {
-      engine = NativeLowLatencyHLS(sourceURL: url, headers: PlaybackService.streamHeaders, history: 30) {
-        [weak self] error in
-        Task { @MainActor in
-          guard let self, self.generation == request, self.engineGeneration == engineRequest else { return }
-          self.failure = error
+    engine = NativeLowLatencyHLS(
+      sourceURL: url, headers: PlaybackService.streamHeaders, history: 30, controlledAuto: false
+    ) {
+      [weak self] error in
+      Task { @MainActor in
+        guard let self, self.generation == request, self.engineGeneration == engineRequest else {
+          return
         }
+        self.failure = error
       }
     }
-    let asset = AVURLAsset(url: engine?.assetURL ?? url,
+    let asset = AVURLAsset(
+      url: engine?.assetURL ?? url,
       options: ["AVURLAssetHTTPHeaderFieldsKey": PlaybackService.streamHeaders])
     if let engine { asset.resourceLoader.setDelegate(engine, queue: engine.queue) }
     let item = AVPlayerItem(asset: asset)
-    item.preferredForwardBufferDuration = native ? 3 : 0.8
-    item.automaticallyPreservesTimeOffsetFromLive = native
+    item.preferredForwardBufferDuration = 3
+    item.automaticallyPreservesTimeOffsetFromLive = true
     item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
     let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [:])
     item.add(output)
     player.replaceCurrentItem(with: item)
     player.play()
-    var aligned = !native
+    var aligned = false
     var receivedFrame = false
     var lastFrame = ProcessInfo.processInfo.systemUptime
     let started = lastFrame
@@ -144,7 +145,8 @@ final class NativeLivePreview {
       let clock = item.currentTime().seconds
       let playing = player.timeControlStatus == .playing
       if output.hasNewPixelBuffer(forItemTime: item.currentTime()),
-        output.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) != nil {
+        output.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) != nil
+      {
         receivedFrame = true
         lastFrame = now
       }
@@ -158,7 +160,8 @@ final class NativeLivePreview {
           do { try await Task.sleep(for: .seconds(5)) } catch { return }
           item.cancelPendingSeeks()
         }
-        let positioned = await item.seek(to: .positiveInfinity, toleranceBefore: .zero, toleranceAfter: .zero)
+        let positioned = await item.seek(
+          to: .positiveInfinity, toleranceBefore: .zero, toleranceAfter: .zero)
         deadline.cancel()
         guard isCurrent(request) else { return }
         guard positioned else { throw PreviewError.startupTimeout }
@@ -170,24 +173,32 @@ final class NativeLivePreview {
       if aligned && receivedFrame && now - lastFrame < 1 { isReady = true }
       if now - lastFrame > 8 { throw PreviewError.missingVideo }
       if !aligned, now - started > 15 { throw PreviewError.startupTimeout }
-      let buffer = item.loadedTimeRanges.map(\.timeRangeValue)
+      let buffer =
+        item.loadedTimeRanges.map(\.timeRangeValue)
         .filter { $0.start.seconds <= clock && $0.end.seconds >= clock }
         .map { $0.end.seconds - clock }.max() ?? 0
       let source = await engine?.origin.snapshot()
       guard isCurrent(request) else { return }
-      if let forwardBuffer = source?.forwardBuffer { item.preferredForwardBufferDuration = forwardBuffer }
-      switch bufferedRecovery.observe(clock: clock, uptime: now, buffer: buffer,
+      if let forwardBuffer = source?.forwardBuffer {
+        item.preferredForwardBufferDuration = forwardBuffer
+      }
+      switch bufferedRecovery.observe(
+        clock: clock, uptime: now, buffer: buffer,
         minimumBuffer: item.preferredForwardBufferDuration,
-        waiting: player.timeControlStatus == .waitingToPlayAtSpecifiedRate, allowed: native && aligned) {
+        waiting: player.timeControlStatus == .waitingToPlayAtSpecifiedRate, allowed: aligned)
+      {
       case .resume: player.playImmediately(atRate: 1)
       case .restart: throw NativeHLSError.timeout
       case .awaitingProgress: continue
       case .none: break
       }
-      let rate = catchUp.observe(.init(uptime: now, clock: clock, playbackDate: item.currentDate(),
-        targetDate: target, rendition: "\(item.presentationSize)", isPlaying: playing, buffer: buffer,
-        allowed: native && aligned, hasFreshVideo: receivedFrame && now - lastFrame < 3,
-        playbackRate: player.rate, normalOffset: 0))
+      let rate = catchUp.observe(
+        .init(
+          uptime: now, clock: clock, playbackDate: item.currentDate(),
+          targetDate: target, rendition: "\(item.presentationSize)", isPlaying: playing,
+          buffer: buffer,
+          allowed: aligned, hasFreshVideo: receivedFrame && now - lastFrame < 3,
+          playbackRate: player.rate, normalOffset: 0))
       if playing, abs(player.rate - rate) >= 0.005 { player.rate = rate }
     }
   }

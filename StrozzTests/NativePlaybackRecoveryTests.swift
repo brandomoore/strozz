@@ -176,6 +176,73 @@ final class NativeRecoveryIntegrationTests: XCTestCase {
     }
   }
 
+  func testNativeFrameObserverControlKeepsEngineAutoAndBufferPolicy() async throws {
+    try await withModel { model, view in
+      let master = URL(string: "https://example.invalid/master.m3u8")!
+      view.playback = StreamPlayback(master: master, qualities: [])
+      let normal = view.makeItem(url: master, diagnosticEnvironment: [:])
+      view.replacePlaybackItem(with: normal)
+      let engine = try XCTUnwrap(model.nativeHLS)
+      let player = model.player
+      let output = try XCTUnwrap(model.playerItemVideoOutput)
+      XCTAssertTrue(normal.outputs.contains(output))
+
+      let control = view.makeItem(url: master,
+        diagnosticEnvironment: ["STROZZ_NATIVE_FRAME_OBSERVER": "off"])
+      view.replacePlaybackItem(with: control)
+      XCTAssertNil(model.playerItemVideoOutput)
+      XCTAssertTrue(control.outputs.isEmpty)
+      XCTAssertFalse(normal.outputs.contains(output), "The outgoing observer must also detach")
+      XCTAssertTrue(model.nativeHLS === engine)
+      XCTAssertTrue(model.player === player)
+      XCTAssertTrue(model.isUsingNativeHLS)
+      XCTAssertEqual((control.asset as? AVURLAsset)?.url.scheme, NativeLowLatencyHLS.scheme)
+      XCTAssertEqual(control.preferredForwardBufferDuration, normal.preferredForwardBufferDuration)
+      XCTAssertEqual(control.preferredMaximumResolution, normal.preferredMaximumResolution)
+      XCTAssertEqual(control.preferredPeakBitRate, normal.preferredPeakBitRate)
+      XCTAssertEqual(view.selectedQualityOption, LivePlaybackProfile.nativeLowLatency.pickerLabel)
+      XCTAssertTrue(model.nativeRecovery.attempts.isEmpty)
+      XCTAssertNil(model.nativeFallbackReason)
+
+      let restored = view.makeItem(url: master, diagnosticEnvironment: [:])
+      XCTAssertNotNil(model.playerItemVideoOutput, "No persisted setting may keep the control enabled")
+      XCTAssertEqual(restored.outputs.count, 1)
+    }
+  }
+
+  func testNativeFrameObserverControlDoesNotDisableAudioOnlyObservation() async {
+    await withModel { model, view in
+      let url = URL(string: "https://example.invalid/audio.m3u8")!
+      let audio = StreamQuality(id: "audio_only", name: "Audio Only",
+        url: url, isAudioOnly: true, bitrate: 160_000)
+      view.playback = StreamPlayback(master: url, qualities: [audio])
+      view.preferredQuality = audio.name
+      let item = view.makeItem(url: url,
+        diagnosticEnvironment: ["STROZZ_NATIVE_FRAME_OBSERVER": "off"])
+      XCTAssertFalse(model.isUsingNativeHLS)
+      XCTAssertNotNil(model.playerItemVideoOutput)
+      XCTAssertEqual(item.outputs.count, 1)
+    }
+  }
+
+  func testControlledAutoQualityUsesDecoderPixelsRatherThanStaticMovieMetadata() async {
+    await withModel { model, view in
+      let master = URL(string: "https://example.invalid/master.m3u8")!
+      let low = StreamQuality(id: "480", name: "480p",
+        url: URL(string: "https://example.invalid/480.m3u8")!, isAudioOnly: false, bitrate: 1_400_000)
+      let source = StreamQuality(id: "source", name: "1080p60 (Source)",
+        url: URL(string: "https://example.invalid/source.m3u8")!, isAudioOnly: false, bitrate: 9_000_000)
+      view.playback = StreamPlayback(master: master, qualities: [low, source])
+      model.nativeControlledAuto = true
+      model.playbackTelemetry.beginSession(channel: "fixture", playbackMode: "live")
+      defer { model.playbackTelemetry.endSession(reason: "test") }
+      model.playbackTelemetry.videoFrameObserved(size: CGSize(width: 1920, height: 1080))
+      XCTAssertEqual(view.computeResolvedQualityName(), "1080p60")
+      model.playbackTelemetry.videoFrameObserved(size: CGSize(width: 852, height: 480))
+      XCTAssertEqual(view.computeResolvedQualityName(), "480p")
+    }
+  }
+
   func testDecodeRecoveryUsesNativeSourceWithoutPersistingQualityOrSpendingRetryBudget() async throws {
     try await withModel { model, view in
       let master = URL(string: "https://example.invalid/master.m3u8")!
@@ -293,13 +360,17 @@ final class NativeRecoveryIntegrationTests: XCTestCase {
     }
   }
 
-  func testUnsupportedAndRepeatedFailuresStillPermitExplicitFallback() async {
+  func testUnsupportedAndRepeatedFailuresStopWithNativeRetryInsteadOfStandardPlayback() async {
     await withModel { model, view in
       XCTAssertTrue(model.nativeRecovery.takeRetry(for: .unavailable))
       XCTAssertTrue(model.nativeRecovery.takeRetry(for: .timeout))
       view.recoverNativeHLS(.unavailable) { XCTFail("Budget exhausted"); throw URLError(.cancelled) }
       XCTAssertFalse(model.isUsingNativeHLS)
       XCTAssertEqual(model.nativeFallbackReason, NativeHLSError.unavailable.rawValue)
+      XCTAssertNil(model.player.currentItem)
+      XCTAssertNil(model.nativeHLS)
+      XCTAssertTrue(view.errorMessage?.contains("Native playback failed") == true)
+      XCTAssertEqual(view.qualityOptions, [LivePlaybackProfile.nativeLowLatency.pickerLabel])
     }
 
     await withModel { model, view in
@@ -307,6 +378,22 @@ final class NativeRecoveryIntegrationTests: XCTestCase {
       XCTAssertFalse(model.isUsingNativeHLS)
       XCTAssertEqual(model.nativeFallbackReason, NativeHLSError.transportCodec.rawValue)
       XCTAssertTrue(model.nativeRecovery.attempts.isEmpty)
+      XCTAssertNil(model.player.currentItem)
+      XCTAssertNotNil(view.errorMessage)
+    }
+  }
+
+  func testExplicitQualityChoiceRestartsNativeAfterTerminalFailure() async {
+    await withModel { model, view in
+      let url = URL(string: "https://example.invalid/manual-retry.m3u8")!
+      view.playback = StreamPlayback(master: url, qualities: [])
+      view.recoverNativeHLS(.unsupported)
+      XCTAssertNil(model.player.currentItem)
+      view.selectQuality(at: 0)
+      XCTAssertNil(model.nativeFallbackReason)
+      XCTAssertNil(view.errorMessage)
+      XCTAssertTrue(model.isUsingNativeHLS)
+      XCTAssertEqual((model.player.currentItem?.asset as? AVURLAsset)?.url.scheme, NativeLowLatencyHLS.scheme)
     }
   }
 }

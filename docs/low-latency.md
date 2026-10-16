@@ -1,30 +1,34 @@
 # Low-Latency Playback — what we know
 
-Notes on the live-playback latency work: the local playlist-rewriting **proxy**
-(prefetch promotion) and the two **Auto profiles** that trade latency against
-quality on top of it. This file deliberately separates **verified facts** from
+Notes on native live playback and its earlier playlist-rewriting experiments.
+Local Twitch live video is now Native-only; legacy profile comparisons below
+are historical, not selectable modes or automatic failure fallbacks.
+This file deliberately separates **verified facts** from
 **open questions**. Only add something to "Established facts" once it is actually
 confirmed (by Apple docs, the HLS spec, the code itself, or a reproducible
 on-device observation). Hypotheses go under "Open questions" until proven.
 
 ## TL;DR
 
-- **Auto · Native Low Latency** is the new default Twitch profile. The original
-  **Auto · Low Latency**, **Auto · High Quality**, and fixed-quality options
-  remain available. Native source-CMAF indexing and original-CDN byte ranges
+- **Controlled Native Auto** is enabled by default for normal and Release
+  launches, including TestFlight. Debug builds can use
+  `STROZZ_NATIVE_CONTROLLED_AUTO=0` for a diagnostic comparison; Release ignores
+  that opt-out. See the controlled-engine section below for supported formats,
+  adaptation behavior, and verification limits.
+- **Auto · Native Low Latency** is the only Twitch live Auto profile.
+  **Auto · Low Latency** and **Auto · High Quality** are removed; saved legacy
+  profile selections migrate to Native. Fixed video resolutions also stay Native.
+  Native source-CMAF indexing and original-CDN byte ranges
   now run in Swift in the app; no desktop helper or certificate is required.
-  The adaptive master is preserved. Transient failures retry native playback
-  before considering the existing player; fallback is explicit in the quality
-  menu/diagnostics.
-- Choose the old **Auto · Low Latency** row for an immediate comparison. Native
-  mode uses AVPlayer's LL-HLS timing, not the legacy variable-rate controller.
+  The adaptive master is preserved. Transient failures retry native playback;
+  unsupported formats or exhausted retries show a native error and Retry.
+- Native mode uses AVPlayer's LL-HLS timing, not the legacy variable-rate controller.
   Choosing native mode explicitly selects Twitch rather than a YouTube simulcast.
   Fixed video qualities retain the selected native engine and its buffer policy.
-  Explicit legacy profiles and Audio Only keep their existing standard paths.
+  Audio Only and explicit receiver/alternate-source transports remain separate.
 - Native mode is independent of the legacy Diagnostics **Prefetch Proxy**
-  kill-switch. Its fallback honors that legacy kill-switch, just like the legacy
-  profiles themselves. The quality menu and diagnostics explicitly identify
-  standard playback after fallback; selection is not proof of activation.
+  kill-switch. The switch cannot cause native failure to select standard playback.
+  There is no automatic standard-player fallback for local Twitch live video.
 - The native engine now indexes both H.264/AAC MPEG-TS and CMAF. TS parts are
   packet-aligned, retain PAT/PMT initialization, and use measured PES timestamps.
   The first video access unit must start with an IDR: a later keyframe cannot
@@ -46,7 +50,7 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   temporary origin, timeline, startup, or watchdog failures. Each retry resolves
   a fresh signed master and replaces the failed engine instead of reusing it.
   Verified unsupported formats skip those futile attempts; repeated failure
-  still permits a visible legacy fallback. Native drift is corrected by gentle
+  stops with a visible native error and Retry. Native drift is corrected by gentle
   rate adjustment rather than seeks; automatic seek-on-rebuffer is disabled
   once the initial native live start is established.
 - A quality-switch blocking reload can return its already-indexed parts before
@@ -75,9 +79,8 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   versus 29/29 reused warm connections after the change, removing repeated
   roughly 90ms connection setup without changing the latency target. This
   eliminates avoidable setup work, not arbitrary upstream delivery delays.
-- When native activation fails, its row disappears for that channel and the
-  checkmark moves to the actual fallback mode. The old **Auto · Low Latency**
-  label refers to the original prefetch engine, not native partial playback.
+- Native activation failure retains the Native choice and offers explicit Retry.
+  No high-latency Auto mode is silently selected.
 - Normal HLS discontinuities, initialization-map changes, and ad date ranges are
   now retained per segment rather than treated as fatal. The native decoder
   timeline resets at a period boundary; completed ad playlists without prefetch
@@ -92,7 +95,7 @@ on-device observation). Hypotheses go under "Open questions" until proven.
   live edge are indexed. Idle renditions resume their retained timeline, and
   active media requests keep their indexer alive during adaptive switches.
 
-### Native-first recovery
+### Native-only recovery
 
 The native profile remains the default. Previously, the TV watchdog had a
 two-attempt recovery budget, but direct origin failures and failed-to-end events
@@ -100,7 +103,8 @@ could bypass it and downgrade immediately. These paths now use
 `NativePlaybackRecovery`, also shared by the mobile player. Brief unavailability,
 timeouts, discontinuity/timeline failures, incomplete keyframes and indexer
 overruns get bounded fresh-native attempts. Unsupported codecs/program tables
-and unsupported part durations can still fall back immediately.
+and unsupported part durations fail explicitly rather than selecting another
+engine.
 
 Duplicate callbacks coalesce during a TV source refresh. Startup waits follow a
 retry-owned replacement rather than launching a competing load. Pause/rewind
@@ -108,10 +112,183 @@ intent is retained, a newer pause remains paused, and discarded-source or
 dismissed-player completions cannot resurrect playback. A failed fresh source
 resolution reports an error rather than pretending standard playback was
 necessary. The default does not force unsupported media to play or promise
-unlimited retries; legacy playback is the last-resort stability path, not the
-first response to a transient engine error.
+unlimited retries. Manual retry or a manual resolution selection starts a new
+native attempt; neither silently selects a legacy engine.
 
-### Isolating failures during native quality switches
+### Controlled Native Auto
+
+The controlled engine keeps Apple's player and adapts both H.264/AAC
+TS and source-CMAF masters. It does not re-encode. For TS, NAL/access-unit assembly spans PES
+boundaries: a new PES can begin with the tail or continuation slice of the
+previous picture, and its timestamp applies to the picture beginning inside it.
+AAC access units retain their source clocks and sample rate.
+
+One movie initialization contains every available video sample description and
+a stable audio track. The controller changes the sample-description index only
+at independent segment/keyframe boundaries. The shared decode timeline is
+derived from the GOP's presentation anchor; signed composition offsets change
+inversely, preserving source presentation times and compressed sample payloads.
+The 33-bit source clock is unwrapped consistently for live and historical media,
+with separate anchors across upstream discontinuities. Actual upstream period
+changes retain their discontinuity and movie initialization.
+
+Source-CMAF uses the same fixed-movie controller rather than leaving rendition
+selection to AVPlayer's loopback throughput estimate. The input adapter discovers
+track IDs, parses AVC/AAC descriptions, retains each movie's actual video
+timescale, and incrementally rewrites fragment metadata while copying `mdat`
+payloads unchanged. It makes sample defaults, description indexes and byte
+offsets explicit, including when source clocks/box lengths use 32 or 64 bits.
+It does not assume TS's video-track ID or 90-kHz clock: the observed CMAF input
+used audio track 1 at 48 kHz and video track 2 at one million ticks per second.
+
+Version-zero CMAF tracks wrap at different times because each uses its own
+timescale. The adapter recovers their common A/V phase before anchoring a period,
+then uses the period/PDT reference to unwrap subsequent live and rewind media.
+A common whole-second epoch keeps historical clocks positive without rescaling
+source samples. GOP decode-origin adjustment is inverted in signed composition
+offsets, preserving presentation intervals and A/V alignment. Compatible
+initialization-URL rotations retain the movie; genuine upstream periods retain
+separate initialization resources and timestamp anchors.
+
+Auto decisions use completed **upstream** media transfers, not AVPlayer's
+cached-loopback throughput or the wall time of an encoder-paced prefetch.
+Payload-transfer timing excludes request latency and actor work. A sharp probe
+drop that would lower the current quality gets an immediate fresh confirmation;
+an isolated delayed probe must not repeatedly cycle healthy video. Confirmed
+capacity loss lowers quality using a 75% capacity budget, rather than waiting
+for the buffer to become nearly empty. Upgrades require fresh evidence and
+hysteresis. Probe byte budgets scale down
+with measured capacity, and their two-second cadence is start-to-start rather
+than adding the preceding transfer duration. Dynamic grid/thumbnail budgets
+still apply. Every original video quality remains eligible. A budget below all
+available variants is explicitly logged and uses the lowest available rendition,
+as a preference cannot create a missing transcoding tier. A renderer's temporary
+wait is not treated as proof of insufficient network capacity.
+
+Normal live hold-back remains 1.5 seconds and the preferred buffer remains three
+seconds. Sources without incremental prefetch retain cadence-aware timing.
+Manifest timeouts retain one bounded in-place retry; definitive failures use the
+existing Native-only recovery budget. Rewind metadata is retained and evicted
+historical media can be remuxed on demand. An unavailable historical request is a
+resource-local failure, not permission to terminate healthy live production.
+Encoded media retention remains bounded.
+
+The controlled path applies to multi-rendition H.264/AAC TS and source-CMAF
+Auto. Manual qualities, explicit receiver/audio/VOD paths, and previews retain
+their existing paths. Source-CMAF currently requires muxed AVC/AAC-LC without
+edit lists, compatible track IDs/timebases across renditions, and a common AAC
+configuration within each period. Harmless audio-track metadata differences
+are not codec mismatches. Unsupported format changes fail
+explicitly rather than silently excluding a quality or changing playback engine.
+
+The default controller uses measured multiview grid budgets: one through four
+visible panes allow up to 1920×1080, and five or six allow up to 1280×720. These
+are adaptive ceilings, not pinned qualities or guaranteed minima. Neither
+controlled grid tier has an additional bitrate ceiling: the previous 3 Mbps
+preference excluded common 3.42 Mbps 720p60 renditions from the controlled policy.
+Fullscreen/spotlight remains unrestricted, while secondary/hidden thumbnails
+retain their 854×480 / 800 kbps preference. Adding/removing panes updates budgets
+without replacing surviving players or items. A Debug diagnostic opt-out retains
+the previous grid policy for comparison; normal and Release launches use the
+measured count-aware budgets.
+
+The opt-in physical capacity test exercises the mounted grid on the authorized
+TV, preserving actual decoded dimensions, clock/frame continuity and thermal
+state. Historical source-CMAF Auto and controlled-TS results must not be conflated:
+the earlier source-CMAF selector's cycling was not proof of a hardware decoder limit. A two- and
+four-pane controlled 1080p60 workload each sustained three minutes on the tested
+Apple TV 4K (second generation); six 1080p60 panes encountered a buffering stop,
+so that workload is not accepted as a safe default. This is workload evidence,
+not an absolute decoder specification or a guarantee against CDN/network stalls.
+A subsequent actual-policy six-pane 720p60 run sustained three minutes with
+fresh target-resolution frames at every recorded observation, no observed
+waiting, zero reported dropped frames, and nominal thermal state.
+
+The guarded hardware test is
+`MultiviewContinuityLiveTests/testOptInPhysicalGridResolutionCapacity`. It needs
+explicit `STROZZ_MULTIVIEW_CAPACITY_TESTS=1` with controlled playback enabled, uses
+real followed live sources, and records source-CMAF exclusions only for isolating
+the controlled-TS workload. `STROZZ_CAPACITY_APPLY_GRID_BUDGETS=1` verifies the
+actual count-aware policy rather than unrestricted resource preferences;
+`STROZZ_CAPACITY_COUNTS=6` selects just the larger-grid stage. With the Xcode test
+runner, prefix these environment keys with `TEST_RUNNER_`. Never enable the
+physical check without permission to take over the TV.
+
+The separate `testOptInPhysicalCMAFZoomKeepsPlayback` check requires
+`STROZZ_CMAF_PHYSICAL_TESTS=1`, controlled playback enabled, and two explicitly
+selected live channel logins in `STROZZ_MATRIX_CHANNELS`, with a verified CMAF
+primary. It checks genuine controlled Auto on both panes, actual decoded
+quality, video/clock progress and retained player/item/surface identities
+through expansion and return. This also requires explicit hardware permission.
+`STROZZ_MULTIVIEW_TEST_AUDIO=audible` keeps only the primary stream audible and
+limits zoom verification to that stream; it does not change system volume.
+
+Multi-description movies may leave `AVPlayerItem.presentationSize` at their first
+description even after the decoder changes resolution. Quality labels and
+verification therefore use dimensions from consumed `CVPixelBuffer` frames.
+Diagnostics keep static `presentation_*` metadata separate from
+`decoded_video_*` evidence, reset decoded dimensions on item replacement, and
+mark `native_controlled_auto`.
+
+Controlled two-broadcaster replays of the live-capable engine have shown
+continuous 100-ms frame observations, sustained decoded 1080p after expansion,
+and genuine down/up adaptation during paced upstream bandwidth changes with the
+same player/item and normal latency policy. These results are not a physical-TV
+verification or a guarantee against arbitrary connectivity outages. A separate
+live-CDN run also retained continuous decoded frames with two independent
+players. No Source
+pin, removed quality, added normal buffer, or high-latency fallback counts as a
+successful Auto run.
+
+For the source-CMAF extension, all five recorded input qualities decoded with
+unchanged compressed payloads. Mixed original-CMAF/TS replays retained fresh
+100-ms video observations while expanding either pane; paced bandwidth loss and
+restoration exercised genuine down/up format changes without waiting. A separate
+live-CDN CMAF-primary run retained decoded 1080p after its initial upgrade,
+without the old selector's rapid resolution cycling. These are separate from
+physical-TV verification and do not erase the earlier failed controls.
+
+The design was compared with StreamNook
+[`5a60d04`](https://github.com/StreamNook/StreamNook/tree/5a60d045cc7aa78bcb86f8dff787c1864ff8d8b3),
+whose Rust origin currently transmuxes TS to fMP4 and feeds hls.js.
+StreamNook's source is noncommercial/source-available, not MIT/BSD; this prototype
+is independently implemented and copies none of that engine.
+
+### Native switching diagnostics and failure isolation
+
+A controlled TV Debug launch with `STROZZ_NATIVE_FRAME_OBSERVER=off` omits the
+main players' auxiliary `AVPlayerItemVideoOutput` observers. It does not change
+Native rendering, adaptive variants, multiview budgets, or buffering. Decode-freeze
+detection is unavailable during this comparison; ordinary stall detection and
+media-service reset logging remain active. Telemetry explicitly records
+`decoded_frame_observer_attached=false`; missing decoded-frame evidence must not
+be counted as proof of healthy video. This is an investigation control, not a
+playback fix. Release builds ignore it, and a normal launch restores observation.
+Native preview observers are unchanged.
+
+A separate TV Debug launch control, `STROZZ_MULTIVIEW_VIDEO_SURFACE=layer`,
+uses the existing native `AVPlayerLayer` host for multiview panes instead of
+embedding one AVKit controller per pane. The choice stays constant when a pane
+expands or collapses, and the same player/item remains mounted. Standalone
+rendering is unchanged. Telemetry labels `video_surface` as `player_layer` or
+`avkit_controller`. A renderer-only comparison must launch without the observer-off
+flag so decoded-frame monitoring is restored. This remains an unproven diagnostic
+control; Release ignores it and normal launches retain AVKit rendering.
+
+Both TV comparisons reproduced the existing media-service loss and track-teardown
+crash signature; neither is the repair. Controlled Native Auto retains normal
+AVKit rendering and decoded-frame monitoring.
+
+The October 15 local delivery controls are not fixes: smooth two-broadcaster
+replay produced 165/165 fresh post-startup frames per player, while whole-segment
+bursts froze one player after 2/165 frames despite continued requests and growing
+buffered ranges. The replay harness now fails on insufficient frame/clock
+progress rather than treating process exit as proof. Automatic buffer preference
+did not fix the burst case. HTTP playlist delivery kept frames moving but fell
+about 18 seconds behind the native edge; removing cold reports also increased
+delay. Continuously warming all renditions did not eliminate quality cycling.
+Those experiments remain outside production. The local freeze is not yet proven
+to share the physical TV's playback-service crash mechanism.
 
 An unused rendition's failed download or invalid media no longer cancels all
 rendition indexers. It is quarantined for the current engine, its cached media
@@ -260,6 +437,26 @@ Shutdown rejects new requests and drains in-flight manifest fetches before
 invalidating their shared URLSession, including when a quality change cancels
 concurrent report refreshes.
 
+Media ingestion also applies backpressure to callbacks URLSession already queued
+before observing a task suspension. At the unchanged 32-chunk capacity, its
+delegate thread waits until the indexer acknowledges a chunk instead of dropping
+media and restarting playback. Acknowledgements belong to a specific request and
+chunk, so duplicate or retired acknowledgements cannot resume a successor.
+Cancellation and shutdown wake blocked delivery. This changes neither the
+playback buffer/hold-back targets nor quality selection. Regressions cover a
+128-callback burst, cancellation, shutdown, request reuse, and byte-exact delivery
+of a two-MiB segment to a slow consumer.
+
+An already-indexed, active rendition gets one in-place manifest retry after a
+network timeout or lost connection. The retry has a four-second wall deadline;
+shutdown cancels both its request and timer. Existing media, the next segment
+cursor, parser state, player/item, quality, and buffer targets remain intact.
+Cold or inactive renditions, rejected signed URLs, certificate failures, and
+invalid media retain their existing failure paths. A second failure still reaches
+bounded native recovery. TV telemetry distinguishes `native_hls_manifest_retry`
+from an engine failure/rebuild. This removes avoidable cold-start overhead, but
+cannot prevent a pause when incoming video stops longer than buffered media lasts.
+
 Retired renditions also honor the blocking reload's requested sequence. If that
 position is ahead of their retained cache, they index the requested completed
 segment directly instead of downloading obsolete intervening media. Earlier
@@ -288,8 +485,8 @@ inability to render that AustinShow feed also reproduced with the original repor
 wait restored; simulator clock progress was not counted as successful video.
 
 TV and mobile fixed-video selections now retain native playback, fresh-native
-recovery and pause/rewind intent. Audio Only, explicitly selected legacy modes,
-AirPlay receivers and genuine unsupported-format fallback remain separate.
+recovery and pause/rewind intent. Audio Only and explicitly requested AirPlay
+receivers retain separate transports; unsupported native video fails explicitly.
 Whole-segment input cannot provide bytes before Twitch publishes them, so it
 does not promise the same end-to-end latency as a true prefetch stream.
 
@@ -358,7 +555,10 @@ every-ad-transition reliability.
    no longer a user-facing toggle; an advanced **Prefetch Proxy** kill-switch
    lives under the Diagnostics overlay for troubleshooting only.
 
-## The two Auto profiles (`LivePlaybackPolicy`)
+## Historical legacy Auto profiles (removed)
+
+The following describes earlier experiments, not the current picker or recovery
+policy. Native is now the only local Twitch live-video engine.
 
 Both Auto rows stay on the adaptive master (ABR active) and keep prefetch
 promotion on; they differ only in how they trade quality for latency. The

@@ -6,6 +6,195 @@ import XCTest
 #endif
 
 final class NativeRenditionReportTests: XCTestCase {
+  func testRenditionForensicsRecordServedHandoffAndSurviveStopWithoutURLs() async throws {
+    let capture = NativePlaybackCapture()
+    let root = URL(string: "https://example.test/master.m3u8?token=do-not-log")!
+    let origin = NativeHLSOrigin(root: root, headers: ["Authorization": "do-not-log"],
+      history: 30, trace: { capture.append($0) }) { _ in XCTFail("Tracing must not fail playback") }
+    let part = NativeHLSOrigin.Part(offset: 0, length: 188, duration: 0.4,
+      independent: true, media: Data([1, 2, 3]), timeline: ["video_decode_start_seconds": 42])
+    let segment = NativeHLSOrigin.Segment(sequence: 7, url: root, date: Date(timeIntervalSince1970: 1000),
+      discontinuity: 2, tags: [], parts: [part, part], complete: true)
+    _ = try await origin.renderForTesting([segment], otherRenditions: [
+      1: .init(url: root, segments: [segment], codecs: "avc1.64002A,mp4a.40.2",
+        bandwidth: 6_000_000, resolution: "1920x1080")
+    ], readyToServe: true)
+    for number in 20..<40 {
+      let missing = await origin.media("/part/1/7/\(number).ts")
+      XCTAssertNil(missing)
+    }
+    XCTAssertFalse(capture.values.contains { $0.event == .rendition })
+    let bytes = await origin.media("/part/1/7/0.ts")
+    XCTAssertEqual(bytes, Data([1, 2, 3]))
+    let handoff = try XCTUnwrap(capture.values.first { $0.event == .rendition })
+    XCTAssertEqual(handoff.counters["previous_rendition"], 0)
+    XCTAssertEqual(handoff.counters["rendition"], 1)
+    XCTAssertEqual(handoff.counters["sequence"], 7)
+    XCTAssertEqual(handoff.metrics["video_decode_start_seconds"], 42)
+    XCTAssertEqual(handoff.attributes["codecs"], "avc1.64002A,mp4a.40.2")
+    await origin.stop()
+    XCTAssertTrue(capture.values.contains { $0.event == .state && $0.attributes["reason"] == "stop" })
+    XCTAssertEqual(capture.values.filter {
+      $0.event == .request && $0.attributes["reason"] == "rendition_switch"
+    }.count, 16)
+    XCTAssertEqual(capture.values.filter {
+      $0.event == .request && $0.attributes["reason"] == "stop"
+    }.count, 16)
+    let text = capture.values.flatMap { $0.attributes.values }.joined()
+    XCTAssertFalse(text.contains("do-not-log"))
+    XCTAssertFalse(text.contains("https://"))
+  }
+
+  func testTransientActiveManifestFailureRetainsCachedMediaAndRetriesInPlace() async throws {
+    for code in [URLError.Code.timedOut, .networkConnectionLost] {
+      let fixture = ResumeCursorFixture(upstream: 0...12, prefetch: true, manifestFailures: [code])
+      let diagnostics = NativeFailureCapture()
+      let origin = try await makeSeededOrigin(loadData: { try await fixture.load($0) },
+        diagnostics: diagnostics) { _ in XCTFail("A recovered manifest must not replace the player") }
+      let cached = await origin.media("/part/1/11/0.ts")
+      XCTAssertEqual(cached, Data([1, 2, 3]))
+      let before = await origin.snapshot()
+      _ = try await origin.response(
+        URL(string: "strozz-native-ll://fixture/media/1.m3u8?_HLS_msn=11&_HLS_part=0")!)
+      for _ in 0..<100 {
+        if await fixture.initializationSequence != nil { break }
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      let resumed = await fixture.initializationSequence
+      let requests = await fixture.manifestRequests
+      XCTAssertEqual(resumed, 12, "Continue the existing indexer's next segment, not cold-start at the live edge")
+      XCTAssertEqual(requests.count, 2)
+      XCTAssertEqual(requests.first?.url, requests.last?.url)
+      XCTAssertEqual(requests.last?.timeoutInterval, 4)
+      XCTAssertEqual(diagnostics.values.first?.attributes["operation"], "manifest_retry")
+      XCTAssertFalse(diagnostics.values.contains { $0.attributes["scope"] == "engine" })
+      let retained = await origin.media("/part/1/11/0.ts")
+      XCTAssertEqual(retained, cached)
+      let after = await origin.snapshot()
+      XCTAssertEqual(after.cachedMediaBytes, before.cachedMediaBytes)
+      XCTAssertEqual(after.forwardBuffer, before.forwardBuffer)
+      XCTAssertEqual(after.holdBack, before.holdBack)
+      await origin.stop()
+    }
+  }
+
+  func testPersistentManifestFailureStillEscalatesAfterOneInPlaceRetry() async throws {
+    let fixture = ResumeCursorFixture(manifestFailures: [.timedOut, .timedOut])
+    let diagnostics = NativeFailureCapture()
+    let failed = expectation(description: "Exhausted retry reaches existing recovery")
+    let origin = try await makeSeededOrigin(loadData: { try await fixture.load($0) },
+      diagnostics: diagnostics) { reason in
+        XCTAssertEqual(reason, .unavailable)
+        failed.fulfill()
+      }
+    _ = await origin.media("/part/1/11/0.ts")
+    _ = try await origin.response(
+      URL(string: "strozz-native-ll://fixture/media/1.m3u8?_HLS_msn=11&_HLS_part=0")!)
+    await fulfillment(of: [failed], timeout: 2)
+    let requests = await fixture.manifestRequests
+    XCTAssertEqual(requests.count, 2, "Do not hide persistent failures behind an unbounded retry loop")
+    XCTAssertEqual(diagnostics.values.map { $0.attributes["operation"] }, ["manifest_retry", "manifest"])
+    XCTAssertEqual(diagnostics.values.last?.attributes["scope"], "engine")
+    await origin.stop()
+  }
+
+  func testManifestRetryHasAFourSecondWallDeadlineAndCancelsItsRequest() async throws {
+    let fixture = ResumeCursorFixture(manifestFailures: [.timedOut], holdManifestRequest: 2)
+    let diagnostics = NativeFailureCapture()
+    let origin = try await makeSeededOrigin(loadData: { try await fixture.load($0) },
+      diagnostics: diagnostics) { _ in XCTFail("The caller owns final failure handling") }
+    _ = await origin.media("/part/1/11/0.ts")
+    let start = ProcessInfo.processInfo.systemUptime
+    do {
+      _ = try await origin.upstreamManifest(1)
+      XCTFail("A held request must not outlive the retry budget")
+    } catch { XCTAssertEqual((error as? URLError)?.code, .timedOut) }
+    let elapsed = ProcessInfo.processInfo.systemUptime - start
+    XCTAssertGreaterThanOrEqual(elapsed, 3.8)
+    XCTAssertLessThan(elapsed, 5, "Four-second deadline plus scheduler tolerance")
+    let cancelled = await fixture.manifestWasCancelled
+    let requests = await fixture.manifestRequests
+    XCTAssertTrue(cancelled)
+    XCTAssertEqual(requests.count, 2)
+    await origin.stop()
+  }
+
+  func testStoppingDuringAnInPlaceManifestRetryCancelsWithoutReplacingPlayback() async throws {
+    let fixture = ResumeCursorFixture(manifestFailures: [.timedOut], holdManifestRequest: 2)
+    let diagnostics = NativeFailureCapture()
+    let origin = try await makeSeededOrigin(loadData: { try await fixture.load($0) },
+      diagnostics: diagnostics) { _ in XCTFail("Shutdown must not initiate playback recovery") }
+    _ = await origin.media("/part/1/11/0.ts")
+    _ = try await origin.response(
+      URL(string: "strozz-native-ll://fixture/media/1.m3u8?_HLS_msn=11&_HLS_part=0")!)
+    for _ in 0..<100 {
+      if await fixture.manifestRequests.count == 2 { break }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    let retained = await origin.media("/part/1/11/0.ts")
+    XCTAssertEqual(retained, Data([1, 2, 3]))
+    await origin.stop()
+    let cancelled = await fixture.manifestWasCancelled
+    let count = await fixture.manifestRequests.count
+    XCTAssertTrue(cancelled)
+    XCTAssertEqual(count, 2)
+    XCTAssertFalse(diagnostics.values.contains { $0.attributes["scope"] == "engine" })
+  }
+
+  func testColdOrInactiveManifestFailuresDoNotReceiveExtraRetries() async throws {
+    for cold in [false, true] {
+      let fixture = ResumeCursorFixture(manifestFailures: [.timedOut])
+      let diagnostics = NativeFailureCapture()
+      let origin = try await makeSeededOrigin(loadData: { try await fixture.load($0) },
+        diagnostics: diagnostics) { _ in }
+      if cold {
+        let metadata = NativeHLSOrigin.Segment(sequence: 0,
+          url: URL(string: "https://example.test/current.m3u8")!, date: Date(),
+          discontinuity: 0, tags: [], complete: true, declaredDuration: 2)
+        _ = try await origin.renderForTesting([metadata], readyToServe: true)
+      }
+      do {
+        _ = try await origin.upstreamManifest(cold ? 0 : 1)
+        XCTFail("Only an active, already-indexed rendition receives a warm retry")
+      } catch { XCTAssertEqual((error as? URLError)?.code, .timedOut) }
+      let count = await fixture.manifestRequests.count
+      XCTAssertEqual(count, 1)
+      XCTAssertTrue(diagnostics.values.isEmpty)
+      await origin.stop()
+    }
+  }
+
+  func testDefinitiveManifestFailuresAreNotRetriedInPlace() async throws {
+    for code in [URLError.Code.secureConnectionFailed, .badServerResponse] {
+      let fixture = ResumeCursorFixture(manifestFailures: [code])
+      let diagnostics = NativeFailureCapture()
+      let origin = try await makeSeededOrigin(loadData: { try await fixture.load($0) },
+        diagnostics: diagnostics) { _ in }
+      _ = await origin.media("/part/1/11/0.ts")
+      do {
+        _ = try await origin.upstreamManifest(1)
+        XCTFail("A definitive failure must reach the existing recovery path")
+      } catch { XCTAssertEqual((error as? URLError)?.code, code) }
+      let count = await fixture.manifestRequests.count
+      XCTAssertEqual(count, 1)
+      XCTAssertTrue(diagnostics.values.isEmpty)
+      await origin.stop()
+    }
+    let fixture = ResumeCursorFixture(manifestHTTPStatus: 403)
+    let diagnostics = NativeFailureCapture()
+    let origin = try await makeSeededOrigin(loadData: { try await fixture.load($0) },
+      diagnostics: diagnostics) { _ in }
+    _ = await origin.media("/part/1/11/0.ts")
+    do {
+      _ = try await origin.upstreamManifest(1)
+      XCTFail("An expired signed source must be refreshed, not retried in place")
+    } catch { XCTAssertEqual(error as? NativeHLSFailureDetail, .httpStatus(403)) }
+    let count = await fixture.manifestRequests.count
+    XCTAssertEqual(count, 1)
+    XCTAssertTrue(diagnostics.values.isEmpty)
+    await origin.stop()
+  }
+
   func testFailedUnusedRenditionDoesNotCancelHealthyPlaybackOrRestartOnProbe() async throws {
     for failure in [NativeHLSFailureDetail.httpStatus(503), .timestampInterval(24_390)] {
       let fixture = FailingRenditionFixture(failure: failure)
@@ -92,9 +281,16 @@ final class NativeRenditionReportTests: XCTestCase {
 
   private func makeFailingOrigin(fixture: FailingRenditionFixture, diagnostics: NativeFailureCapture,
                                 failure: @escaping @Sendable (NativeHLSError) -> Void) async throws -> NativeHLSOrigin {
+    try await makeSeededOrigin(loadData: { try await fixture.load($0) },
+      diagnostics: diagnostics, failure: failure)
+  }
+
+  private func makeSeededOrigin(loadData: @escaping NativeHLSOrigin.DataLoader,
+                               diagnostics: NativeFailureCapture,
+                               failure: @escaping @Sendable (NativeHLSError) -> Void) async throws -> NativeHLSOrigin {
     let root = URL(string: "https://example.test/current.m3u8")!
     let origin = NativeHLSOrigin(root: root, headers: [:], history: 30,
-      loadData: { try await fixture.load($0) }, diagnostic: { diagnostics.append($0) }, failure: failure)
+      loadData: loadData, diagnostic: { diagnostics.append($0) }, failure: failure)
     let part = NativeHLSOrigin.Part(offset: 0, length: 188, duration: 0.4,
       independent: true, media: Data([1, 2, 3]))
     let segments = (0..<12).map { number in
@@ -671,6 +867,13 @@ private final class NativeFailureCapture: @unchecked Sendable {
   func append(_ value: NativeHLSFailureDiagnostic) { lock.withLock { storage.append(value) } }
 }
 
+private final class NativePlaybackCapture: @unchecked Sendable {
+  private let lock = NSLock()
+  private var storage: [NativeHLSPlaybackDiagnostic] = []
+  var values: [NativeHLSPlaybackDiagnostic] { lock.withLock { storage } }
+  func append(_ value: NativeHLSPlaybackDiagnostic) { lock.withLock { storage.append(value) } }
+}
+
 private actor MasterTargetFixture {
   private(set) var requests: [String: Int] = [:]
 
@@ -703,6 +906,11 @@ private actor MasterTargetFixture {
 }
 
 private actor ResumeCursorFixture {
+  private(set) var manifestRequests: [URLRequest] = []
+  private var manifestFailures: [URLError.Code]
+  private let holdManifestRequest: Int?
+  private let manifestHTTPStatus: Int
+  private(set) var manifestWasCancelled = false
   private(set) var initializationSequence: Int?
   private(set) var initializationWasCancelled = false
   private let upstream: ClosedRange<Int>
@@ -711,11 +919,15 @@ private actor ResumeCursorFixture {
   private let periodChange: Int?
 
   init(upstream: ClosedRange<Int> = 12...25, prefetch: Bool = false,
-       discontinuity: Int = 0, periodChange: Int? = nil) {
+       discontinuity: Int = 0, periodChange: Int? = nil, manifestFailures: [URLError.Code] = [],
+       holdManifestRequest: Int? = nil, manifestHTTPStatus: Int = 200) {
     self.upstream = upstream
     self.prefetch = prefetch
     self.discontinuity = discontinuity
     self.periodChange = periodChange
+    self.manifestFailures = manifestFailures
+    self.holdManifestRequest = holdManifestRequest
+    self.manifestHTTPStatus = manifestHTTPStatus
   }
 
   func load(_ request: URLRequest) async throws -> (Data, URLResponse) {
@@ -729,6 +941,15 @@ private actor ResumeCursorFixture {
       }
       throw URLError(.timedOut)
     }
+    manifestRequests.append(request)
+    if manifestRequests.count == holdManifestRequest {
+      do { try await Task.sleep(for: .seconds(60)) }
+      catch {
+        manifestWasCancelled = error is CancellationError
+        throw error
+      }
+    }
+    if !manifestFailures.isEmpty { throw URLError(manifestFailures.removeFirst()) }
     let text = """
       #EXTM3U
       #EXT-X-TARGETDURATION:2
@@ -742,7 +963,7 @@ private actor ResumeCursorFixture {
       }.joined(separator: "\n")
       + (prefetch ? "\n#EXT-X-TWITCH-PREFETCH:\(upstream.upperBound + 1).m4s" : "")
     return (Data(text.utf8), try XCTUnwrap(HTTPURLResponse(
-      url: url, statusCode: 200, httpVersion: nil, headerFields: nil)))
+      url: url, statusCode: manifestHTTPStatus, httpVersion: nil, headerFields: nil)))
   }
 }
 

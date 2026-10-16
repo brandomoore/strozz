@@ -125,7 +125,7 @@ model, tvOS version, and the stream where something went wrong helps a lot. See
 
 The mobile version includes personalized Twitch recommendations, a full followed
 channel directory, channel profiles, past broadcasts with local resume, category
-browsing, search, native low-latency live playback, standard Auto
+browsing, search, native low-latency live playback with Auto
 and fixed qualities (including audio-only), and live chat with Twitch/7TV/BTTV/FFZ
 emotes. Sign in through **Account > Sign in to Twitch**, open the Twitch link,
 approve the displayed code, then return to Strozz. Browsing, playback, and
@@ -279,10 +279,12 @@ a stream, edit its other channel handles or URLs and tap **Apply channel
 targets**; defaults use the Twitch handle, not automatic cross-platform account
 matching. Targets belong to the active stream session. Sending remains Twitch-only.
 
-Selecting a fixed video quality retains the native engine when native playback
-is selected, on both TV and mobile. Explicit standard playback, Audio Only, and
-AirPlay retain their standard paths; a genuine unsupported-format fallback is
-still reported rather than disguised as native playback.
+Twitch live video uses the native engine for both Auto and fixed resolutions on
+TV and mobile. The older Auto Low Latency/High Quality choices are removed, and
+saved legacy selections migrate to Native. Unsupported media or exhausted native
+retries show a clear failure and **Try Again**, never an automatic standard-player
+fallback. Audio Only, VOD, alternate video sources, and explicitly requested
+AirPlay receiver playback retain their separate transports.
 
 Home automatically previews one mostly visible stream at a time, nearest the
 middle of the screen. A small, leading-aligned heading scrolls with the feed
@@ -409,8 +411,8 @@ intent. Both targets use the same audio-session setup and bounded date-position
 restoration. Audio activation failures surface an error without exhausting the
 native stream retry budget; interruptions honor the system's resume permission.
 Transient native-engine failures get up to two fresh native attempts in a
-rolling minute before standard fallback; unsupported formats still fail over
-explicitly instead of leaving playback stuck.
+rolling minute. Unsupported formats or repeated failure stop with an explicit
+native error and Retry rather than switching to standard playback.
 If audio advances without decodable video, the mobile player makes one recovery
 attempt using the primary video rendition and displays the actual selected
 quality and a notice. A failed recovery shows an error instead of staying black.
@@ -760,13 +762,24 @@ hourly during viewing. Expired or revoked rewards sessions require reconnecting.
 Strozz keeps a bounded, local JSONL playback log in its app cache so lag reports
 can be examined after the fact. Logging samples playback state about every two
 seconds and records noteworthy state changes, stalls, access/error-log updates,
-seeks, and recovery actions. It is diagnostic observation only; enabling it does
-not change playback tuning. Samples also include chat connection/read-pause
-flags, message-buffer counts, time since the last IRC frame, and reconnect
+seeks, and recovery actions. Multiview budget events record the old and applied
+resolution/bitrate limits and whether the pane is expanded. It is diagnostic
+observation only; enabling it does not change playback tuning. Samples also
+include chat connection/read-pause flags, message-buffer counts, time since the
+last IRC frame, and reconnect
 counts/reasons, current sync delay, and queued release/wake deadlines; they do
 not include chat text or chat participants. Watch-rewards diagnostics record
 report acknowledgements and server-returned streak counts, never access tokens
 or activation codes.
+
+Debug native playback also records segment-boundary decode/presentation clocks,
+the first audio clock, packet IDs and codec profile/level when available, plus
+served rendition changes and their program-date mapping. Before changing active
+rendition or stopping an engine, it saves bounded recent rendition state and the
+last 16 resource-request timings. This is metadata only, not a media recording;
+signed URLs, credentials and headers are excluded.
+Native decoded-frame pulls also record paired begin/end events so a media-service
+reset can be correlated with sampling without changing or disabling the sampler.
 
 Pull the retained logs from the paired Apple TV and summarize the current or
 most recent session:
@@ -802,8 +815,12 @@ rotation parts, bounded native access/error-log backlog skips, and sessions that
 are still active are marked as partial evidence.
 
 The cache retains at most eight 4 MiB files across all sessions (about 32 MiB)
-and tvOS may reclaim it. It does not contain OAuth credentials, full URLs,
-request headers, server IP addresses, AVPlayer session IDs, SDK localized error
+and tvOS may reclaim it. Pane writers coordinate retention and protect each
+other's open files, including a quiet or hidden pane; one stream's rotation must
+not erase another stream's active diagnostics. File-capacity exhaustion is
+reported rather than exceeding the shared limit. It does not contain OAuth
+credentials, full URLs, request headers, server IP addresses, AVPlayer session
+IDs, SDK localized error
 prose, or error comments. Failures retain only structured evidence such as
 error domain/code, AVPlayer error-log status code, and an explicit HTTP status
 when AVFoundation includes one. YouTube resolution records the client/version

@@ -30,6 +30,22 @@ extension PlayerView {
   }
 
   func updateNativeCatchUp() async {
+    if let item = player.currentItem, let native = model.nativeHLS {
+      do {
+        let controlled = try await native.origin.updateControlledPlayback(buffer: bufferAheadSeconds(item) ?? 0,
+          budget: .init(maximumWidth: Int(item.preferredMaximumResolution.width),
+            maximumHeight: Int(item.preferredMaximumResolution.height),
+            maximumBitrate: Int(item.preferredPeakBitRate)))
+        guard native === model.nativeHLS, item === player.currentItem else { return }
+        model.nativeControlledAuto = controlled
+      } catch {
+        guard native === model.nativeHLS, item === player.currentItem, !(error is CancellationError) else { return }
+        recordPlaybackEvent("native_controlled_feedback_failed", level: .error,
+          attributes: PlaybackTelemetryRecorder.errorAttributes(error))
+        recoverNativeHLS(NativeHLSError.classify(error))
+        return
+      }
+    }
     if model.isUsingNativeHLS, model.startupProgress.hasStarted {
       player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false
     }

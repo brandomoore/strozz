@@ -40,9 +40,19 @@ extension PlayerView {
     singlePlayerTransportHandler(videoColumnContent)
   }
 
+  @ViewBuilder
+  private var playerVideoSurface: some View {
+    // The launch control is constant across grid/expanded layouts.
+    if usesDirectMultiviewVideoLayer() {
+      PreviewVideoSurface(player: player)
+    } else {
+      VideoSurface(player: player)
+    }
+  }
+
   private var videoColumnContent: some View {
     ZStack(alignment: .bottom) {
-      VideoSurface(player: player)
+      playerVideoSurface
         .id(ObjectIdentifier(player))
         .accessibilityIdentifier("player-video-surface")
         .accessibilityValue(isLoading ? "Loading" : "Ready")
@@ -177,13 +187,25 @@ extension PlayerView {
           if model.audioInterrupted {
             Button("Resume playback") { resumeAfterAudioInterruption() }
               .focused($focus, equals: .audioResume)
+          } else if isNativeLiveVideo {
+            Button("Try Again") {
+              resetDiagnostics()
+              Task { await load(reason: "native user retry") }
+            }
+            .focused($focus, equals: .nativeRetry)
+            .accessibilityIdentifier("native-playback-retry")
           }
           Button("Back") { closePlayer() }
             .focused($focus, equals: .errorBack)
         }
         .padding(40)
-        .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 24))
-        .defaultFocus($focus, model.audioInterrupted ? .audioResume : .errorBack)
+        .foregroundStyle(glassDisabled ? palette.chromeOnOpaque : .primary)
+        .background {
+          if glassDisabled { RoundedRectangle(cornerRadius: 24).fill(palette.chromeOpaqueSurface) }
+          else { RoundedRectangle(cornerRadius: 24).fill(.regularMaterial) }
+        }
+        .defaultFocus($focus, model.audioInterrupted ? .audioResume
+          : (isNativeLiveVideo ? .nativeRetry : .errorBack))
       } else if showControls && !isMultiviewCompact {
         bottomOverlay
       }

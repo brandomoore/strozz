@@ -75,6 +75,20 @@ struct NativeHLSFailureDiagnostic: Sendable {
   }
 }
 
+struct NativeHLSPlaybackDiagnostic: Sendable {
+  enum Event: String, Sendable {
+    case segment = "native_hls_segment_timing"
+    case rendition = "native_hls_rendition_switch"
+    case state = "native_hls_rendition_state"
+    case request = "native_hls_request"
+  }
+
+  let event: Event
+  let attributes: [String: String]
+  let metrics: [String: Double]
+  let counters: [String: Int]
+}
+
 /// Byte-level indexing only: encoded audio/video remains on Twitch's CDN.
 enum NativeCMAF {
   struct Box {
@@ -117,14 +131,23 @@ enum NativeCMAF {
     let scale: UInt64
     let duration: UInt64
     let flags: UInt64
+    let size: UInt64
+
+    init(id: UInt64, scale: UInt64, duration: UInt64, flags: UInt64, size: UInt64 = 0) {
+      self.id = id; self.scale = scale; self.duration = duration; self.flags = flags; self.size = size
+    }
   }
 
   static func videoTrack(_ initialization: Data) throws -> Track {
+    try track(initialization, handler: "vide")
+  }
+
+  static func track(_ initialization: Data, handler name: String) throws -> Track {
     let moov = try child(initialization, "moov")
     for box in try boxes(moov) where box.type == "trak" {
       let mdia = try child(box.payload, "mdia")
       let handler = try child(mdia, "hdlr")
-      guard String(decoding: handler.dropFirst(8).prefix(4), as: UTF8.self) == "vide" else { continue }
+      guard String(decoding: handler.dropFirst(8).prefix(4), as: UTF8.self) == name else { continue }
       let tkhd = try child(box.payload, "tkhd")
       let mdhd = try child(mdia, "mdhd")
       let id = try integer(tkhd, tkhd.first == 1 ? 20 : 12)
@@ -133,7 +156,7 @@ enum NativeCMAF {
       for entry in try boxes(child(moov, "mvex")) where entry.type == "trex" {
         if try integer(entry.payload, 4) == id {
           return Track(id: id, scale: scale, duration: try integer(entry.payload, 12),
-                       flags: try integer(entry.payload, 20))
+                       flags: try integer(entry.payload, 20), size: try integer(entry.payload, 16))
         }
       }
     }
@@ -146,6 +169,15 @@ enum NativeCMAF {
     let independent: Bool
   }
 
+  struct FragmentTiming: Sendable {
+    let version: UInt8
+    let decodeTime: UInt64
+    let duration: UInt64
+    let samples: Int
+    let firstComposition: Int64
+    let independent: Bool
+  }
+
   static func shouldFlushPart(accumulated: Double, next: Double) throws -> Bool {
     guard accumulated.isFinite, next.isFinite, accumulated >= 0, next > 0,
       accumulated <= 0.45, next <= 0.45 else { throw NativeHLSError.partDuration }
@@ -153,6 +185,12 @@ enum NativeCMAF {
   }
 
   static func timing(_ moof: Data, track: Track) throws -> Timing {
+    let value = try fragmentTiming(moof, track: track)
+    return Timing(start: Double(value.decodeTime) / Double(track.scale),
+      duration: Double(value.duration) / Double(track.scale), independent: value.independent)
+  }
+
+  static func fragmentTiming(_ moof: Data, track: Track) throws -> FragmentTiming {
     for box in try boxes(moof) where box.type == "traf" {
       let tfhd = try child(box.payload, "tfhd")
       guard try integer(tfhd, 4) == track.id else { continue }
@@ -167,13 +205,20 @@ enum NativeCMAF {
       if flags & 16 != 0 { position += 4 }
       let defaults = flags & 32 != 0 ? try integer(tfhd, position) : track.flags
       let tfdt = try child(box.payload, "tfdt")
+      guard let version = tfdt.first, version <= 1 else { throw NativeHLSError.invalidMedia }
       let start = try integer(tfdt, 4, tfdt.first == 1 ? 8 : 4)
       var total: UInt64 = 0
       var firstFlags: UInt64?
+      var firstComposition: Int64?
+      var samples = 0
       for run in try boxes(box.payload) where run.type == "trun" {
         let flags = try integer(run.payload, 0) & 0xFFFFFF
         let count = try integer(run.payload, 4)
-        guard count <= 100_000 else { throw NativeHLSError.invalidMedia }
+        guard count <= 100_000, run.payload.first == 0 || run.payload.first == 1 else {
+          throw NativeHLSError.invalidMedia
+        }
+        samples += Int(count)
+        guard samples <= 100_000 else { throw NativeHLSError.invalidMedia }
         var offset = 8 + (flags & 1 != 0 ? 4 : 0)
         var initialFlags = defaults
         if flags & 4 != 0 {
@@ -189,15 +234,21 @@ enum NativeCMAF {
             sampleFlags = try integer(run.payload, offset)
             offset += 4
           }
-          if flags & 0x800 != 0 { offset += 4 }
+          var composition: Int64 = 0
+          if flags & 0x800 != 0 {
+            let value = UInt32(try integer(run.payload, offset))
+            composition = run.payload.first == 1 ? Int64(Int32(bitPattern: value)) : Int64(value)
+            offset += 4
+          }
           guard sampleDuration > 0, offset <= run.payload.count else { throw NativeHLSError.invalidMedia }
           total += sampleDuration
           if firstFlags == nil { firstFlags = sampleFlags }
+          if firstComposition == nil { firstComposition = composition }
         }
       }
-      guard total > 0, let firstFlags else { throw NativeHLSError.invalidMedia }
-      return Timing(start: Double(start) / Double(track.scale),
-                    duration: Double(total) / Double(track.scale), independent: firstFlags & 0x10000 == 0)
+      guard total > 0, let firstFlags, let firstComposition else { throw NativeHLSError.invalidMedia }
+      return FragmentTiming(version: version, decodeTime: start, duration: total, samples: samples,
+        firstComposition: firstComposition, independent: firstFlags & 0x10000 == 0)
     }
     throw NativeHLSError.invalidMedia
   }
@@ -253,6 +304,7 @@ enum NativeCMAF {
     var targetDuration = 6
     var duration: Double?
     var date: Date?
+    var explicitDate = false
     var entries: [Entry] = []
     var prefetch = false
     var ended = false
@@ -267,6 +319,7 @@ enum NativeCMAF {
       if line == "#EXT-X-DISCONTINUITY" {
         discontinuity += 1
         date = nil
+        explicitDate = false
       } else if line == "#EXT-X-ENDLIST" {
         ended = true
       } else if line.hasPrefix("#EXT-X-DATERANGE:") {
@@ -292,6 +345,7 @@ enum NativeCMAF {
           date = formatter.date(from: value)
         }
         guard date != nil else { throw NativeHLSError.invalidMedia }
+        explicitDate = true
       } else if line.hasPrefix("#EXTINF:") {
         duration = value.split(separator: ",").first.flatMap { Double($0) }
         guard let duration, duration.isFinite, duration > 0, duration <= 10 else { throw NativeHLSError.invalidMedia }
@@ -301,12 +355,13 @@ enum NativeCMAF {
         guard let number = sequence, let media = URL(string: path, relativeTo: url)?.absoluteURL,
           media.scheme == "https" else { throw NativeHLSError.invalidMedia }
         entries.append(Entry(sequence: number, url: media, duration: isPrefetch ? nil : duration,
-                             date: isPrefetch ? nil : date, initialization: map,
+                             date: isPrefetch && !explicitDate ? nil : date, initialization: map,
                              discontinuity: discontinuity, tags: tags))
         tags.removeAll()
         sequence = number + 1
         if let duration { date = date?.addingTimeInterval(duration) }
         duration = nil
+        explicitDate = false
         prefetch = prefetch || isPrefetch
       }
     }

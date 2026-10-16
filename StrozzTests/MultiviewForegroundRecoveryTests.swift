@@ -1,14 +1,116 @@
-import AVFoundation
+import AVKit
+import SwiftUI
 import XCTest
 @testable import Strozz
 
 @MainActor
 final class MultiviewForegroundRecoveryTests: XCTestCase {
-  private func controller(count: Int = 4) -> MultiviewController {
+  private func controller(count: Int = 4, controlledAuto: Bool = false) -> MultiviewController {
     MultiviewController(channels: (0..<count).map { index in
       FollowedChannel(id: "\(index)", login: "fixture\(index)", displayName: "Fixture \(index)",
         title: "", gameName: "", viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true)
-    })
+    }, controlledAuto: controlledAuto)
+  }
+
+  func testControlledGridRaisesSmallLayoutsAndRetainsPlayersAcrossTheFourPaneBoundary() throws {
+    let controller = controller(count: 6, controlledAuto: true)
+    defer { controller.teardown() }
+    let players = controller.panes.map(\.player)
+    let items = controller.panes.map { pane in
+      let item = AVPlayerItem(url: URL(fileURLWithPath: "/dev/null"))
+      pane.player.replaceCurrentItem(with: item)
+      return item
+    }
+    XCTAssertTrue(controller.panes.allSatisfy { $0.qualityTier == .grid720 })
+    controller.removePane(try XCTUnwrap(controller.panes.last).id)
+    XCTAssertTrue(controller.panes.allSatisfy { $0.qualityTier == .grid720 })
+    controller.removePane(try XCTUnwrap(controller.panes.last).id)
+    XCTAssertTrue(controller.panes.allSatisfy { $0.qualityTier == .grid1080 })
+    for (index, pane) in controller.panes.enumerated() {
+      XCTAssertTrue(pane.player === players[index])
+      XCTAssertTrue(pane.player.currentItem === items[index])
+    }
+    controller.expand(controller.panes[0].id)
+    XCTAssertEqual(controller.panes[0].qualityTier, .source)
+    XCTAssertTrue(controller.panes.dropFirst().allSatisfy { $0.qualityTier == .thumbnail })
+    controller.collapse()
+    XCTAssertTrue(controller.panes.allSatisfy { $0.qualityTier == .grid1080 })
+    controller.addPane(FollowedChannel(id: "new", login: "new", displayName: "New",
+      title: "", gameName: "", viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true))
+    XCTAssertTrue(controller.panes.allSatisfy { $0.qualityTier == .grid720 })
+  }
+
+  func testControlledGridBudgetsAdmitReal720p60And1080p60Bitrates() throws {
+    let variants: [NativeAdaptiveRenditionPolicy.Variant] = [
+      .init(id: 0, bitrate: 1_427_999, width: 852, height: 480),
+      .init(id: 1, bitrate: 3_422_999, width: 1280, height: 720),
+      .init(id: 2, bitrate: 9_013_733, width: 1920, height: 1080),
+    ]
+    for (tier, expected) in [(MultiviewQualityTier.grid720, 720), (.grid1080, 1080)] {
+      var policy = try NativeAdaptiveRenditionPolicy(variants: variants)
+      try policy.recordCompletedTransfer(bytes: 262_144, seconds: 0.1, at: 0)
+      let budget = NativeAdaptiveRenditionPolicy.Budget(
+        maximumWidth: Int(tier.maximumResolution.width), maximumHeight: Int(tier.maximumResolution.height),
+        maximumBitrate: tier.targetBitrate)
+      XCTAssertEqual(tier.targetBitrate, 0, "A nominal resolution must not hide an excluding bitrate ceiling")
+      XCTAssertEqual(try policy.select(budget: budget, buffer: 1.5, deliveryLate: false, at: 0).variant.height, expected)
+    }
+    let small = controller(count: 2, controlledAuto: true)
+    let legacy = controller(count: 4)
+    defer { small.teardown(); legacy.teardown() }
+    XCTAssertEqual(small.panes.first?.qualityTier, .grid1080)
+    XCTAssertEqual(legacy.panes.first?.qualityTier, .grid,
+      "An explicit diagnostic opt-out retains the previous resource policy")
+  }
+
+  func testDiagnosticLayerSelectionIsStableAcrossExpansionAndExcludesStandalone() {
+    let controller = controller(count: 2)
+    defer { controller.teardown() }
+    let pane = controller.panes[0]
+    let view = PlayerView(channel: pane.channel.login, auth: TwitchAuthSession(), model: pane.model)
+    let control = ["STROZZ_MULTIVIEW_VIDEO_SURFACE": "layer"]
+    XCTAssertFalse(view.usesDirectMultiviewVideoLayer(environment: [:]))
+    XCTAssertTrue(view.usesDirectMultiviewVideoLayer(environment: control))
+    controller.expand(pane.id)
+    XCTAssertTrue(view.usesDirectMultiviewVideoLayer(environment: control))
+    controller.collapse()
+    XCTAssertTrue(view.usesDirectMultiviewVideoLayer(environment: control))
+    let standalone = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: PlayerModel())
+    XCTAssertFalse(standalone.usesDirectMultiviewVideoLayer(environment: control))
+  }
+
+  func testDirectLayerHostRetainsPlayerDuringResizeAndDetachesOnDismantle() async throws {
+    let player = AVPlayer()
+    let item = AVPlayerItem(url: URL(fileURLWithPath: "/nonexistent-layer-fixture.m3u8"))
+    player.replaceCurrentItem(with: item)
+    defer { player.pause(); player.replaceCurrentItem(with: nil) }
+    let host = UIHostingController(rootView: PreviewVideoSurface(player: player))
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = host
+    window.isHidden = false
+    defer { window.isHidden = true; window.rootViewController = nil }
+    host.view.frame = CGRect(x: 0, y: 0, width: 854, height: 480)
+    host.view.layoutIfNeeded()
+    func layerView(in view: UIView) -> PlayerLayerHostView? {
+      if let layer = view as? PlayerLayerHostView { return layer }
+      return view.subviews.lazy.compactMap { layerView(in: $0) }.first
+    }
+    for _ in 0..<25 {
+      if layerView(in: host.view) != nil { break }
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    let view = try XCTUnwrap(layerView(in: host.view))
+    XCTAssertTrue(view.playerLayer.player === player)
+    XCTAssertEqual(view.playerLayer.videoGravity, .resizeAspect)
+    host.view.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+    host.view.layoutIfNeeded()
+    XCTAssertTrue(layerView(in: host.view) === view)
+    XCTAssertTrue(view.playerLayer.player === player)
+    XCTAssertTrue(player.currentItem === item)
+    PreviewVideoSurface.dismantleUIView(view, coordinator: ())
+    XCTAssertNil(view.playerLayer.player)
+    XCTAssertTrue(player.currentItem === item, "Surface cleanup must not stop its retained player")
   }
 
   func testExpansionAndReturnKeepEveryPlayerAndItemAlive() {
@@ -162,9 +264,9 @@ final class MultiviewForegroundRecoveryTests: XCTestCase {
     let pane = controller.panes[0]
     let view = PlayerView(channel: pane.channel.login, auth: TwitchAuthSession(), model: pane.model)
     view.preferredQuality = "720p"
-    view.livePlaybackProfile = .lowerLatency
+    view.livePlaybackProfile = .nativeLowLatency
     XCTAssertEqual(pane.presentation.quality, "720p")
-    XCTAssertEqual(pane.presentation.profile, .lowerLatency)
+    XCTAssertEqual(pane.presentation.profile, .nativeLowLatency)
     XCTAssertEqual(UserDefaults.standard.string(forKey: PersistenceKey.preferredQuality), savedQuality)
     XCTAssertEqual(UserDefaults.standard.string(forKey: PersistenceKey.livePlaybackProfile), savedProfile)
     XCTAssertEqual(controller.panes[1].presentation.profile, .nativeLowLatency)

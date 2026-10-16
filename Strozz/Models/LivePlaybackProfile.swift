@@ -1,45 +1,27 @@
 import Foundation
 
-/// User-selectable live playback profile, surfaced in the quality picker as the
-/// Auto options. Native LL-HLS uses source-CMAF parts; the two legacy profiles
-/// retain whole-segment prefetch promotion. Fixed video renditions retain the
-/// selected engine; legacy fixed renditions use a deeper buffer.
+/// Local Twitch live video always uses the native engine, including fixed video
+/// renditions. Removed profile raw values restore as native for migration.
 enum LivePlaybackProfile: String, CaseIterable, Identifiable {
   case nativeLowLatency
-  /// Latency priority: keep a shallow buffer near the live edge and let adaptive
-  /// bitrate drop resolution to avoid a stall. Degraded quality is acceptable;
-  /// stutter is not.
-  case lowerLatency
-  /// Quality priority: keep a deeper buffer so adaptive bitrate can settle on (and
-  /// hold) the best stable resolution, accepting a little more latency. Never
-  /// sacrifices quality on its own.
-  case higherQuality
 
   var id: String { rawValue }
 
   var requestsNativePlayback: Bool { self == .nativeLowLatency }
 
-  static func available(nativeAvailable: Bool) -> [Self] {
-    nativeAvailable ? [.nativeLowLatency, .lowerLatency, .higherQuality] : [.lowerLatency, .higherQuality]
-  }
-
-  func effectiveSelection(nativeAvailable: Bool) -> Self {
-    self == .nativeLowLatency && !nativeAvailable ? .lowerLatency : self
-  }
+  static func restored(rawValue: String) -> Self { Self(rawValue: rawValue) ?? .nativeLowLatency }
 
   func promotesPrefetch(legacyEnabled: Bool, unstable: Bool) -> Bool {
-    !unstable && (requestsNativePlayback || legacyEnabled)
+    !unstable
   }
 
-  /// Default for new installs; the old profile raw values remain selectable.
+  /// Default for new installs and migrated legacy preferences.
   static let `default`: LivePlaybackProfile = .nativeLowLatency
 
-  /// Short label used in the quality picker's two Auto rows and the button.
+  /// The quality picker's only Auto row.
   var pickerLabel: String {
     switch self {
     case .nativeLowLatency: return "Auto · Native Low Latency"
-    case .lowerLatency: return "Auto · Low Latency"
-    case .higherQuality: return "Auto · High Quality"
     }
   }
 
@@ -47,8 +29,6 @@ enum LivePlaybackProfile: String, CaseIterable, Identifiable {
   var shortTag: String {
     switch self {
     case .nativeLowLatency: return "Native Low Latency"
-    case .lowerLatency: return "Low Latency"
-    case .higherQuality: return "Quality"
     }
   }
 }
@@ -88,9 +68,19 @@ struct LivePlaybackPolicy: Equatable {
   ///   - profile: the active Auto profile.
   ///   - isPinned: true when the viewer pinned a specific rendition (not Auto).
   static func live(profile: LivePlaybackProfile, isPinned: Bool) -> LivePlaybackPolicy {
+    LivePlaybackPolicy(
+      preferredForwardBufferDuration: 3, enablesGentleCatchUp: false,
+      catchUpThresholdSeconds: .greatestFiniteMagnitude, maxCatchUpRate: 1,
+      catchUpRampPerSecond: 0, minPlaybackRate: 1, slowdownBufferFloorSeconds: 0,
+      catchUpHealthyBufferSeconds: .greatestFiniteMagnitude)
+  }
+
+  /// Explicit non-native transports, such as a YouTube source or AirPlay receiver.
+  /// This is not a selectable Twitch live mode or a native-failure fallback.
+  static func standard(isPinned: Bool) -> LivePlaybackPolicy {
     // A pinned rendition is inherently "hold this exact quality"; it has no ABR
     // fallback, so give it a stable buffer and never fight it with catch-up.
-    if isPinned && profile != .nativeLowLatency {
+    if isPinned {
       return LivePlaybackPolicy(
         preferredForwardBufferDuration: 8,
         enablesGentleCatchUp: false,
@@ -103,49 +93,29 @@ struct LivePlaybackPolicy: Equatable {
       )
     }
 
-    switch profile {
-    case .nativeLowLatency:
-      return LivePlaybackPolicy(
-        preferredForwardBufferDuration: 3, enablesGentleCatchUp: false,
-        catchUpThresholdSeconds: .greatestFiniteMagnitude, maxCatchUpRate: 1,
-        catchUpRampPerSecond: 0, minPlaybackRate: 1, slowdownBufferFloorSeconds: 0,
-        catchUpHealthyBufferSeconds: .greatestFiniteMagnitude)
-    case .lowerLatency:
-      return LivePlaybackPolicy(
-        // Shallow forward buffer: sit close to the edge and, critically, resume
-        // quickly after a dip instead of waiting to refill a deep buffer (that
-        // deep-refill wait is what caused the long "waiting toMinimizeStalls"
-        // freezes). The anti-stall slow-down covers transient dips instead.
-        preferredForwardBufferDuration: 3,
-        enablesGentleCatchUp: true,
-        // Actively chase the live edge down to ~2s — *tighter* than the 3.5s seek
-        // landing point — so catch-up always has slack to work with and visibly
-        // drives the rate. This is what makes it a true low-latency profile.
-        catchUpThresholdSeconds: 2,
-        maxCatchUpRate: 1.12,
-        catchUpRampPerSecond: 0.04,
-        // Ease down toward 0.90× as the buffer drains under 1.5s so a transient
-        // dip is absorbed by playing slightly slow instead of a hard stall. The
-        // slow-down arm is evaluated first, so it always overrides catch-up.
-        minPlaybackRate: 0.90,
-        slowdownBufferFloorSeconds: 1.5,
-        // Catch up once the buffer clears 2.0s (a 0.5s dead-band above the
-        // slow-down floor so the two arms settle at ~2s edge gap instead of
-        // flapping). Equilibrium = ~2s from the edge with a safe buffer.
-        catchUpHealthyBufferSeconds: 2.0
-      )
-    case .higherQuality:
-      return LivePlaybackPolicy(
-        preferredForwardBufferDuration: 8,
-        enablesGentleCatchUp: false,
-        catchUpThresholdSeconds: .greatestFiniteMagnitude,
-        maxCatchUpRate: 1.0,
-        catchUpRampPerSecond: 0,
-        minPlaybackRate: 1.0,
-        slowdownBufferFloorSeconds: 0,
-        catchUpHealthyBufferSeconds: .greatestFiniteMagnitude
-      )
-    }
+    return LivePlaybackPolicy(
+      // Shallow forward buffer: sit close to the edge and, critically, resume
+      // quickly after a dip instead of waiting to refill a deep buffer (that
+      // deep-refill wait is what caused the long "waiting toMinimizeStalls"
+      // freezes). The anti-stall slow-down covers transient dips instead.
+      preferredForwardBufferDuration: 3,
+      enablesGentleCatchUp: true,
+      // Actively chase the live edge down to ~2s — *tighter* than the 3.5s seek
+      // landing point — so catch-up always has slack to work with and visibly
+      // drives the rate. This is what makes it a true low-latency profile.
+      catchUpThresholdSeconds: 2,
+      maxCatchUpRate: 1.12,
+      catchUpRampPerSecond: 0.04,
+      // Ease down toward 0.90× as the buffer drains under 1.5s so a transient
+      // dip is absorbed by playing slightly slow instead of a hard stall. The
+      // slow-down arm is evaluated first, so it always overrides catch-up.
+      minPlaybackRate: 0.90,
+      slowdownBufferFloorSeconds: 1.5,
+      // Catch up once the buffer clears 2.0s (a 0.5s dead-band above the
+      // slow-down floor so the two arms settle at ~2s edge gap instead of
+      // flapping). Equilibrium = ~2s from the edge with a safe buffer.
+      catchUpHealthyBufferSeconds: 2.0
+    )
   }
 
   /// Emergency policy for a stream detected as chronically unstable (repeated

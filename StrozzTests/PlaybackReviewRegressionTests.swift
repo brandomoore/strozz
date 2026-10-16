@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class PlaybackReviewRegressionTests: XCTestCase {
-  func testLegacyAutoChoicesKeepTheSelectedYouTubeItem() throws {
+  func testLegacyAutoChoicesMigrateWithoutChangingPinnedQuality() throws {
     let defaults = UserDefaults.standard
     let keys = [PersistenceKey.preferredQuality, PersistenceKey.livePlaybackProfile]
     let saved = keys.map { defaults.object(forKey: $0) }
@@ -14,23 +14,16 @@ final class PlaybackReviewRegressionTests: XCTestCase {
         else { defaults.removeObject(forKey: key) }
       }
     }
-    for selection in [LivePlaybackProfile.higherQuality, .lowerLatency] {
-      defaults.set("Auto", forKey: PersistenceKey.preferredQuality)
-      defaults.set(LivePlaybackProfile.nativeLowLatency.rawValue, forKey: PersistenceKey.livePlaybackProfile)
+    for selection in ["higherQuality", "lowerLatency"] {
+      defaults.set("720p60", forKey: PersistenceKey.preferredQuality)
+      defaults.set(selection, forKey: PersistenceKey.livePlaybackProfile)
       let model = PlayerModel()
-      let youtube = URL(fileURLWithPath: "/nonexistent-youtube-review.m3u8")
-      model.playback = StreamPlayback(master: URL(fileURLWithPath: "/nonexistent-twitch-review.m3u8"), qualities: [])
-      model.isUsingAltSource = true
-      model.currentSourceURL = youtube
-      let item = AVPlayerItem(url: youtube)
-      model.player.replaceCurrentItem(with: item)
-      defer { model.player.pause(); model.player.replaceCurrentItem(with: nil) }
       let view = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: model)
-      view.selectQuality(at: try XCTUnwrap(view.qualityOptions.firstIndex(of: selection.pickerLabel)))
-      XCTAssertTrue(model.isUsingAltSource)
-      XCTAssertEqual(model.currentSourceURL, youtube)
-      XCTAssertTrue(model.player.currentItem === item)
-      XCTAssertEqual(view.livePlaybackProfile, selection)
+      XCTAssertEqual(view.livePlaybackProfile, .nativeLowLatency)
+      view.migrateNativeLiveProfile()
+      XCTAssertEqual(defaults.string(forKey: PersistenceKey.livePlaybackProfile), "nativeLowLatency")
+      XCTAssertEqual(view.preferredQuality, "720p60")
+      XCTAssertEqual(view.qualityOptions, [LivePlaybackProfile.nativeLowLatency.pickerLabel])
     }
   }
 
@@ -68,7 +61,7 @@ final class PlaybackReviewRegressionTests: XCTestCase {
     XCTAssertTrue(model.nativeNeedsRefresh)
     XCTAssertNil(model.nativeHLS)
     XCTAssertNotEqual(model.nativeGeneration, generation)
-    view.fallbackFromNativeHLS(.unavailable)
+    view.failNativeHLS(.unavailable)
     XCTAssertNil(model.nativeFallbackReason)
     XCTAssertTrue(model.nativeNeedsRefresh)
   }

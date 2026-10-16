@@ -3,18 +3,33 @@ import Foundation
 /// URLSession delivers chunks; awaiting once per byte cannot sustain live video
 /// on the TV's CPU, particularly in a development build.
 final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+  struct Chunk: Sendable {
+    let data: Data
+    fileprivate let task: URLSessionDataTask
+    fileprivate let id: Int
+  }
+
+  private static let capacity = 32
   #if DEBUG
   private var metricsObservers: [Int: @Sendable ([String: String]) -> Void] = [:]
   #endif
-  private let lock = NSLock()
-  private var continuation: AsyncThrowingStream<Data, Error>.Continuation?
+  private let lock = NSCondition()
+  private var continuation: AsyncThrowingStream<Chunk, Error>.Continuation?
   private var session: URLSession?
   private var task: URLSessionDataTask?
+  private var pendingChunks: Set<Int> = []
+  private var nextChunkID = 0
   private var stopped = false
+  private let configuration: URLSessionConfiguration
+
+  init(configuration: URLSessionConfiguration = .ephemeral) {
+    self.configuration = configuration
+    super.init()
+  }
 
   func stream(_ request: URLRequest,
-              observeMetrics: (@Sendable ([String: String]) -> Void)? = nil) -> AsyncThrowingStream<Data, Error> {
-    AsyncThrowingStream(bufferingPolicy: .bufferingOldest(32)) { continuation in
+              observeMetrics: (@Sendable ([String: String]) -> Void)? = nil) -> AsyncThrowingStream<Chunk, Error> {
+    AsyncThrowingStream(bufferingPolicy: .bufferingOldest(Self.capacity)) { continuation in
       lock.lock()
       guard !stopped, self.task == nil else {
         let error: Error = stopped ? CancellationError() : NativeHLSError.unavailable
@@ -26,7 +41,6 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
       if let existing = self.session {
         session = existing
       } else {
-        let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         configuration.timeoutIntervalForRequest = 8
@@ -35,6 +49,7 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
         self.session = session
       }
       self.continuation = continuation
+      pendingChunks.removeAll(keepingCapacity: true)
       let task = session.dataTask(with: request)
       self.task = task
       #if DEBUG
@@ -53,6 +68,8 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
     if self.task === task {
       self.task = nil
       continuation = nil
+      pendingChunks.removeAll(keepingCapacity: true)
+      lock.broadcast()
     }
     lock.unlock()
     task.cancel()
@@ -66,6 +83,8 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
     self.continuation = nil
     self.session = nil
     self.task = nil
+    pendingChunks.removeAll(keepingCapacity: true)
+    lock.broadcast()
     #if DEBUG
     metricsObservers.removeAll()
     #endif
@@ -92,11 +111,19 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
 
   func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
     lock.lock()
+    // Suspension cannot retract delegate callbacks URLSession already queued.
+    // Wait on its delegate thread, not the indexer's cooperative executor.
+    while self.task === dataTask, pendingChunks.count >= Self.capacity {
+      lock.wait()
+    }
     let continuation = self.task === dataTask ? self.continuation : nil
+    guard let continuation else { lock.unlock(); dataTask.cancel(); return }
+    let id = nextChunkID
+    nextChunkID += 1
+    pendingChunks.insert(id)
     lock.unlock()
-    guard let continuation else { dataTask.cancel(); return }
     dataTask.suspend()
-    switch continuation.yield(data) {
+    switch continuation.yield(Chunk(data: data, task: dataTask, id: id)) {
     case .dropped:
       continuation.finish(throwing: NativeHLSError.indexerOverrun)
       dataTask.cancel()
@@ -107,9 +134,12 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
     }
   }
 
-  func consumedChunk() {
-    lock.lock(); let task = self.task; lock.unlock()
-    task?.resume()
+  func consumedChunk(_ chunk: Chunk) {
+    lock.lock()
+    let consumed = task === chunk.task && pendingChunks.remove(chunk.id) != nil
+    if consumed { lock.signal() }
+    lock.unlock()
+    if consumed { chunk.task.resume() }
   }
 
   func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -118,6 +148,8 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
     if self.task === task {
       self.task = nil
       self.continuation = nil
+      pendingChunks.removeAll(keepingCapacity: true)
+      lock.broadcast()
     }
     #if DEBUG
     metricsObservers.removeValue(forKey: task.taskIdentifier)

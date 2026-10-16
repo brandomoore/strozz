@@ -13,12 +13,24 @@ final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unche
   private var stopped = false
   let queue = DispatchQueue(label: "strozz.native-hls.requests")
 
+  static var controlledAutoEnabled: Bool {
+    #if DEBUG
+    ProcessInfo.processInfo.environment["STROZZ_NATIVE_CONTROLLED_AUTO"] != "0"
+    #else
+    true
+    #endif
+  }
+
   init(sourceURL: URL, headers: [String: String], history: Double,
+       controlledAuto: Bool = NativeLowLatencyHLS.controlledAutoEnabled,
+       initialBudget: NativeAdaptiveRenditionPolicy.Budget = .init(),
        diagnostic: @escaping @Sendable (NativeHLSFailureDiagnostic) -> Void = { _ in },
+       trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil,
        failure: @escaping @Sendable (NativeHLSError) -> Void) {
     self.sourceURL = sourceURL
     origin = NativeHLSOrigin(root: sourceURL, headers: headers, history: history,
-      diagnostic: diagnostic, failure: failure)
+      controlledAuto: controlledAuto, initialBudget: initialBudget,
+      diagnostic: diagnostic, trace: trace, failure: failure)
     super.init()
   }
 
@@ -96,6 +108,9 @@ final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unche
 
 actor NativeHLSOrigin {
   typealias DataLoader = @Sendable (URLRequest) async throws -> (Data, URLResponse)
+  typealias Snapshot = (parts: Int, renditions: Int, edgeAge: Double?, holdBack: Double?, hasPrefetch: Bool?,
+    forwardBuffer: Double?, reportRefreshSeconds: Double?, reportRefreshMaxSeconds: Double?,
+    inferredDiscontinuities: Int, cachedMediaBytes: Int)
 
   enum Response: Sendable {
     case playlist(Data)
@@ -107,6 +122,7 @@ actor NativeHLSOrigin {
     let duration: Double
     let independent: Bool
     var media: Data? = nil
+    var timeline: [String: Double] = [:]
   }
   struct Segment: Sendable {
     let sequence: Int
@@ -141,6 +157,9 @@ actor NativeHLSOrigin {
     var reportedSegments: [Segment] = []
     var inferredDiscontinuities = 0
     var failure: NativeHLSError?
+    var codecs: String?
+    var bandwidth: Int?
+    var resolution: String?
 
     var liveHoldBack: Double {
       // Cover the upstream publication interval plus the native part cushion.
@@ -166,6 +185,7 @@ actor NativeHLSOrigin {
   let history: Double
   let failure: @Sendable (NativeHLSError) -> Void
   let diagnostic: @Sendable (NativeHLSFailureDiagnostic) -> Void
+  private let trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)?
   let session: URLSession
   private let loadData: DataLoader?
   private let variantNamespace = UUID().uuidString
@@ -184,18 +204,30 @@ actor NativeHLSOrigin {
   private var reportTask: Task<Void, Never>?
   private var reportRefreshSeconds: TimeInterval?
   private var reportRefreshMaxSeconds: TimeInterval?
+  private let controlledAuto: Bool
+  private var initialBudget: NativeAdaptiveRenditionPolicy.Budget
+  private var controlled: NativeControlledHLSOrigin?
   private var inFlightRequests = 0
   private var requestDrainWaiters: [CheckedContinuation<Void, Never>] = []
+  private static let manifestRetrySeconds: TimeInterval = 4
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "native-hls")
   #if DEBUG
   private var capturesRequests = false
   private var recentRequests: [[String: String]] = []
+  private var traceRequests: [NativeHLSPlaybackDiagnostic] = []
 
-  func enableRequestDiagnostics() { capturesRequests = true }
-  func requestDiagnostics() -> [[String: String]] { recentRequests }
+  func enableRequestDiagnostics() async {
+    capturesRequests = true
+    await controlled?.enableRequestDiagnostics()
+  }
+  func requestDiagnostics() async -> [[String: String]] {
+    if let controlled { return await controlled.requestDiagnostics() }
+    return recentRequests
+  }
 
-  func timelineDiagnostics() -> [[String: String]] {
-    sources.sorted(by: { $0.key < $1.key }).flatMap { index, source in
+  func timelineDiagnostics() async -> [[String: String]] {
+    if let controlled { return await controlled.timelineDiagnostics() }
+    return sources.sorted(by: { $0.key < $1.key }).flatMap { index, source in
       let segments = source.publishedSegments
       let sampled = Array(segments.prefix(2)) + Array(segments.dropFirst(2).suffix(4))
       return sampled.map { segment in
@@ -226,6 +258,18 @@ actor NativeHLSOrigin {
 
   private func recordRequest(_ path: String, started: Date, served: Bool, query: [URLQueryItem] = [],
                              bytes: Int? = nil) {
+    if trace != nil {
+      var counters = ["active_rendition": lastActive]
+      counters["bytes"] = bytes
+      for name in ["_HLS_msn", "_HLS_part"] {
+        counters[name] = query.first(where: { $0.name == name })?.value.flatMap(Int.init)
+      }
+      traceRequests.append(.init(event: .request,
+        attributes: ["path": path, "served": String(served)],
+        metrics: ["duration_seconds": max(0, Date().timeIntervalSince(started)),
+          "ended_uptime_seconds": ProcessInfo.processInfo.systemUptime], counters: counters))
+      if traceRequests.count > 16 { traceRequests.removeFirst(traceRequests.count - 16) }
+    }
     guard capturesRequests else { return }
     let fields = path.split(separator: "/")
     let index = path == "/root.m3u8" ? 0 : fields.dropFirst().first?.split(separator: ".").first.flatMap { Int($0) }
@@ -251,11 +295,16 @@ actor NativeHLSOrigin {
   #endif
 
   init(root: URL, headers: [String: String], history: Double, loadData: DataLoader? = nil,
+       controlledAuto: Bool = false, initialBudget: NativeAdaptiveRenditionPolicy.Budget = .init(),
        diagnostic: @escaping @Sendable (NativeHLSFailureDiagnostic) -> Void = { _ in },
+       trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil,
        failure: @escaping @Sendable (NativeHLSError) -> Void) {
     self.root = root; self.headers = headers; self.history = max(12, min(history, 1800))
+    self.controlledAuto = controlledAuto
+    self.initialBudget = initialBudget
     self.failure = failure
     self.diagnostic = diagnostic
+    self.trace = trace
     self.loadData = loadData
     let config = URLSessionConfiguration.ephemeral
     config.urlCache = nil
@@ -268,8 +317,10 @@ actor NativeHLSOrigin {
   func stop() async {
     guard !stopped else { return }
     stopped = true
+    traceState(reason: "stop")
     preparationTask?.cancel()
     preparationTask = nil
+    await controlled?.stop()
     for source in sources.values { source.task?.cancel() }
     reportTask?.cancel()
     sources.removeAll()
@@ -281,9 +332,8 @@ actor NativeHLSOrigin {
     session.invalidateAndCancel()
   }
 
-  func snapshot() -> (parts: Int, renditions: Int, edgeAge: Double?, holdBack: Double?, hasPrefetch: Bool?,
-                     forwardBuffer: Double?, reportRefreshSeconds: Double?, reportRefreshMaxSeconds: Double?,
-                     inferredDiscontinuities: Int, cachedMediaBytes: Int) {
+  func snapshot() async -> Snapshot {
+    if let controlled { return await controlled.snapshot() }
     let source = sources[lastActive]
     let tail = source?.segments.last
     return (publishedParts, sources.count,
@@ -292,12 +342,21 @@ actor NativeHLSOrigin {
       reportRefreshSeconds, reportRefreshMaxSeconds, source?.inferredDiscontinuities ?? 0, cachedMediaBytes)
   }
 
-  func liveTargetDate() -> Date? {
-    Self.liveTargetDate(in: sources, active: lastActive)
+  func liveTargetDate() async -> Date? {
+    if let controlled { return await controlled.liveTargetDate() }
+    return Self.liveTargetDate(in: sources, active: lastActive)
   }
 
-  func liveEdgeDate() -> Date? {
-    Self.liveEdgeDate(in: sources, active: lastActive)
+  func liveEdgeDate() async -> Date? {
+    if let controlled { return await controlled.liveEdgeDate() }
+    return Self.liveEdgeDate(in: sources, active: lastActive)
+  }
+
+  func updateControlledPlayback(buffer: Double, budget: NativeAdaptiveRenditionPolicy.Budget) async throws -> Bool {
+    initialBudget = budget
+    guard let controlled else { return false }
+    try await controlled.update(buffer: buffer, budget: budget)
+    return true
   }
 
   static func liveTargetDate(in sources: [Int: Rendition], active: Int) -> Date? {
@@ -335,6 +394,7 @@ actor NativeHLSOrigin {
   }
 
   func media(_ path: String) async -> Data? {
+    if let controlled { return await controlled.media(path) }
     #if DEBUG
     let started = Date()
     var servedBytes: Int?
@@ -351,7 +411,9 @@ actor NativeHLSOrigin {
       if let segment = sources[index]?.segments.first(where: { $0.sequence == sequence }) {
         if segment.parts.indices.contains(number) {
           // A speculative preload is not proof that playback switched renditions.
-          if segment.parts[number].media != nil { lastActive = index }
+          if segment.parts[number].media != nil {
+            servedRendition(index, segment: segment, part: number, reason: "media_served")
+          }
           #if DEBUG
           servedBytes = segment.parts[number].media?.count
           #endif
@@ -365,13 +427,22 @@ actor NativeHLSOrigin {
     return nil
   }
 
+  private func servedRendition(_ index: Int, segment: Segment, part: Int, reason: String) {
+    let previous = lastActive
+    lastActive = index
+    if previous != index {
+      traceMedia(.rendition, index: index, segment: segment, part: part, reason: reason, previous: previous)
+      traceState(reason: "rendition_switch")
+    }
+  }
+
   private func request(_ url: URL) -> URLRequest {
     var request = URLRequest(url: url)
     headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
     return request
   }
 
-  private func data(_ url: URL) async throws -> Data {
+  private func data(_ url: URL, timeout: TimeInterval? = nil) async throws -> Data {
     try Task.checkCancellation()
     guard !stopped else { throw CancellationError() }
     inFlightRequests += 1
@@ -385,8 +456,10 @@ actor NativeHLSOrigin {
     }
     let data: Data
     let response: URLResponse
-    if let loadData { (data, response) = try await loadData(request(url)) }
-    else { (data, response) = try await session.data(for: request(url)) }
+    var request = request(url)
+    if let timeout { request.timeoutInterval = timeout }
+    if let loadData { (data, response) = try await loadData(request) }
+    else { (data, response) = try await session.data(for: request) }
     try Task.checkCancellation()
     guard !stopped else { throw CancellationError() }
     guard (response as? HTTPURLResponse)?.statusCode == 200 else {
@@ -454,10 +527,12 @@ actor NativeHLSOrigin {
     var prepared: [Int: Rendition] = [:]
     var awaitingVariant = false
     var audioOnly = false
+    var variantAttributes: [String: String] = [:]
     for line in text.components(separatedBy: .newlines) {
       if line.hasPrefix("#EXT-X-STREAM-INF:") {
         awaitingVariant = true
         audioOnly = NativeCMAF.isAudioOnlyVariant(line)
+        variantAttributes = NativeCMAF.attributes(String(line.dropFirst("#EXT-X-STREAM-INF:".count)))
         if !audioOnly {
           if let identity = NativeCMAF.attributes(String(line.dropFirst("#EXT-X-STREAM-INF:".count)))["STABLE-VARIANT-ID"] {
             let attribute = "STABLE-VARIANT-ID=\"\(identity)\""
@@ -476,6 +551,9 @@ actor NativeHLSOrigin {
         if !audioOnly {
           let index = prepared.count
           prepared[index] = Rendition(url: url)
+          prepared[index]?.codecs = variantAttributes["CODECS"]
+          prepared[index]?.bandwidth = variantAttributes["BANDWIDTH"].flatMap(Int.init)
+          prepared[index]?.resolution = variantAttributes["RESOLUTION"]
           output.append("media/\(index).m3u8")
         }
         awaitingVariant = false
@@ -507,6 +585,18 @@ actor NativeHLSOrigin {
     advertisedTargetDuration = manifests.values.map(\.targetDuration).max()
     sources = prepared
     reportsUpdatedAt = Date()
+    if controlledAuto, prepared.count > 1 {
+      let values = try prepared.sorted(by: { $0.key < $1.key }).map { index, source in
+        guard let bitrate = source.bandwidth, let manifest = manifests[index] else { throw NativeHLSError.invalidMedia }
+        return NativeControlledHLSOrigin.Variant(id: index, url: source.url, bitrate: bitrate, manifest: manifest)
+      }
+      controlled = NativeControlledHLSOrigin(variants: values, headers: headers, history: history,
+        target: advertisedTargetDuration ?? 2, namespace: variantNamespace, budget: initialBudget,
+        loadData: loadData, diagnostic: diagnostic, trace: trace, failure: failure)
+      #if DEBUG
+      if capturesRequests { await controlled?.enableRequestDiagnostics() }
+      #endif
+    }
     master = output.joined(separator: "\n")
   }
 
@@ -577,6 +667,7 @@ actor NativeHLSOrigin {
       guard !stopped else { throw CancellationError() }
       try await prepare()
       guard !stopped else { throw CancellationError() }
+      if let controlled { return try await controlled.response(url) }
       if let error { throw error }
       if url.path == "/root.m3u8", let master, !master.isEmpty {
         #if DEBUG
@@ -618,7 +709,7 @@ actor NativeHLSOrigin {
           #if DEBUG
           served = true
           #endif
-          lastActive = index
+          servedRendition(index, segment: segment, part: number, reason: "resource_redirect")
           sources[index]?.lastMediaRequest = Date()
           return .redirect(segment.url, part.offset, part.length)
         }
@@ -649,6 +740,7 @@ actor NativeHLSOrigin {
       }
       throw CancellationError()
     } catch {
+      if controlled != nil { throw error }
       if (error as? URLError)?.code != .resourceUnavailable {
         fail(error, rendition: requestedRendition)
       }
@@ -761,12 +853,41 @@ actor NativeHLSOrigin {
     return Array(retained.reversed())
   }
 
+  func upstreamManifest(_ index: Int) async throws -> NativeCMAF.Manifest {
+    guard let url = sources[index]?.url else { throw CancellationError() }
+    let bytes: Data
+    do {
+      bytes = try await data(url)
+    } catch {
+      try Task.checkCancellation()
+      guard !stopped, index == lastActive,
+        sources[index]?.segments.contains(where: { !$0.parts.isEmpty }) == true,
+        let network = error as? URLError,
+        network.code == .timedOut || network.code == .networkConnectionLost else { throw error }
+      Self.logger.warning("Retrying active manifest in place: rendition \(index), code \(network.code.rawValue)")
+      diagnostic(.init(error: error, operation: "manifest_retry", rendition: index,
+        active: lastActive, fatal: false))
+      // Bound the whole retry, not just URLSession's inactivity timeout.
+      bytes = try await withThrowingTaskGroup(of: Data.self) { group in
+        group.addTask { try await self.data(url, timeout: Self.manifestRetrySeconds) }
+        group.addTask {
+          try await Task.sleep(for: .seconds(Self.manifestRetrySeconds))
+          throw URLError(.timedOut)
+        }
+        defer { group.cancelAll() }
+        guard let result = try await group.next() else { throw CancellationError() }
+        return result
+      }
+    }
+    return try NativeCMAF.manifest(String(decoding: bytes, as: UTF8.self), url: url)
+  }
+
   private func run(_ index: Int, startingAt requestedSequence: Int? = nil) async {
     let reader = NativeHLSChunkReader()
     defer { reader.stop() }
     var operation = "manifest"
     do {
-      guard let url = sources[index]?.url else { return }
+      guard sources[index] != nil else { return }
       var next: Int? = sources[index]?.segments.last.map { $0.sequence + 1 }
       if let requestedSequence, let cachedNext = next, requestedSequence > cachedNext {
         // A retired rendition must resume at the client's position, not put
@@ -781,7 +902,7 @@ actor NativeHLSOrigin {
         try Task.checkCancellation()
         if index != lastActive, let last = sources[index]?.lastMediaRequest, Date().timeIntervalSince(last) > 8 { break }
         operation = "manifest"
-        let manifest = try NativeCMAF.manifest(String(decoding: try await data(url), as: UTF8.self), url: url)
+        let manifest = try await upstreamManifest(index)
         sources[index]?.hasPrefetch = manifest.hasPrefetch
         sources[index]?.publicationDuration = manifest.entries.compactMap(\.duration).max()
         if next == nil {
@@ -876,17 +997,18 @@ actor NativeHLSOrigin {
         var timing: NativeCMAF.Timing?
         var partOffset = 0
         var partDuration = 0.0
+        var cmafStart: Double?
         var independent = false
-        var transportStream = NativeTransportStream()
+        var transportStream = NativeTransportStream(capturesDiagnostics: trace != nil)
         var tsPending = Data()
         var tsInitialization = Data()
         var cmafPending = Data()
         operation = "media"
         for try await chunk in chunks {
-          defer { reader.consumedChunk() }
+          defer { reader.consumedChunk(chunk) }
           try Task.checkCancellation()
           operation = "indexing"
-          buffer.append(chunk)
+          buffer.append(chunk.data)
           guard buffer.count < 32 * 1024 * 1024 else { throw NativeHLSError.invalidMedia }
           while !buffer.isEmpty {
             if track == nil {
@@ -907,7 +1029,8 @@ actor NativeHLSOrigin {
                 var bytes = Data(tsPending.prefix(range.length))
                 if range.offset != 0 { bytes = tsInitialization + bytes }
                 try publish(index, Part(offset: range.offset, length: range.length,
-                                        duration: range.duration, independent: range.independent, media: bytes))
+                                        duration: range.duration, independent: range.independent,
+                                        media: bytes, timeline: range.timeline))
                 tsPending.removeFirst(range.length)
               }
               continue
@@ -929,7 +1052,8 @@ actor NativeHLSOrigin {
             let nextTiming = try NativeCMAF.timing(box.payload, track: track)
             if try NativeCMAF.shouldFlushPart(accumulated: partDuration, next: nextTiming.duration) {
               try publish(index, Part(offset: partOffset, length: offset - partOffset,
-                                      duration: partDuration, independent: independent, media: cmafPending))
+                                      duration: partDuration, independent: independent, media: cmafPending,
+                                      timeline: cmafTimeline(start: cmafStart, track: track)))
               cmafPending.removeAll(keepingCapacity: true)
               partDuration = 0
             }
@@ -947,12 +1071,17 @@ actor NativeHLSOrigin {
               sources[index] = source
             }
             endClock = frame.start + frame.duration
-            if partDuration == 0 { partOffset = fragmentOffset; independent = frame.independent }
+            if partDuration == 0 {
+              partOffset = fragmentOffset
+              independent = frame.independent
+              cmafStart = frame.start
+            }
             partDuration += frame.duration
             guard partDuration <= 0.45 else { throw NativeHLSError.unsupported }
             if partDuration >= 0.3825 {
               try publish(index, Part(offset: partOffset, length: offset + boxLength - partOffset,
-                                      duration: partDuration, independent: independent, media: cmafPending))
+                                      duration: partDuration, independent: independent, media: cmafPending,
+                                      timeline: cmafTimeline(start: cmafStart, track: track)))
               cmafPending.removeAll(keepingCapacity: true)
               partDuration = 0
             }
@@ -968,10 +1097,13 @@ actor NativeHLSOrigin {
           let range = try transportStream.finish(expectedDuration: entry.duration)
           let bytes = range.offset == 0 ? tsPending : tsInitialization + tsPending
           try publish(index, Part(offset: range.offset, length: range.length,
-                                  duration: range.duration, independent: range.independent, media: bytes))
+                                  duration: range.duration, independent: range.independent,
+                                  media: bytes, timeline: range.timeline))
         }
         if partDuration > 0 {
-          try publish(index, Part(offset: partOffset, length: offset - partOffset, duration: partDuration, independent: independent, media: cmafPending))
+          try publish(index, Part(offset: partOffset, length: offset - partOffset,
+            duration: partDuration, independent: independent, media: cmafPending,
+            timeline: cmafTimeline(start: cmafStart, track: track)))
         }
         if var source = sources[index], !source.segments.isEmpty {
           let last = source.segments.count - 1
@@ -991,6 +1123,7 @@ actor NativeHLSOrigin {
               for p in source.segments[i].parts.indices {
                 cachedMediaBytes -= source.segments[i].parts[p].media?.count ?? 0
                 source.segments[i].parts[p].media = nil
+                source.segments[i].parts[p].timeline.removeAll()
               }
             }
             age += source.segments[i].duration
@@ -1009,6 +1142,15 @@ actor NativeHLSOrigin {
     }
   }
 
+  private func cmafTimeline(start: Double?, track: NativeCMAF.Track?) -> [String: Double] {
+    guard trace != nil else { return [:] }
+    var timeline: [String: Double] = [:]
+    timeline["video_decode_start_seconds"] = start
+    timeline["video_track_id"] = track.map { Double($0.id) }
+    timeline["video_timescale"] = track.map { Double($0.scale) }
+    return timeline
+  }
+
   private func publish(_ index: Int, _ part: Part) throws {
     guard var source = sources[index], !source.segments.isEmpty else { throw CancellationError() }
     let last = source.segments.count - 1
@@ -1021,10 +1163,54 @@ actor NativeHLSOrigin {
     cachedMediaBytes += part.media?.count ?? 0
     sources[index] = source
     publishedParts += 1
+    if source.segments[last].parts.count == 1 {
+      traceMedia(.segment, index: index, segment: source.segments[last], part: 0, reason: "indexed")
+    }
     #if DEBUG
     if capturesRequests {
       recordRequest("/produced/\(index)/\(source.segments[last].sequence)/\(source.segments[last].parts.count - 1)",
         started: Date(), served: true, bytes: part.media?.count)
+    }
+    #endif
+  }
+
+  private func traceMedia(_ event: NativeHLSPlaybackDiagnostic.Event, index: Int,
+                          segment: Segment, part number: Int, reason: String, previous: Int? = nil) {
+    guard let trace, let source = sources[index], segment.parts.indices.contains(number) else { return }
+    let part = segment.parts[number]
+    var attributes = ["reason": reason, "format": segment.initialization == nil
+      || segment.initializationRange != nil ? "ts" : "cmaf"]
+    attributes["codecs"] = source.codecs
+    attributes["resolution"] = source.resolution
+    var metrics = part.timeline
+    metrics["program_date_seconds"] = segment.date.timeIntervalSince1970
+      + segment.parts.prefix(number).reduce(0) { $0 + $1.duration }
+    metrics["part_duration_seconds"] = part.duration
+    metrics["hold_back_seconds"] = source.liveHoldBack
+    var counters = ["rendition": index, "active_rendition": lastActive,
+      "sequence": segment.sequence, "part": number, "period": segment.discontinuity,
+      "part_bytes": part.media?.count ?? 0, "independent": part.independent ? 1 : 0,
+      "cached_media_bytes": cachedMediaBytes, "part_offset": part.offset, "part_length": part.length]
+    counters["initialization_length"] = segment.initializationRange
+    counters["previous_rendition"] = previous
+    counters["bandwidth_bps"] = source.bandwidth
+    trace(.init(event: event, attributes: attributes, metrics: metrics, counters: counters))
+  }
+
+  private func traceState(reason: String) {
+    guard let trace else { return }
+    for (index, source) in sources.sorted(by: { $0.key < $1.key }) {
+      for segment in source.segments.suffix(2) {
+        if !segment.parts.isEmpty {
+          traceMedia(.state, index: index, segment: segment, part: 0, reason: reason)
+        }
+      }
+    }
+    #if DEBUG
+    for request in traceRequests {
+      trace(.init(event: .request,
+        attributes: request.attributes.merging(["reason": reason]) { _, new in new },
+        metrics: request.metrics, counters: request.counters))
     }
     #endif
   }

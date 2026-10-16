@@ -77,8 +77,7 @@ struct PlayerView: View {
       else { storedPreferredQuality = newValue }
     }
   }
-  /// Latency-vs-quality profile for the adaptive ("Auto") stream, surfaced as the
-  /// two Auto rows in the quality picker. Stored as the enum raw value; read it
+  /// Stored compatibility value for the single native Auto profile; read it
   /// through `livePlaybackProfile`.
   @AppStorage(PersistenceKey.livePlaybackProfile) var livePlaybackProfileRaw = LivePlaybackProfile.default
     .rawValue
@@ -608,7 +607,7 @@ struct PlayerView: View {
   // its `focusTag`, and must be registered in that allow-list — otherwise tvOS
   // can't land focus on it and traps on a neighbor.
   enum Focusable: Hashable {
-    case video, streamInfo, quality, rewards, chatToggle, chatInput, errorBack, audioResume
+    case video, streamInfo, quality, rewards, chatToggle, chatInput, errorBack, audioResume, nativeRetry
     case offlineViewChannel, offlineTryAgain
     case chatSend
     /// VOD-only: invisible target inside the chat pane that holds focus while the

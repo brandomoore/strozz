@@ -20,6 +20,8 @@ extension PlayerView {
       attributes["quality_budget"] = switch context.qualityTier {
       case .source: "source"
       case .grid: "grid"
+      case .grid720: "grid_720"
+      case .grid1080: "grid_1080"
       case .thumbnail: "thumbnail"
       }
     } else {
@@ -30,6 +32,7 @@ extension PlayerView {
     }
     attributes["asset_host"] = PlaybackTelemetryRecorder.host(
       (player.currentItem?.asset as? AVURLAsset)?.url.absoluteString)
+    attributes["video_surface"] = usesDirectMultiviewVideoLayer() ? "player_layer" : "avkit_controller"
     return attributes
   }
 
@@ -153,9 +156,15 @@ extension PlayerView {
       Date().timeIntervalSince($0) >= 4
     } ?? false
     snapshot.flags["video_output_observed"] = model.playbackTelemetry.videoFrameAge != nil
+    snapshot.flags["decoded_frame_observer_attached"] = playerItemVideoOutput != nil
     snapshot.metrics["video_frame_age_seconds"] = model.playbackTelemetry.videoFrameAge
     snapshot.flags["using_alt_source"] = isUsingAltSource
     snapshot.flags["native_ll_hls"] = model.isUsingNativeHLS
+    snapshot.flags["native_controlled_auto"] = model.nativeControlledAuto
+    if let size = model.playbackTelemetry.decodedVideoSize {
+      snapshot.metrics["decoded_video_width"] = size.width
+      snapshot.metrics["decoded_video_height"] = size.height
+    }
     snapshot.flags["native_startup_complete"] = model.nativeStartupComplete
     snapshot.flags["playback_date_mapping_valid"] = wallClockLowConfidenceStreak < wallClockUnavailableSamples
     snapshot.flags["native_catch_up_active"] = model.nativeCatchUp.isActive
@@ -395,10 +404,10 @@ extension PlayerView {
         flags: [
           "uses_proxy": usesProxy,
           "promotes_prefetch": usesProxy && livePlaybackProfile
-            .effectiveSelection(nativeAvailable: model.nativeFallbackReason == nil)
             .promotesPrefetch(legacyEnabled: lowLatencyProxyEnabled, unstable: isStreamUnstable),
           "retains_history": usesProxy && streamRewindEnabled,
           "stream_unstable": isStreamUnstable,
+          "decoded_frame_observer_attached": playerItemVideoOutput != nil,
         ]
       )
     }

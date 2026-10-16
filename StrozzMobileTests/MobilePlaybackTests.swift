@@ -43,7 +43,7 @@ final class MobilePlaybackTests: XCTestCase {
       StreamQuality(id: "source", name: "Source", url: video, isAudioOnly: false, bitrate: 1000)
     ])
     XCTAssertEqual(MobileQuality.native.source(in: playback), master)
-    XCTAssertEqual(MobileQuality.automatic.source(in: playback), master)
+    XCTAssertEqual(MobileQuality.receiver.source(in: playback), master)
     XCTAssertEqual(MobileQuality.fixed("source").source(in: playback), video)
     XCTAssertNil(MobileQuality.fixed("missing").source(in: playback))
     XCTAssertNil(MobileQuality.audioOnly.source(in: playback),
@@ -188,7 +188,7 @@ final class MobilePlaybackTests: XCTestCase {
     let lower = StreamQuality(id: "lower", name: "Low", url: url, isAudioOnly: false, bitrate: 1000)
     let audio = StreamQuality(id: "audio", name: "Audio", url: url, isAudioOnly: true, bitrate: 9999)
     XCTAssertEqual(MobilePlaybackModel.decodeRecoveryQuality(in: [lower, audio, source], selection: .native), source)
-    XCTAssertEqual(MobilePlaybackModel.decodeRecoveryQuality(in: [lower, source], selection: .automatic), source)
+    XCTAssertEqual(MobilePlaybackModel.decodeRecoveryQuality(in: [lower, source], selection: .receiver), source)
     XCTAssertNil(MobilePlaybackModel.decodeRecoveryQuality(in: [lower, source], selection: .fixed(source.id)))
     XCTAssertNil(MobilePlaybackModel.decodeRecoveryQuality(in: [audio], selection: .native))
   }
@@ -198,10 +198,10 @@ final class MobilePlaybackTests: XCTestCase {
     model.select(.fixed("720p60"))
     XCTAssertTrue(model.requestsNativePlayback)
     model.prepareForAirPlay()
-    XCTAssertEqual(model.selection, .automatic)
+    XCTAssertEqual(model.selection, .receiver)
     XCTAssertFalse(model.requestsNativePlayback)
     model.select(.fixed("720p60"))
-    XCTAssertFalse(model.requestsNativePlayback, "An explicit standard selection remains standard")
+    XCTAssertTrue(model.requestsNativePlayback, "Local video quality selections return to native playback")
     model.select(.native)
     model.select(.fixed("720p60"))
     XCTAssertTrue(model.requestsNativePlayback)
@@ -430,6 +430,82 @@ final class MobilePlaybackTests: XCTestCase {
     }
     await Task.yield()
     XCTAssertNil(model.player.currentItem)
+  }
+
+  func testTerminalNativeFailureKeepsNativeSelectionAndExplicitRetryUsesNative() async throws {
+    var pending: [CheckedContinuation<StreamPlayback, Never>] = []
+    let model = MobilePlaybackModel(muted: true) { _ in
+      await withCheckedContinuation { pending.append($0) }
+    }
+    model.activateAudioSession = {}
+    model.loadMetadata = { _ in nil }
+    model.start(channel: "fixture")
+    for _ in 0..<100 {
+      if pending.count == 1 { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    model.recoverNative(.transportCodec)
+    XCTAssertEqual(model.selection, .native)
+    XCTAssertTrue(model.requestsNativePlayback)
+    XCTAssertNotNil(model.nativeFailure)
+    XCTAssertTrue(model.errorMessage?.contains("Native playback failed") == true)
+    XCTAssertNil(model.player.currentItem)
+    XCTAssertFalse(model.isLoading)
+    XCTAssertEqual(pending.count, 1)
+    model.handleMediaServicesLost()
+    model.handleMediaServicesReset()
+    await Task.yield()
+    XCTAssertEqual(pending.count, 1, "A global services reset must not bypass terminal Native Retry")
+    XCTAssertNotNil(model.nativeFailure)
+    XCTAssertNotNil(model.errorMessage)
+    model.retry()
+    for _ in 0..<100 {
+      if pending.count == 2 { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    XCTAssertEqual(pending.count, 2)
+    XCTAssertEqual(model.selection, .native)
+    XCTAssertTrue(model.requestsNativePlayback)
+    XCTAssertNil(model.nativeFailure)
+    model.stop()
+    for request in pending {
+      request.resume(returning: StreamPlayback(
+        master: URL(string: "https://example.invalid/cancelled.m3u8")!, qualities: []))
+    }
+    await Task.yield()
+    XCTAssertNil(model.player.currentItem)
+  }
+
+  func testExhaustedNativeRetriesStopWithoutSelectingReceiverPlayback() async throws {
+    var pending: [CheckedContinuation<StreamPlayback, Never>] = []
+    let model = MobilePlaybackModel(muted: true) { _ in
+      await withCheckedContinuation { pending.append($0) }
+    }
+    model.activateAudioSession = {}
+    model.loadMetadata = { _ in nil }
+    model.start(channel: "fixture")
+    for expected in 1...3 {
+      for _ in 0..<100 {
+        if pending.count == expected { break }
+        try await Task.sleep(for: .milliseconds(5))
+      }
+      XCTAssertEqual(pending.count, expected)
+      model.recoverNative(.timeout)
+    }
+    XCTAssertEqual(pending.count, 3)
+    XCTAssertEqual(model.selection, .native)
+    XCTAssertTrue(model.requestsNativePlayback)
+    XCTAssertNotNil(model.nativeFailure)
+    XCTAssertNotNil(model.errorMessage)
+    XCTAssertNil(model.recoveryNotice)
+    XCTAssertFalse(model.isLoading)
+    XCTAssertNil(model.player.currentItem)
+    model.stop()
+    for request in pending {
+      request.resume(returning: StreamPlayback(
+        master: URL(string: "https://example.invalid/cancelled.m3u8")!, qualities: []))
+    }
+    await Task.yield()
   }
 
   func testSlowMetadataDoesNotBlockPlaybackResolutionOrResurrectStoppedState() async throws {

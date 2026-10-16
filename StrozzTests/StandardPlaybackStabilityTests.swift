@@ -23,17 +23,17 @@ final class StandardPlaybackStabilityTests: XCTestCase {
     try await body()
   }
 
-  func testNativeFallbackHonorsDisabledLegacyPrefetchAndKeepsDVR() async throws {
+  func testPreviousNativeFailureCannotSelectAStandardItemOnRetry() async throws {
     await withPreferences {
       let model = PlayerModel()
       model.nativeFallbackReason = NativeHLSError.unavailable.rawValue
       let view = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: model)
-      _ = view.makeItem(url: URL(string: "https://example.invalid/master.m3u8")!)
+      let item = view.makeItem(url: URL(string: "https://example.invalid/master.m3u8")!)
       await flush(model.lowLatencyProxy)
-      XCTAssertFalse(model.isUsingNativeHLS)
-      XCTAssertFalse(model.lowLatencyProxy.telemetrySnapshot.promotesPrefetch)
-      XCTAssertTrue(model.lowLatencyProxy.telemetrySnapshot.retainsHistory)
-      XCTAssertEqual(view.selectedQualityOption, LivePlaybackProfile.lowerLatency.pickerLabel)
+      XCTAssertTrue(model.isUsingNativeHLS)
+      XCTAssertEqual((item.asset as? AVURLAsset)?.url.scheme, NativeLowLatencyHLS.scheme)
+      XCTAssertNil(model.nativeFallbackReason)
+      XCTAssertEqual(view.selectedQualityOption, LivePlaybackProfile.nativeLowLatency.pickerLabel)
     }
   }
 
@@ -46,11 +46,11 @@ final class StandardPlaybackStabilityTests: XCTestCase {
       let view = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: model)
       view.enterStreamStabilityMode()
       await flush(model.lowLatencyProxy)
-      XCTAssertTrue(view.isStreamUnstable)
+      XCTAssertFalse(view.isStreamUnstable)
       XCTAssertTrue(model.player.currentItem === item)
       XCTAssertEqual(item.seeks, 0)
       XCTAssertEqual(item.currentTime().seconds, 23.468, accuracy: 0.001)
-      XCTAssertEqual(item.preferredForwardBufferDuration, LivePlaybackPolicy.stabilityFallback.preferredForwardBufferDuration)
+      XCTAssertEqual(item.preferredForwardBufferDuration, 0)
       XCTAssertFalse(model.lowLatencyProxy.telemetrySnapshot.promotesPrefetch)
     }
   }
@@ -69,7 +69,8 @@ final class StandardPlaybackStabilityTests: XCTestCase {
       await Task.yield()
       XCTAssertTrue(model.player.currentItem === item)
       XCTAssertEqual(item.seeks, 0)
-      XCTAssertFalse(model.lowLatencyProxy.telemetrySnapshot.promotesPrefetch)
+      XCTAssertTrue(model.lowLatencyProxy.telemetrySnapshot.promotesPrefetch,
+        "Native-only playback does not engage the legacy stability controller")
       XCTAssertTrue(model.lowLatencyProxy.telemetrySnapshot.retainsHistory)
     }
   }

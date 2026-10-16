@@ -242,6 +242,11 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
     snapshot.metrics["playhead_seconds"] = model.player.currentTime().seconds
     snapshot.metrics["playback_rate"] = Double(model.player.rate)
     snapshot.metrics["video_frame_age_seconds"] = model.diagnostics.videoFrameAge
+    snapshot.flags["native_controlled_auto"] = model.controlledAutoActive
+    if let size = model.decodedVideoSize {
+      snapshot.metrics["decoded_video_width"] = size.width
+      snapshot.metrics["decoded_video_height"] = size.height
+    }
     if let item {
       snapshot.metrics["presentation_width"] = Double(item.presentationSize.width)
       snapshot.metrics["presentation_height"] = Double(item.presentationSize.height)

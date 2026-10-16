@@ -1,4 +1,5 @@
 import AVKit
+import CoreVideo
 import SwiftUI
 
 // Playback diagnostics: formatting helpers and the sampling loop that powers the
@@ -108,7 +109,7 @@ extension PlayerView {
   private func recordInstabilityEvent() {
     // Native LL-HLS owns its live-offset recovery; legacy buffering must not
     // silently replace the selected engine.
-    guard !model.isUsingNativeHLS else { return }
+    guard !isNativeLiveVideo else { return }
     guard !isVOD, !isStreamUnstable else { return }
     let now = Date()
     lastStallAt = now
@@ -134,7 +135,7 @@ extension PlayerView {
   /// position. Recovery must never replay watched content to manufacture buffer.
   /// The policy stays latched until the viewer changes channel.
   func enterStreamStabilityMode() {
-    guard !model.isUsingNativeHLS, !isUsingAltSource, !isVOD, !isStreamUnstable,
+    guard !isNativeLiveVideo, !isUsingAltSource, !isVOD, !isStreamUnstable,
       !isUserPaused, !isScrubbing, backgroundedAt == nil else { return }
     streamUnstableSince = Date()
     recordPlaybackEvent(
@@ -263,14 +264,38 @@ extension PlayerView {
     }
 
     let itemTime = item.currentTime()
+    #if DEBUG
+    if model.isUsingNativeHLS {
+      recordPlaybackEvent("native_video_output_pull", level: .debug,
+        attributes: ["phase": "begin"], metrics: [
+          "playhead_seconds": itemTime.seconds, "presentation_width": size.width,
+          "presentation_height": size.height, "player_rate": Double(player.rate),
+        ])
+    }
+    #endif
     if output.hasNewPixelBuffer(forItemTime: itemTime) {
       // Consume the frame so the next poll's freshness check is meaningful, then
       // clear the freeze timer — the picture is genuinely advancing.
       let frame = output.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: nil)
-      if frame != nil { model.playbackTelemetry.videoFrameObserved() }
+      #if DEBUG
+      if model.isUsingNativeHLS {
+        recordPlaybackEvent("native_video_output_pull", level: .debug,
+          attributes: ["phase": "end"], flags: ["has_new_frame": true, "received_frame": frame != nil])
+      }
+      #endif
+      if let frame {
+        model.playbackTelemetry.videoFrameObserved(
+          size: CGSize(width: CVPixelBufferGetWidth(frame), height: CVPixelBufferGetHeight(frame)))
+      }
       videoDecodeFrozenSince = nil
       return
     }
+    #if DEBUG
+    if model.isUsingNativeHLS {
+      recordPlaybackEvent("native_video_output_pull", level: .debug,
+        attributes: ["phase": "end"], flags: ["has_new_frame": false, "received_frame": false])
+    }
+    #endif
 
     // The clock advanced this sample but no new frame was produced.
     let now = Date()

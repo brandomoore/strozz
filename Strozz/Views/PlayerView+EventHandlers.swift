@@ -91,11 +91,8 @@ extension PlayerView {
     }
     .task(id: model.multiviewContext?.reloadID) {
       if activeChannel.isEmpty { activeChannel = channel }
-      if model.multiviewContext == nil,
-        !UserDefaults.standard.bool(forKey: PersistenceKey.nativePlaybackDefaultApplied) {
-        if preferredQuality == "Auto", livePlaybackProfile == .lowerLatency {
-          livePlaybackProfile = .nativeLowLatency
-        }
+      if model.multiviewContext == nil {
+        migrateNativeLiveProfile()
         UserDefaults.standard.set(true, forKey: PersistenceKey.nativePlaybackDefaultApplied)
       }
       if isVOD {

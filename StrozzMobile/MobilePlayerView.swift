@@ -856,8 +856,6 @@ struct MobileStreamDetails: View {
   @ViewBuilder private var playbackNotice: some View {
     if let notice = model.recoveryNotice {
       Text(notice).font(.caption).foregroundStyle(secondaryText).lineLimit(2)
-    } else if let failure = model.nativeFailure {
-      Text("Using standard playback: \(failure)").font(.caption).foregroundStyle(secondaryText).lineLimit(2)
     }
   }
 }

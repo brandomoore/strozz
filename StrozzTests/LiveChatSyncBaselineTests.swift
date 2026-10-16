@@ -46,10 +46,10 @@ final class ChatSyncDefaultsMigrationTests: XCTestCase {
   func testMigrationDoesNotChangePlaybackQualityOrOtherPreferences() throws {
     try withDefaults { defaults in
       defaults.set("720p60", forKey: PersistenceKey.preferredQuality)
-      defaults.set(LivePlaybackProfile.higherQuality.rawValue, forKey: PersistenceKey.livePlaybackProfile)
+      defaults.set("higherQuality", forKey: PersistenceKey.livePlaybackProfile)
       ChatSyncDefaultsMigration.runIfNeeded(defaults)
       XCTAssertEqual(defaults.string(forKey: PersistenceKey.preferredQuality), "720p60")
-      XCTAssertEqual(defaults.string(forKey: PersistenceKey.livePlaybackProfile), LivePlaybackProfile.higherQuality.rawValue)
+      XCTAssertEqual(defaults.string(forKey: PersistenceKey.livePlaybackProfile), "higherQuality")
     }
   }
 }
