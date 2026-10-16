@@ -16,6 +16,7 @@ struct ChannelPageView: View {
 
   @Environment(\.dismiss) private var dismiss
   @Environment(\.themePalette) private var palette
+  @Environment(AppEnvironment.self) private var environment
 
   @State private var profile: ChannelProfile?
   @State private var isLoadingProfile = true
@@ -71,7 +72,11 @@ struct ChannelPageView: View {
     if profile?.isLive == true { return "live" }
     if let clip = content?.clips.first { return "clip-\(clip.slug)" }
     if let vod = content?.videos.first { return "vod-\(vod.id)" }
-    return nil
+    return isOwnChannel ? nil : "follow"
+  }
+
+  private var isOwnChannel: Bool {
+    environment.auth.userLogin?.lowercased() == target.login.lowercased()
   }
 
   private var headerName: String {
@@ -233,6 +238,12 @@ struct ChannelPageView: View {
       }
 
       Spacer(minLength: 0)
+      if !isOwnChannel {
+        ChannelFollowButton(login: target.login, displayName: headerName,
+          auth: environment.auth, rewards: environment.watchRewards, follows: environment.follows)
+          .focused($focusedID, equals: "follow")
+          .prefersDefaultFocus(defaultFocusID == "follow", in: focusNamespace)
+      }
     }
     .padding(24)
     .frame(maxWidth: .infinity, alignment: .leading)

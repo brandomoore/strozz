@@ -702,6 +702,20 @@ without discarding known emotes or caching an outage as an empty catalog.
 Playback diagnostics include catalog size and pending-retry state, not emote
 names or chat text.
 
+### Following channels
+
+Open a Twitch channel page on Apple TV, iPhone, or iPad and choose **Follow**.
+Choose **Following** to unfollow, with confirmation. This changes your Twitch
+account, not a device-local favorites list. Your own channel has no follow button.
+
+Following requires both the normal Twitch sign-in and the same-account
+**Twitch Rewards** connection; the button opens the existing rewards connection
+flow when needed. Twitch removed public follow/unfollow APIs in 2021, so changes
+use its unofficial TV-client endpoint. Strozz confirms the result through the
+official followed-channels API before updating the button and refreshing
+Following. Rejected or unconfirmed changes show an error rather than a false
+success. New follows do not automatically enable Twitch notification bells.
+
 ### Twitch rewards and polls (experimental)
 
 In **Settings > Accounts > Twitch Rewards**, connect watch rewards using
