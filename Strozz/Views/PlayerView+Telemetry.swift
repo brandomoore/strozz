@@ -153,6 +153,7 @@ extension PlayerView {
       Date().timeIntervalSince($0) >= 4
     } ?? false
     snapshot.flags["video_output_observed"] = model.playbackTelemetry.videoFrameAge != nil
+    snapshot.flags["decoded_frame_observer_attached"] = playerItemVideoOutput != nil
     snapshot.metrics["video_frame_age_seconds"] = model.playbackTelemetry.videoFrameAge
     snapshot.flags["using_alt_source"] = isUsingAltSource
     snapshot.flags["native_ll_hls"] = model.isUsingNativeHLS
@@ -398,6 +399,7 @@ extension PlayerView {
             .promotesPrefetch(legacyEnabled: lowLatencyProxyEnabled, unstable: isStreamUnstable),
           "retains_history": usesProxy && streamRewindEnabled,
           "stream_unstable": isStreamUnstable,
+          "decoded_frame_observer_attached": playerItemVideoOutput != nil,
         ]
       )
     }

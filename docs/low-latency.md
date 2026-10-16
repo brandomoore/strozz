@@ -112,6 +112,16 @@ native attempt; neither silently selects a legacy engine.
 
 ### Isolating failures during native quality switches
 
+A controlled TV Debug launch with `STROZZ_NATIVE_FRAME_OBSERVER=off` omits the
+main players' auxiliary `AVPlayerItemVideoOutput` observers. It does not change
+Native rendering, adaptive variants, multiview budgets, or buffering. Decode-freeze
+detection is unavailable during this comparison; ordinary stall detection and
+media-service reset logging remain active. Telemetry explicitly records
+`decoded_frame_observer_attached=false`; missing decoded-frame evidence must not
+be counted as proof of healthy video. This is an investigation control, not a
+playback fix. Release builds ignore it, and a normal launch restores observation.
+Native preview observers are unchanged.
+
 An unused rendition's failed download or invalid media no longer cancels all
 rendition indexers. It is quarantined for the current engine, its cached media
 is released, and subsequent requests fail explicitly without restarting its

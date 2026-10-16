@@ -352,7 +352,15 @@ extension PlayerView {
     }
   }
 
-  func makeItem(url: URL) -> AVPlayerItem {
+  static func observesNativeDecodedFrames(environment: [String: String]) -> Bool {
+    #if DEBUG
+    return environment["STROZZ_NATIVE_FRAME_OBSERVER"] != "off"
+    #else
+    return true
+    #endif
+  }
+
+  func makeItem(url: URL, diagnosticEnvironment: [String: String] = ProcessInfo.processInfo.environment) -> AVPlayerItem {
     cancelNativeCatchUp(reason: "source_change")
     model.nativeNeedsRefresh = false
     currentSourceURL = url
@@ -473,13 +481,14 @@ extension PlayerView {
     // Keep refreshing the live playlist while paused so the seekable (rewind)
     // window keeps growing and pause-then-resume stays inside the DVR window.
     item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-    // Tap decoded frames for the decode-freeze watchdog. Native pixel format
-    // (empty attributes) so attaching/consuming a frame every couple of seconds
-    // adds no colour-conversion cost; this output is independent of the display
-    // layer and doesn't affect normal playback.
-    let videoOutput = AVPlayerItemVideoOutput(pixelBufferAttributes: [:])
-    item.add(videoOutput)
-    playerItemVideoOutput = videoOutput
+    // The DEBUG-only control isolates the auxiliary frame tap, not the renderer.
+    // An empty pixel format avoids requesting colour conversion for the watchdog.
+    playerItemVideoOutput = nil
+    if !useNative || Self.observesNativeDecodedFrames(environment: diagnosticEnvironment) {
+      let videoOutput = AVPlayerItemVideoOutput(pixelBufferAttributes: [:])
+      item.add(videoOutput)
+      playerItemVideoOutput = videoOutput
+    }
     videoDecodeFrozenSince = nil
     return item
   }

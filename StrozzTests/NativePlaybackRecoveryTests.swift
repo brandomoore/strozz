@@ -176,6 +176,55 @@ final class NativeRecoveryIntegrationTests: XCTestCase {
     }
   }
 
+  func testNativeFrameObserverControlKeepsEngineAutoAndBufferPolicy() async throws {
+    try await withModel { model, view in
+      let master = URL(string: "https://example.invalid/master.m3u8")!
+      view.playback = StreamPlayback(master: master, qualities: [])
+      let normal = view.makeItem(url: master, diagnosticEnvironment: [:])
+      view.replacePlaybackItem(with: normal)
+      let engine = try XCTUnwrap(model.nativeHLS)
+      let player = model.player
+      let output = try XCTUnwrap(model.playerItemVideoOutput)
+      XCTAssertTrue(normal.outputs.contains(output))
+
+      let control = view.makeItem(url: master,
+        diagnosticEnvironment: ["STROZZ_NATIVE_FRAME_OBSERVER": "off"])
+      view.replacePlaybackItem(with: control)
+      XCTAssertNil(model.playerItemVideoOutput)
+      XCTAssertTrue(control.outputs.isEmpty)
+      XCTAssertFalse(normal.outputs.contains(output), "The outgoing observer must also detach")
+      XCTAssertTrue(model.nativeHLS === engine)
+      XCTAssertTrue(model.player === player)
+      XCTAssertTrue(model.isUsingNativeHLS)
+      XCTAssertEqual((control.asset as? AVURLAsset)?.url.scheme, NativeLowLatencyHLS.scheme)
+      XCTAssertEqual(control.preferredForwardBufferDuration, normal.preferredForwardBufferDuration)
+      XCTAssertEqual(control.preferredMaximumResolution, normal.preferredMaximumResolution)
+      XCTAssertEqual(control.preferredPeakBitRate, normal.preferredPeakBitRate)
+      XCTAssertEqual(view.selectedQualityOption, LivePlaybackProfile.nativeLowLatency.pickerLabel)
+      XCTAssertTrue(model.nativeRecovery.attempts.isEmpty)
+      XCTAssertNil(model.nativeFallbackReason)
+
+      let restored = view.makeItem(url: master, diagnosticEnvironment: [:])
+      XCTAssertNotNil(model.playerItemVideoOutput, "No persisted setting may keep the control enabled")
+      XCTAssertEqual(restored.outputs.count, 1)
+    }
+  }
+
+  func testNativeFrameObserverControlDoesNotDisableAudioOnlyObservation() async {
+    await withModel { model, view in
+      let url = URL(string: "https://example.invalid/audio.m3u8")!
+      let audio = StreamQuality(id: "audio_only", name: "Audio Only",
+        url: url, isAudioOnly: true, bitrate: 160_000)
+      view.playback = StreamPlayback(master: url, qualities: [audio])
+      view.preferredQuality = audio.name
+      let item = view.makeItem(url: url,
+        diagnosticEnvironment: ["STROZZ_NATIVE_FRAME_OBSERVER": "off"])
+      XCTAssertFalse(model.isUsingNativeHLS)
+      XCTAssertNotNil(model.playerItemVideoOutput)
+      XCTAssertEqual(item.outputs.count, 1)
+    }
+  }
+
   func testDecodeRecoveryUsesNativeSourceWithoutPersistingQualityOrSpendingRetryBudget() async throws {
     try await withModel { model, view in
       let master = URL(string: "https://example.invalid/master.m3u8")!
