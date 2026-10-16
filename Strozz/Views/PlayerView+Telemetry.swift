@@ -30,6 +30,7 @@ extension PlayerView {
     }
     attributes["asset_host"] = PlaybackTelemetryRecorder.host(
       (player.currentItem?.asset as? AVURLAsset)?.url.absoluteString)
+    attributes["video_surface"] = usesDirectMultiviewVideoLayer() ? "player_layer" : "avkit_controller"
     return attributes
   }
 

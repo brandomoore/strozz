@@ -50,7 +50,7 @@ final class PlayerLayerHostView: UIView {
   var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
 }
 
-/// Lightweight, controls-free video surface for rounded preview tiles.
+/// Controls-free layer surface for preview tiles and the multiview diagnostic control.
 ///
 /// Rounding an *ancestor* of the video — SwiftUI's `.clipShape` or an enclosing
 /// `AVPlayerViewController` view layer — leaves a sub-pixel "bleed" at the
@@ -78,6 +78,10 @@ struct PreviewVideoSurface: UIViewRepresentable {
     }
     view.playerLayer.videoGravity = .resizeAspect
     apply(to: view)
+  }
+
+  static func dismantleUIView(_ view: PlayerLayerHostView, coordinator: ()) {
+    view.playerLayer.player = nil
   }
 
   private func apply(to view: PlayerLayerHostView) {

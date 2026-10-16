@@ -1,4 +1,5 @@
-import AVFoundation
+import AVKit
+import SwiftUI
 import XCTest
 @testable import Strozz
 
@@ -9,6 +10,56 @@ final class MultiviewForegroundRecoveryTests: XCTestCase {
       FollowedChannel(id: "\(index)", login: "fixture\(index)", displayName: "Fixture \(index)",
         title: "", gameName: "", viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true)
     })
+  }
+
+  func testDiagnosticLayerSelectionIsStableAcrossExpansionAndExcludesStandalone() {
+    let controller = controller(count: 2)
+    defer { controller.teardown() }
+    let pane = controller.panes[0]
+    let view = PlayerView(channel: pane.channel.login, auth: TwitchAuthSession(), model: pane.model)
+    let control = ["STROZZ_MULTIVIEW_VIDEO_SURFACE": "layer"]
+    XCTAssertFalse(view.usesDirectMultiviewVideoLayer(environment: [:]))
+    XCTAssertTrue(view.usesDirectMultiviewVideoLayer(environment: control))
+    controller.expand(pane.id)
+    XCTAssertTrue(view.usesDirectMultiviewVideoLayer(environment: control))
+    controller.collapse()
+    XCTAssertTrue(view.usesDirectMultiviewVideoLayer(environment: control))
+    let standalone = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: PlayerModel())
+    XCTAssertFalse(standalone.usesDirectMultiviewVideoLayer(environment: control))
+  }
+
+  func testDirectLayerHostRetainsPlayerDuringResizeAndDetachesOnDismantle() async throws {
+    let player = AVPlayer()
+    let item = AVPlayerItem(url: URL(fileURLWithPath: "/nonexistent-layer-fixture.m3u8"))
+    player.replaceCurrentItem(with: item)
+    defer { player.pause(); player.replaceCurrentItem(with: nil) }
+    let host = UIHostingController(rootView: PreviewVideoSurface(player: player))
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = host
+    window.isHidden = false
+    defer { window.isHidden = true; window.rootViewController = nil }
+    host.view.frame = CGRect(x: 0, y: 0, width: 854, height: 480)
+    host.view.layoutIfNeeded()
+    func layerView(in view: UIView) -> PlayerLayerHostView? {
+      if let layer = view as? PlayerLayerHostView { return layer }
+      return view.subviews.lazy.compactMap { layerView(in: $0) }.first
+    }
+    for _ in 0..<25 {
+      if layerView(in: host.view) != nil { break }
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    let view = try XCTUnwrap(layerView(in: host.view))
+    XCTAssertTrue(view.playerLayer.player === player)
+    XCTAssertEqual(view.playerLayer.videoGravity, .resizeAspect)
+    host.view.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+    host.view.layoutIfNeeded()
+    XCTAssertTrue(layerView(in: host.view) === view)
+    XCTAssertTrue(view.playerLayer.player === player)
+    XCTAssertTrue(player.currentItem === item)
+    PreviewVideoSurface.dismantleUIView(view, coordinator: ())
+    XCTAssertNil(view.playerLayer.player)
+    XCTAssertTrue(player.currentItem === item, "Surface cleanup must not stop its retained player")
   }
 
   func testExpansionAndReturnKeepEveryPlayerAndItemAlive() {

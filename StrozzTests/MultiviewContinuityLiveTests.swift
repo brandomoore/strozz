@@ -5,6 +5,34 @@ import XCTest
 
 @MainActor
 final class MultiviewContinuityLiveTests: XCTestCase {
+  private enum Surface {
+    case avkit(AVPlayerViewController)
+    case layer(PlayerLayerHostView)
+
+    var view: UIView {
+      switch self {
+      case .avkit(let controller): controller.view
+      case .layer(let view): view
+      }
+    }
+
+    var identity: ObjectIdentifier { ObjectIdentifier(view) }
+
+    var player: AVPlayer? {
+      switch self {
+      case .avkit(let controller): controller.player
+      case .layer(let view): view.playerLayer.player
+      }
+    }
+
+    var isReadyForDisplay: Bool {
+      switch self {
+      case .avkit(let controller): controller.isReadyForDisplay
+      case .layer(let view): view.playerLayer.isReadyForDisplay
+      }
+    }
+  }
+
   func testAdaptiveVerificationRejectsFixedQualityAndDecodeRecovery() {
     let channel = FollowedChannel(id: "auto-proof", login: "auto-proof", displayName: "Auto proof",
       title: "", gameName: "", viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true)
@@ -291,14 +319,14 @@ final class MultiviewContinuityLiveTests: XCTestCase {
 
   private func assertIdentity(_ controller: MultiviewController, host: UIViewController,
                               players: [AVPlayer], items: [AVPlayerItem],
-                              surfaces original: [ObjectIdentifier: AVPlayerViewController],
+                              surfaces original: [ObjectIdentifier: Surface],
                               audiblePaneID: String?) throws {
     let current = surfaces(in: host)
     for (index, pane) in controller.panes.enumerated() {
       XCTAssertTrue(pane.player === players[index], "Zoom must not create a player")
       XCTAssertTrue(pane.player.currentItem === items[index], "Zoom must not reload playback")
-      XCTAssertTrue(current.contains { $0 === original[ObjectIdentifier(pane.player)] },
-                    "Zoom must preserve the actual AVKit surface")
+      XCTAssertTrue(current.contains { $0.identity == original[ObjectIdentifier(pane.player)]?.identity },
+                    "Zoom must preserve the actual native rendering surface")
       XCTAssertTrue(pane.model.isUsingNativeHLS)
       XCTAssertTrue(isNativeAuto(pane), "Native Auto must remain adaptive without a fixed-quality decode recovery")
       XCTAssertEqual(pane.player.isMuted, pane.id != audiblePaneID, "Audio must remain with the authorized stream")
@@ -306,9 +334,16 @@ final class MultiviewContinuityLiveTests: XCTestCase {
     XCTAssertEqual(current.count, players.count, "No extra rendering owner may appear during zoom")
   }
 
-  private func surfaces(in controller: UIViewController) -> [AVPlayerViewController] {
-    if let surface = controller as? AVPlayerViewController { return [surface] }
-    return controller.children.flatMap { surfaces(in: $0) }
+  private func surfaces(in controller: UIViewController) -> [Surface] {
+    func controllers(in controller: UIViewController) -> [Surface] {
+      if let surface = controller as? AVPlayerViewController { return [.avkit(surface)] }
+      return controller.children.flatMap { controllers(in: $0) }
+    }
+    func layers(in view: UIView) -> [Surface] {
+      if let layer = view as? PlayerLayerHostView { return [.layer(layer)] }
+      return view.subviews.flatMap { layers(in: $0) }
+    }
+    return controllers(in: controller) + layers(in: controller.view)
   }
 
   private func attach(_ host: UIViewController, name: String) {

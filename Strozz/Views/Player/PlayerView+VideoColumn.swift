@@ -40,9 +40,19 @@ extension PlayerView {
     singlePlayerTransportHandler(videoColumnContent)
   }
 
+  @ViewBuilder
+  private var playerVideoSurface: some View {
+    // The launch control is constant across grid/expanded layouts.
+    if usesDirectMultiviewVideoLayer() {
+      PreviewVideoSurface(player: player)
+    } else {
+      VideoSurface(player: player)
+    }
+  }
+
   private var videoColumnContent: some View {
     ZStack(alignment: .bottom) {
-      VideoSurface(player: player)
+      playerVideoSurface
         .id(ObjectIdentifier(player))
         .accessibilityIdentifier("player-video-surface")
         .accessibilityValue(isLoading ? "Loading" : "Ready")

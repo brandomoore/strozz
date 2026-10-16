@@ -122,6 +122,26 @@ be counted as proof of healthy video. This is an investigation control, not a
 playback fix. Release builds ignore it, and a normal launch restores observation.
 Native preview observers are unchanged.
 
+A separate TV Debug launch control, `STROZZ_MULTIVIEW_VIDEO_SURFACE=layer`,
+uses the existing native `AVPlayerLayer` host for multiview panes instead of
+embedding one AVKit controller per pane. The choice stays constant when a pane
+expands or collapses, and the same player/item remains mounted. Standalone
+rendering is unchanged. Telemetry labels `video_surface` as `player_layer` or
+`avkit_controller`. A renderer-only comparison must launch without the observer-off
+flag so decoded-frame monitoring is restored. This remains an unproven diagnostic
+control; Release ignores it and normal launches retain AVKit rendering.
+
+The October 15 local delivery controls are not fixes: smooth two-broadcaster
+replay produced 165/165 fresh post-startup frames per player, while whole-segment
+bursts froze one player after 2/165 frames despite continued requests and growing
+buffered ranges. The replay harness now fails on insufficient frame/clock
+progress rather than treating process exit as proof. Automatic buffer preference
+did not fix the burst case. HTTP playlist delivery kept frames moving but fell
+about 18 seconds behind the native edge; removing cold reports also increased
+delay. Continuously warming all renditions did not eliminate quality cycling.
+Those experiments remain outside production. The local freeze is not yet proven
+to share the physical TV's playback-service crash mechanism.
+
 An unused rendition's failed download or invalid media no longer cancels all
 rendition indexers. It is quarantined for the current engine, its cached media
 is released, and subsequent requests fail explicitly without restarting its

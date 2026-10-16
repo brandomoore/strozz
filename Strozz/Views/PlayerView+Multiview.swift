@@ -2,6 +2,16 @@ import AVFoundation
 import SwiftUI
 
 extension PlayerView {
+  func usesDirectMultiviewVideoLayer(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> Bool {
+    #if DEBUG
+    return model.multiviewContext != nil && environment["STROZZ_MULTIVIEW_VIDEO_SURFACE"] == "layer"
+    #else
+    return false
+    #endif
+  }
+
   var isMultiviewCompact: Bool {
     model.multiviewContext.map { !$0.isExpanded } ?? false
   }
