@@ -6,6 +6,16 @@ import XCTest
 #endif
 
 final class NativeCMAFRemuxTests: XCTestCase {
+  func testControlledPlaybackIsTheReleaseDefaultWithoutDiagnosticLaunchArguments() {
+    #if DEBUG
+    XCTAssertEqual(NativeLowLatencyHLS.controlledAutoEnabled,
+      ProcessInfo.processInfo.environment["STROZZ_NATIVE_CONTROLLED_AUTO"] != "0")
+    #else
+    XCTAssertTrue(NativeLowLatencyHLS.controlledAutoEnabled,
+      "TestFlight must ship the verified engine even when a Debug opt-out is present in the environment")
+    #endif
+  }
+
   private func word(_ value: UInt64) -> Data {
     Data((0..<4).reversed().map { UInt8((value >> ($0 * 8)) & 255) })
   }

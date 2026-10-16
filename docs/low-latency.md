@@ -10,10 +10,11 @@ on-device observation). Hypotheses go under "Open questions" until proven.
 
 ## TL;DR
 
-- A Debug-only **controlled Native Auto prototype** is available through the
-  `STROZZ_NATIVE_CONTROLLED_AUTO=1` launch environment. It is not enabled by a
-  normal launch or in Release. See the prototype section below for its supported
-  format, adaptation contract, and verification limits.
+- **Controlled Native Auto** is enabled by default for normal and Release
+  launches, including TestFlight. Debug builds can use
+  `STROZZ_NATIVE_CONTROLLED_AUTO=0` for a diagnostic comparison; Release ignores
+  that opt-out. See the controlled-engine section below for supported formats,
+  adaptation behavior, and verification limits.
 - **Auto · Native Low Latency** is the only Twitch live Auto profile.
   **Auto · Low Latency** and **Auto · High Quality** are removed; saved legacy
   profile selections migrate to Native. Fixed video resolutions also stay Native.
@@ -114,9 +115,9 @@ necessary. The default does not force unsupported media to play or promise
 unlimited retries. Manual retry or a manual resolution selection starts a new
 native attempt; neither silently selects a legacy engine.
 
-### Controlled Native Auto prototype
+### Controlled Native Auto
 
-The prototype keeps Apple's player and controls adaptation for both H.264/AAC
+The controlled engine keeps Apple's player and adapts both H.264/AAC
 TS and source-CMAF masters. It does not re-encode. For TS, NAL/access-unit assembly spans PES
 boundaries: a new PES can begin with the tail or continuation slice of the
 previous picture, and its timestamp applies to the picture beginning inside it.
@@ -172,7 +173,7 @@ historical media can be remuxed on demand. An unavailable historical request is 
 resource-local failure, not permission to terminate healthy live production.
 Encoded media retention remains bounded.
 
-The experimental path applies to multi-rendition H.264/AAC TS and source-CMAF
+The controlled path applies to multi-rendition H.264/AAC TS and source-CMAF
 Auto. Manual qualities, explicit receiver/audio/VOD paths, and previews retain
 their existing paths. Source-CMAF currently requires muxed AVC/AAC-LC without
 edit lists, compatible track IDs/timebases across renditions, and a common AAC
@@ -180,15 +181,16 @@ configuration within each period. Harmless audio-track metadata differences
 are not codec mismatches. Unsupported format changes fail
 explicitly rather than silently excluding a quality or changing playback engine.
 
-The same Debug opt-in enables measured multiview grid budgets: one through four
+The default controller uses measured multiview grid budgets: one through four
 visible panes allow up to 1920×1080, and five or six allow up to 1280×720. These
 are adaptive ceilings, not pinned qualities or guaranteed minima. Neither
-experimental grid tier has an additional bitrate ceiling: the previous 3 Mbps
+controlled grid tier has an additional bitrate ceiling: the previous 3 Mbps
 preference excluded common 3.42 Mbps 720p60 renditions from the controlled policy.
 Fullscreen/spotlight remains unrestricted, while secondary/hidden thumbnails
 retain their 854×480 / 800 kbps preference. Adding/removing panes updates budgets
-without replacing surviving players or items. Normal and Release launches keep
-the previous grid policy until broader validation.
+without replacing surviving players or items. A Debug diagnostic opt-out retains
+the previous grid policy for comparison; normal and Release launches use the
+measured count-aware budgets.
 
 The opt-in physical capacity test exercises the mounted grid on the authorized
 TV, preserving actual decoded dimensions, clock/frame continuity and thermal
@@ -204,7 +206,7 @@ waiting, zero reported dropped frames, and nominal thermal state.
 
 The guarded hardware test is
 `MultiviewContinuityLiveTests/testOptInPhysicalGridResolutionCapacity`. It needs
-explicit `STROZZ_MULTIVIEW_CAPACITY_TESTS=1` and the controlled-engine flag, uses
+explicit `STROZZ_MULTIVIEW_CAPACITY_TESTS=1` with controlled playback enabled, uses
 real followed live sources, and records source-CMAF exclusions only for isolating
 the controlled-TS workload. `STROZZ_CAPACITY_APPLY_GRID_BUDGETS=1` verifies the
 actual count-aware policy rather than unrestricted resource preferences;
@@ -213,7 +215,7 @@ runner, prefix these environment keys with `TEST_RUNNER_`. Never enable the
 physical check without permission to take over the TV.
 
 The separate `testOptInPhysicalCMAFZoomKeepsPlayback` check requires
-`STROZZ_CMAF_PHYSICAL_TESTS=1`, the controlled-engine flag, and two explicitly
+`STROZZ_CMAF_PHYSICAL_TESTS=1`, controlled playback enabled, and two explicitly
 selected live channel logins in `STROZZ_MATRIX_CHANNELS`, with a verified CMAF
 primary. It checks genuine controlled Auto on both panes, actual decoded
 quality, video/clock progress and retained player/item/surface identities

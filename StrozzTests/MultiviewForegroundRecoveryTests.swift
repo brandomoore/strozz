@@ -60,7 +60,7 @@ final class MultiviewForegroundRecoveryTests: XCTestCase {
     defer { small.teardown(); legacy.teardown() }
     XCTAssertEqual(small.panes.first?.qualityTier, .grid1080)
     XCTAssertEqual(legacy.panes.first?.qualityTier, .grid,
-      "Normal and Release launches keep their pre-experiment resource policy")
+      "An explicit diagnostic opt-out retains the previous resource policy")
   }
 
   func testDiagnosticLayerSelectionIsStableAcrossExpansionAndExcludesStandalone() {

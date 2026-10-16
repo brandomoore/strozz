@@ -15,9 +15,9 @@ final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unche
 
   static var controlledAutoEnabled: Bool {
     #if DEBUG
-    ProcessInfo.processInfo.environment["STROZZ_NATIVE_CONTROLLED_AUTO"] == "1"
+    ProcessInfo.processInfo.environment["STROZZ_NATIVE_CONTROLLED_AUTO"] != "0"
     #else
-    false
+    true
     #endif
   }
 
