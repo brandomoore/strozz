@@ -111,6 +111,28 @@ final class FollowedChannelsService {
   private(set) var directoryErrorMessage: String?
   private(set) var directoryLoadedAt: Date?
 
+  /// Invalidate in-flight snapshots before refreshing a server-confirmed relationship change.
+  func followChanged(login: String, following: Bool, using auth: TwitchAuthSession) async {
+    accountChanged(using: auth)
+    let reloadDirectory = directoryLoadedAt != nil || isLoadingDirectory || !directory.isEmpty
+    refreshID = UUID()
+    directoryRequestID = UUID()
+    lastUpdatedAt = nil
+    directoryLoadedAt = nil
+    isLoadingDirectory = false
+    let normalized = login.lowercased()
+    if following {
+      followedLogins.insert(normalized)
+    } else {
+      followedLogins.remove(normalized)
+      channels.removeAll { $0.login.lowercased() == normalized }
+      directory.removeAll { $0.login.lowercased() == normalized }
+    }
+    async let liveRefresh: Void = refresh(using: auth)
+    if reloadDirectory { await loadDirectory(using: auth, force: true) }
+    await liveRefresh
+  }
+
   /// Merges live YouTube presence into the current Twitch-followed channels and
   /// directory so a dual-platform streamer shows as one card with both Twitch
   /// and YouTube viewers. Called after `refresh`/`loadDirectory` from the view

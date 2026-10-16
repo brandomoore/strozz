@@ -298,17 +298,6 @@ final class TwitchAuthSession {
         return normalized.contains("invalid_refresh_token") || normalized.contains("invalid_grant")
     }
 
-    func isInvalidClientIDError(_ error: TwitchAuthHTTPError) -> Bool {
-        guard error.status == 400 else { return false }
-        guard let normalized = normalizedOAuthMessage(error.message) else { return false }
-        return normalized.contains("client_id") && normalized.contains("invalid")
-    }
-
-    func isIntegrityCheckFailureMessage(_ message: String?) -> Bool {
-        guard let normalized = normalizedOAuthMessage(message) else { return false }
-        return normalized.contains("integrity_check") && normalized.contains("fail")
-    }
-
     func describe(_ error: Error) -> String {
         if let authError = error as? TwitchAuthHTTPError {
             return authError.localizedDescription
@@ -347,21 +336,22 @@ struct TwitchEventSubCredentials: Equatable {
 }
 
 enum FollowActionError: LocalizedError {
-    case notSignedIn
-    case integrityCheckRequired
-    case mutationFailed(reason: String?)
+    case notSignedIn, connectionRequired, ownChannel, unavailable, invalidResponse, notConfirmed
 
     var errorDescription: String? {
         switch self {
         case .notSignedIn:
-            return "Sign in to follow channels."
-        case .integrityCheckRequired:
-            return "Twitch blocked follow/unfollow from this app (integrity check required). Use the Twitch app or website to change follows."
-        case .mutationFailed(let reason):
-            if let reason, !reason.isEmpty {
-                return "Couldn't update follow: \(reason)."
-            }
-            return "Couldn't update follow right now."
+            return String(localized: "Sign in to Twitch in Accounts to follow channels.")
+        case .connectionRequired:
+            return String(localized: "Connect Twitch Rewards to follow or unfollow channels.")
+        case .ownChannel:
+            return String(localized: "You cannot follow your own channel.")
+        case .unavailable:
+            return String(localized: "Twitch rejected this follow change. Try again, or use the Twitch app or website.")
+        case .invalidResponse:
+            return String(localized: "Twitch returned an unexpected follow response. Check the follow status before trying again.")
+        case .notConfirmed:
+            return String(localized: "Twitch has not confirmed the follow change. Check the follow status before trying again.")
         }
     }
 }

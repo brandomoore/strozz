@@ -19,7 +19,13 @@ struct StrozzMobileApp: App {
   var body: some Scene {
     WindowGroup {
       #if DEBUG
-      if ProcessInfo.processInfo.environment["STROZZ_LAYOUT_FIXTURE"] == "chat" {
+      if ProcessInfo.processInfo.environment["STROZZ_FOLLOW_FIXTURE"] == "1" {
+        #if targetEnvironment(simulator)
+        ChannelFollowFixture()
+        #else
+        appContent
+        #endif
+      } else if ProcessInfo.processInfo.environment["STROZZ_LAYOUT_FIXTURE"] == "chat" {
         MobileChatLayoutFixture()
       } else if ProcessInfo.processInfo.environment["STROZZ_LAYOUT_FIXTURE"] == "emotes" {
         MobileEmoteInspectionFixture()
@@ -115,6 +121,7 @@ struct MobileRootView: View {
     .environment(\.themePalette, palette)
     .environment(history)
     .environment(vodProgress)
+    .environment(follows)
     .environment(returnRefresh)
     .onChange(of: playerVisibility) { previous, current in
       if previous == .expanded && current != .expanded
