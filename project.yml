@@ -62,6 +62,7 @@ targets:
           - "TwitchWatchRewards*.swift"
           - "TwitchWatchTracker.swift"
           - "TwitchChannelRewards*.swift"
+          - "TwitchChannelFollowModel.swift"
           - "PlaybackTelemetry*.swift"
           - "PlaybackAudioSession.swift"
           - "PlaybackReturnRefreshCoordinator.swift"
@@ -98,6 +99,8 @@ targets:
       - path: Strozz/Views/StreamLoadingView.swift
       - path: Strozz/Views/BroadcastUptimeView.swift
       - path: Strozz/Views/TwitchICloudSyncControls.swift
+      - path: Strozz/Views/ChannelFollowButton.swift
+      - path: Strozz/Views/ChannelFollowFixture.swift
       - path: Strozz/Resources/StreamerAffinity.json
       - path: Strozz/Views/RichChatLineView.swift
       - path: Strozz/Views/Chat/ChatColor.swift
@@ -142,6 +145,7 @@ targets:
       - path: StrozzTests/BroadcastUptimeTests.swift
       - path: StrozzTests/TwitchAutomaticSignInTests.swift
       - path: StrozzTests/FollowingRecoveryTests.swift
+      - path: StrozzTests/TwitchChannelFollowTests.swift
       - path: StrozzTests/TwitchGIFTests.swift
       - path: StrozzTests/ChatBadgeRenderingTests.swift
     dependencies:
@@ -160,6 +164,7 @@ targets:
     platform: iOS
     sources:
       - path: StrozzMobileUITests
+      - path: StrozzUITests/ChannelFollowUITests.swift
     dependencies:
       - target: StrozzMobile
     settings:

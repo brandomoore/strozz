@@ -346,6 +346,45 @@ final class FollowingRecoveryTests: XCTestCase {
     XCTAssertNil(service.errorMessage)
     XCTAssertFalse(service.isUsingDemoData)
   }
+
+  func testUnfollowInvalidatesAnOlderDirectoryRequest() async {
+    let loader = FollowingLoader()
+    let auth = auth()
+    let service = FollowedChannelsService(loadData: { try await loader.load($0) })
+    await service.refresh(using: auth)
+    await service.loadDirectory(using: auth)
+    let started = expectation(description: "Old directory request")
+    loader.heldPath = "/helix/channels/followed"
+    loader.onHeld = { started.fulfill() }
+    let old = Task { await service.loadDirectory(using: auth, force: true) }
+    await fulfillment(of: [started], timeout: 2)
+    loader.heldPath = nil
+    loader.title = nil
+    loader.followBody = #"{"data":[]}"#
+    await service.followChanged(login: "FOLLOWED", following: false, using: auth)
+    loader.finish(0, json: FollowingLoader.follows)
+    await old.value
+    XCTAssertTrue(service.directory.isEmpty)
+    XCTAssertTrue(service.channels.isEmpty)
+    XCTAssertTrue(service.followedLogins.isEmpty)
+    XCTAssertNotNil(service.directoryLoadedAt)
+  }
+
+  func testConfirmedUnfollowStaysRemovedWhenDirectoryRefreshFails() async {
+    let loader = FollowingLoader()
+    let auth = auth()
+    let service = FollowedChannelsService(loadData: { try await loader.load($0) })
+    await service.refresh(using: auth)
+    await service.loadDirectory(using: auth)
+    loader.failurePath = "/helix/channels/followed"
+    loader.title = nil
+    await service.followChanged(login: "followed", following: false, using: auth)
+    XCTAssertTrue(service.directory.isEmpty)
+    XCTAssertTrue(service.channels.isEmpty)
+    XCTAssertTrue(service.followedLogins.isEmpty)
+    XCTAssertNil(service.directoryLoadedAt)
+    XCTAssertNotNil(service.directoryErrorMessage)
+  }
 }
 
 @MainActor
@@ -356,6 +395,7 @@ private final class FollowingLoader {
   var rejectedAccessToken: String?
   var onHeld: (() -> Void)?
   var paths: [String] = []
+  var followBody = FollowingLoader.follows
   private var nextID = 0
   private var pending: [Int: (URL, CheckedContinuation<(Data, URLResponse), Error>)] = [:]
 
@@ -385,7 +425,7 @@ private final class FollowingLoader {
     switch url.path {
     case "/helix/streams/followed", "/helix/streams": json = title.map(Self.streams) ?? #"{"data":[]}"#
     case "/helix/users": json = #"{"data":[{"id":"channel","login":"followed","display_name":"Followed"}]}"#
-    case "/helix/channels/followed": json = Self.follows
+    case "/helix/channels/followed": json = followBody
     case "/helix/channels": json = #"{"data":[{"broadcaster_id":"channel","game_name":"Game"}]}"#
     case "/gql": json = #"{"data":{"streams":{"edges":[{"node":{"id":"demo","broadcaster":{"login":"trending"}}}]}}}"#
     case "/oauth2/token": json = #"{"access_token":"rotated-access","refresh_token":"rotated-refresh","token_type":"bearer","expires_in":3600}"#

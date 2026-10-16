@@ -73,6 +73,9 @@ struct MobileChannelProfileHeader: View {
   let channel: FollowedChannel
   let profile: ChannelProfile?
   let onLive: (FollowedChannel) -> Void
+  @Environment(TwitchAuthSession.self) private var auth
+  @Environment(TwitchWatchRewardsSession.self) private var rewards
+  @Environment(FollowedChannelsService.self) private var follows
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -90,6 +93,10 @@ struct MobileChannelProfileHeader: View {
         }
       }
       if let description = profile?.description { Text(description).font(.subheadline) }
+      if auth.userLogin?.lowercased() != channel.login.lowercased() {
+        ChannelFollowButton(login: channel.login, displayName: profile?.displayName ?? channel.displayName,
+          auth: auth, rewards: rewards, follows: follows)
+      }
       if profile?.isLive ?? channel.isLive {
         Button("Watch live") {
           onLive(FollowedChannel(id: channel.id, login: channel.login,

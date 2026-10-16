@@ -20,7 +20,9 @@ struct StrozzApp: App {
     WindowGroup {
       Group {
         #if DEBUG && targetEnvironment(simulator)
-        if ProcessInfo.processInfo.environment["STROZZ_HOME_ERROR_FIXTURE"] == "1" {
+        if ProcessInfo.processInfo.environment["STROZZ_FOLLOW_FIXTURE"] == "1" {
+          ChannelFollowFixture()
+        } else if ProcessInfo.processInfo.environment["STROZZ_HOME_ERROR_FIXTURE"] == "1" {
           HomeFollowingErrorFixture()
         } else {
           HomeView(deepLinkRouter: deepLinkRouter)

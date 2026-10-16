@@ -73,7 +73,7 @@ struct TwitchWatchRewardsSection: View {
   }
 }
 
-private struct TwitchWatchRewardsSignInView: View {
+struct TwitchWatchRewardsSignInView: View {
   let session: TwitchWatchRewardsSession
   let userID: String
   @Environment(\.dismiss) private var dismiss
