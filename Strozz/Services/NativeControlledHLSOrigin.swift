@@ -41,11 +41,78 @@ actor NativeControlledHLSOrigin {
     let variant: Variant
     let entry: NativeCMAF.Entry
     let bytes: Data
+    let cmaf: NativeCMAFRemuxer.Format?
   }
 
   private struct Movie: Sendable {
     let initialization: Data
     let configurations: [Int: NativeFragmentedMP4.Configuration]
+    let cmaf: [Int: NativeCMAFRemuxer.Format]
+    let maps: [Int: URL]
+  }
+
+  private enum Remuxer {
+    case transport(NativeTransportRemuxer, Data)
+    case cmaf(NativeCMAFRemuxer)
+
+    init(format: NativeCMAFRemuxer.Format?, configuration: NativeFragmentedMP4.Configuration?,
+         description: UInt32, sequence: UInt32, reference: UInt64?) throws {
+      if let format {
+        if let configuration, configuration != format.configuration { throw NativeHLSError.transition }
+        self = .cmaf(try .init(format: format, videoDescriptionIndex: description,
+          firstSequence: sequence, presentationReference: reference))
+      } else {
+        self = .transport(try .init(configuration: configuration, videoDescriptionIndex: description,
+          firstSequence: sequence, presentationEpoch: NativeMediaClock.wrap,
+          presentationReference: reference), Data())
+      }
+    }
+
+    var configuration: NativeFragmentedMP4.Configuration? {
+      switch self {
+      case .transport(let value, _): value.configuration
+      case .cmaf(let value): value.format.configuration
+      }
+    }
+
+    var nextSequence: UInt32 {
+      switch self {
+      case .transport(let value, _): value.nextSequence
+      case .cmaf(let value): value.nextSequence
+      }
+    }
+
+    mutating func append(_ data: Data) throws -> [NativeTransportRemuxer.Part] {
+      switch self {
+      case .transport(var value, var pending):
+        pending.append(data)
+        var output: [NativeTransportRemuxer.Part] = []
+        while pending.count >= 188 {
+          output += try value.append(Data(pending.prefix(188)))
+          pending.removeFirst(188)
+        }
+        self = .transport(value, pending)
+        return output
+      case .cmaf(var value):
+        let output = try value.append(data)
+        self = .cmaf(value)
+        return output
+      }
+    }
+
+    mutating func finish(_ duration: Double?) throws -> [NativeTransportRemuxer.Part] {
+      switch self {
+      case .transport(var value, let pending):
+        guard pending.isEmpty else { throw NativeHLSError.invalidMedia }
+        let output = try value.finish(expectedDuration: duration)
+        self = .transport(value, pending)
+        return output
+      case .cmaf(var value):
+        let output = try value.finish(expectedDuration: duration)
+        self = .cmaf(value)
+        return output
+      }
+    }
   }
 
   private let variants: [Variant]
@@ -275,7 +342,7 @@ actor NativeControlledHLSOrigin {
           guard let entry = variant.manifest.entries.last(where: { $0.duration != nil && $0.date != nil }) else {
             throw NativeHLSError.unsupported
           }
-          return Bootstrap(variant: variant, entry: entry, bytes: try await self.data(entry.url, media: true))
+          return try await self.bootstrap(variant: variant, entry: entry)
         }
       }
       var values: [Bootstrap] = []
@@ -293,7 +360,7 @@ actor NativeControlledHLSOrigin {
     for sample in samples {
       let converted = try remux(sample.bytes, variant: sample.variant.id, date: sample.entry.date!,
         period: sample.entry.discontinuity,
-        expectedDuration: sample.entry.duration, firstSequence: 1, expectedConfiguration: nil)
+        expectedDuration: sample.entry.duration, firstSequence: 1, expectedConfiguration: nil, format: sample.cmaf)
       prepared[sample.variant.id] = converted.configuration
       bootstraps[sample.variant.id] = sample
     }
@@ -304,9 +371,10 @@ actor NativeControlledHLSOrigin {
     var selection = try NativeAdaptiveRenditionPolicy(variants: values)
     try selection.recordCompletedTransfer(bytes: samples.reduce(0) { $0 + $1.bytes.count },
       seconds: max(0.000001, ended - began), at: ended)
+    let byVariant = Dictionary(uniqueKeysWithValues: samples.map { ($0.variant.id, $0) })
     let inits = try variants.map { variant -> Data in
       guard let configuration = prepared[variant.id] else { throw NativeHLSError.invalidMedia }
-      return NativeFragmentedMP4.initialization(configuration)
+      return byVariant[variant.id]?.cmaf?.initialization ?? NativeFragmentedMP4.initialization(configuration)
     }
     guard let largest = values.max(by: { $0.width * $0.height < $1.width * $1.height }),
       let largestIndex = variants.firstIndex(where: { $0.id == largest.id }) else { throw NativeHLSError.invalidMedia }
@@ -320,9 +388,18 @@ actor NativeControlledHLSOrigin {
     server = listener
     mediaBase = base
     initialization = movie
-    movies[period] = Movie(initialization: movie, configurations: prepared)
+    movies[period] = Movie(initialization: movie, configurations: prepared,
+      cmaf: byVariant.compactMapValues(\.cmaf),
+      maps: byVariant.compactMapValues { $0.entry.initialization })
     currentMoviePeriod = period
     probe = Task { [weak self] in await self?.probeCapacity() }
+  }
+
+  private func bootstrap(variant: Variant, entry: NativeCMAF.Entry) async throws -> Bootstrap {
+    let format: NativeCMAFRemuxer.Format?
+    if let map = entry.initialization { format = try NativeCMAFRemuxer.Format(await data(map)) }
+    else { format = nil }
+    return Bootstrap(variant: variant, entry: entry, bytes: try await data(entry.url, media: true), cmaf: format)
   }
 
   private func data(_ url: URL, media: Bool = false, timeout: TimeInterval? = nil) async throws -> Data {
@@ -380,7 +457,6 @@ actor NativeControlledHLSOrigin {
       }
     }
     let result = try NativeCMAF.manifest(String(decoding: bytes, as: UTF8.self), url: variant.url)
-    guard result.initialization == nil else { throw NativeHLSError.transition }
     manifests[variant.id] = result
     return result
   }
@@ -507,11 +583,13 @@ actor NativeControlledHLSOrigin {
         let startSequence = nextMovieSequence
         segments.append(Segment(sequence: sequence, variant: variant.id, entry: entry, date: date,
           firstMovieSequence: startSequence))
-        var remuxer = try NativeTransportRemuxer(configuration: configuration,
-          videoDescriptionIndex: UInt32(description + 1), firstSequence: startSequence,
-          presentationEpoch: NativeMediaClock.wrap,
-          presentationReference: mediaClock.reference(period: entry.discontinuity, date: date))
-        if let cached = bootstraps[variant.id], cached.entry.sequence == entry.sequence {
+        let format = try await format(for: entry, variant: variant.id, movie: movie)
+        var remuxer = try Remuxer(format: format, configuration: configuration,
+          description: UInt32(description + 1), sequence: startSequence,
+          reference: mediaClock.reference(period: entry.discontinuity, date: date,
+            scale: UInt64(configuration.videoTimescale)))
+        if let cached = bootstraps[variant.id], cached.entry.sequence == entry.sequence,
+          cached.entry.discontinuity == entry.discontinuity, cached.entry.url == entry.url {
           try consume(cached.bytes, remuxer: &remuxer, sequence: sequence)
           bootstraps.removeValue(forKey: variant.id)
         } else if loadData != nil {
@@ -521,23 +599,16 @@ actor NativeControlledHLSOrigin {
           readers[variant.id] = reader
           var request = URLRequest(url: entry.url)
           headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
-          var pending = Data()
           var total = 0
           for try await chunk in reader.stream(request) {
             defer { reader.consumedChunk(chunk) }
             try checkRunning()
             total += chunk.data.count
             guard total < 32 * 1024 * 1024 else { throw NativeHLSError.invalidMedia }
-            pending.append(chunk.data)
-            while pending.count >= 188 {
-              let packet = Data(pending.prefix(188))
-              pending.removeFirst(188)
-              try publish(remuxer.append(packet), sequence: sequence)
-            }
+            try publish(remuxer.append(chunk.data), sequence: sequence)
           }
-          guard pending.isEmpty else { throw NativeHLSError.invalidMedia }
         }
-        try publish(remuxer.finish(expectedDuration: entry.duration), sequence: sequence)
+        try publish(remuxer.finish(entry.duration), sequence: sequence)
         bootstraps.removeAll()
         guard let last = segments.indices.last else { throw NativeHLSError.invalidMedia }
         segments[last].complete = true
@@ -618,7 +689,7 @@ actor NativeControlledHLSOrigin {
               duration: found.0.duration, date: found.1, initialization: found.0.initialization,
               discontinuity: found.0.discontinuity, tags: found.0.tags)
           }
-          return Bootstrap(variant: variant, entry: entry, bytes: try await self.data(entry.url, media: true))
+          return try await self.bootstrap(variant: variant, entry: entry)
         }
       }
       var values: [Bootstrap] = []
@@ -633,12 +704,14 @@ actor NativeControlledHLSOrigin {
       try checkRunning()
       guard let date = sample.entry.date else { throw NativeHLSError.invalidMedia }
       prepared[sample.variant.id] = try remux(sample.bytes, variant: sample.variant.id, date: date, period: period,
-        expectedDuration: sample.entry.duration, firstSequence: 1, expectedConfiguration: nil).configuration
+        expectedDuration: sample.entry.duration, firstSequence: 1, expectedConfiguration: nil,
+        format: sample.cmaf).configuration
       bootstraps[sample.variant.id] = sample
     }
+    let byVariant = Dictionary(uniqueKeysWithValues: samples.map { ($0.variant.id, $0) })
     let initializations = try variants.map { variant -> Data in
       guard let configuration = prepared[variant.id] else { throw NativeHLSError.invalidMedia }
-      return NativeFragmentedMP4.initialization(configuration)
+      return byVariant[variant.id]?.cmaf?.initialization ?? NativeFragmentedMP4.initialization(configuration)
     }
     guard let maximum = variants.indices.max(by: { a, b in
       let left = prepared[variants[a].id]
@@ -646,14 +719,32 @@ actor NativeControlledHLSOrigin {
       return (left.map { $0.width * $0.height } ?? 0) < (right.map { $0.width * $0.height } ?? 0)
     }) else { throw NativeHLSError.invalidMedia }
     return Movie(initialization: try NativeFragmentedMP4.switchingInitialization(initializations,
-      maximumResolutionIndex: maximum), configurations: prepared)
+      maximumResolutionIndex: maximum), configurations: prepared,
+      cmaf: byVariant.compactMapValues(\.cmaf),
+      maps: byVariant.compactMapValues { $0.entry.initialization })
   }
 
-  private func consume(_ data: Data, remuxer: inout NativeTransportRemuxer, sequence: Int) throws {
-    guard !data.isEmpty, data.count.isMultiple(of: 188) else { throw NativeHLSError.invalidMedia }
-    for offset in stride(from: 0, to: data.count, by: 188) {
-      try publish(remuxer.append(data.subdata(in: offset..<(offset + 188))), sequence: sequence)
+  private func format(for entry: NativeCMAF.Entry, variant: Int, movie: Movie) async throws -> NativeCMAFRemuxer.Format? {
+    guard entry.initialization != movie.maps[variant] else { return movie.cmaf[variant] }
+    guard let map = entry.initialization, let previous = movie.cmaf[variant] else { throw NativeHLSError.transition }
+    let updated = try NativeCMAFRemuxer.Format(await data(map))
+    guard updated.configuration == previous.configuration, updated.video.id == previous.video.id,
+      updated.audio.id == previous.audio.id, updated.videoCodec == previous.videoCodec,
+      updated.videoDescription == previous.videoDescription,
+      updated.audioDescription == previous.audioDescription else { throw NativeHLSError.transition }
+    return updated
+  }
+
+  private func consume(_ data: Data, remuxer: inout Remuxer, sequence: Int) throws {
+    guard !data.isEmpty else { throw NativeHLSError.invalidMedia }
+    try publish(remuxer.append(data), sequence: sequence)
+  }
+
+  private func presentationScale(for segment: Segment) throws -> UInt64 {
+    guard let configuration = movies[segment.entry.discontinuity]?.configurations[segment.variant] else {
+      throw NativeHLSError.invalidMedia
     }
+    return UInt64(configuration.videoTimescale)
   }
 
   private func publish(_ parts: [NativeTransportRemuxer.Part], sequence: Int) throws {
@@ -670,7 +761,8 @@ actor NativeControlledHLSOrigin {
       publishedParts += 1
       reachedLive = true
       try mediaClock.observe(period: segments[index].entry.discontinuity,
-        date: segments[index].date, presentationTime: part.decodeTime)
+        date: segments[index].date, presentationTime: part.decodeTime,
+        scale: presentationScale(for: segments[index]))
     }
   }
 
@@ -699,19 +791,17 @@ actor NativeControlledHLSOrigin {
   }
 
   private func remux(_ data: Data, variant: Int, date: Date, period: Int, expectedDuration: Double?,
-                     firstSequence: UInt32, expectedConfiguration: NativeFragmentedMP4.Configuration?) throws
+                     firstSequence: UInt32, expectedConfiguration: NativeFragmentedMP4.Configuration?,
+                     format: NativeCMAFRemuxer.Format?) throws
     -> (configuration: NativeFragmentedMP4.Configuration, parts: [NativeTransportRemuxer.Part]) {
-    guard !data.isEmpty, data.count.isMultiple(of: 188),
+    guard !data.isEmpty,
       let description = variants.firstIndex(where: { $0.id == variant }) else { throw NativeHLSError.invalidMedia }
-    var remuxer = try NativeTransportRemuxer(configuration: expectedConfiguration,
-      videoDescriptionIndex: UInt32(description + 1), firstSequence: firstSequence,
-      presentationEpoch: NativeMediaClock.wrap,
-      presentationReference: mediaClock.reference(period: period, date: date))
-    var parts: [NativeTransportRemuxer.Part] = []
-    for offset in stride(from: 0, to: data.count, by: 188) {
-      parts += try remuxer.append(data.subdata(in: offset..<(offset + 188)))
-    }
-    parts += try remuxer.finish(expectedDuration: expectedDuration)
+    var remuxer = try Remuxer(format: format, configuration: expectedConfiguration,
+      description: UInt32(description + 1), sequence: firstSequence,
+      reference: mediaClock.reference(period: period, date: date,
+        scale: UInt64(format?.configuration.videoTimescale ?? 90_000)))
+    var parts = try remuxer.append(data)
+    parts += try remuxer.finish(expectedDuration)
     guard let configuration = remuxer.configuration else { throw NativeHLSError.transportCodec }
     return (configuration, parts)
   }
@@ -792,7 +882,8 @@ actor NativeControlledHLSOrigin {
       let converted = try await self.remux(bytes, variant: segment.variant, date: segment.date,
         period: segment.entry.discontinuity,
         expectedDuration: segment.entry.duration, firstSequence: segment.firstMovieSequence,
-        expectedConfiguration: movie.configurations[segment.variant])
+        expectedConfiguration: movie.configurations[segment.variant],
+        format: format(for: segment.entry, variant: segment.variant, movie: movie))
       return converted.parts.reduce(into: Data()) { $0.append($1.bytes) }
     }
     historyLoads[sequence] = task
@@ -856,13 +947,14 @@ actor NativeControlledHLSOrigin {
   private func traceSegment(_ segment: Segment, part: NativeTransportRemuxer.Part,
                             event: NativeHLSPlaybackDiagnostic.Event) {
     guard let configuration = movies[segment.entry.discontinuity]?.configurations[segment.variant] else { return }
-    var metrics = ["video_decode_start_seconds": Double(part.decodeTime) / 90_000,
-      "video_presentation_start_seconds": Double(part.presentationTime) / 90_000,
+    var metrics = ["video_decode_start_seconds": Double(part.decodeTime) / Double(configuration.videoTimescale),
+      "video_presentation_start_seconds": Double(part.presentationTime) / Double(configuration.videoTimescale),
       "program_date_seconds": segment.date.timeIntervalSince1970,
       "part_duration_seconds": part.duration, "hold_back_seconds": holdBack]
     metrics["audio_first_presentation_seconds"] = part.audioDecodeTime.map { Double($0) / Double(configuration.audioRate) }
     trace?(.init(event: event,
       attributes: ["pipeline": "controlled_cmaf", "format": "cmaf",
+        "input_format": movies[segment.entry.discontinuity]?.cmaf[segment.variant] == nil ? "ts" : "cmaf",
         "resolution": "\(configuration.width)x\(configuration.height)"],
       metrics: metrics, counters: ["rendition": segment.variant, "sequence": segment.sequence,
         "video_samples": part.videoSamples, "audio_samples": part.audioSamples,

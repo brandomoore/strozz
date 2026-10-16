@@ -351,6 +351,43 @@ final class MultiviewContinuityLiveTests: XCTestCase {
     #endif
   }
 
+  func testOptInPhysicalCMAFZoomKeepsPlayback() async throws {
+    #if targetEnvironment(simulator)
+    throw XCTSkip("The physical CMAF check requires its own explicit permission.")
+    #else
+    var settings = ProcessInfo.processInfo.environment
+    guard settings["STROZZ_CMAF_PHYSICAL_TESTS"] == "1",
+      NativeLowLatencyHLS.controlledAutoEnabled, let names = settings["STROZZ_MATRIX_CHANNELS"] else {
+      throw XCTSkip("Explicitly select a CMAF primary and a second live channel for authorized hardware verification.")
+    }
+    let channels = names.split(separator: ",").map(String.init)
+    guard channels.count == 2, Set(channels).count == 2,
+      channels.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") } })
+      else { return XCTFail("Select two distinct public channel logins") }
+    for _ in 0..<50 {
+      if AppEnvironment.playbackTestEnvironment != nil { break }
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    let environment = try XCTUnwrap(AppEnvironment.playbackTestEnvironment)
+    for _ in 0..<300 {
+      if environment.accountSync.hasCompletedInitialSync, environment.auth.isAuthenticated { break }
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    guard environment.auth.isAuthenticated else { throw XCTSkip("Wait for the existing account restoration") }
+    let playback = try await PlaybackService.resolve(for: channels[0])
+    let highest = try XCTUnwrap(playback.qualities.filter { !$0.isAudioOnly }.max { $0.bitrate < $1.bitrate })
+    var request = URLRequest(url: highest.url)
+    PlaybackService.streamHeaders.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+    let (bytes, response) = try await URLSession.shared.data(for: request)
+    guard (response as? HTTPURLResponse)?.statusCode == 200 else { return XCTFail("CMAF source verification failed") }
+    guard try NativeCMAF.manifest(String(decoding: bytes, as: UTF8.self), url: highest.url).initialization != nil else {
+      throw XCTSkip("The selected primary is no longer a source-CMAF stream")
+    }
+    settings["STROZZ_REQUIRE_CONTROLLED_AUTO"] = "1"
+    try await check(names: names, settings: settings, muted: true, environment: environment)
+    #endif
+  }
+
   private func check(names: String, settings: [String: String], muted: Bool,
                      environment: AppEnvironment) async throws {
     let logins = names.split(separator: ",").map(String.init)
@@ -379,6 +416,7 @@ final class MultiviewContinuityLiveTests: XCTestCase {
          "offline": String(pane.model.isOffline), "loading": String(pane.isLoading),
          "error": String(pane.model.errorMessage != nil), "fallback": pane.model.nativeFallbackReason ?? "none",
          "selected_quality": pane.presentation.quality,
+         "controlled_auto": String(pane.model.nativeControlledAuto),
          "decode_recovery": pane.model.decodeRecoveryQualityID ?? "none"]
       }
       do {
@@ -393,6 +431,11 @@ final class MultiviewContinuityLiveTests: XCTestCase {
     }
     controller.setAudiblePane(audiblePaneID)
     try await ready(controller, host: host, audiblePaneID: audiblePaneID)
+    if settings["STROZZ_REQUIRE_CONTROLLED_AUTO"] == "1" {
+      guard controller.panes.allSatisfy({ $0.model.nativeControlledAuto }) else {
+        return XCTFail("CMAF verification must use the actual controlled engine on every selected pane")
+      }
+    }
     let players = controller.panes.map(\.player)
     let items = try controller.panes.map { try XCTUnwrap($0.player.currentItem) }
     let outputs = items.map { item in

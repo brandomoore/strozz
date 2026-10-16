@@ -3,20 +3,24 @@ import Foundation
 struct NativeMediaClock: Sendable {
   static let wrap: UInt64 = 1 << 33
   static let maximum = UInt64.max / 96_000 - 2 * wrap
-  private struct Anchor: Sendable { let date: Date; let time: UInt64 }
+  private struct Anchor: Sendable { let date: Date; let time: UInt64; let scale: UInt64 }
   private var anchors: [Int: Anchor] = [:]
 
-  mutating func observe(period: Int, date: Date, presentationTime: UInt64) throws {
-    guard period >= 0, date.timeIntervalSince1970.isFinite, presentationTime <= Self.maximum else {
+  mutating func observe(period: Int, date: Date, presentationTime: UInt64, scale: UInt64 = 90_000) throws {
+    guard period >= 0, date.timeIntervalSince1970.isFinite, presentationTime <= Self.maximum,
+      (1...1_000_000).contains(scale) else {
       throw NativeHLSError.invalidMedia
     }
-    if anchors[period] == nil { anchors[period] = Anchor(date: date, time: presentationTime) }
+    if anchors[period] == nil { anchors[period] = Anchor(date: date, time: presentationTime, scale: scale) }
   }
 
-  func reference(period: Int, date: Date) throws -> UInt64? {
-    guard period >= 0, date.timeIntervalSince1970.isFinite else { throw NativeHLSError.invalidMedia }
+  func reference(period: Int, date: Date, scale: UInt64 = 90_000) throws -> UInt64? {
+    guard period >= 0, date.timeIntervalSince1970.isFinite, (1...1_000_000).contains(scale) else {
+      throw NativeHLSError.invalidMedia
+    }
     guard let anchor = anchors[period] else { return nil }
-    let expected = Double(anchor.time) + date.timeIntervalSince(anchor.date) * 90_000
+    let expected = Double(anchor.time) * Double(scale) / Double(anchor.scale)
+      + date.timeIntervalSince(anchor.date) * Double(scale)
     guard expected.isFinite, expected >= 0, expected <= Double(Self.maximum) else {
       throw NativeHLSError.transition
     }

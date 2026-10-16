@@ -116,8 +116,8 @@ native attempt; neither silently selects a legacy engine.
 
 ### Controlled Native Auto prototype
 
-The prototype keeps Apple's player but independently packages H.264/AAC TS as
-fragmented MP4. It does not re-encode. NAL/access-unit assembly spans PES
+The prototype keeps Apple's player and controls adaptation for both H.264/AAC
+TS and source-CMAF masters. It does not re-encode. For TS, NAL/access-unit assembly spans PES
 boundaries: a new PES can begin with the tail or continuation slice of the
 previous picture, and its timestamp applies to the picture beginning inside it.
 AAC access units retain their source clocks and sample rate.
@@ -130,6 +130,24 @@ inversely, preserving source presentation times and compressed sample payloads.
 The 33-bit source clock is unwrapped consistently for live and historical media,
 with separate anchors across upstream discontinuities. Actual upstream period
 changes retain their discontinuity and movie initialization.
+
+Source-CMAF uses the same fixed-movie controller rather than leaving rendition
+selection to AVPlayer's loopback throughput estimate. The input adapter discovers
+track IDs, parses AVC/AAC descriptions, retains each movie's actual video
+timescale, and incrementally rewrites fragment metadata while copying `mdat`
+payloads unchanged. It makes sample defaults, description indexes and byte
+offsets explicit, including when source clocks/box lengths use 32 or 64 bits.
+It does not assume TS's video-track ID or 90-kHz clock: the observed CMAF input
+used audio track 1 at 48 kHz and video track 2 at one million ticks per second.
+
+Version-zero CMAF tracks wrap at different times because each uses its own
+timescale. The adapter recovers their common A/V phase before anchoring a period,
+then uses the period/PDT reference to unwrap subsequent live and rewind media.
+A common whole-second epoch keeps historical clocks positive without rescaling
+source samples. GOP decode-origin adjustment is inverted in signed composition
+offsets, preserving presentation intervals and A/V alignment. Compatible
+initialization-URL rotations retain the movie; genuine upstream periods retain
+separate initialization resources and timestamp anchors.
 
 Auto decisions use completed **upstream** media transfers, not AVPlayer's
 cached-loopback throughput or the wall time of an encoder-paced prefetch.
@@ -154,10 +172,12 @@ historical media can be remuxed on demand. An unavailable historical request is 
 resource-local failure, not permission to terminate healthy live production.
 Encoded media retention remains bounded.
 
-The experimental path applies to multi-rendition H.264/AAC TS Auto. Manual
-qualities, already-CMAF inputs, explicit receiver/audio/VOD paths, and previews
-retain their existing paths. Renditions currently need compatible AAC format
-descriptions within each upstream period; unsupported format changes fail
+The experimental path applies to multi-rendition H.264/AAC TS and source-CMAF
+Auto. Manual qualities, explicit receiver/audio/VOD paths, and previews retain
+their existing paths. Source-CMAF currently requires muxed AVC/AAC-LC without
+edit lists, compatible track IDs/timebases across renditions, and a common AAC
+configuration within each period. Harmless audio-track metadata differences
+are not codec mismatches. Unsupported format changes fail
 explicitly rather than silently excluding a quality or changing playback engine.
 
 The same Debug opt-in enables measured multiview grid budgets: one through four
@@ -172,8 +192,8 @@ the previous grid policy until broader validation.
 
 The opt-in physical capacity test exercises the mounted grid on the authorized
 TV, preserving actual decoded dimensions, clock/frame continuity and thermal
-state. Separate source-CMAF and controlled-TS results must not be conflated:
-source-CMAF Auto cycling is not proof of a hardware decoder limit. A two- and
+state. Historical source-CMAF Auto and controlled-TS results must not be conflated:
+the earlier source-CMAF selector's cycling was not proof of a hardware decoder limit. A two- and
 four-pane controlled 1080p60 workload each sustained three minutes on the tested
 Apple TV 4K (second generation); six 1080p60 panes encountered a buffering stop,
 so that workload is not accepted as a safe default. This is workload evidence,
@@ -192,6 +212,13 @@ actual count-aware policy rather than unrestricted resource preferences;
 runner, prefix these environment keys with `TEST_RUNNER_`. Never enable the
 physical check without permission to take over the TV.
 
+The separate `testOptInPhysicalCMAFZoomKeepsPlayback` check requires
+`STROZZ_CMAF_PHYSICAL_TESTS=1`, the controlled-engine flag, and two explicitly
+selected live channel logins in `STROZZ_MATRIX_CHANNELS`, with a verified CMAF
+primary. It checks genuine controlled Auto on both panes, actual decoded
+quality, video/clock progress and retained player/item/surface identities
+through expansion and return. This also requires explicit hardware permission.
+
 Multi-description movies may leave `AVPlayerItem.presentationSize` at their first
 description even after the decoder changes resolution. Quality labels and
 verification therefore use dimensions from consumed `CVPixelBuffer` frames.
@@ -208,6 +235,14 @@ live-CDN run also retained continuous decoded frames with two independent
 players. No Source
 pin, removed quality, added normal buffer, or high-latency fallback counts as a
 successful Auto run.
+
+For the source-CMAF extension, all five recorded input qualities decoded with
+unchanged compressed payloads. Mixed original-CMAF/TS replays retained fresh
+100-ms video observations while expanding either pane; paced bandwidth loss and
+restoration exercised genuine down/up format changes without waiting. A separate
+live-CDN CMAF-primary run retained decoded 1080p after its initial upgrade,
+without the old selector's rapid resolution cycling. These are separate from
+physical-TV verification and do not erase the earlier failed controls.
 
 The design was compared with StreamNook
 [`5a60d04`](https://github.com/StreamNook/StreamNook/tree/5a60d045cc7aa78bcb86f8dff787c1864ff8d8b3),

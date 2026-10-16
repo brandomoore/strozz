@@ -6,13 +6,16 @@ enum NativeFragmentedMP4 {
     let avc: Data
     let width: Int
     let height: Int
+    let videoTimescale: Int
     let audioConfig: Data
     let audioRate: Int
     let audioChannels: Int
 
-    init(sps: Data, pps: Data, audioConfig: Data, audioRate: Int, audioChannels: Int) throws {
+    init(sps: Data, pps: Data, audioConfig: Data, audioRate: Int, audioChannels: Int,
+         videoTimescale: Int = 90_000) throws {
       guard !sps.isEmpty, !pps.isEmpty, audioConfig.count == 2,
-        (1...65_535).contains(audioRate), (1...8).contains(audioChannels) else {
+        (1...65_535).contains(audioRate), (1...8).contains(audioChannels),
+        (1...1_000_000).contains(videoTimescale) else {
         throw NativeHLSError.transportCodec
       }
       var description: CMFormatDescription?
@@ -38,6 +41,7 @@ enum NativeFragmentedMP4 {
       self.avc = avc
       width = Int(dimensions.width)
       height = Int(dimensions.height)
+      self.videoTimescale = videoTimescale
       self.audioConfig = audioConfig
       self.audioRate = audioRate
       self.audioChannels = audioChannels
@@ -57,14 +61,14 @@ enum NativeFragmentedMP4 {
     let matrix = [0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000].reduce(into: Data()) {
       $0.append(u32(UInt32($1)))
     }
-    let mvhd = full("mvhd", joined([u32(0), u32(0), u32(90_000), u32(0),
+    let mvhd = full("mvhd", joined([u32(0), u32(0), u32(UInt32(config.videoTimescale)), u32(0),
       u32(0x00010000), u16(0x0100), zeros(10), matrix, zeros(24), u32(3)]))
     func track(id: UInt32, audio: Bool) -> Data {
       let tkhd = full("tkhd", joined([u32(0), u32(0), u32(id), u32(0), u32(0), zeros(8),
         u16(0), u16(0), u16(audio ? 0x0100 : 0), u16(0), matrix,
         u32(audio ? 0 : UInt32(config.width) << 16),
         u32(audio ? 0 : UInt32(config.height) << 16)]), flags: 7)
-      let mdhd = full("mdhd", u32(0) + u32(0) + u32(audio ? UInt32(config.audioRate) : 90_000)
+      let mdhd = full("mdhd", u32(0) + u32(0) + u32(audio ? UInt32(config.audioRate) : UInt32(config.videoTimescale))
         + u32(0) + u16(0x55C4) + u16(0))
       let hdlr = full("hdlr", u32(0) + text(audio ? "soun" : "vide") + zeros(12)
         + text(audio ? "Audio\0" : "Video\0"))
@@ -156,11 +160,15 @@ enum NativeFragmentedMP4 {
       guard tracks.count == 1 else { throw NativeHLSError.invalidMedia }
       return tracks[0]
     }
-    let audio = try track(initializations[0], handler: "soun")
+    let firstFormat = try NativeCMAFRemuxer.Format(initializations[0])
     var descriptions = Data()
     for initialization in initializations {
-      guard try track(initialization, handler: "soun").payload == audio.payload else {
-        throw NativeHLSError.transportCodec
+      let format = try NativeCMAFRemuxer.Format(initialization)
+      guard format.video.id == firstFormat.video.id, format.video.scale == firstFormat.video.scale,
+        format.audio.id == firstFormat.audio.id, format.audio.scale == firstFormat.audio.scale,
+        format.configuration.audioConfig == firstFormat.configuration.audioConfig,
+        format.configuration.audioChannels == firstFormat.configuration.audioChannels else {
+        throw NativeHLSError.unsupported
       }
       let video = try track(initialization, handler: "vide")
       let stbl = try NativeCMAF.child(NativeCMAF.child(video.payload, "mdia"), "minf")
@@ -177,6 +185,122 @@ enum NativeFragmentedMP4 {
       movie.append(box(child.type, child.type == "trak" && child.payload == video.payload ? payload : child.payload))
     }
     return box("ftyp", try NativeCMAF.child(base, "ftyp")) + box("moov", movie)
+  }
+
+  static func controlledFragment(_ data: Data, video: NativeCMAF.Track, audio: NativeCMAF.Track,
+                                 videoDescriptionIndex: UInt32, videoDecodeTime: UInt64,
+                                 compositionShift: Int64, audioDecodeTime: UInt64,
+                                 sequence: UInt32) throws -> Data {
+    let boxes = try NativeCMAF.boxes(data)
+    guard boxes.count == 2, boxes[0].type == "moof", boxes[1].type == "mdat",
+      video.id != audio.id, (1...16).contains(videoDescriptionIndex) else { throw NativeHLSError.invalidMedia }
+    let originalHeader = try NativeCMAF.integer(data, 0) == 1 ? 16 : 8
+    let originalLength = boxes[0].payload.count + originalHeader
+    let mediaHeader = try NativeCMAF.integer(data, originalLength) == 1 ? 16 : 8
+    var seen = Set<UInt64>()
+    var components: [(String, Data)] = []
+    for item in try NativeCMAF.boxes(boxes[0].payload) {
+      if item.type == "mfhd" {
+        guard item.payload.count == 8 else { throw NativeHLSError.invalidMedia }
+        components.append(("mfhd", Data(item.payload.prefix(4)) + u32(sequence)))
+        continue
+      }
+      guard item.type == "traf" else { throw NativeHLSError.unsupported }
+      let header = try NativeCMAF.child(item.payload, "tfhd")
+      _ = try NativeCMAF.child(item.payload, "tfdt")
+      let id = try NativeCMAF.integer(header, 4)
+      guard (id == video.id || id == audio.id), seen.insert(id).inserted else { throw NativeHLSError.invalidMedia }
+      let isVideo = id == video.id
+      let track = isVideo ? video : audio
+      let flags = try NativeCMAF.integer(header, 0) & 0xFFFFFF
+      guard flags & 1 == 0, flags & 0x020000 != 0 else { throw NativeHLSError.unsupported }
+      if flags & 2 != 0 {
+        guard try NativeCMAF.integer(header, 8) == 1 else { throw NativeHLSError.invalidMedia }
+      }
+      var position = 8 + (flags & 2 != 0 ? 4 : 0)
+      let duration = flags & 8 != 0 ? try NativeCMAF.integer(header, position) : track.duration
+      if flags & 8 != 0 { position += 4 }
+      let size = flags & 16 != 0 ? try NativeCMAF.integer(header, position) : track.size
+      if flags & 16 != 0 { position += 4 }
+      let sampleFlags = flags & 32 != 0 ? try NativeCMAF.integer(header, position) : track.flags
+      var replacement = Data()
+      for child in try NativeCMAF.boxes(item.payload) {
+        switch child.type {
+        case "tfhd":
+          replacement.append(full("tfhd", u32(UInt32(id)) + (isVideo ? u32(videoDescriptionIndex) : u32(1)),
+            flags: 0x020002))
+        case "tfdt":
+          replacement.append(full("tfdt", u64(isVideo ? videoDecodeTime : audioDecodeTime), version: 1))
+        case "trun":
+          let sourceFlags = try NativeCMAF.integer(child.payload, 0) & 0xFFFFFF
+          let count = try NativeCMAF.integer(child.payload, 4)
+          guard count > 0, count <= 10_000, sourceFlags & 1 != 0, sourceFlags & ~0x000F05 == 0,
+            child.payload.first == 0 || child.payload.first == 1 else { throw NativeHLSError.invalidMedia }
+          let rawOffset = UInt32(try NativeCMAF.integer(child.payload, 8))
+          let offset = Int(Int32(bitPattern: rawOffset))
+          guard offset >= originalLength + mediaHeader, offset < data.count else { throw NativeHLSError.invalidMedia }
+          var p = 12
+          let firstFlags = sourceFlags & 4 != 0 ? try NativeCMAF.integer(child.payload, p) : sampleFlags
+          if sourceFlags & 4 != 0 { p += 4 }
+          var entries = u32(UInt32(count)) + u32(rawOffset)
+          var byteCount: UInt64 = 0
+          for index in 0..<count {
+            let d = sourceFlags & 0x100 != 0 ? try NativeCMAF.integer(child.payload, p) : duration
+            if sourceFlags & 0x100 != 0 { p += 4 }
+            let s = sourceFlags & 0x200 != 0 ? try NativeCMAF.integer(child.payload, p) : size
+            if sourceFlags & 0x200 != 0 { p += 4 }
+            let f = sourceFlags & 0x400 != 0 ? try NativeCMAF.integer(child.payload, p)
+              : (index == 0 ? firstFlags : sampleFlags)
+            if sourceFlags & 0x400 != 0 { p += 4 }
+            var composition: Int64 = 0
+            if sourceFlags & 0x800 != 0 {
+              let raw = UInt32(try NativeCMAF.integer(child.payload, p))
+              composition = child.payload.first == 1 ? Int64(Int32(bitPattern: raw)) : Int64(raw)
+              p += 4
+            }
+            guard d > 0, s > 0, p <= child.payload.count else { throw NativeHLSError.invalidMedia }
+            byteCount += s
+            guard byteCount <= data.count - offset else { throw NativeHLSError.invalidMedia }
+            entries += u32(UInt32(d)) + u32(UInt32(s)) + u32(UInt32(f))
+            if isVideo {
+              let shifted = composition.addingReportingOverflow(compositionShift)
+              guard !shifted.overflow, let c = Int32(exactly: shifted.partialValue) else {
+                throw NativeHLSError.invalidMedia
+              }
+              entries += u32(UInt32(bitPattern: c))
+            } else if composition != 0 { throw NativeHLSError.unsupported }
+          }
+          guard p == child.payload.count else { throw NativeHLSError.invalidMedia }
+          replacement.append(full("trun", entries, version: isVideo ? 1 : 0,
+            flags: isVideo ? 0x000F01 : 0x000701))
+        case "sdtp", "sgpd", "sbgp":
+          replacement.append(box(child.type, child.payload))
+        default: throw NativeHLSError.unsupported
+        }
+      }
+      components.append(("traf", replacement))
+    }
+    guard seen == Set([video.id, audio.id]), components.filter({ $0.0 == "mfhd" }).count == 1 else {
+      throw NativeHLSError.invalidMedia
+    }
+    let newLength = components.reduce(8) { $0 + $1.1.count + 8 }
+    let growth = newLength - originalLength + 8 - mediaHeader
+    var movie = Data()
+    for (type, payload) in components {
+      guard type == "traf" else { movie.append(box(type, payload)); continue }
+      var traf = Data()
+      for child in try NativeCMAF.boxes(payload) {
+        var value = child.payload
+        if child.type == "trun" {
+          let offset = Int64(Int32(bitPattern: UInt32(try NativeCMAF.integer(value, 8)))) + Int64(growth)
+          guard let checked = Int32(exactly: offset), checked > 0 else { throw NativeHLSError.invalidMedia }
+          value.replaceSubrange(8..<12, with: u32(UInt32(bitPattern: checked)))
+        }
+        traf.append(box(child.type, value))
+      }
+      movie.append(box(type, traf))
+    }
+    return box("moof", movie) + box("mdat", boxes[1].payload)
   }
 
   /// Keep presentation clocks and compressed payloads unchanged while giving a

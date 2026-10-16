@@ -585,7 +585,7 @@ actor NativeHLSOrigin {
     advertisedTargetDuration = manifests.values.map(\.targetDuration).max()
     sources = prepared
     reportsUpdatedAt = Date()
-    if controlledAuto, prepared.count > 1, manifests.values.allSatisfy({ $0.initialization == nil }) {
+    if controlledAuto, prepared.count > 1 {
       let values = try prepared.sorted(by: { $0.key < $1.key }).map { index, source in
         guard let bitrate = source.bandwidth, let manifest = manifests[index] else { throw NativeHLSError.invalidMedia }
         return NativeControlledHLSOrigin.Variant(id: index, url: source.url, bitrate: bitrate, manifest: manifest)
