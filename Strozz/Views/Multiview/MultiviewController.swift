@@ -10,11 +10,11 @@ enum MultiviewLayout {
 }
 
 enum MultiviewQualityTier {
-  case source, grid, thumbnail
+  case source, grid, grid720, grid1080, thumbnail
 
   var targetBitrate: Int {
     switch self {
-    case .source: 0
+    case .source, .grid720, .grid1080: 0
     case .grid: 3_000_000
     case .thumbnail: 800_000
     }
@@ -23,7 +23,8 @@ enum MultiviewQualityTier {
   var maximumResolution: CGSize {
     switch self {
     case .source: .zero
-    case .grid: CGSize(width: 1280, height: 720)
+    case .grid, .grid720: CGSize(width: 1280, height: 720)
+    case .grid1080: CGSize(width: 1920, height: 1080)
     case .thumbnail: CGSize(width: 854, height: 480)
     }
   }
@@ -107,15 +108,19 @@ final class MultiviewController {
   @ObservationIgnored var reduceMotion = false
   @ObservationIgnored private var transitionID = UUID()
   @ObservationIgnored private let muted: Bool
+  @ObservationIgnored private let controlledAuto: Bool
   @ObservationIgnored private var sleepSuspendedPaneIDs = Set<String>()
 
-  init(channels: [FollowedChannel], muted: Bool = false) {
+  init(channels: [FollowedChannel], muted: Bool = false,
+       controlledAuto: Bool = NativeLowLatencyHLS.controlledAutoEnabled) {
     self.muted = muted
+    self.controlledAuto = controlledAuto
     var seen = Set<String>()
     panes = channels.filter { seen.insert($0.channelKey).inserted }
       .prefix(multiviewPaneLimit).map(MultiviewPane.init)
     primaryPaneID = panes.first?.id
     for pane in panes { configure(pane) }
+    refreshQuality()
   }
 
   var canAddPane: Bool { panes.count < multiviewPaneLimit }
@@ -212,7 +217,7 @@ final class MultiviewController {
       } else if layout == .spotlight {
         pane.presentation.qualityTier = pane.id == primaryPane?.id ? .source : .thumbnail
       } else {
-        pane.presentation.qualityTier = .grid
+        pane.presentation.qualityTier = controlledAuto ? (panes.count <= 4 ? .grid1080 : .grid720) : .grid
       }
     }
   }

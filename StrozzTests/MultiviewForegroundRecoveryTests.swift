@@ -5,11 +5,62 @@ import XCTest
 
 @MainActor
 final class MultiviewForegroundRecoveryTests: XCTestCase {
-  private func controller(count: Int = 4) -> MultiviewController {
+  private func controller(count: Int = 4, controlledAuto: Bool = false) -> MultiviewController {
     MultiviewController(channels: (0..<count).map { index in
       FollowedChannel(id: "\(index)", login: "fixture\(index)", displayName: "Fixture \(index)",
         title: "", gameName: "", viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true)
-    })
+    }, controlledAuto: controlledAuto)
+  }
+
+  func testControlledGridRaisesSmallLayoutsAndRetainsPlayersAcrossTheFourPaneBoundary() throws {
+    let controller = controller(count: 6, controlledAuto: true)
+    defer { controller.teardown() }
+    let players = controller.panes.map(\.player)
+    let items = controller.panes.map { pane in
+      let item = AVPlayerItem(url: URL(fileURLWithPath: "/dev/null"))
+      pane.player.replaceCurrentItem(with: item)
+      return item
+    }
+    XCTAssertTrue(controller.panes.allSatisfy { $0.qualityTier == .grid720 })
+    controller.removePane(try XCTUnwrap(controller.panes.last).id)
+    XCTAssertTrue(controller.panes.allSatisfy { $0.qualityTier == .grid720 })
+    controller.removePane(try XCTUnwrap(controller.panes.last).id)
+    XCTAssertTrue(controller.panes.allSatisfy { $0.qualityTier == .grid1080 })
+    for (index, pane) in controller.panes.enumerated() {
+      XCTAssertTrue(pane.player === players[index])
+      XCTAssertTrue(pane.player.currentItem === items[index])
+    }
+    controller.expand(controller.panes[0].id)
+    XCTAssertEqual(controller.panes[0].qualityTier, .source)
+    XCTAssertTrue(controller.panes.dropFirst().allSatisfy { $0.qualityTier == .thumbnail })
+    controller.collapse()
+    XCTAssertTrue(controller.panes.allSatisfy { $0.qualityTier == .grid1080 })
+    controller.addPane(FollowedChannel(id: "new", login: "new", displayName: "New",
+      title: "", gameName: "", viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true))
+    XCTAssertTrue(controller.panes.allSatisfy { $0.qualityTier == .grid720 })
+  }
+
+  func testControlledGridBudgetsAdmitReal720p60And1080p60Bitrates() throws {
+    let variants: [NativeAdaptiveRenditionPolicy.Variant] = [
+      .init(id: 0, bitrate: 1_427_999, width: 852, height: 480),
+      .init(id: 1, bitrate: 3_422_999, width: 1280, height: 720),
+      .init(id: 2, bitrate: 9_013_733, width: 1920, height: 1080),
+    ]
+    for (tier, expected) in [(MultiviewQualityTier.grid720, 720), (.grid1080, 1080)] {
+      var policy = try NativeAdaptiveRenditionPolicy(variants: variants)
+      try policy.recordCompletedTransfer(bytes: 262_144, seconds: 0.1, at: 0)
+      let budget = NativeAdaptiveRenditionPolicy.Budget(
+        maximumWidth: Int(tier.maximumResolution.width), maximumHeight: Int(tier.maximumResolution.height),
+        maximumBitrate: tier.targetBitrate)
+      XCTAssertEqual(tier.targetBitrate, 0, "A nominal resolution must not hide an excluding bitrate ceiling")
+      XCTAssertEqual(try policy.select(budget: budget, buffer: 1.5, deliveryLate: false, at: 0).variant.height, expected)
+    }
+    let small = controller(count: 2, controlledAuto: true)
+    let legacy = controller(count: 4)
+    defer { small.teardown(); legacy.teardown() }
+    XCTAssertEqual(small.panes.first?.qualityTier, .grid1080)
+    XCTAssertEqual(legacy.panes.first?.qualityTier, .grid,
+      "Normal and Release launches keep their pre-experiment resource policy")
   }
 
   func testDiagnosticLayerSelectionIsStableAcrossExpansionAndExcludesStandalone() {

@@ -20,6 +20,8 @@ extension PlayerView {
       attributes["quality_budget"] = switch context.qualityTier {
       case .source: "source"
       case .grid: "grid"
+      case .grid720: "grid_720"
+      case .grid1080: "grid_1080"
       case .thumbnail: "thumbnail"
       }
     } else {

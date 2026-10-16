@@ -160,6 +160,38 @@ retain their existing paths. Renditions currently need compatible AAC format
 descriptions within each upstream period; unsupported format changes fail
 explicitly rather than silently excluding a quality or changing playback engine.
 
+The same Debug opt-in enables measured multiview grid budgets: one through four
+visible panes allow up to 1920×1080, and five or six allow up to 1280×720. These
+are adaptive ceilings, not pinned qualities or guaranteed minima. Neither
+experimental grid tier has an additional bitrate ceiling: the previous 3 Mbps
+preference excluded common 3.42 Mbps 720p60 renditions from the controlled policy.
+Fullscreen/spotlight remains unrestricted, while secondary/hidden thumbnails
+retain their 854×480 / 800 kbps preference. Adding/removing panes updates budgets
+without replacing surviving players or items. Normal and Release launches keep
+the previous grid policy until broader validation.
+
+The opt-in physical capacity test exercises the mounted grid on the authorized
+TV, preserving actual decoded dimensions, clock/frame continuity and thermal
+state. Separate source-CMAF and controlled-TS results must not be conflated:
+source-CMAF Auto cycling is not proof of a hardware decoder limit. A two- and
+four-pane controlled 1080p60 workload each sustained three minutes on the tested
+Apple TV 4K (second generation); six 1080p60 panes encountered a buffering stop,
+so that workload is not accepted as a safe default. This is workload evidence,
+not an absolute decoder specification or a guarantee against CDN/network stalls.
+A subsequent actual-policy six-pane 720p60 run sustained three minutes with
+fresh target-resolution frames at every recorded observation, no observed
+waiting, zero reported dropped frames, and nominal thermal state.
+
+The guarded hardware test is
+`MultiviewContinuityLiveTests/testOptInPhysicalGridResolutionCapacity`. It needs
+explicit `STROZZ_MULTIVIEW_CAPACITY_TESTS=1` and the controlled-engine flag, uses
+real followed live sources, and records source-CMAF exclusions only for isolating
+the controlled-TS workload. `STROZZ_CAPACITY_APPLY_GRID_BUDGETS=1` verifies the
+actual count-aware policy rather than unrestricted resource preferences;
+`STROZZ_CAPACITY_COUNTS=6` selects just the larger-grid stage. With the Xcode test
+runner, prefix these environment keys with `TEST_RUNNER_`. Never enable the
+physical check without permission to take over the TV.
+
 Multi-description movies may leave `AVPlayerItem.presentationSize` at their first
 description even after the decoder changes resolution. Quality labels and
 verification therefore use dimensions from consumed `CVPixelBuffer` frames.
