@@ -474,6 +474,29 @@ def summarize_session(
             for name, value in record["metrics"].items():
                 metrics[name].append(float(value))
     metric_stats = {name: distribution(values) for name, values in sorted(metrics.items())}
+    diagnostic_metrics: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    diagnostic_names = {
+        "native_hls_delivery_timing", "native_hls_request", "native_hls_segment_timing",
+        "playback_scheduler_sample", "playback_scheduler_delay", "playback_main_operation_slow",
+    }
+    for record in records:
+        if record["kind"] != "event" or record["name"] not in diagnostic_names:
+            continue
+        attributes = record["attributes"]
+        stage = attributes.get("stage") or attributes.get("operation") or attributes.get("resource_kind")
+        group = record["name"] + (f"/{stage}" if stage else "")
+        if attributes.get("requester"):
+            group += "/" + attributes["requester"]
+        completed = attributes.get("body_complete", attributes.get("completed"))
+        if completed in {"true", "false"}:
+            group += "/complete" if completed == "true" else "/partial"
+        for name, value in record["metrics"].items():
+            if not name.endswith("_uptime_seconds"):
+                diagnostic_metrics[group][name].append(float(value))
+    diagnostic_stats = {
+        group: {name: distribution(values) for name, values in sorted(fields.items())}
+        for group, fields in sorted(diagnostic_metrics.items())
+    }
     counter_totals, counter_latest = summarize_counters(records, warnings)
     proxy_last_failure: dict[str, float | int] = {}
     for record in reversed(records):
@@ -675,6 +698,7 @@ def summarize_session(
         },
         "rates": dict(sorted(rates.items())),
         "metric_distributions": metric_stats,
+        "diagnostic_timing_groups": diagnostic_stats,
         "counter_deltas": counter_totals,
         "latest_counter_values": counter_latest,
         "skipped_native_log_entries": dict(sorted(skipped_native_logs.items())),
@@ -694,8 +718,14 @@ def summarize_session(
             "playback; repeated short hiccups can fall below the four-second clock threshold.",
             "A telemetry_records_dropped counter is attached to the next admitted record. "
             "Sequence gaps are additional evidence of missing records.",
-            "Proxy timing covers playlist/master requests only. AVPlayer fetches media segments "
-            "directly, so proxy timing is not segment-transfer timing.",
+            "Playlist/resource-loader timings are not upstream media-transfer timings. Native "
+            "delivery diagnostics separate ingress wait, consumer queue delay and remux/publish wall time.",
+            "Native events retain native_event_uptime_seconds from their producer. "
+            "main_actor_delivery_delay_seconds measures delayed logging, not network latency. "
+            "A large main_queue_delay_seconds with a normal background probe interval supports "
+            "a main-thread scheduling/long-running-operation hypothesis. A delayed background "
+            "probe also can reflect wider scheduling pressure; neither proves a Wi-Fi/CDN failure. "
+            "Missing diagnostic timing groups are not evidence that those stages were healthy.",
             "proxy_last_failure_status, proxy_last_failure_error_code, and "
             "proxy_last_failure_uptime_seconds retain the last proxy failure after later success; "
             "they do not describe the latest request unless a failure just occurred.",
@@ -810,6 +840,12 @@ def print_text(report: dict[str, Any]) -> None:
                     f"p50={number(stats['p50'])} p95={number(stats['p95'])} "
                     f"max={number(stats['max'])}"
                 )
+        if session["diagnostic_timing_groups"]:
+            print("  Diagnostic stage timings:")
+            for group, fields in session["diagnostic_timing_groups"].items():
+                print(f"    {group}:")
+                for key, stats in fields.items():
+                    print(f"      {key}: n={stats['count']} p95={number(stats['p95'])} max={number(stats['max'])}")
         if session["counter_deltas"]:
             print("  Counter deltas (reset-aware):")
             for key, value in session["counter_deltas"].items():

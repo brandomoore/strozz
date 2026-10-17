@@ -422,7 +422,7 @@ extension PlayerView {
           guard let telemetry, telemetry.sessionID == sessionID else { return }
           telemetry.recordEvent(detail.event.rawValue,
             attributes: detail.attributes.merging(["native_generation": generation.uuidString]) { _, new in new },
-            metrics: detail.metrics, counters: detail.counters)
+            metrics: PlaybackTelemetryRecorder.nativeDeliveryMetrics(detail.metrics), counters: detail.counters)
         }
       }
       #else
@@ -445,7 +445,7 @@ extension PlayerView {
               : retrying ? "native_hls_manifest_retry" : "native_hls_failure",
               level: retrying || probing ? .warning : .error,
               attributes: detail.attributes.merging(["native_generation": generation.uuidString]) { _, new in new },
-              metrics: detail.metrics, counters: detail.counters)
+              metrics: PlaybackTelemetryRecorder.nativeDeliveryMetrics(detail.metrics), counters: detail.counters)
           }
         }, trace: trace) { reason in
           Task { @MainActor in

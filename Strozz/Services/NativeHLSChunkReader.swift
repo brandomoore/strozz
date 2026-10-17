@@ -5,8 +5,45 @@ import Foundation
 final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
   struct Chunk: Sendable {
     let data: Data
+    let receivedAtUptime: Double
     fileprivate let task: URLSessionDataTask
     fileprivate let id: Int
+  }
+
+  struct DeliveryTiming {
+    let startedAt: Double
+    private(set) var chunks = 0
+    private(set) var bytes = 0
+    private var firstBodyAt: Double?
+    private var previousFinishedAt: Double?
+    private var maximumIngressWait = 0.0
+    private var maximumConsumerDelay = 0.0
+    private var maximumProcessing = 0.0
+
+    init(startedAt: Double) { self.startedAt = startedAt }
+
+    mutating func observe(bytes: Int, receivedAt: Double, consumedAt: Double, finishedAt: Double) {
+      chunks += 1
+      self.bytes += bytes
+      if firstBodyAt == nil { firstBodyAt = receivedAt }
+      // Exclude our previous chunk's processing/backpressure from ingress wait.
+      maximumIngressWait = max(maximumIngressWait, receivedAt - (previousFinishedAt ?? startedAt))
+      maximumConsumerDelay = max(maximumConsumerDelay, consumedAt - receivedAt)
+      maximumProcessing = max(maximumProcessing, finishedAt - consumedAt)
+      previousFinishedAt = finishedAt
+    }
+
+    var metrics: [String: Double] {
+      var values = [
+        "request_started_uptime_seconds": startedAt,
+        "max_ingress_wait_seconds": maximumIngressWait,
+        "max_consumer_queue_seconds": maximumConsumerDelay,
+        "max_remux_publish_seconds": maximumProcessing,
+      ]
+      values["first_body_seconds"] = firstBodyAt.map { max(0, $0 - startedAt) }
+      values["transfer_wall_seconds"] = previousFinishedAt.map { max(0, $0 - startedAt) }
+      return values
+    }
   }
 
   private static let capacity = 32
@@ -110,6 +147,7 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
   }
 
   func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+    let receivedAt = ProcessInfo.processInfo.systemUptime
     lock.lock()
     // Suspension cannot retract delegate callbacks URLSession already queued.
     // Wait on its delegate thread, not the indexer's cooperative executor.
@@ -123,7 +161,7 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
     pendingChunks.insert(id)
     lock.unlock()
     dataTask.suspend()
-    switch continuation.yield(Chunk(data: data, task: dataTask, id: id)) {
+    switch continuation.yield(Chunk(data: data, receivedAtUptime: receivedAt, task: dataTask, id: id)) {
     case .dropped:
       continuation.finish(throwing: NativeHLSError.indexerOverrun)
       dataTask.cancel()
