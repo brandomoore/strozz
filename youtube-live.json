@@ -1,4 +1,11 @@
 {
-  "generatedAt": "2026-10-17T01:24:10.832Z",
-  "streams": {}
+  "generatedAt": "2026-10-17T05:53:28.380Z",
+  "streams": {
+    "UCujyjxsq5FZNVnQro51zKSQ": {
+      "live": true,
+      "viewers": 4296,
+      "videoId": "mPDz0Fqcku4",
+      "title": "CS NIGHT WITH RAE, CHIBLEE, ABE, ARCKON :)"
+    }
+  }
 }
