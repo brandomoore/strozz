@@ -187,6 +187,7 @@ final class NativeLivePreview {
         minimumBuffer: item.preferredForwardBufferDuration,
         waiting: player.timeControlStatus == .waitingToPlayAtSpecifiedRate, allowed: aligned)
       {
+      case .resumePaused: player.play()
       case .resume: player.playImmediately(atRate: 1)
       case .restart: throw NativeHLSError.timeout
       case .awaitingProgress: continue

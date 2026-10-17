@@ -249,8 +249,21 @@ final class MultiviewForegroundRecoveryTests: XCTestCase {
     selected.model.isSleeping = true
     controller.synchronizeExpandedSleep()
     XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled)
+    XCTAssertTrue(live.model.multiviewSleepSuspended)
+    XCTAssertFalse(paused.model.multiviewSleepSuspended)
+    let view = PlayerView(channel: live.channel.login, auth: TwitchAuthSession(), model: live.model)
+    XCTAssertFalse(view.shouldPlayAltSource)
+    var activations = 0
+    live.model.activateAudioSession = { activations += 1 }
+    view.startPlayback()
+    view.resumePlayback()
+    view.resumePlaybackAfterAbsence(restoreLive: true)
+    XCTAssertEqual(activations, 0)
+    XCTAssertEqual(live.player.rate, 0)
     selected.model.isSleeping = false
     controller.synchronizeExpandedSleep()
+    XCTAssertFalse(live.model.multiviewSleepSuspended)
+    XCTAssertTrue(view.shouldPlayAltSource)
     XCTAssertNotEqual(live.presentation.reloadID, liveRequest)
     XCTAssertEqual(paused.presentation.reloadID, pausedRequest)
     XCTAssertTrue(paused.model.isUserPaused)

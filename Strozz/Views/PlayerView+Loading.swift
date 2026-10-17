@@ -877,6 +877,7 @@ extension PlayerView {
 
   func resumePlaybackAfterAbsence(restoreLive: Bool) {
     guard !isOffline, !isSleeping, backgroundedAt == nil, channelPageTarget == nil,
+      !model.multiviewSleepSuspended,
       !model.livePlaybackReturn.isAway, !model.audioInterrupted,
       !model.mediaServicesUnavailable else { return }
     if model.mediaServicesResetPending {
@@ -1102,10 +1103,17 @@ extension PlayerView {
       clock: currentSeconds, uptime: ProcessInfo.processInfo.systemUptime, buffer: bufferAheadSeconds(item),
       minimumBuffer: item.preferredForwardBufferDuration,
       waiting: player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+      paused: player.timeControlStatus == .paused,
       allowed: model.isUsingNativeHLS && model.nativeStartupComplete && !model.nativeNeedsRefresh
         && item.status == .readyToPlay && !player.isExternalPlaybackActive
         && !model.playbackTelemetry.isSeekPending)
     switch bufferedRecovery {
+    case .resumePaused:
+      cancelNativeCatchUp(reason: "unrequested_pause")
+      recordPlaybackEvent("native_unrequested_pause_resume", level: .warning,
+        flags: ["automatically_waits": player.automaticallyWaitsToMinimizeStalling])
+      player.play()
+      return
     case .resume:
       cancelNativeCatchUp(reason: "buffered_resume")
       recordPlaybackEvent("native_buffered_resume_requested", level: .warning,

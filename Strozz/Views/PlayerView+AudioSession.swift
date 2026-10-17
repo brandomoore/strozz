@@ -4,7 +4,7 @@ import Foundation
 extension PlayerView {
   @discardableResult
   func preparePlaybackAudio(reason: String) -> Bool {
-    guard !model.audioInterrupted, !model.mediaServicesUnavailable,
+    guard !model.audioInterrupted, !model.mediaServicesUnavailable, !model.multiviewSleepSuspended,
       backgroundedAt == nil else { return false }
     do {
       try model.activateAudioSession()
@@ -56,7 +56,7 @@ extension PlayerView {
           do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
           guard !Task.isCancelled, model.audioInterrupted, item === player.currentItem,
             !isUserPaused, backgroundedAt == nil, !isSleeping, channelPageTarget == nil,
-            !model.mediaServicesUnavailable else { return }
+            !model.mediaServicesUnavailable, !model.multiviewSleepSuspended else { return }
           resumeAfterAudioInterruption()
         }
       } else {
@@ -92,7 +92,7 @@ extension PlayerView {
 
   func resumeMutedPaneAfterAudioActivation() {
     guard model.multiviewContext != nil, player.isMuted, model.audioInterrupted,
-      !isUserPaused, !isSleeping, !model.mediaServicesUnavailable,
+      !isUserPaused, !isSleeping, !model.mediaServicesUnavailable, !model.multiviewSleepSuspended,
       backgroundedAt == nil, channelPageTarget == nil else { return }
     model.audioInterrupted = false
     errorMessage = nil
@@ -102,7 +102,7 @@ extension PlayerView {
 
   func resumeAfterAudioInterruption() {
     guard model.audioInterrupted, backgroundedAt == nil, !isSleeping,
-      !model.mediaServicesUnavailable, channelPageTarget == nil else { return }
+      !model.mediaServicesUnavailable, !model.multiviewSleepSuspended, channelPageTarget == nil else { return }
     isUserPaused = false
     model.audioInterrupted = false
     errorMessage = nil

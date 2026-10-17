@@ -288,12 +288,23 @@ extension PlayerView {
       notification in
       guard let endedItem = notification.object as? AVPlayerItem else { return }
       guard endedItem == player.currentItem else { return }
+      recordPlaybackEvent("avplayer_reached_end", flags: ["viewer_paused": isUserPaused])
+      recordPlaybackTelemetrySnapshot()
       // Ignore while intentionally paused or scrubbing for DVR rewind.
       guard !isUserPaused, !isScrubbing else { return }
       // A live HLS that ends with #EXT-X-ENDLIST plays to the very end and then
       // pauses here on a frozen final frame. Confirm with Twitch and surface the
       // offline empty state instead of leaving the viewer on a dead frame.
       probeOfflineIfStreamEnded()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: AVPlayer.rateDidChangeNotification)) {
+      notification in
+      guard let changedPlayer = notification.object as? AVPlayer, changedPlayer === player else { return }
+      recordPlaybackEvent("avplayer_rate_changed",
+        attributes: ["reason": notification.userInfo?[AVPlayer.rateDidChangeReasonKey] as? String ?? "unknown"],
+        metrics: ["rate": Double(player.rate)],
+        flags: ["viewer_paused": isUserPaused,
+          "automatically_waits": player.automaticallyWaitsToMinimizeStalling])
     }
     .onDisappear {
       model.audioTakeoverTask?.cancel()

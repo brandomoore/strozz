@@ -83,6 +83,7 @@ final class MobilePlaybackModel {
   @ObservationIgnored private var needsFreshPlayer = false
   @ObservationIgnored var activateAudioSession: @MainActor () throws -> Void = PlaybackAudioSession.activate
   @ObservationIgnored var onPlayerChanged: ((AVPlayer) -> Void)?
+  @ObservationIgnored var usesPictureInPictureControls = false
   @ObservationIgnored private var triedDecodeRecovery = false
   @ObservationIgnored private var nativeRecovery = NativePlaybackRecovery()
   @ObservationIgnored private let muteForTesting: Bool
@@ -381,7 +382,29 @@ final class MobilePlaybackModel {
         let options = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
         MainActor.assumeIsolated { self?.handleAudioInterruption(type: type, options: options) }
       },
+      center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) {
+        [weak self] notification in
+        let reason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+        MainActor.assumeIsolated { self?.handleAudioRouteChange(reason: reason) }
+      },
     ]
+  }
+
+  func handleAudioRouteChange(_ notification: Notification) {
+    handleAudioRouteChange(reason: notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt)
+  }
+
+  private func handleAudioRouteChange(reason value: UInt?) {
+    guard isActive, mode != .chatOnly, let value,
+      AVAudioSession.RouteChangeReason(rawValue: value) == .oldDeviceUnavailable else { return }
+    isPaused = true
+    stopFollowingLive()
+    loadingPosition?.shouldPlay = false
+    suspendedPosition?.shouldPlay = false
+    interruptedPosition?.shouldPlay = false
+    resetPosition?.shouldPlay = false
+    player.pause()
+    Self.logger.info("Audio output disconnected; waiting for explicit resume")
   }
 
   func handleMediaServicesLost() {
@@ -580,18 +603,18 @@ final class MobilePlaybackModel {
         #endif
         player.isMuted = isMuted || muteForTesting
         player.allowsExternalPlayback = !useNative
-        if position.shouldPlay && position.date == nil { player.play() }
+        if position.shouldPlay && !isPaused && position.date == nil { player.play() }
         let deadline = ContinuousClock.now.advanced(by: .seconds(30))
         while (item.status != .readyToPlay &&
           !(position.date != nil && !item.seekableTimeRanges.isEmpty && item.currentDate() != nil)) ||
-          (useNative && position.shouldPlay && item.seekableTimeRanges.isEmpty) {
+          (useNative && position.shouldPlay && !isPaused && item.seekableTimeRanges.isEmpty) {
           guard isCurrent(request) else { return }
           if item.status == .failed { throw item.error ?? MobilePlaybackError.unavailable }
           if ContinuousClock.now >= deadline { throw MobilePlaybackError.timeout }
           try await Task.sleep(for: .milliseconds(100))
         }
         guard isCurrent(request) else { return }
-        var needsLiveAlignment = useNative && position.shouldPlay && position.date == nil
+        var needsLiveAlignment = useNative && position.shouldPlay && !isPaused && position.date == nil
         if needsLiveAlignment, let native = engine {
           let target = await native.origin.liveTargetDate()
           let sourceBuffer = await native.origin.snapshot().forwardBuffer
@@ -626,7 +649,7 @@ final class MobilePlaybackModel {
           if !restored {
             throw position.date == nil ? MobilePlaybackError.timeout : MobilePlaybackError.positionUnavailable
           }
-          if position.shouldPlay { player.play() }
+          if position.shouldPlay && !isPaused { player.play() }
         }
         isLoading = false
         loadingPosition = nil
@@ -646,7 +669,7 @@ final class MobilePlaybackModel {
         } else if requestsNativePlayback && (error as? MobilePlaybackError) != .positionUnavailable
           && (error as? MobilePlaybackError) != .qualityUnavailable {
           recoverNative(error as? NativeHLSError ?? .unavailable,
-                        detail: error.localizedDescription, position: position)
+                        detail: error.localizedDescription, position: self.position())
         } else {
           fail(error.localizedDescription)
         }
@@ -716,12 +739,10 @@ final class MobilePlaybackModel {
       }
     }
     rateObserver = player.observe(\.rate, options: [.initial, .new]) { [weak self] player, _ in
-      let paused = player.rate == 0 && player.timeControlStatus == .paused
       Task { @MainActor [weak self] in
         guard let self, self.isCurrent(request),
-          self.player.status != .failed, item.status != .failed else { return }
-        self.isPaused = paused
-        if paused { self.stopFollowingLive() }
+          self.player === player, self.player.status != .failed, item.status != .failed else { return }
+        self.observePlayerPause(player.rate == 0 && player.timeControlStatus == .paused)
       }
     }
     jumpObserver = NotificationCenter.default.addObserver(
@@ -739,6 +760,15 @@ final class MobilePlaybackModel {
         self.stopFollowingLive()
       }
     }
+  }
+
+  func observePlayerPause(_ paused: Bool) {
+    // Inline native controls set viewer intent explicitly. A decoder stop must
+    // not become a viewer pause; system PiP/AirPlay controls still own theirs.
+    guard !requestsNativePlayback || isAudioOnly || usesPictureInPictureControls
+      || player.isExternalPlaybackActive else { return }
+    isPaused = paused
+    if paused { stopFollowingLive() }
   }
 
   private func stopFollowingLive() {
@@ -780,7 +810,7 @@ final class MobilePlaybackModel {
         let clock = item.currentTime().seconds
         let playing = player.timeControlStatus == .playing
         let paused = player.timeControlStatus == .paused
-        if clock > previousClock + 0.05 || paused { lastProgress = uptime }
+        if clock > previousClock + 0.05 || isPaused { lastProgress = uptime }
         previousClock = clock
         let buffer = item.loadedTimeRanges.map(\.timeRangeValue)
           .filter { $0.start.seconds <= clock && $0.end.seconds >= clock }
@@ -788,7 +818,19 @@ final class MobilePlaybackModel {
         switch bufferedStallRecovery.observe(clock: clock, uptime: uptime, buffer: buffer,
           minimumBuffer: item.preferredForwardBufferDuration,
           waiting: player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
-          allowed: engine != nil && !isLoading && !isPaused && !isExternalPlayback && !isAudioOnly) {
+          paused: paused,
+          allowed: engine != nil && !isLoading && !isPaused && !isExternalPlayback && !isAudioOnly
+            && suspendedPosition == nil && interruptedPosition == nil && !mediaServicesUnavailable
+            && !usesPictureInPictureControls) {
+        case .resumePaused:
+          catchUp.interrupt(at: uptime)
+          catchUpRateChange = (uptime, clock, 1)
+          Self.logger.warning("Resuming native playback after an unrequested pause")
+          #if DEBUG
+          diagnostics.recordEvent("native_unrequested_pause_resume", level: .warning)
+          #endif
+          player.play()
+          continue
         case .resume:
           catchUp.interrupt(at: uptime)
           catchUpRateChange = (uptime, clock, 1)

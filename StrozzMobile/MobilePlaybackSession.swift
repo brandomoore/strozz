@@ -13,7 +13,9 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
   private(set) var channel: FollowedChannel?
   private(set) var model: MobilePlaybackModel
   private(set) var videoController = MobileVideoController()
-  private(set) var pictureInPictureState = PictureInPictureState.inline
+  private(set) var pictureInPictureState = PictureInPictureState.inline {
+    didSet { model.usesPictureInPictureControls = pictureInPictureState != .inline }
+  }
   private(set) var isExpanded = false
   var errorMessage: String?
   let watchTracker = TwitchWatchTracker()
