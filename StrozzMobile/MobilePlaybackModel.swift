@@ -382,7 +382,29 @@ final class MobilePlaybackModel {
         let options = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
         MainActor.assumeIsolated { self?.handleAudioInterruption(type: type, options: options) }
       },
+      center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) {
+        [weak self] notification in
+        let reason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+        MainActor.assumeIsolated { self?.handleAudioRouteChange(reason: reason) }
+      },
     ]
+  }
+
+  func handleAudioRouteChange(_ notification: Notification) {
+    handleAudioRouteChange(reason: notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt)
+  }
+
+  private func handleAudioRouteChange(reason value: UInt?) {
+    guard isActive, mode != .chatOnly, let value,
+      AVAudioSession.RouteChangeReason(rawValue: value) == .oldDeviceUnavailable else { return }
+    isPaused = true
+    stopFollowingLive()
+    loadingPosition?.shouldPlay = false
+    suspendedPosition?.shouldPlay = false
+    interruptedPosition?.shouldPlay = false
+    resetPosition?.shouldPlay = false
+    player.pause()
+    Self.logger.info("Audio output disconnected; waiting for explicit resume")
   }
 
   func handleMediaServicesLost() {
@@ -581,18 +603,18 @@ final class MobilePlaybackModel {
         #endif
         player.isMuted = isMuted || muteForTesting
         player.allowsExternalPlayback = !useNative
-        if position.shouldPlay && position.date == nil { player.play() }
+        if position.shouldPlay && !isPaused && position.date == nil { player.play() }
         let deadline = ContinuousClock.now.advanced(by: .seconds(30))
         while (item.status != .readyToPlay &&
           !(position.date != nil && !item.seekableTimeRanges.isEmpty && item.currentDate() != nil)) ||
-          (useNative && position.shouldPlay && item.seekableTimeRanges.isEmpty) {
+          (useNative && position.shouldPlay && !isPaused && item.seekableTimeRanges.isEmpty) {
           guard isCurrent(request) else { return }
           if item.status == .failed { throw item.error ?? MobilePlaybackError.unavailable }
           if ContinuousClock.now >= deadline { throw MobilePlaybackError.timeout }
           try await Task.sleep(for: .milliseconds(100))
         }
         guard isCurrent(request) else { return }
-        var needsLiveAlignment = useNative && position.shouldPlay && position.date == nil
+        var needsLiveAlignment = useNative && position.shouldPlay && !isPaused && position.date == nil
         if needsLiveAlignment, let native = engine {
           let target = await native.origin.liveTargetDate()
           let sourceBuffer = await native.origin.snapshot().forwardBuffer
@@ -627,7 +649,7 @@ final class MobilePlaybackModel {
           if !restored {
             throw position.date == nil ? MobilePlaybackError.timeout : MobilePlaybackError.positionUnavailable
           }
-          if position.shouldPlay { player.play() }
+          if position.shouldPlay && !isPaused { player.play() }
         }
         isLoading = false
         loadingPosition = nil
@@ -647,7 +669,7 @@ final class MobilePlaybackModel {
         } else if requestsNativePlayback && (error as? MobilePlaybackError) != .positionUnavailable
           && (error as? MobilePlaybackError) != .qualityUnavailable {
           recoverNative(error as? NativeHLSError ?? .unavailable,
-                        detail: error.localizedDescription, position: position)
+                        detail: error.localizedDescription, position: self.position())
         } else {
           fail(error.localizedDescription)
         }
@@ -717,11 +739,10 @@ final class MobilePlaybackModel {
       }
     }
     rateObserver = player.observe(\.rate, options: [.initial, .new]) { [weak self] player, _ in
-      let paused = player.rate == 0 && player.timeControlStatus == .paused
       Task { @MainActor [weak self] in
         guard let self, self.isCurrent(request),
-          self.player.status != .failed, item.status != .failed else { return }
-        self.observePlayerPause(paused)
+          self.player === player, self.player.status != .failed, item.status != .failed else { return }
+        self.observePlayerPause(player.rate == 0 && player.timeControlStatus == .paused)
       }
     }
     jumpObserver = NotificationCenter.default.addObserver(

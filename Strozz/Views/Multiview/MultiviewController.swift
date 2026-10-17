@@ -236,11 +236,13 @@ final class MultiviewController {
     if expandedPane?.model.isSleeping == true {
       for pane in panes where pane.id != expandedPaneID && !pane.model.isUserPaused && !pane.model.isSleeping {
         sleepSuspendedPaneIDs.insert(pane.id)
+        pane.model.multiviewSleepSuspended = true
         pane.player.pause()
       }
       UIApplication.shared.isIdleTimerDisabled = false
     } else {
       for pane in panes where sleepSuspendedPaneIDs.contains(pane.id) {
+        pane.model.multiviewSleepSuspended = false
         pane.presentation.reloadID = UUID()
       }
       sleepSuspendedPaneIDs.removeAll()

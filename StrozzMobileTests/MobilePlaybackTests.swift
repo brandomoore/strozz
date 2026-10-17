@@ -4,6 +4,54 @@ import XCTest
 
 @MainActor
 final class MobilePlaybackTests: XCTestCase {
+  func testNativeOutputDisconnectRequiresExplicitResume() {
+    let model = MobilePlaybackModel(muted: true)
+    model.activateAudioSession = {}
+    model.prepareLayoutFixtureMetadata()
+    model.selectMode(.audioOnly)
+    model.selectMode(.video)
+    model.handleAudioRouteChange(Notification(name: AVAudioSession.routeChangeNotification, userInfo: [
+      AVAudioSessionRouteChangeReasonKey: AVAudioSession.RouteChangeReason.newDeviceAvailable.rawValue,
+    ]))
+    XCTAssertFalse(model.isPaused)
+    model.handleAudioRouteChange(Notification(name: AVAudioSession.routeChangeNotification, userInfo: [
+      AVAudioSessionRouteChangeReasonKey: AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue,
+    ]))
+    XCTAssertTrue(model.isPaused)
+    model.observePlayerPause(false)
+    XCTAssertTrue(model.isPaused, "Decoder/rate changes cannot undo the output-loss pause")
+    XCTAssertEqual(model.player.rate, 0)
+    model.togglePlayPause()
+    XCTAssertFalse(model.isPaused)
+    model.stop()
+  }
+
+  func testOutputLossWhileResolvingSurvivesInterruptionResumePermission() async {
+    let gate = ResolutionGate()
+    let model = MobilePlaybackModel(muted: true) { _ in await gate.wait() }
+    model.activateAudioSession = {}
+    model.loadMetadata = { _ in nil }
+    model.start(channel: "fixture")
+    await gate.waitUntilRequested()
+    NotificationCenter.default.post(name: AVAudioSession.routeChangeNotification, object: nil, userInfo: [
+      AVAudioSessionRouteChangeReasonKey: AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue,
+    ])
+    XCTAssertTrue(model.isPaused)
+    model.handleAudioInterruption(Notification(name: AVAudioSession.interruptionNotification, userInfo: [
+      AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue,
+    ]))
+    gate.finish()
+    model.handleAudioInterruption(Notification(name: AVAudioSession.interruptionNotification, userInfo: [
+      AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.ended.rawValue,
+      AVAudioSessionInterruptionOptionKey: AVAudioSession.InterruptionOptions.shouldResume.rawValue,
+    ]))
+    await gate.waitUntilRequested()
+    XCTAssertTrue(model.isPaused)
+    XCTAssertEqual(model.player.rate, 0)
+    model.stop()
+    gate.finish()
+  }
+
   func testInlineNativeStopDoesNotBecomeViewerPause() {
     let model = MobilePlaybackModel(muted: true)
     model.observePlayerPause(true)

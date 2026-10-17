@@ -79,8 +79,10 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   Retry. A refilled-buffer same-item resume is one bounded attempt, not proof of
   recovery. An unrequested `paused` state also needs bounded recovery: player
   rate zero is not viewer intent. Preserve real pause, interruption, background,
-  seek and system PiP/AirPlay control ownership. Recheck item/player/generation
-  ownership after asynchronous work.
+  seek and system PiP/AirPlay control ownership. Output disconnection is an
+  intentional privacy pause, including during pending loads; expanded-pane sleep
+  also owns the hidden panes' pauses. Recheck item/player/generation ownership
+  after asynchronous work.
 - **Do not turn background work into a live failure.** Unused-rendition reports
   are optional and must not block active media. Unavailable historical resources
   fail locally rather than killing healthy live production. Keep reader queues,

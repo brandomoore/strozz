@@ -877,6 +877,7 @@ extension PlayerView {
 
   func resumePlaybackAfterAbsence(restoreLive: Bool) {
     guard !isOffline, !isSleeping, backgroundedAt == nil, channelPageTarget == nil,
+      !model.multiviewSleepSuspended,
       !model.livePlaybackReturn.isAway, !model.audioInterrupted,
       !model.mediaServicesUnavailable else { return }
     if model.mediaServicesResetPending {
