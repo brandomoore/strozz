@@ -193,6 +193,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
 
   func testOptInLongVariedLivePlaybackSoak() async throws {
     #if targetEnvironment(simulator)
+    executionTimeAllowance = 18_000
     let settings = ProcessInfo.processInfo.environment
     guard settings["STROZZ_LONG_SOAK"] == "1",
       let names = settings["STROZZ_SOAK_CANDIDATES"] else {
@@ -210,6 +211,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     let sink = Sink(directory: directory,
       diagnosticsDirectory: URL.cachesDirectory.appendingPathComponent(PlaybackTelemetryRecorder.directoryName))
     print("SOAK_OUTPUT \(directory.path)")
+    print("SOAK_TIME_ALLOWANCE \(executionTimeAllowance)")
     var inputs: [Input] = []
     var unavailable: [String: String] = [:]
     for channel in candidates {
@@ -359,7 +361,11 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     var incidentCounts = Array(repeating: 0, count: watches.count)
     print("SOAK_BEGIN \(channels.joined(separator: ",")) \(phase) \(seconds)s")
     while ProcessInfo.processInfo.systemUptime - began < Double(seconds) {
-      try await Task.sleep(for: .milliseconds(250))
+      do { try await Task.sleep(for: .milliseconds(250)) }
+      catch {
+        print("SOAK_CANCELLED \(phase) after=\(ProcessInfo.processInfo.systemUptime - began) allowance=\(executionTimeAllowance) cancelled=\(Task.isCancelled)")
+        throw error
+      }
       let now = ProcessInfo.processInfo.systemUptime
       watches.forEach { $0.sample(interval: now - previous) }
       previous = now
