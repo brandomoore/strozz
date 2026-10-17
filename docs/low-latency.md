@@ -247,8 +247,25 @@ adjacent coverage appropriate to the change:
 | Mobile ownership, transitions and live frames | `MobilePlaybackTests`, `MobilePictureInPictureTests`, `MobileLivePlaybackTests` |
 | Chat timing and evidence | `LiveChatSyncBaselineTests`, `PlaybackTelemetryTests`, `tools/tests/test_playback_diagnostics.py` |
 
-Live/hardware tests are deliberately opt-in. Read their guards before running;
-a skipped test is not a pass for the behavior being investigated. The simulator-only
+Live/hardware tests are deliberately opt-in. Read their guards before running.
+
+A long simulator run is available in
+`NativePlaybackSoakLiveTests/testOptInLongVariedLivePlaybackSoak` with
+`STROZZ_LONG_SOAK=1` and 6...16 public `STROZZ_SOAK_CANDIDATES`. It selects six
+currently live inputs using observed TS/CMAF and frame-rate metadata, defaults to
+30 minutes each, then runs 15-minute grid/expanded/returned-grid stages.
+Candidate selection should span broadcasters/delivery regions, not only genres;
+reports include declared codecs/bitrate, playlist cadence, fetch time and PDT age.
+Those measurements do not independently verify broadcaster location or true
+end-to-end latency. Offline candidates and missing comparisons remain explicit.
+All simulator players are muted; it cannot take over hardware. Reports persist every
+30 seconds, with bounded incident and stage-end diagnostic copies. Short stall
+notifications, recovered failures, item replacements and missing sampling
+evidence fail the stage; the existing app frame consumer supplies decoded size
+and age, rather than adding a competing video output. Missing input-format
+coverage is explicit, not a pass. This is not physical-TV certification.
+
+A skipped test is not a pass for the behavior being investigated. The simulator-only
 `NativeStreamMatrixLiveTests/testOptInUnrequestedPauseRecoversWithoutChangingAutoOrItem`
 uses `STROZZ_NATIVE_PAUSE_TESTS=1` and one live `STROZZ_MATRIX_CHANNELS` login.
 It injects a player stop to verify recovery and intentional-pause protection;
