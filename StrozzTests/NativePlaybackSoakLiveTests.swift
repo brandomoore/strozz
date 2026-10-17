@@ -249,8 +249,9 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
       candidates.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") } }),
       let seconds = Int(settings["STROZZ_SOAK_SECONDS"] ?? "1800"), (1800...3600).contains(seconds),
       let multiviewSeconds = Int(settings["STROZZ_SOAK_MULTIVIEW_SECONDS"] ?? "900"),
-      (900...1800).contains(multiviewSeconds) else {
-      return XCTFail("Use 6...16 distinct logins, 1800...3600-second single stages and 900...1800-second multiview stages.")
+      (900...1800).contains(multiviewSeconds),
+      let paneCount = Int(settings["STROZZ_SOAK_MULTIVIEW_PANES"] ?? "4"), (2...4).contains(paneCount) else {
+      return XCTFail("Use 6...16 distinct logins, 1800...3600-second single stages, 900...1800-second multiview stages and 2...4 panes.")
     }
     let directory = URL.cachesDirectory.appendingPathComponent("PlaybackSoak/\(UUID().uuidString)", isDirectory: true)
     let sink = Sink(directory: directory,
@@ -269,7 +270,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     try await sink.save(inputs, name: "available-inputs")
     try await sink.save(unavailable, name: "unavailable-candidates")
     let completed = Set((settings["STROZZ_SOAK_COMPLETED_CHANNELS"] ?? "").split(separator: ",").map(String.init))
-    let required = mode == "followup" ? 4 : 6
+    let required = mode == "followup" ? paneCount : 6
     var selected: [Input] = []
     let replacement = mode == "followup" ? inputs.first(where: { !completed.contains($0.channel) }) : inputs.first
     if let replacement { selected.append(replacement) }
@@ -293,7 +294,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
       try Task.checkCancellation()
       try await single(input, seconds: seconds, sink: sink)
     }
-    try await multiview(Array(selected.prefix(4)), seconds: multiviewSeconds, sink: sink)
+    try await multiview(Array(selected.prefix(paneCount)), seconds: multiviewSeconds, sink: sink)
   }
 
   private static func describe(_ channel: String) async throws -> Input {

@@ -267,6 +267,8 @@ coverage is explicit, not a pass. This is not physical-TV certification.
 `STROZZ_SOAK_MODE=followup` rechecks the current live pool, selects one broadcaster
 not listed in `STROZZ_SOAK_COMPLETED_CHANNELS`, and runs that single-stream stage
 plus the multiview stages. It supplements, never replaces, the original reports.
+`STROZZ_SOAK_MULTIVIEW_PANES` explicitly selects 2...4 panes (default four);
+record the actual workload rather than claiming unavailable four-pane coverage.
 Sampling-only gaps are marked incomplete separately from playback faults; neither
 is a clean pass. Unsupported CMAF boxes report numeric type/size, and TS
 finalization failures report pending sample/PES byte counts, not media payloads.
