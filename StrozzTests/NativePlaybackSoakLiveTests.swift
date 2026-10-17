@@ -191,7 +191,18 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     XCTAssertFalse(evidence.clean)
   }
 
-  func testOptInLongVariedLivePlaybackSoak() async throws {
+  nonisolated func testSynchronousDriverRunsItsOwnedMainActorTask() {
+    let completed = expectation(description: "Main actor driver")
+    let run = Task { @MainActor in
+      await Task.yield()
+      XCTAssertFalse(Task.isCancelled)
+      completed.fulfill()
+    }
+    defer { run.cancel() }
+    wait(for: [completed], timeout: 2)
+  }
+
+  nonisolated func testOptInLongVariedLivePlaybackSoak() throws {
     #if targetEnvironment(simulator)
     executionTimeAllowance = 18_000
     let settings = ProcessInfo.processInfo.environment
@@ -199,6 +210,23 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
       let names = settings["STROZZ_SOAK_CANDIDATES"] else {
       throw XCTSkip("Explicitly enable STROZZ_LONG_SOAK and choose live candidate logins on an isolated simulator.")
     }
+    let completed = expectation(description: "Bounded multi-hour playback soak")
+    let run = Task { @MainActor in
+      defer { completed.fulfill() }
+      do { try await Self.runLongSoak(settings: settings, names: names) }
+      catch {
+        let error = error as NSError
+        XCTFail("Soak failed: \(error.domain):\(error.code); task_cancelled=\(Task.isCancelled)")
+      }
+    }
+    defer { run.cancel() }
+    wait(for: [completed], timeout: 18_000)
+    #else
+    throw XCTSkip("The long soak must never take over a physical TV.")
+    #endif
+  }
+
+  private static func runLongSoak(settings: [String: String], names: String) async throws {
     let candidates = names.split(separator: ",").map(String.init)
     guard (6...16).contains(candidates.count), Set(candidates).count == candidates.count,
       candidates.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") } }),
@@ -211,7 +239,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     let sink = Sink(directory: directory,
       diagnosticsDirectory: URL.cachesDirectory.appendingPathComponent(PlaybackTelemetryRecorder.directoryName))
     print("SOAK_OUTPUT \(directory.path)")
-    print("SOAK_TIME_ALLOWANCE \(executionTimeAllowance)")
+    print("SOAK_TIME_ALLOWANCE 18000")
     var inputs: [Input] = []
     var unavailable: [String: String] = [:]
     for channel in candidates {
@@ -244,12 +272,9 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
       try await single(input, seconds: seconds, sink: sink)
     }
     try await multiview(Array(selected.prefix(4)), seconds: multiviewSeconds, sink: sink)
-    #else
-    throw XCTSkip("The long soak must never take over a physical TV.")
-    #endif
   }
 
-  private func describe(_ channel: String) async throws -> Input {
+  private static func describe(_ channel: String) async throws -> Input {
     let playback = try await PlaybackService.resolve(for: channel)
     guard let highest = playback.qualities.filter({ !$0.isAudioOnly }).max(by: { $0.bitrate < $1.bitrate }) else {
       throw URLError(.resourceUnavailable)
@@ -285,7 +310,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
       deliveryHost: PlaybackTelemetryRecorder.host(highest.url.absoluteString))
   }
 
-  private func single(_ input: Input, seconds: Int, sink: Sink) async throws {
+  private static func single(_ input: Input, seconds: Int, sink: Sink) async throws {
     let environment = AppEnvironment()
     let model = PlayerModel()
     model.player.isMuted = true
@@ -320,7 +345,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     try await observe([model], channels: [input.channel], phase: "single", seconds: seconds, sink: sink)
   }
 
-  private func multiview(_ inputs: [Input], seconds: Int, sink: Sink) async throws {
+  private static func multiview(_ inputs: [Input], seconds: Int, sink: Sink) async throws {
     let environment = AppEnvironment()
     let channels = inputs.map {
       FollowedChannel(id: $0.channel, login: $0.channel, displayName: $0.channel, title: "",
@@ -350,7 +375,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     }
   }
 
-  private func observe(_ models: [PlayerModel], channels: [String], phase: String,
+  private static func observe(_ models: [PlayerModel], channels: [String], phase: String,
                        seconds: Int, sink: Sink) async throws {
     let watches = zip(models, channels).map { Watch(model: $0.0, channel: $0.1, phase: phase, seconds: seconds) }
     defer { watches.forEach { $0.stop() } }
@@ -363,7 +388,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     while ProcessInfo.processInfo.systemUptime - began < Double(seconds) {
       do { try await Task.sleep(for: .milliseconds(250)) }
       catch {
-        print("SOAK_CANCELLED \(phase) after=\(ProcessInfo.processInfo.systemUptime - began) allowance=\(executionTimeAllowance) cancelled=\(Task.isCancelled)")
+        print("SOAK_CANCELLED \(phase) after=\(ProcessInfo.processInfo.systemUptime - began) cancelled=\(Task.isCancelled)")
         throw error
       }
       let now = ProcessInfo.processInfo.systemUptime
@@ -410,7 +435,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     }
   }
 
-  private func ready(_ models: [PlayerModel]) async -> Bool {
+  private static func ready(_ models: [PlayerModel]) async -> Bool {
     for _ in 0..<450 {
       if models.allSatisfy({ $0.nativeStartupComplete && $0.nativeControlledAuto && !$0.isLoading
         && $0.player.timeControlStatus == .playing && $0.playbackTelemetry.videoFrameAge.map({ $0 < 3 }) == true }) {
@@ -422,7 +447,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     return false
   }
 
-  private func keyWindow() throws -> UIWindow {
+  private static func keyWindow() throws -> UIWindow {
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     return try XCTUnwrap(scene.keyWindow)
   }
