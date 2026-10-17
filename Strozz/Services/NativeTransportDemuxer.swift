@@ -111,7 +111,9 @@ struct NativeTransportDemuxer {
     pending.removeAll(keepingCapacity: true)
     var result: [Unit] = []
     for value in values {
-      guard value.length == nil || value.bytes.count == value.length else { throw NativeHLSError.invalidMedia }
+      if let expected = value.length, value.bytes.count != expected {
+        throw NativeHLSFailureDetail.pesLength(actual: value.bytes.count, expected: expected)
+      }
       result += try decode(value)
     }
     result += try drainVideo(final: true)

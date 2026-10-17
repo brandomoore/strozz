@@ -43,14 +43,20 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     var decodedSizes: [String: Int] = [:]
     var errors: [String: Int] = [:]
 
-    var clean: Bool {
+    var completeSampling: Bool {
       plannedSeconds > 0 && observedSeconds >= Double(plannedSeconds)
         && samples >= plannedSeconds * 3 && !decodedSizes.isEmpty
-        && stallNotifications == 0 && failedToEnd == 0 && itemReplacements == 0
-        && playerReplacements == 0 && frozenClockEpisodes == 0 && samplingGaps == 0
-        && waitingSeconds < 0.5 && unavailableSeconds < 0.5 && staleVideoSeconds < 0.5
-        && !decodeRecoveryObserved && nativeOnly && controlledAutoOnly
+        && samplingGaps == 0
     }
+
+    var playbackIssue: Bool {
+      stallNotifications > 0 || failedToEnd > 0 || itemReplacements > 0 || playerReplacements > 0
+        || frozenClockEpisodes > 0 || waitingSeconds >= 0.5 || unavailableSeconds >= 0.5
+        || staleVideoSeconds >= 0.5 || decodeRecoveryObserved || !nativeOnly || !controlledAutoOnly
+    }
+
+    var clean: Bool { completeSampling && !playbackIssue }
+    var verdict: String { playbackIssue ? "failed_playback" : (completeSampling ? "passed" : "incomplete_sampling") }
   }
 
   private actor Sink {
@@ -186,6 +192,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     evidence.failedToEnd = 0
     evidence.samplingGaps = 1
     XCTAssertFalse(evidence.clean)
+    XCTAssertEqual(evidence.verdict, "incomplete_sampling")
     evidence.samplingGaps = 0
     evidence.decodeRecoveryObserved = true
     XCTAssertFalse(evidence.clean)
@@ -236,7 +243,9 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
 
   private static func runLongSoak(settings: [String: String], names: String) async throws {
     let candidates = names.split(separator: ",").map(String.init)
+    let mode = settings["STROZZ_SOAK_MODE"] ?? "all"
     guard (6...16).contains(candidates.count), Set(candidates).count == candidates.count,
+      ["all", "followup"].contains(mode),
       candidates.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") } }),
       let seconds = Int(settings["STROZZ_SOAK_SECONDS"] ?? "1800"), (1800...3600).contains(seconds),
       let multiviewSeconds = Int(settings["STROZZ_SOAK_MULTIVIEW_SECONDS"] ?? "900"),
@@ -259,23 +268,28 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     }
     try await sink.save(inputs, name: "available-inputs")
     try await sink.save(unavailable, name: "unavailable-candidates")
+    let completed = Set((settings["STROZZ_SOAK_COMPLETED_CHANNELS"] ?? "").split(separator: ",").map(String.init))
+    let required = mode == "followup" ? 4 : 6
     var selected: [Input] = []
-    if let first = inputs.first { selected.append(first) }
-    for input in inputs where selected.count < 6 {
+    let replacement = mode == "followup" ? inputs.first(where: { !completed.contains($0.channel) }) : inputs.first
+    if let replacement { selected.append(replacement) }
+    for input in inputs where selected.count < required {
       if !selected.contains(where: { $0.channel == input.channel }),
         !selected.contains(where: { $0.format == input.format && $0.frameRate == input.frameRate }) {
         selected.append(input)
       }
     }
-    for input in inputs where selected.count < 6 && !selected.contains(where: { $0.channel == input.channel }) {
+    for input in inputs where selected.count < required && !selected.contains(where: { $0.channel == input.channel }) {
       selected.append(input)
     }
     try await sink.save(selected, name: "selected-inputs")
-    guard selected.count == 6 else { return XCTFail("Fewer than six live inputs available; coverage is incomplete") }
+    guard selected.count == required else { return XCTFail("Insufficient live inputs; coverage is incomplete") }
     if Set(selected.map(\.format)).count < 2 {
       XCTFail("Only one input container is currently available; TS/CMAF coverage is incomplete")
     }
-    for input in selected {
+    let singles = mode == "followup" ? replacement.map { [$0] } ?? [] : selected
+    if mode == "followup", replacement == nil { XCTFail("No new live single-stream replacement is available") }
+    for input in singles {
       try Task.checkCancellation()
       try await single(input, seconds: seconds, sink: sink)
     }
@@ -432,7 +446,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
       }
     }
     for watch in watches {
-      watch.evidence.status = watch.evidence.clean ? "passed" : "failed"
+      watch.evidence.status = watch.evidence.verdict
       try await sink.save(watch.evidence, name: watch.evidence.channel + "-" + phase)
       await watch.model.playbackTelemetry.flush()
       if let session = watch.model.playbackTelemetry.sessionID {

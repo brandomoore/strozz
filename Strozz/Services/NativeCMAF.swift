@@ -25,11 +25,17 @@ enum NativeHLSFailureDetail: Error, Sendable, Equatable {
   case transportContinuity
   case transportDuration(actual: Double, expected: Double)
   case cacheCapacity(Int)
+  case isoBox(type: UInt64, bytes: UInt64)
+  case transportFinalization(video: Int, audio: Int)
+  case transportRemainder(video: Int, audio: Int)
+  case pesLength(actual: Int, expected: Int)
 
   var reason: NativeHLSError {
     switch self {
     case .httpStatus, .cacheCapacity: .unavailable
     case .timestampInterval, .transportContinuity, .transportDuration: .transition
+    case .isoBox: .unsupported
+    case .transportFinalization, .transportRemainder, .pesLength: .invalidMedia
     }
   }
 
@@ -40,6 +46,10 @@ enum NativeHLSFailureDetail: Error, Sendable, Equatable {
     case .transportContinuity: "transport_packet_continuity"
     case .transportDuration: "transport_duration_mismatch"
     case .cacheCapacity: "media_cache_capacity"
+    case .isoBox: "unsupported_iso_box"
+    case .transportFinalization: "transport_final_video_timing"
+    case .transportRemainder: "transport_final_unpaired_samples"
+    case .pesLength: "transport_incomplete_pes"
     }
   }
 }
@@ -66,6 +76,15 @@ struct NativeHLSFailureDiagnostic: Sendable {
         metrics["actual_duration_seconds"] = actual
         metrics["expected_duration_seconds"] = expected
       case .cacheCapacity(let bytes): counters["cached_media_bytes"] = bytes
+      case .isoBox(let type, let bytes):
+        counters["iso_box_type"] = Int(clamping: type)
+        counters["iso_box_bytes"] = Int(clamping: bytes)
+      case .transportFinalization(let video, let audio), .transportRemainder(let video, let audio):
+        counters["pending_video_samples"] = video
+        counters["pending_audio_samples"] = audio
+      case .pesLength(let actual, let expected):
+        counters["pes_actual_bytes"] = actual
+        counters["pes_expected_bytes"] = expected
       case .transportContinuity: break
       }
     }
