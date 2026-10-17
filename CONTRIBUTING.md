@@ -130,17 +130,19 @@ lanes: `fastlane build` (archive only, no upload), `fastlane release`,
 
 Apple TV has no official Twitch playback SDK. Strozz resolves playback via the
 Twitch GraphQL PlaybackAccessToken and Usher HLS playlists, similar in spirit to
-open-source clients like Streamlink and Frosty. Playback is AVPlayer-backed with
-custom overlay controls and an in-process low-latency HLS proxy — see
-[`docs/low-latency.md`](docs/low-latency.md) for the details of that work.
+open-source clients like Streamlink and Frosty. On TV and mobile, local Twitch
+video uses AVPlayer with a native low-latency HLS origin. Auto's controller adapts
+TS and source-CMAF without re-encoding; manual qualities and alternate transports
+have separate paths. See [the playback runbook](docs/low-latency.md) for the
+ownership map, invariants, diagnostics and regression checks.
 
 This project is non-commercial and ad-respecting.
 
 ## Tech stack
 
-- Swift / SwiftUI targeting tvOS.
-- AVPlayer-backed playback with custom overlay controls and an in-process
-  low-latency HLS proxy.
+- Swift / SwiftUI targeting tvOS and iOS/iPadOS.
+- AVPlayer-backed playback with platform controls/overlays and a shared native
+  low-latency HLS engine.
 - Twitch EventSub / Hermes for real-time raids, polls, predictions, and live
   events.
 - A Top Shelf app extension for the tvOS home screen.

@@ -42,6 +42,43 @@ These lanes still build **tvOS only**. An iPhone/iPad archive must use the
 release runner must verify the new app and Top Shelf identifiers before upload;
 historical runners/receipts for the legacy app must not be reused unmodified.
 
+### Two-platform release checklist
+
+The committed lanes are not a combined tvOS/iOS release runner. When both
+platforms are requested, archive and upload `Strozz` and `StrozzMobile`
+separately, then verify both results:
+
+1. Use one clean, recorded source commit after the automatic main-branch version
+   bump. Both platforms must have the same marketing/build version; keep TV app
+   and Top Shelf versions in lockstep. Do not hand-edit numbers to repair drift.
+2. Hold the shared build lease across the **whole** release lane: preparation,
+   both archives/exports, uploads and Apple processing. Use
+   `tools/with-apple-build-lease.sh <owner> -- <release-command>` around the lane;
+   nested generation/build commands still use their normal wrappers. Separate
+   per-build leases leave gaps and do not protect the release's retained outputs.
+3. Record the selected Xcode/toolchain and reconcile it with actual archive SDK/
+   `DTXcodeBuild` metadata before upload. Stop on a provenance mismatch, preserve
+   evidence, and rebuild under the verified toolchain. Do not patch metadata,
+   switch shared tooling or purge build resources to make a guard pass.
+4. Verify both Release archives/exports before uploading: new Strozz identity,
+   platform, versions, distribution signing, no debugger entitlement, correct
+   App Group, and Production CloudKit/push entitlements. Top Shelf needs its own
+   correct identifier/profile and App Group, not CloudKit. Verify the Production
+   schema below; development sign-in tests are not distribution-schema proof.
+5. Confirm shipping behavior is enabled without Debug launch flags. Controlled
+   Native Auto is a Release default, not an opt-in experiment. Use the
+   [playback runbook](../docs/low-latency.md) for behavioral evidence requirements.
+6. Upload each exported IPA to the new universal app record and retain its source
+   SHA, artifact hash and platform-specific receipt. Upload success is not
+   TestFlight readiness: wait for each build to be valid and available to the
+   intended internal/external tester group. The `beta` lane skips processing
+   waits. Do not claim both platforms are ready from one receipt, or submit an
+   App Store release unless requested.
+
+Keep archives, dSYMs, receipts and scoped evidence until their owner releases
+them. Do not stop another build, alter signing or clean shared caches during
+shipping. Keep credentials and local release artifacts out of commits.
+
 ### Explicit tvOS development profiles
 
 If automatic signing falls back to a wildcard profile that lacks App Groups,
@@ -100,8 +137,9 @@ only, no upload), `fastlane release` (App Store + metadata), `fastlane metadata`
 Because `.env.fastlane` is gitignored, it does **not** exist in a clean clone or a
 freshly created worktree. If it's missing, do **not** invent credentials —
 recreate it from `.env.fastlane.example`, or copy it from another existing local
-worktree that already has it. The concrete machine-specific values and key path
-are recorded in the maintainer's gitignored `AGENTS.local.md` (not in the repo).
+worktree that already has it. Use private maintainer guidance for machine-specific
+key locations if provided. If no usable key is configured, ask the maintainer;
+do not assume that an `AGENTS.local.md` exists or change signing accounts.
 
 <!-- END manually-maintained section -->
 

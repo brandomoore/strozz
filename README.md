@@ -496,8 +496,8 @@ cross-device reads and Keychain access using synthetic data, not Twitch tokens.
 Viewing history and VOD progress remain device-local.
 
 Build instructions, the Twitch auth setup, how playback is resolved, versioning,
-and release steps all live in **[CONTRIBUTING.md](CONTRIBUTING.md)**. Notes on
-the low-latency playback work are in
+and release steps all live in **[CONTRIBUTING.md](CONTRIBUTING.md)**. The current
+playback architecture, invariants, troubleshooting and targeted checks are in
 [`docs/low-latency.md`](docs/low-latency.md).
 
 ### Brand assets
@@ -839,9 +839,10 @@ brief, non-focusable notice. It does not change the saved YouTube preference or
 automatically switch back during that channel visit; the source picker remains
 available for a deliberate retry.
 
-Interpret summaries cautiously. Proxy timings cover playlist/master requests,
-not media segment transfers; AVPlayer access-log throughput is a coarse
-cumulative estimate, not an instantaneous network test. Low buffer, bitrate
+Interpret summaries cautiously. Distinguish playlist/resource-loader timings
+from completed upstream media-transfer metrics. AVPlayer access-log throughput
+is a coarse cumulative estimate and can measure localhost rather than the CDN;
+it is not an instantaneous network-capacity test. Low buffer, bitrate
 differences, dropped frames, healthy-buffer waits, decode freezes, controller
 interventions, and thermal state can support hypotheses but do not prove a root
 cause. Rates cover the retained record window; initial cumulative values in a
