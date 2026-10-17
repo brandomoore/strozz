@@ -188,7 +188,8 @@ out of commits; never add signed URLs, tokens, headers or chat bodies.
 ## Short hiccups: separate delivery from delayed logging
 
 Native events retain `native_event_uptime_seconds` at their producer;
-`main_actor_delivery_delay_seconds` is the wait before main accepts that event.
+`native_trace_retention_delay_seconds` separates buffered/replayed diagnostics
+from `main_actor_delivery_delay_seconds`, the dispatch-to-main wait.
 Do not infer a CDN/producer gap from JSONL record timestamps alone.
 
 `playback_scheduler_delay` compares an independent one-second background probe

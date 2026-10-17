@@ -721,6 +721,8 @@ def summarize_session(
             "Playlist/resource-loader timings are not upstream media-transfer timings. Native "
             "delivery diagnostics separate ingress wait, consumer queue delay and remux/publish wall time.",
             "Native events retain native_event_uptime_seconds from their producer. "
+            "native_trace_retention_delay_seconds separates intentionally buffered/replayed events "
+            "from the dispatch-to-main wait. "
             "main_actor_delivery_delay_seconds measures delayed logging, not network latency. "
             "A large main_queue_delay_seconds with a normal background probe interval supports "
             "a main-thread scheduling/long-running-operation hypothesis. A delayed background "

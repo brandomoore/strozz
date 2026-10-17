@@ -12,12 +12,15 @@ final class PlaybackTelemetryTests: XCTestCase {
   func testNativeSourceTimeIsNotReplacedByDelayedMainDelivery() {
     let detail = NativeHLSPlaybackDiagnostic(event: .delivery, attributes: ["stage": "ingress_remux"],
       metrics: ["max_ingress_wait_seconds": 0.1], counters: ["ingress_chunks": 4], uptime: 10)
-    let delivered = PlaybackTelemetryRecorder.nativeDeliveryMetrics(detail.metrics, at: 15)
+    let delivered = PlaybackTelemetryRecorder.nativeDeliveryMetrics(detail.metrics, dispatchedAt: 10, at: 15)
     XCTAssertEqual(delivered["native_event_uptime_seconds"], 10)
     XCTAssertEqual(delivered["main_actor_delivery_delay_seconds"], 5)
     XCTAssertEqual(delivered["max_ingress_wait_seconds"], 0.1)
-    XCTAssertNil(PlaybackTelemetryRecorder.nativeDeliveryMetrics([:], at: 15)["main_actor_delivery_delay_seconds"])
-    XCTAssertNil(PlaybackTelemetryRecorder.nativeDeliveryMetrics(detail.metrics, at: 9)["main_actor_delivery_delay_seconds"])
+    XCTAssertNil(PlaybackTelemetryRecorder.nativeDeliveryMetrics([:], dispatchedAt: 10, at: 15)["main_actor_delivery_delay_seconds"])
+    XCTAssertNil(PlaybackTelemetryRecorder.nativeDeliveryMetrics(detail.metrics, dispatchedAt: 10, at: 9)["main_actor_delivery_delay_seconds"])
+    let retained = PlaybackTelemetryRecorder.nativeDeliveryMetrics(detail.metrics, dispatchedAt: 14, at: 15)
+    XCTAssertEqual(retained["native_trace_retention_delay_seconds"], 4)
+    XCTAssertEqual(retained["main_actor_delivery_delay_seconds"], 1)
   }
 
   func testIndependentProbeObservesABlockedMainQueueAndStopsWithSession() async throws {

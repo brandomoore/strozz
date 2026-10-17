@@ -195,12 +195,13 @@ actor NativeControlledHLSOrigin {
         attributes: ["resource_kind": kind, "served": String(bytes != nil), "pipeline": "controlled_cmaf"],
         metrics: ["duration_seconds": seconds, "ended_uptime_seconds": ProcessInfo.processInfo.systemUptime],
         counters: counters)
-      traceRequests.append(detail)
-      if traceRequests.count > 16 { traceRequests.removeFirst(traceRequests.count - 16) }
       let now = ProcessInfo.processInfo.systemUptime
       if (seconds >= 1 || bytes == nil), now - (lastSlowRequestAt[kind] ?? -.infinity) >= 5 {
         lastSlowRequestAt[kind] = now
         trace?(detail)
+      } else {
+        traceRequests.append(detail)
+        if traceRequests.count > 16 { traceRequests.removeFirst(traceRequests.count - 16) }
       }
     }
     guard capturesRequests else { return }

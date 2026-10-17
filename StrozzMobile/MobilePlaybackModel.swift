@@ -559,11 +559,13 @@ final class MobilePlaybackModel {
           let recorder = diagnostics
           let sessionID = recorder.sessionID
           let trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = { [weak recorder] detail in
+            let dispatchedAt = ProcessInfo.processInfo.systemUptime
             Task { @MainActor in
               guard let recorder, recorder.sessionID == sessionID else { return }
               recorder.recordEvent(detail.event.rawValue,
                 attributes: detail.attributes.merging(["native_generation": request.uuidString]) { _, new in new },
-                metrics: PlaybackTelemetryRecorder.nativeDeliveryMetrics(detail.metrics), counters: detail.counters)
+                metrics: PlaybackTelemetryRecorder.nativeDeliveryMetrics(detail.metrics, dispatchedAt: dispatchedAt),
+                counters: detail.counters)
             }
           }
           #else

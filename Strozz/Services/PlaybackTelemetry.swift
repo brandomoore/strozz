@@ -216,11 +216,14 @@ final class PlaybackTelemetryRecorder {
     }
   }
 
-  static func nativeDeliveryMetrics(_ input: [String: Double],
+  static func nativeDeliveryMetrics(_ input: [String: Double], dispatchedAt: Double,
                                    at now: Double = ProcessInfo.processInfo.systemUptime) -> [String: Double] {
     var metrics = input
-    if let source = input["native_event_uptime_seconds"], source.isFinite, now.isFinite, now >= source {
-      metrics["main_actor_delivery_delay_seconds"] = now - source
+    if let source = input["native_event_uptime_seconds"], source.isFinite, dispatchedAt.isFinite,
+      now.isFinite, dispatchedAt >= source, now >= dispatchedAt {
+      metrics["native_trace_dispatch_uptime_seconds"] = dispatchedAt
+      metrics["native_trace_retention_delay_seconds"] = dispatchedAt - source
+      metrics["main_actor_delivery_delay_seconds"] = now - dispatchedAt
     }
     return metrics
   }
