@@ -185,6 +185,40 @@ out of commits; never add signed URLs, tokens, headers or chat bodies.
   it; neither is a proven fix. IPS files can contain separate JSON header/body
   documents, so parsing one as a single JSON object can fail.
 
+## Short hiccups: separate delivery from delayed logging
+
+Native events retain `native_event_uptime_seconds` at their producer;
+`native_trace_retention_delay_seconds` separates buffered/replayed diagnostics
+from `main_actor_delivery_delay_seconds`, the dispatch-to-main wait.
+Do not infer a CDN/producer gap from JSONL record timestamps alone.
+
+`playback_scheduler_delay` compares an independent one-second background probe
+with its main-queue acknowledgement, with only one callback pending per player.
+Large `main_queue_delay_seconds` with a normal
+`background_probe_interval_seconds` supports main-thread blockage. If the
+background probe is late too, broader scheduling pressure is possible. Probes
+are inactive for background/idle playback; absence of a delay event is not proof
+of healthy playback. `playback_main_operation_slow` names slow synchronous
+snapshot, audio-track, access-log or error-log reads.
+
+Debug controlled playback emits `native_hls_delivery_timing` per segment:
+`max_ingress_wait_seconds` excludes the preceding chunk's processing;
+`max_consumer_queue_seconds` measures receipt-to-consumption delay;
+`max_remux_publish_seconds` is remux/publish wall time, not CPU time.
+Ingress wait includes URLSession/delegate scheduling, so it is not by itself
+proof of network loss. The separate `network_transaction` stage records
+connection reuse, connect/TLS and first-byte timing without URLs or addresses.
+Slow producer/probe manifests, movie preparation and segment-finalization work
+have separate stages; incomplete bodies are not grouped with completed transfers.
+Slow/failed local requests are rate-limited and identify only a resource kind;
+blocking playlist/part waits can be intentional.
+
+The analysis tool groups these event metrics under `diagnostic_timing_groups`,
+separately from sampled player metrics. Detailed native traces and mobile logs
+retain their existing Debug scope; TV scheduler evidence uses retained telemetry.
+Missing groups, dropped records and inactive/background intervals must remain
+explicit limitations, not success-shaped conclusions.
+
 ## Validate the claim, not a proxy
 
 Use the build/generation wrappers and target selection in

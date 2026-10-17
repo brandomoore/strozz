@@ -54,7 +54,7 @@ struct NativeHLSFailureDiagnostic: Sendable {
     var attributes = ["operation": operation, "scope": fatal ? "engine" : "rendition",
       "reason": NativeHLSError.classify(error).rawValue,
       "error_domain": nsError.domain, "error_code": String(nsError.code)]
-    var metrics: [String: Double] = [:]
+    var metrics: [String: Double] = ["native_event_uptime_seconds": ProcessInfo.processInfo.systemUptime]
     var counters = ["active_rendition": active]
     counters["rendition"] = rendition
     if let detail = error as? NativeHLSFailureDetail {
@@ -81,12 +81,23 @@ struct NativeHLSPlaybackDiagnostic: Sendable {
     case rendition = "native_hls_rendition_switch"
     case state = "native_hls_rendition_state"
     case request = "native_hls_request"
+    case delivery = "native_hls_delivery_timing"
   }
 
   let event: Event
   let attributes: [String: String]
   let metrics: [String: Double]
   let counters: [String: Int]
+
+  init(event: Event, attributes: [String: String], metrics: [String: Double], counters: [String: Int],
+       uptime: Double = ProcessInfo.processInfo.systemUptime) {
+    self.event = event
+    self.attributes = attributes
+    var metrics = metrics
+    metrics["native_event_uptime_seconds"] = uptime
+    self.metrics = metrics
+    self.counters = counters
+  }
 }
 
 /// Byte-level indexing only: encoded audio/video remains on Twitch's CDN.

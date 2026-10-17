@@ -418,11 +418,13 @@ extension PlayerView {
       let sessionID = telemetry.sessionID
       #if DEBUG
       let trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = { [weak telemetry] detail in
+        let dispatchedAt = ProcessInfo.processInfo.systemUptime
         Task { @MainActor in
           guard let telemetry, telemetry.sessionID == sessionID else { return }
           telemetry.recordEvent(detail.event.rawValue,
             attributes: detail.attributes.merging(["native_generation": generation.uuidString]) { _, new in new },
-            metrics: detail.metrics, counters: detail.counters)
+            metrics: PlaybackTelemetryRecorder.nativeDeliveryMetrics(detail.metrics, dispatchedAt: dispatchedAt),
+            counters: detail.counters)
         }
       }
       #else
@@ -435,6 +437,7 @@ extension PlayerView {
           maximumHeight: Int(model.multiviewContext?.qualityTier.maximumResolution.height ?? 0),
           maximumBitrate: model.multiviewContext?.qualityTier.targetBitrate ?? 0),
         diagnostic: { [weak telemetry] detail in
+          let dispatchedAt = ProcessInfo.processInfo.systemUptime
           Task { @MainActor in
             guard let telemetry, telemetry.sessionID == sessionID else { return }
             // A recovery may replace the engine before this main-actor event runs.
@@ -445,7 +448,8 @@ extension PlayerView {
               : retrying ? "native_hls_manifest_retry" : "native_hls_failure",
               level: retrying || probing ? .warning : .error,
               attributes: detail.attributes.merging(["native_generation": generation.uuidString]) { _, new in new },
-              metrics: detail.metrics, counters: detail.counters)
+              metrics: PlaybackTelemetryRecorder.nativeDeliveryMetrics(detail.metrics, dispatchedAt: dispatchedAt),
+              counters: detail.counters)
           }
         }, trace: trace) { reason in
           Task { @MainActor in

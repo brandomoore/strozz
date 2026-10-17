@@ -15,6 +15,27 @@ SPEC.loader.exec_module(playback_diagnostics)
 
 
 class PlaybackDiagnosticsTests(unittest.TestCase):
+    def test_diagnostic_stage_timings_preserve_queue_delay_without_mixing_sample_metrics(self):
+        self.write_records(f"playback-{self.session_one}-0001.jsonl", [
+            self.record(self.session_one, 1),
+            self.record(self.session_one, 2, kind="event", name="native_hls_delivery_timing",
+                        attributes={"stage": "ingress_remux"},
+                        metrics={"native_event_uptime_seconds": 90,
+                                 "main_actor_delivery_delay_seconds": 5,
+                                 "max_ingress_wait_seconds": 0.1}),
+            self.record(self.session_one, 3, kind="event", name="playback_scheduler_delay",
+                        metrics={"main_queue_delay_seconds": 5, "background_probe_interval_seconds": 1}),
+        ])
+        session = playback_diagnostics.analyze(self.directory)["sessions"][0]
+        stages = session["diagnostic_timing_groups"]
+        ingress = stages["native_hls_delivery_timing/ingress_remux"]
+        self.assertEqual(ingress["main_actor_delivery_delay_seconds"]["max"], 5)
+        self.assertEqual(ingress["max_ingress_wait_seconds"]["max"], 0.1)
+        self.assertNotIn("native_event_uptime_seconds", ingress)
+        self.assertNotIn("main_queue_delay_seconds", session["metric_distributions"])
+        self.assertEqual(stages["playback_scheduler_delay"]["background_probe_interval_seconds"]["max"], 1)
+        self.assertTrue(any("not network latency" in note for note in session["interpretation_notes"]))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir=Path.cwd())
         self.directory = Path(self.temp.name)

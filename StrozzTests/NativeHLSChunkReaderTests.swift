@@ -7,6 +7,31 @@ import XCTest
 #endif
 
 final class NativeHLSChunkReaderTests: XCTestCase {
+  func testDeliveryTimingSeparatesIngressFromConsumerAndProcessingDelays() {
+    var timing = NativeHLSChunkReader.DeliveryTiming(startedAt: 10)
+    timing.observe(bytes: 100, receivedAt: 10.1, consumedAt: 12.1, finishedAt: 15.1)
+    timing.observe(bytes: 200, receivedAt: 15.2, consumedAt: 15.3, finishedAt: 15.4)
+    XCTAssertEqual(timing.chunks, 2)
+    XCTAssertEqual(timing.bytes, 300)
+    XCTAssertEqual(timing.metrics["first_body_seconds"] ?? -1, 0.1, accuracy: 0.0001)
+    XCTAssertEqual(timing.metrics["max_ingress_wait_seconds"] ?? -1, 0.1, accuracy: 0.0001)
+    XCTAssertEqual(timing.metrics["max_consumer_queue_seconds"] ?? -1, 2, accuracy: 0.0001)
+    XCTAssertEqual(timing.metrics["max_remux_publish_seconds"] ?? -1, 3, accuracy: 0.0001)
+    XCTAssertEqual(timing.metrics["transfer_wall_seconds"] ?? -1, 5.4, accuracy: 0.0001)
+  }
+
+  func testQueuedIngressCannotBeMisreportedAsNetworkWait() {
+    var timing = NativeHLSChunkReader.DeliveryTiming(startedAt: 0)
+    timing.observe(bytes: 100, receivedAt: 0.1, consumedAt: 0.2, finishedAt: 5)
+    timing.observe(bytes: 100, receivedAt: 0.3, consumedAt: 5.1, finishedAt: 5.2)
+    XCTAssertEqual(timing.metrics["max_ingress_wait_seconds"] ?? -1, 0.1, accuracy: 0.0001)
+    XCTAssertEqual(timing.metrics["max_consumer_queue_seconds"] ?? -1, 4.8, accuracy: 0.0001)
+    var deliveryWait = NativeHLSChunkReader.DeliveryTiming(startedAt: 0)
+    deliveryWait.observe(bytes: 100, receivedAt: 5, consumedAt: 5.01, finishedAt: 5.02)
+    XCTAssertEqual(deliveryWait.metrics["max_ingress_wait_seconds"], 5)
+    XCTAssertEqual(deliveryWait.metrics["max_consumer_queue_seconds"] ?? -1, 0.01, accuracy: 0.0001)
+  }
+
   func testBurstDeliveryWaitsForTheIndexerWithoutDroppingMedia() async throws {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [ChunkBurstProtocol.self]
