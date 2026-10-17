@@ -4,6 +4,31 @@ import XCTest
 
 @MainActor
 final class MobilePlaybackTests: XCTestCase {
+  func testInlineNativeStopDoesNotBecomeViewerPause() {
+    let model = MobilePlaybackModel(muted: true)
+    model.observePlayerPause(true)
+    XCTAssertFalse(model.isPaused)
+    model.usesPictureInPictureControls = true
+    model.observePlayerPause(true)
+    XCTAssertTrue(model.isPaused)
+    model.observePlayerPause(false)
+    XCTAssertFalse(model.isPaused)
+    model.usesPictureInPictureControls = false
+    model.observePlayerPause(true)
+    XCTAssertFalse(model.isPaused)
+    model.stop()
+  }
+
+  func testReceiverPauseRemainsViewerIntent() {
+    let model = MobilePlaybackModel(muted: true)
+    model.prepareForAirPlay()
+    model.observePlayerPause(true)
+    XCTAssertTrue(model.isPaused)
+    model.observePlayerPause(false)
+    XCTAssertFalse(model.isPaused)
+    model.stop()
+  }
+
   func testLayoutFixtureCanPauseAndResumeWithoutResolvingMedia() {
     let model = MobilePlaybackModel()
     model.activateAudioSession = {}

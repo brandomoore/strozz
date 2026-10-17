@@ -5,6 +5,18 @@ import XCTest
 
 @MainActor
 final class MobilePictureInPictureTests: XCTestCase {
+  func testPictureInPictureRetainsSystemPauseOwnershipUntilReturningInline() {
+    let session = MobilePlaybackSession()
+    XCTAssertFalse(session.model.usesPictureInPictureControls)
+    session.willStartPictureInPicture()
+    XCTAssertTrue(session.model.usesPictureInPictureControls)
+    session.didStartPictureInPicture()
+    XCTAssertTrue(session.model.usesPictureInPictureControls)
+    session.failedToStartPictureInPicture(NSError(domain: "fixture", code: 1))
+    XCTAssertFalse(session.model.usesPictureInPictureControls)
+    session.close()
+  }
+
   func testDownwardGestureMustBeDeliberateAndVertical() {
     XCTAssertTrue(MobilePlayerCollapseGesture.shouldCollapse(translation: .init(width: 0, height: 70)))
     XCTAssertTrue(MobilePlayerCollapseGesture.shouldCollapse(translation: .init(width: -30, height: 90)))

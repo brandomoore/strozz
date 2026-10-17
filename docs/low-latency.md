@@ -77,7 +77,10 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   fresh-source/engine attempts per rolling minute across origin, startup and
   stall failures. Unsupported formats and exhausted attempts show an error and
   Retry. A refilled-buffer same-item resume is one bounded attempt, not proof of
-  recovery. Recheck item/player/generation ownership after asynchronous work.
+  recovery. An unrequested `paused` state also needs bounded recovery: player
+  rate zero is not viewer intent. Preserve real pause, interruption, background,
+  seek and system PiP/AirPlay control ownership. Recheck item/player/generation
+  ownership after asynchronous work.
 - **Do not turn background work into a live failure.** Unused-rendition reports
   are optional and must not block active media. Unavailable historical resources
   fail locally rather than killing healthy live production. Keep reader queues,
@@ -169,6 +172,10 @@ out of commits; never add signed URLs, tokens, headers or chat bodies.
   only that loading returned. Require subsequent fresh frames and clock
   progress. Zero classified stall episodes does not exclude short hiccups below
   the parser's clock threshold.
+- **Explain unexpected stops.** `avplayer_rate_changed` records the framework's
+  rate-change reason and automatic-wait setting; `avplayer_reached_end` separates
+  an end notification from ordinary buffering. Correlate those with viewer intent
+  and subsequent `native_unrequested_pause_resume`, not just the final rate zero.
 - **Correlate system failures.** Match `mediaplaybackd` reports to build, device,
   session and UTC time. A previously observed track-teardown fingerprint
   (`CFEqual`, `fpfsi_IsTrackAlive`, `fpfs_AbandonSyncAttempt`) did not establish
@@ -205,7 +212,11 @@ adjacent coverage appropriate to the change:
 | Chat timing and evidence | `LiveChatSyncBaselineTests`, `PlaybackTelemetryTests`, `tools/tests/test_playback_diagnostics.py` |
 
 Live/hardware tests are deliberately opt-in. Read their guards before running;
-a skipped test is not a pass for the behavior being investigated. In
+a skipped test is not a pass for the behavior being investigated. The simulator-only
+`NativeStreamMatrixLiveTests/testOptInUnrequestedPauseRecoversWithoutChangingAutoOrItem`
+uses `STROZZ_NATIVE_PAUSE_TESTS=1` and one live `STROZZ_MATRIX_CHANNELS` login.
+It injects a player stop to verify recovery and intentional-pause protection;
+it does not reproduce or prove the original reason AVPlayer stopped. In
 `MultiviewContinuityLiveTests`, `testOptInPhysicalCMAFZoomKeepsPlayback` requires
 hardware-takeover permission, `STROZZ_CMAF_PHYSICAL_TESTS=1`, and two public live
 channel logins in `STROZZ_MATRIX_CHANNELS`, with CMAF verified on the primary.

@@ -10,6 +10,75 @@ final class NativeStreamMatrixLiveTests: XCTestCase {
     case offline, nativeFallback, playerError, playerReplaced, playbackTimedOut
   }
 
+  func testOptInUnrequestedPauseRecoversWithoutChangingAutoOrItem() async throws {
+    #if targetEnvironment(simulator)
+    let configuration = ProcessInfo.processInfo.environment
+    guard configuration["STROZZ_NATIVE_PAUSE_TESTS"] == "1",
+      let channel = configuration["STROZZ_MATRIX_CHANNELS"],
+      !channel.isEmpty, channel.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") })
+    else { throw XCTSkip("Select one live channel and enable STROZZ_NATIVE_PAUSE_TESTS on an isolated simulator.") }
+    let environment = AppEnvironment()
+    let model = PlayerModel()
+    model.player.isMuted = true
+    let suite = "NativePause.\(UUID())"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+    defaults.set("Auto", forKey: PersistenceKey.preferredQuality)
+    defaults.set(LivePlaybackProfile.nativeLowLatency.rawValue, forKey: PersistenceKey.livePlaybackProfile)
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    let view = PlayerView(channel: channel, auth: environment.auth, model: model)
+    let host = UIHostingController(rootView: view.environment(environment).defaultAppStorage(defaults))
+    window.rootViewController = host
+    defer {
+      window.rootViewController = previous
+      model.nativeRefreshTask?.cancel()
+      model.fallbackRestoreTask?.cancel()
+      model.channelMetadataTask?.cancel()
+      view.cancelNativeStartup()
+      view.stopLatencyMonitor()
+      view.stopPlaybackWatchdog()
+      model.nativeHLS?.stop()
+      model.player.pause()
+      model.player.replaceCurrentItem(with: nil)
+      defaults.removePersistentDomain(forName: suite)
+    }
+    try await ready(model, host: host)
+    let player = model.player
+    let item = try XCTUnwrap(player.currentItem)
+    let surface = try XCTUnwrap(videoController(in: host))
+    let clock = item.currentTime().seconds
+    XCTAssertTrue(model.nativeControlledAuto)
+    XCTAssertFalse(model.isUserPaused)
+    player.pause()
+    var recovered = false
+    for _ in 0..<120 {
+      try await Task.sleep(for: .milliseconds(100))
+      if player.timeControlStatus == .playing, item.currentTime().seconds > clock + 1,
+        model.playbackTelemetry.videoFrameAge.map({ $0 < 2 }) == true {
+        recovered = true
+        break
+      }
+    }
+    XCTAssertTrue(recovered, "An unrequested native pause must not remain frozen")
+    XCTAssertTrue(model.player === player)
+    XCTAssertTrue(player.currentItem === item)
+    XCTAssertTrue(videoController(in: host) === surface)
+    XCTAssertNil(model.decodeRecoveryQualityID)
+    XCTAssertFalse(model.triedDecodeRecovery)
+    XCTAssertNil(model.nativeFallbackReason)
+    XCTAssertFalse(model.isUserPaused)
+    model.isUserPaused = true
+    player.pause()
+    let pausedClock = item.currentTime().seconds
+    try await Task.sleep(for: .seconds(4))
+    XCTAssertEqual(player.timeControlStatus, .paused)
+    XCTAssertEqual(item.currentTime().seconds, pausedClock, accuracy: 0.1)
+    #else
+    throw XCTSkip("Fault injection must never take over a physical TV.")
+    #endif
+  }
+
   func testReadinessReportsSourceFailures() async {
     for failure in [MatrixFailure.offline, .nativeFallback, .playerError] {
       let model = PlayerModel()

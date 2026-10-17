@@ -6,6 +6,46 @@ import XCTest
 #endif
 
 final class NativeBufferedStallRecoveryTests: XCTestCase {
+  func testCapturedUnrequestedPauseWithoutLoadedRangesCannotDeadlock() {
+    var recovery = NativeBufferedStallRecovery()
+    _ = recovery.observe(clock: 100, uptime: 0, buffer: 0.038, waiting: false, allowed: true)
+    XCTAssertEqual(recovery.observe(clock: 100, uptime: 2, buffer: nil,
+      waiting: false, paused: true, allowed: true), .none)
+    XCTAssertEqual(recovery.observe(clock: 100, uptime: 4, buffer: nil,
+      waiting: false, paused: true, allowed: true), .resumePaused)
+    XCTAssertEqual(recovery.observe(clock: 100, uptime: 8.99, buffer: nil,
+      waiting: false, paused: true, allowed: true), .awaitingProgress)
+    XCTAssertEqual(recovery.observe(clock: 100, uptime: 9, buffer: nil,
+      waiting: false, paused: true, allowed: true), .restart)
+    XCTAssertEqual(recovery.observe(clock: 100, uptime: 300, buffer: nil,
+      waiting: false, paused: true, allowed: true), .awaitingProgress)
+  }
+
+  func testResumedPauseRequiresRealProgressAndDoesNotForceAnEmptyWaitingBuffer() {
+    var recovery = NativeBufferedStallRecovery()
+    _ = recovery.observe(clock: 100, uptime: 0, buffer: nil, waiting: false, paused: true, allowed: true)
+    XCTAssertEqual(recovery.observe(clock: 100, uptime: 2, buffer: nil,
+      waiting: false, paused: true, allowed: true), .resumePaused)
+    XCTAssertEqual(recovery.observe(clock: 101, uptime: 3, buffer: 1,
+      waiting: false, allowed: true), .none)
+    XCTAssertEqual(recovery.observe(clock: 101, uptime: 30, buffer: nil,
+      waiting: true, allowed: true), .none)
+  }
+
+  func testTransientPauseAndIntentCancellationDoNotResume() {
+    var recovery = NativeBufferedStallRecovery()
+    _ = recovery.observe(clock: 100, uptime: 0, buffer: nil, waiting: false, paused: true, allowed: true)
+    XCTAssertEqual(recovery.observe(clock: 100, uptime: 1, buffer: nil,
+      waiting: true, allowed: true), .none)
+    _ = recovery.observe(clock: 100, uptime: 2, buffer: nil, waiting: false, paused: true, allowed: true)
+    XCTAssertEqual(recovery.observe(clock: 100, uptime: 3, buffer: nil,
+      waiting: false, paused: true, allowed: false), .none)
+    XCTAssertEqual(recovery.observe(clock: 100, uptime: 20, buffer: nil,
+      waiting: false, paused: true, allowed: true), .none)
+    XCTAssertEqual(recovery.observe(clock: 100, uptime: 21.99, buffer: nil,
+      waiting: false, paused: true, allowed: true), .none)
+  }
+
   func testRefilledBufferResumesOnceThenRequiresClockProgress() {
     var recovery = NativeBufferedStallRecovery()
     XCTAssertEqual(recovery.observe(clock: 10, uptime: 0, buffer: 1.9, waiting: false, allowed: true), .none)
