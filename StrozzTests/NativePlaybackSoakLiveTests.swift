@@ -191,18 +191,31 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     XCTAssertFalse(evidence.clean)
   }
 
-  nonisolated func testSynchronousDriverRunsItsOwnedMainActorTask() {
-    let completed = expectation(description: "Main actor driver")
-    let run = Task { @MainActor in
-      await Task.yield()
-      XCTAssertFalse(Task.isCancelled)
-      completed.fulfill()
+  func testProgressCheckpointsOverwriteOnlyProgressAndArchiveOnceAtCompletion() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let diagnostics = root.appendingPathComponent("source")
+    let output = root.appendingPathComponent("output")
+    try FileManager.default.createDirectory(at: diagnostics, withIntermediateDirectories: true)
+    let name = "playback-fixture-0001.jsonl"
+    try Data("fixture\n".utf8).write(to: diagnostics.appendingPathComponent(name))
+    let sink = Sink(directory: output, diagnosticsDirectory: diagnostics)
+    var evidence = Evidence(channel: "fixture", phase: "single")
+    for elapsed in [30.0, 60.0, 90.0] {
+      evidence.observedSeconds = elapsed
+      try await sink.save(evidence, name: "fixture-single")
     }
-    defer { run.cancel() }
-    wait(for: [completed], timeout: 2)
+    evidence.status = "failed"
+    try await sink.save(evidence, name: "fixture-single")
+    try await sink.archive(session: "fixture", folder: "fixture-single-complete")
+    let saved = try JSONDecoder().decode(Evidence.self, from: Data(contentsOf: output.appendingPathComponent("fixture-single.json")))
+    XCTAssertEqual(saved.observedSeconds, 90)
+    XCTAssertEqual(saved.status, "failed")
+    XCTAssertTrue(FileManager.default.fileExists(atPath:
+      output.appendingPathComponent("diagnostics/fixture-single-complete/" + name).path))
   }
 
-  nonisolated func testOptInLongVariedLivePlaybackSoak() throws {
+  func testOptInLongVariedLivePlaybackSoak() async throws {
     #if targetEnvironment(simulator)
     executionTimeAllowance = 18_000
     let settings = ProcessInfo.processInfo.environment
@@ -210,17 +223,12 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
       let names = settings["STROZZ_SOAK_CANDIDATES"] else {
       throw XCTSkip("Explicitly enable STROZZ_LONG_SOAK and choose live candidate logins on an isolated simulator.")
     }
-    let completed = expectation(description: "Bounded multi-hour playback soak")
-    let run = Task { @MainActor in
-      defer { completed.fulfill() }
-      do { try await Self.runLongSoak(settings: settings, names: names) }
-      catch {
-        let error = error as NSError
-        XCTFail("Soak failed: \(error.domain):\(error.code); task_cancelled=\(Task.isCancelled)")
-      }
+    do { try await Self.runLongSoak(settings: settings, names: names) }
+    catch {
+      let failure = error as NSError
+      XCTFail("Soak failed: \(failure.domain):\(failure.code); task_cancelled=\(Task.isCancelled)")
+      throw error
     }
-    defer { run.cancel() }
-    wait(for: [completed], timeout: 18_000)
     #else
     throw XCTSkip("The long soak must never take over a physical TV.")
     #endif
@@ -410,10 +418,6 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
       if now - savedAt >= 30 {
         for watch in watches {
           try await sink.save(watch.evidence, name: watch.evidence.channel + "-" + phase)
-          await watch.model.playbackTelemetry.flush()
-          if let session = watch.model.playbackTelemetry.sessionID {
-            try await sink.archive(session: session, folder: watch.evidence.channel + "-" + phase + "-complete")
-          } else { XCTFail("Missing telemetry session at the end of a stage") }
         }
         print("SOAK_PROGRESS \(phase) \(Int(now - began))/\(seconds)")
         savedAt = now
@@ -430,6 +434,10 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     for watch in watches {
       watch.evidence.status = watch.evidence.clean ? "passed" : "failed"
       try await sink.save(watch.evidence, name: watch.evidence.channel + "-" + phase)
+      await watch.model.playbackTelemetry.flush()
+      if let session = watch.model.playbackTelemetry.sessionID {
+        try await sink.archive(session: session, folder: watch.evidence.channel + "-" + phase + "-complete")
+      } else { XCTFail("Missing telemetry session at the end of a stage") }
       print("SOAK_END \(watch.evidence.channel) \(phase) \(watch.evidence.status) stalls=\(watch.evidence.stallNotifications) failures=\(watch.evidence.failedToEnd)")
       XCTAssertTrue(watch.evidence.clean, "\(watch.evidence.channel) \(phase): interruptions or missing evidence; see persisted soak report")
     }
