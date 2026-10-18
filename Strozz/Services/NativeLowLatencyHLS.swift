@@ -24,11 +24,12 @@ final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unche
   init(sourceURL: URL, headers: [String: String], history: Double,
        controlledAuto: Bool = NativeLowLatencyHLS.controlledAutoEnabled,
        initialBudget: NativeAdaptiveRenditionPolicy.Budget = .init(),
+       loadData: NativeHLSOrigin.DataLoader? = nil,
        diagnostic: @escaping @Sendable (NativeHLSFailureDiagnostic) -> Void = { _ in },
        trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil,
        failure: @escaping @Sendable (NativeHLSError) -> Void) {
     self.sourceURL = sourceURL
-    origin = NativeHLSOrigin(root: sourceURL, headers: headers, history: history,
+    origin = NativeHLSOrigin(root: sourceURL, headers: headers, history: history, loadData: loadData,
       controlledAuto: controlledAuto, initialBudget: initialBudget,
       diagnostic: diagnostic, trace: trace, failure: failure)
     super.init()

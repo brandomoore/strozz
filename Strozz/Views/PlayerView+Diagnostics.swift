@@ -297,6 +297,12 @@ extension PlayerView {
     }
     #endif
 
+    // Keep the existing output consumer alive, but do not require hidden frames.
+    guard model.isVideoPresentationVisible else {
+      videoDecodeFrozenSince = nil
+      return
+    }
+
     // The clock advanced this sample but no new frame was produced.
     let now = Date()
     if videoDecodeFrozenSince == nil { videoDecodeFrozenSince = now }

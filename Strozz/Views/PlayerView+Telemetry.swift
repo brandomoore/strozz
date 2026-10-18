@@ -48,6 +48,7 @@ extension PlayerView {
         "prefer_youtube_source": preferYouTubeSource,
       ]
     )
+    model.playbackTelemetry.startSchedulerMonitoring()
     startPlaybackTelemetrySampling()
   }
 
@@ -90,6 +91,15 @@ extension PlayerView {
   }
 
   func recordPlaybackTelemetrySnapshot() {
+    let started = ProcessInfo.processInfo.systemUptime
+    defer {
+      let elapsed = ProcessInfo.processInfo.systemUptime - started
+      if elapsed >= 0.1 {
+        recordPlaybackEvent("playback_main_operation_slow", level: .warning,
+          attributes: ["operation": "tv_telemetry_snapshot"],
+          metrics: ["operation_started_uptime_seconds": started, "duration_seconds": elapsed])
+      }
+    }
     model.playbackTelemetry.trackItem(player.currentItem, source: playbackTelemetrySource)
     model.playbackTelemetry.recordItemLogs()
     var snapshot = PlaybackTelemetrySnapshot()
@@ -111,15 +121,19 @@ extension PlayerView {
     snapshot.flags["media_services_unavailable"] = model.mediaServicesUnavailable
     snapshot.flags["media_services_reset_pending"] = model.mediaServicesResetPending
     snapshot.flags["external_playback_active"] = player.isExternalPlaybackActive
-    let audioSession = AVAudioSession.sharedInstance()
-    snapshot.attributes["audio_session_category"] = audioSession.category.rawValue
-    snapshot.attributes["audio_session_mode"] = audioSession.mode.rawValue
-    snapshot.attributes["audio_output_ports"] = audioSession.currentRoute.outputs.map(\.portType.rawValue).joined(separator: ",")
-    snapshot.flags["other_audio_playing"] = audioSession.isOtherAudioPlaying
-    let outputVolume = Double(audioSession.outputVolume)
-    if outputVolume.isFinite { snapshot.metrics["audio_output_volume"] = outputVolume }
+    model.playbackTelemetry.measure("audio_session") {
+      let audioSession = AVAudioSession.sharedInstance()
+      snapshot.attributes["audio_session_category"] = audioSession.category.rawValue
+      snapshot.attributes["audio_session_mode"] = audioSession.mode.rawValue
+      snapshot.attributes["audio_output_ports"] = audioSession.currentRoute.outputs.map(\.portType.rawValue).joined(separator: ",")
+      snapshot.flags["other_audio_playing"] = audioSession.isOtherAudioPlaying
+      let outputVolume = Double(audioSession.outputVolume)
+      if outputVolume.isFinite { snapshot.metrics["audio_output_volume"] = outputVolume }
+    }
     if let item = player.currentItem, item.status == .readyToPlay {
-      let audioTracks = item.tracks.filter { $0.assetTrack?.mediaType == .audio }
+      let audioTracks = model.playbackTelemetry.measure("audio_tracks") {
+        item.tracks.filter { $0.assetTrack?.mediaType == .audio }
+      }
       snapshot.counters["audio_track_count"] = audioTracks.count
       snapshot.counters["enabled_audio_track_count"] = audioTracks.filter(\.isEnabled).count
     }
@@ -156,6 +170,7 @@ extension PlayerView {
       Date().timeIntervalSince($0) >= 4
     } ?? false
     snapshot.flags["video_output_observed"] = model.playbackTelemetry.videoFrameAge != nil
+    snapshot.flags["video_presentation_visible"] = model.isVideoPresentationVisible
     snapshot.flags["decoded_frame_observer_attached"] = playerItemVideoOutput != nil
     snapshot.metrics["video_frame_age_seconds"] = model.playbackTelemetry.videoFrameAge
     snapshot.flags["using_alt_source"] = isUsingAltSource
@@ -281,7 +296,7 @@ extension PlayerView {
         snapshot.metrics["smoothed_latency_seconds"] = smoothedLatencySeconds
       }
 
-      let accesses = item.accessLog()?.events ?? []
+      let accesses = model.playbackTelemetry.measure("snapshot_access_log") { item.accessLog()?.events ?? [] }
       if let access = accesses.last {
         let accessSnapshot = PlaybackTelemetryRecorder.accessSnapshot(access)
         snapshot.metrics.merge(accessSnapshot.metrics) { _, new in new }

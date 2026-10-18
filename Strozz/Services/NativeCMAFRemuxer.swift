@@ -236,7 +236,8 @@ struct NativeCMAFRemuxer {
         pendingMovie = nil
       case "emsg", "styp", "sidx", "free", "prft":
         guard pendingMovie == nil else { throw NativeHLSError.unsupported }
-      default: throw NativeHLSError.unsupported
+      default:
+        throw NativeHLSFailureDetail.isoBox(type: try NativeCMAF.integer(bytes, 4), bytes: size)
       }
     }
     return output

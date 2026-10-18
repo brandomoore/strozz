@@ -9,6 +9,68 @@ import XCTest
 
 @MainActor
 final class PlaybackTelemetryTests: XCTestCase {
+  func testNativeSourceTimeIsNotReplacedByDelayedMainDelivery() {
+    let detail = NativeHLSPlaybackDiagnostic(event: .delivery, attributes: ["stage": "ingress_remux"],
+      metrics: ["max_ingress_wait_seconds": 0.1], counters: ["ingress_chunks": 4], uptime: 10)
+    let delivered = PlaybackTelemetryRecorder.nativeDeliveryMetrics(detail.metrics, dispatchedAt: 10, at: 15)
+    XCTAssertEqual(delivered["native_event_uptime_seconds"], 10)
+    XCTAssertEqual(delivered["main_actor_delivery_delay_seconds"], 5)
+    XCTAssertEqual(delivered["max_ingress_wait_seconds"], 0.1)
+    XCTAssertNil(PlaybackTelemetryRecorder.nativeDeliveryMetrics([:], dispatchedAt: 10, at: 15)["main_actor_delivery_delay_seconds"])
+    XCTAssertNil(PlaybackTelemetryRecorder.nativeDeliveryMetrics(detail.metrics, dispatchedAt: 10, at: 9)["main_actor_delivery_delay_seconds"])
+    let retained = PlaybackTelemetryRecorder.nativeDeliveryMetrics(detail.metrics, dispatchedAt: 14, at: 15)
+    XCTAssertEqual(retained["native_trace_retention_delay_seconds"], 4)
+    XCTAssertEqual(retained["main_actor_delivery_delay_seconds"], 1)
+  }
+
+  func testIndependentProbeObservesABlockedMainQueueAndStopsWithSession() async throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let recorder = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(directory: directory, mirrorToSystemLog: false))
+    recorder.beginSession(channel: "fixture", playbackMode: "live")
+    recorder.startSchedulerMonitoring()
+    recorder.recordSnapshot(PlaybackTelemetrySnapshot(flags: ["playback_requested": true]))
+    recorder.measure("synthetic_main_block") { Thread.sleep(forTimeInterval: 1.6) }
+    try await Task.sleep(for: .milliseconds(150))
+    recorder.endSession(reason: "test")
+    await recorder.flush()
+    let saved = try records(in: directory)
+    let delay = try XCTUnwrap(saved.first { $0.name == "playback_scheduler_delay" })
+    XCTAssertGreaterThanOrEqual(delay.metrics["main_queue_delay_seconds"] ?? 0, 0.25)
+    XCTAssertLessThan(delay.metrics["background_probe_interval_seconds"] ?? .infinity, 1.5)
+    XCTAssertTrue(saved.contains { $0.attributes["operation"] == "synthetic_main_block" })
+    XCTAssertEqual(saved.last?.name, "session_ended")
+  }
+
+  func testSchedulerProbeCoalescesWhileMainIsBlocked() throws {
+    var state = PlaybackSchedulerProbe.State()
+    state.setEnabled(true, at: 0)
+    let ticket = try XCTUnwrap(state.tick(at: 1))
+    for tick in 2...300 { XCTAssertNil(state.tick(at: Double(tick))) }
+    let report = try XCTUnwrap(state.finish(ticket, at: 301))
+    XCTAssertEqual(report.mainDelay, 300)
+    XCTAssertEqual(report.backgroundInterval, 1)
+    XCTAssertEqual(report.coalescedTicks, 299)
+    XCTAssertNotNil(state.tick(at: 302))
+  }
+
+  func testSchedulerDistinguishesBackgroundQueueDelayAndCancelsStaleOwnership() throws {
+    var state = PlaybackSchedulerProbe.State()
+    state.setEnabled(true, at: 0)
+    let ticket = try XCTUnwrap(state.tick(at: 5))
+    let report = try XCTUnwrap(state.finish(ticket, at: 5.01))
+    XCTAssertEqual(report.mainDelay, 0.01, accuracy: 0.0001)
+    XCTAssertEqual(report.backgroundInterval, 5)
+    let stale = try XCTUnwrap(state.tick(at: 6))
+    state.setEnabled(false, at: 7)
+    XCTAssertNil(state.finish(stale, at: 200))
+    XCTAssertNil(state.tick(at: 201))
+    state.setEnabled(true, at: 202)
+    let resumed = try XCTUnwrap(state.tick(at: 203))
+    XCTAssertNil(state.finish(stale, at: 204))
+    XCTAssertEqual(state.finish(resumed, at: 204)?.backgroundInterval, 1)
+  }
+
   private func temporaryDirectory() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
   }

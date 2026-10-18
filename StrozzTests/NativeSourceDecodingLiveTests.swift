@@ -1,9 +1,33 @@
 import AVKit
+import CoreVideo
 import XCTest
 @testable import Strozz
 
 @MainActor
 final class NativeSourceDecodingLiveTests: XCTestCase {
+  func testOptInLocalAdaptiveRenditionTransitions() async throws {
+    #if targetEnvironment(simulator)
+    guard let address = ProcessInfo.processInfo.environment["STROZZ_ADAPTIVE_FIXTURE_URL"],
+      let url = URL(string: address), url.scheme == "http", url.host == "127.0.0.1" else {
+      throw XCTSkip("Select a session-owned loopback HLS fixture on an isolated simulator.")
+    }
+    executionTimeAllowance = 300
+    let fixture = URL(string: "https://synthetic.invalid/master.m3u8")!
+    try await check(fixture, channel: "synthetic", native: true, audible: false, adaptive: true,
+      loadData: { request in
+        guard let source = request.url, source.host == fixture.host,
+          var target = URLComponents(url: url, resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
+        target.path = source.path
+        guard let local = target.url else { throw URLError(.badURL) }
+        var localRequest = request
+        localRequest.url = local
+        return try await URLSession.shared.data(for: localRequest)
+      })
+    #else
+    throw XCTSkip("Synthetic adaptation must never take over the physical TV.")
+    #endif
+  }
+
   func testOptInSequentialStandardAndNativeDecoding() async throws {
     #if targetEnvironment(simulator)
     let environment = ProcessInfo.processInfo.environment
@@ -81,12 +105,15 @@ final class NativeSourceDecodingLiveTests: XCTestCase {
   }
 
   private func check(_ url: URL, channel: String, native: Bool, audible: Bool,
-                     adaptive: Bool = false, expansion: Bool = false) async throws {
+                     adaptive: Bool = false, expansion: Bool = false,
+                     loadData: NativeHLSOrigin.DataLoader? = nil) async throws {
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     let window = try XCTUnwrap(scene.keyWindow)
     let previous = window.rootViewController
     let engine = native ? NativeLowLatencyHLS(sourceURL: url, headers: PlaybackService.streamHeaders,
-      history: 1800) { error in XCTFail("Native comparison failed: \(error.rawValue)") } : nil
+      history: 1800, loadData: loadData, diagnostic: { value in
+        print("ADAPTIVE_NATIVE_FAILURE \(value.attributes) \(value.metrics) \(value.counters)")
+      }) { error in XCTFail("Native comparison failed: \(error.rawValue)") } : nil
     let asset = AVURLAsset(url: engine?.assetURL ?? url,
       options: ["AVURLAssetHTTPHeaderFieldsKey": PlaybackService.streamHeaders])
     if let engine { asset.resourceLoader.setDelegate(engine, queue: engine.queue) }
@@ -129,6 +156,7 @@ final class NativeSourceDecodingLiveTests: XCTestCase {
     player.play()
     for second in 0..<sampleCount {
       try await Task.sleep(for: .seconds(1))
+      if item.status == .failed { throw item.error ?? URLError(.cannotDecodeContentData) }
       if expansion, second == 30 {
         item.preferredPeakBitRate = 0
         item.preferredMaximumResolution = .zero
@@ -153,8 +181,9 @@ final class NativeSourceDecodingLiveTests: XCTestCase {
         XCTAssertTrue(positioned, "\(channel): bounded native startup alignment")
       }
       let clock = item.currentTime()
-      let hasFrame = output.hasNewPixelBuffer(forItemTime: clock)
-        && output.copyPixelBuffer(forItemTime: clock, itemTimeForDisplay: nil) != nil
+      let frame = output.hasNewPixelBuffer(forItemTime: clock)
+        ? output.copyPixelBuffer(forItemTime: clock, itemTimeForDisplay: nil) : nil
+      let hasFrame = frame != nil
       missingFrames = hasFrame ? 0 : missingFrames + 1
       if adaptive || expansion, second == 30 || (second >= 15 && missingFrames == 3) {
         let image = UIGraphicsImageRenderer(bounds: controller.view.bounds).image { _ in
@@ -176,10 +205,10 @@ final class NativeSourceDecodingLiveTests: XCTestCase {
         add(attachment)
       }
       if second >= 15, hasFrame, controller.isReadyForDisplay { fresh += 1 }
-      if second >= 15, item.presentationSize.height > 0 {
-        heights.insert(Int(item.presentationSize.height))
+      if second >= 15, let frame {
+        heights.insert(CVPixelBufferGetHeight(frame))
       }
-      let height = Int(item.presentationSize.height)
+      let height = frame.map(CVPixelBufferGetHeight) ?? previousHeight
       if expansion, second >= 60, previousHeight > 0, height > 0, previousHeight != height {
         settledQualityChanges += 1
       }
@@ -187,6 +216,18 @@ final class NativeSourceDecodingLiveTests: XCTestCase {
       let buffer = item.loadedTimeRanges.map(\.timeRangeValue)
         .filter { $0.start.seconds <= clock.seconds && $0.end.seconds >= clock.seconds }
         .map { $0.end.seconds - clock.seconds }.max() ?? 0
+      if let engine {
+        let controlled = try await engine.origin.updateControlledPlayback(buffer: buffer,
+          budget: .init(maximumWidth: Int(item.preferredMaximumResolution.width),
+            maximumHeight: Int(item.preferredMaximumResolution.height),
+            maximumBitrate: Int(item.preferredPeakBitRate)))
+        if adaptive || expansion, item.status == .readyToPlay {
+          XCTAssertTrue(controlled, "Adaptive verification must exercise the controlled engine")
+        }
+      }
+      if adaptive || expansion, second.isMultiple(of: 15) || missingFrames == 3 {
+        print("ADAPTIVE_SAMPLE \(channel) native=\(native) second=\(second) fresh=\(hasFrame) height=\(height) missing=\(missingFrames) clock=\(clock.seconds) buffer=\(buffer)")
+      }
       if let date = item.currentDate() {
         let age = Date().timeIntervalSince(date)
         if second == 30 { referenceSourceAge = age }
@@ -203,7 +244,7 @@ final class NativeSourceDecodingLiveTests: XCTestCase {
         "buffer": String(buffer), "peak_bitrate": String(item.preferredPeakBitRate),
         "dropped_frames": String(item.accessLog()?.events.reduce(0) { $0 + $1.numberOfDroppedVideoFrames } ?? 0),
         "error_count": String(item.errorLog()?.events.count ?? 0),
-        "height": String(Double(item.presentationSize.height)), "state": String(player.timeControlStatus.rawValue)])
+        "height": String(height), "state": String(player.timeControlStatus.rawValue)])
     }
     let name = "\(channel) \(native ? "native" : "standard")"
     if adaptive || expansion, let engine {
@@ -227,7 +268,7 @@ final class NativeSourceDecodingLiveTests: XCTestCase {
     }
     if expansion {
       XCTAssertLessThanOrEqual(settledQualityChanges, 2, "\(name): Auto must not oscillate after budget release")
-      XCTAssertGreaterThanOrEqual(Int(item.presentationSize.height), 720, "\(name): quality must not collapse")
+      XCTAssertGreaterThanOrEqual(previousHeight, 720, "\(name): quality must not collapse")
     }
   }
 }

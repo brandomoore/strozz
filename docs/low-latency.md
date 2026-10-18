@@ -60,7 +60,14 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   and recover common A/V phase across CMAF's per-timescale version-zero wraps;
   keep rewind timestamps positive and periods separate. GOP decode-origin
   changes require inverse signed composition-offset changes so presentation
-  times and compressed payloads remain unchanged.
+  times and compressed picture payloads remain unchanged.
+  When converting TS to MP4, remove only HRD buffering-period/picture-timing SEI
+  messages (types 0/1), not entire SEI NALs. Their transport clock model can
+  freeze Apple's decoder after a rendition change even when FFmpeg decodes the
+  same picture bytes. Preserve caption/user/other SEI and VCL bytes; see
+  `NativeTransportDemuxer.removingTransportTimingSEI` and its regressions.
+  Adaptive decode checks must feed `updateControlledPlayback` and inspect actual
+  CVPixelBuffer dimensions; AVPlayer preferences alone do not drive this engine.
 - **Respect format and part contracts.** Source-CMAF requires muxed AVC/AAC-LC,
   compatible track IDs/timebases and audio configuration within a period, and no
   edit lists. Unsupported media fails explicitly, not by silently hiding a
@@ -95,6 +102,10 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   its replacement. Native PiP is a separate background lifecycle. Deliberate
   foreground/error recovery can rebuild the engine/player; TV must also replace
   its AVKit surface then, preserving mute/volume and pause/DVR intent.
+  Fully hidden expanded peers do not owe visible decoded frames: the same
+  visibility state drives opacity and decoder-watchdog eligibility. Their clock,
+  network and engine-error monitoring remains active; missing hidden frames must
+  not force a fixed-quality decode recovery.
 - **Audio ownership is separate from video health.** One multiview pane is
   audible. See `PlayerView+AudioSession.swift` and `PlaybackAudioSessionTests`
   before changing interruption/reclaim behavior; do not repeatedly fight another
@@ -185,6 +196,40 @@ out of commits; never add signed URLs, tokens, headers or chat bodies.
   it; neither is a proven fix. IPS files can contain separate JSON header/body
   documents, so parsing one as a single JSON object can fail.
 
+## Short hiccups: separate delivery from delayed logging
+
+Native events retain `native_event_uptime_seconds` at their producer;
+`native_trace_retention_delay_seconds` separates buffered/replayed diagnostics
+from `main_actor_delivery_delay_seconds`, the dispatch-to-main wait.
+Do not infer a CDN/producer gap from JSONL record timestamps alone.
+
+`playback_scheduler_delay` compares an independent one-second background probe
+with its main-queue acknowledgement, with only one callback pending per player.
+Large `main_queue_delay_seconds` with a normal
+`background_probe_interval_seconds` supports main-thread blockage. If the
+background probe is late too, broader scheduling pressure is possible. Probes
+are inactive for background/idle playback; absence of a delay event is not proof
+of healthy playback. `playback_main_operation_slow` names slow synchronous
+snapshot, audio-track, access-log or error-log reads.
+
+Debug controlled playback emits `native_hls_delivery_timing` per segment:
+`max_ingress_wait_seconds` excludes the preceding chunk's processing;
+`max_consumer_queue_seconds` measures receipt-to-consumption delay;
+`max_remux_publish_seconds` is remux/publish wall time, not CPU time.
+Ingress wait includes URLSession/delegate scheduling, so it is not by itself
+proof of network loss. The separate `network_transaction` stage records
+connection reuse, connect/TLS and first-byte timing without URLs or addresses.
+Slow producer/probe manifests, movie preparation and segment-finalization work
+have separate stages; incomplete bodies are not grouped with completed transfers.
+Slow/failed local requests are rate-limited and identify only a resource kind;
+blocking playlist/part waits can be intentional.
+
+The analysis tool groups these event metrics under `diagnostic_timing_groups`,
+separately from sampled player metrics. Detailed native traces and mobile logs
+retain their existing Debug scope; TV scheduler evidence uses retained telemetry.
+Missing groups, dropped records and inactive/background intervals must remain
+explicit limitations, not success-shaped conclusions.
+
 ## Validate the claim, not a proxy
 
 Use the build/generation wrappers and target selection in
@@ -213,8 +258,42 @@ adjacent coverage appropriate to the change:
 | Mobile ownership, transitions and live frames | `MobilePlaybackTests`, `MobilePictureInPictureTests`, `MobileLivePlaybackTests` |
 | Chat timing and evidence | `LiveChatSyncBaselineTests`, `PlaybackTelemetryTests`, `tools/tests/test_playback_diagnostics.py` |
 
-Live/hardware tests are deliberately opt-in. Read their guards before running;
-a skipped test is not a pass for the behavior being investigated. The simulator-only
+Live/hardware tests are deliberately opt-in. Read their guards before running.
+
+A long simulator run is available in
+`NativePlaybackSoakLiveTests/testOptInLongVariedLivePlaybackSoak` with
+`STROZZ_LONG_SOAK=1` and 6...16 public `STROZZ_SOAK_CANDIDATES`. It selects six
+currently live inputs using observed TS/CMAF and frame-rate metadata, defaults to
+30 minutes each, then runs 15-minute grid/expanded/returned-grid stages.
+Candidate selection should span broadcasters/delivery regions, not only genres;
+reports include declared codecs/bitrate, playlist cadence, fetch time and PDT age.
+Those measurements do not independently verify broadcaster location or true
+end-to-end latency. Offline candidates and missing comparisons remain explicit.
+All simulator players are muted; it cannot take over hardware. Reports persist every
+30 seconds, with bounded incident and stage-end diagnostic copies. Short stall
+notifications, recovered failures, item replacements and missing sampling
+evidence fail the stage; the existing app frame consumer supplies decoded size
+and age, rather than adding a competing video output. Missing input-format
+coverage is explicit, not a pass. This is not physical-TV certification.
+`STROZZ_SOAK_MODE=followup` rechecks the current live pool, selects one broadcaster
+not listed in `STROZZ_SOAK_COMPLETED_CHANNELS`, and runs that single-stream stage
+plus the multiview stages. It supplements, never replaces, the original reports.
+`STROZZ_SOAK_MULTIVIEW_PANES` explicitly selects 2...4 panes (default four);
+record the actual workload rather than claiming unavailable four-pane coverage.
+`STROZZ_SOAK_MODE=multiview` runs only those stages against freshly qualified
+inputs. Video freshness/quality is assessed only while the pane is visible;
+hidden time is reported separately, without exempting clock/engine failures.
+The existing four-second frame-freshness deadline starts when a hidden pane is
+revealed; its preceding hidden frame age is not a visible freeze. Already-visible
+panes do not receive another deadline just because the observation phase changes.
+The separate `testOptInShortMultiviewVisibilityRegression` uses
+`STROZZ_VISIBILITY_CHECK=1` for a fixed, 30-second-per-stage reproduction against
+Valkyrae/Gaules/Burn when all three are live; it is not sustained-soak coverage.
+Sampling-only gaps are marked incomplete separately from playback faults; neither
+is a clean pass. Unsupported CMAF boxes report numeric type/size, and TS
+finalization failures report pending sample/PES byte counts, not media payloads.
+
+A skipped test is not a pass for the behavior being investigated. The simulator-only
 `NativeStreamMatrixLiveTests/testOptInUnrequestedPauseRecoversWithoutChangingAutoOrItem`
 uses `STROZZ_NATIVE_PAUSE_TESTS=1` and one live `STROZZ_MATRIX_CHANNELS` login.
 It injects a player stop to verify recovery and intentional-pause protection;

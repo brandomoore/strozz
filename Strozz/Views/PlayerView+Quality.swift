@@ -86,7 +86,8 @@ extension PlayerView {
   }
 
   func recoverUndecodableVideo() -> Bool {
-    guard !isVOD, !isUsingAltSource, !isAudioOnlyActive, !player.isExternalPlaybackActive,
+    guard model.isVideoPresentationVisible,
+      !isVOD, !isUsingAltSource, !isAudioOnlyActive, !player.isExternalPlaybackActive,
       !model.triedDecodeRecovery,
       let playback,
       let source = StreamQuality.decodeRecoveryQuality(in: playback.qualities,

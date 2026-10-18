@@ -156,6 +156,7 @@ actor NativeControlledHLSOrigin {
   private var capturesRequests = false
   private var requests: [[String: String]] = []
   private var traceRequests: [NativeHLSPlaybackDiagnostic] = []
+  private var lastSlowRequestAt: [String: Double] = [:]
 
   func enableRequestDiagnostics() { capturesRequests = true }
   func requestDiagnostics() -> [[String: String]] { requests }
@@ -183,11 +184,25 @@ actor NativeControlledHLSOrigin {
       counters[key] = query.first(where: { $0.name == key })?.value.flatMap(Int.init)
     }
     if trace != nil {
-      traceRequests.append(.init(event: .request,
-        attributes: ["path": path, "served": String(bytes != nil), "pipeline": "controlled_cmaf"],
+      let kind: String
+      if path == "/root.m3u8" { kind = "master" }
+      else if path == "/media/0.m3u8" { kind = "playlist" }
+      else if path.hasPrefix("/part/0/") { kind = "part" }
+      else if path.hasPrefix("/segment/0/") { kind = "segment" }
+      else if path.hasPrefix("/init/0/") { kind = "initialization" }
+      else { kind = "invalid" }
+      let detail = NativeHLSPlaybackDiagnostic(event: .request,
+        attributes: ["resource_kind": kind, "served": String(bytes != nil), "pipeline": "controlled_cmaf"],
         metrics: ["duration_seconds": seconds, "ended_uptime_seconds": ProcessInfo.processInfo.systemUptime],
-        counters: counters))
-      if traceRequests.count > 16 { traceRequests.removeFirst(traceRequests.count - 16) }
+        counters: counters)
+      let now = ProcessInfo.processInfo.systemUptime
+      if (seconds >= 1 || bytes == nil), now - (lastSlowRequestAt[kind] ?? -.infinity) >= 5 {
+        lastSlowRequestAt[kind] = now
+        trace?(detail)
+      } else {
+        traceRequests.append(detail)
+        if traceRequests.count > 16 { traceRequests.removeFirst(traceRequests.count - 16) }
+      }
     }
     guard capturesRequests else { return }
     var row = ["path": path, "served": String(bytes != nil), "seconds": String(seconds),
@@ -440,7 +455,19 @@ actor NativeControlledHLSOrigin {
     return (result.0, result.2)
   }
 
-  private func manifest(_ variant: Variant) async throws -> NativeCMAF.Manifest {
+  private func manifest(_ variant: Variant, purpose: String = "metadata") async throws -> NativeCMAF.Manifest {
+    let started = ProcessInfo.processInfo.systemUptime
+    var complete = false
+    defer {
+      let duration = ProcessInfo.processInfo.systemUptime - started
+      if duration >= 0.5 || !complete {
+        trace?(.init(event: .delivery,
+          attributes: ["pipeline": "controlled_cmaf", "stage": "manifest",
+            "requester": purpose, "completed": String(complete)],
+          metrics: ["duration_seconds": duration, "request_started_uptime_seconds": started],
+          counters: ["rendition": variant.id]))
+      }
+    }
     let bytes: Data
     do { bytes = try await data(variant.url) }
     catch {
@@ -458,6 +485,7 @@ actor NativeControlledHLSOrigin {
     }
     let result = try NativeCMAF.manifest(String(decoding: bytes, as: UTF8.self), url: variant.url)
     manifests[variant.id] = result
+    complete = true
     return result
   }
 
@@ -474,7 +502,7 @@ actor NativeControlledHLSOrigin {
           return limit.allows(.init(id: value.id, bitrate: value.bitrate,
             width: configuration.width, height: configuration.height))
         }).max(by: { $0.bitrate < $1.bitrate }) else { throw NativeHLSError.unsupported }
-        let latest = try await manifest(variant)
+        let latest = try await manifest(variant, purpose: "capacity_probe")
         guard let entry = latest.entries.last(where: { $0.duration != nil }) else { throw NativeHLSError.invalidMedia }
         let probeBytes = Int(max(16_384, min(262_144, (policy?.capacity ?? 20_000_000) * 0.025)))
         var sample = try await download(entry.url, media: true, probeBytes: probeBytes)
@@ -530,7 +558,7 @@ actor NativeControlledHLSOrigin {
             metrics: ["capacity_bps": policy?.capacity ?? 0],
             counters: ["rendition": variant.id, "height": chosen.variant.height]))
         }
-        let current = try await manifest(variant)
+        let current = try await manifest(variant, purpose: "producer")
         hasPrefetch = current.hasPrefetch
         publicationDuration = current.entries.compactMap(\.duration).max() ?? Double(current.targetDuration)
         let entries = dated(current.entries)
@@ -568,6 +596,7 @@ actor NativeControlledHLSOrigin {
           nextVirtual = entry.sequence
         }
         guard let sequence = nextVirtual else { throw NativeHLSError.invalidMedia }
+        let prepareStarted = ProcessInfo.processInfo.systemUptime
         let movie = try await movie(for: entry.discontinuity)
         guard let configuration = movie.configurations[variant.id] else { throw NativeHLSError.invalidMedia }
         if currentMoviePeriod != entry.discontinuity {
@@ -588,6 +617,13 @@ actor NativeControlledHLSOrigin {
           description: UInt32(description + 1), sequence: startSequence,
           reference: mediaClock.reference(period: entry.discontinuity, date: date,
             scale: UInt64(configuration.videoTimescale)))
+        let prepareDuration = ProcessInfo.processInfo.systemUptime - prepareStarted
+        if prepareDuration >= 0.1 {
+          trace?(.init(event: .delivery,
+            attributes: ["pipeline": "controlled_cmaf", "stage": "movie_prepare"],
+            metrics: ["duration_seconds": prepareDuration],
+            counters: ["rendition": variant.id, "sequence": sequence]))
+        }
         if let cached = bootstraps[variant.id], cached.entry.sequence == entry.sequence,
           cached.entry.discontinuity == entry.discontinuity, cached.entry.url == entry.url {
           try consume(cached.bytes, remuxer: &remuxer, sequence: sequence)
@@ -600,15 +636,52 @@ actor NativeControlledHLSOrigin {
           var request = URLRequest(url: entry.url)
           headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
           var total = 0
-          for try await chunk in reader.stream(request) {
-            defer { reader.consumedChunk(chunk) }
+          var bodyComplete = false
+          var timing = NativeHLSChunkReader.DeliveryTiming(startedAt: ProcessInfo.processInfo.systemUptime)
+          let emitTrace = trace
+          defer {
+            if timing.chunks > 0 {
+              emitTrace?(.init(event: .delivery,
+                attributes: ["pipeline": "controlled_cmaf", "stage": "ingress_remux",
+                  "body_complete": String(bodyComplete)],
+                metrics: timing.metrics,
+                counters: ["rendition": variant.id, "sequence": sequence,
+                  "ingress_chunks": timing.chunks, "ingress_bytes": timing.bytes]))
+            }
+          }
+          for try await chunk in reader.stream(request, observeMetrics: { values in
+            var metrics: [String: Double] = [:]
+            for key in ["connect_seconds", "tls_seconds", "first_byte_seconds"] {
+              metrics[key] = values[key].flatMap(Double.init)
+            }
+            emitTrace?(.init(event: .delivery,
+              attributes: ["pipeline": "controlled_cmaf", "stage": "network_transaction",
+                "connection_reused": values["reused"] ?? "unknown",
+                "network_protocol": values["protocol"] ?? "unknown"],
+              metrics: metrics, counters: ["rendition": variant.id, "sequence": sequence]))
+          }) {
+            let consumedAt = ProcessInfo.processInfo.systemUptime
+            defer {
+              timing.observe(bytes: chunk.data.count, receivedAt: chunk.receivedAtUptime,
+                consumedAt: consumedAt, finishedAt: ProcessInfo.processInfo.systemUptime)
+              reader.consumedChunk(chunk)
+            }
             try checkRunning()
             total += chunk.data.count
             guard total < 32 * 1024 * 1024 else { throw NativeHLSError.invalidMedia }
             try publish(remuxer.append(chunk.data), sequence: sequence)
           }
+          bodyComplete = true
         }
+        let finishStarted = ProcessInfo.processInfo.systemUptime
         try publish(remuxer.finish(entry.duration), sequence: sequence)
+        let finishDuration = ProcessInfo.processInfo.systemUptime - finishStarted
+        if finishDuration >= 0.1 {
+          trace?(.init(event: .delivery,
+            attributes: ["pipeline": "controlled_cmaf", "stage": "segment_finish"],
+            metrics: ["duration_seconds": finishDuration],
+            counters: ["rendition": variant.id, "sequence": sequence]))
+        }
         bootstraps.removeAll()
         guard let last = segments.indices.last else { throw NativeHLSError.invalidMedia }
         segments[last].complete = true

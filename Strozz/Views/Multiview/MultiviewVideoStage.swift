@@ -16,9 +16,9 @@ struct MultiviewVideoStage<Content: View>: View {
             content(pane)
               .frame(width: frame.width, height: frame.height)
               .position(x: frame.midX, y: frame.midY)
-              .opacity(controller.expandedPaneID == nil || pane.presentation.isExpanded ? 1 : 0)
-              .allowsHitTesting(controller.expandedPaneID == nil || pane.presentation.isExpanded)
-              .accessibilityHidden(controller.expandedPaneID != nil && !pane.presentation.isExpanded)
+              .opacity(pane.presentation.videoIsVisible ? 1 : 0)
+              .allowsHitTesting(pane.presentation.videoIsVisible)
+              .accessibilityHidden(!pane.presentation.videoIsVisible)
               .zIndex(pane.presentation.isExpanded ? 2 : 0)
           }
         }

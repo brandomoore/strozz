@@ -55,6 +55,97 @@ struct PlaybackTelemetryRecord: Codable, Sendable {
   let flags: [String: Bool]
 }
 
+final class PlaybackSchedulerProbe: @unchecked Sendable {
+  struct Ticket: Equatable, Sendable {
+    let id: Int
+    let enqueuedAt: Double
+  }
+
+  struct Report: Sendable {
+    let enqueuedAt: Double
+    let observedAt: Double
+    let backgroundInterval: Double
+    let coalescedTicks: Int
+    var mainDelay: Double { max(0, observedAt - enqueuedAt) }
+  }
+
+  struct State {
+    private var enabled = false
+    private var nextID = 0
+    private var lastTick: Double?
+    private var pending: Ticket?
+    private var maximumInterval = 0.0
+    private var coalesced = 0
+
+    init() {}
+
+    mutating func setEnabled(_ enabled: Bool, at now: Double) {
+      guard self.enabled != enabled else { return }
+      self.enabled = enabled
+      pending = nil
+      lastTick = enabled ? now : nil
+      maximumInterval = 0
+      coalesced = 0
+    }
+
+    mutating func tick(at now: Double) -> Ticket? {
+      guard enabled else { return nil }
+      maximumInterval = max(maximumInterval, lastTick.map { max(0, now - $0) } ?? 0)
+      lastTick = now
+      guard pending == nil else { coalesced += 1; return nil }
+      nextID += 1
+      let ticket = Ticket(id: nextID, enqueuedAt: now)
+      pending = ticket
+      return ticket
+    }
+
+    mutating func finish(_ ticket: Ticket, at now: Double) -> Report? {
+      guard enabled, pending == ticket else { return nil }
+      let report = Report(enqueuedAt: ticket.enqueuedAt, observedAt: now,
+        backgroundInterval: maximumInterval, coalescedTicks: coalesced)
+      pending = nil
+      maximumInterval = 0
+      coalesced = 0
+      return report
+    }
+  }
+
+  private let lock = NSLock()
+  private var state = State()
+  private let timer: DispatchSourceTimer
+  private let report: @MainActor @Sendable (Report) -> Void
+
+  init(report: @escaping @MainActor @Sendable (Report) -> Void) {
+    self.report = report
+    timer = DispatchSource.makeTimerSource(
+      queue: DispatchQueue(label: "strozz.playback-scheduler-probe", qos: .userInitiated))
+    timer.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(50))
+    timer.setEventHandler { [weak self] in
+      guard let self,
+        let ticket = self.lock.withLock({ self.state.tick(at: ProcessInfo.processInfo.systemUptime) }) else { return }
+      // One pending callback per player, even when main is blocked for minutes.
+      DispatchQueue.main.async { [weak self] in
+        guard let self,
+          let value = self.lock.withLock({ self.state.finish(ticket, at: ProcessInfo.processInfo.systemUptime) })
+        else { return }
+        self.report(value)
+      }
+    }
+    timer.resume()
+  }
+
+  func setEnabled(_ enabled: Bool) {
+    lock.withLock { state.setEnabled(enabled, at: ProcessInfo.processInfo.systemUptime) }
+  }
+
+  func stop() {
+    setEnabled(false)
+    timer.cancel()
+  }
+
+  deinit { timer.cancel() }
+}
+
 /// Collects AVFoundation values on the main actor, but never encodes or touches
 /// disk there. This is intentionally independent of the playback watchdog.
 @MainActor
@@ -98,9 +189,56 @@ final class PlaybackTelemetryRecorder {
   private var lastRateEventAt = -Double.infinity
   private var lastRateReason: String?
   private var repeatedEvents: [String: Double] = [:]
+  private var schedulerProbe: PlaybackSchedulerProbe?
+  private var lastSchedulerReportAt = 0.0
 
   init(writer: PlaybackTelemetryWriter = PlaybackTelemetryWriter()) {
     self.writer = writer
+  }
+
+  deinit { schedulerProbe?.stop() }
+
+  func startSchedulerMonitoring() {
+    guard let session, schedulerProbe == nil else { return }
+    let sessionID = session.id
+    lastSchedulerReportAt = ProcessInfo.processInfo.systemUptime
+    schedulerProbe = PlaybackSchedulerProbe { [weak self] report in
+      guard let self, self.session?.id == sessionID else { return }
+      let delayed = report.mainDelay >= 0.25 || report.backgroundInterval >= 1.25
+      guard delayed || report.observedAt - self.lastSchedulerReportAt >= 15 else { return }
+      self.lastSchedulerReportAt = report.observedAt
+      self.recordEvent(delayed ? "playback_scheduler_delay" : "playback_scheduler_sample",
+        level: delayed ? .warning : .debug, metrics: [
+          "probe_enqueued_uptime_seconds": report.enqueuedAt,
+          "main_queue_delay_seconds": report.mainDelay,
+          "background_probe_interval_seconds": report.backgroundInterval,
+        ], counters: ["coalesced_probe_ticks": report.coalescedTicks])
+    }
+  }
+
+  static func nativeDeliveryMetrics(_ input: [String: Double], dispatchedAt: Double,
+                                   at now: Double = ProcessInfo.processInfo.systemUptime) -> [String: Double] {
+    var metrics = input
+    if let source = input["native_event_uptime_seconds"], source.isFinite, dispatchedAt.isFinite,
+      now.isFinite, dispatchedAt >= source, now >= dispatchedAt {
+      metrics["native_trace_dispatch_uptime_seconds"] = dispatchedAt
+      metrics["native_trace_retention_delay_seconds"] = dispatchedAt - source
+      metrics["main_actor_delivery_delay_seconds"] = now - dispatchedAt
+    }
+    return metrics
+  }
+
+  func measure<T>(_ operation: String, _ body: () -> T) -> T {
+    let start = ProcessInfo.processInfo.systemUptime
+    defer {
+      let elapsed = ProcessInfo.processInfo.systemUptime - start
+      if elapsed >= 0.1 {
+        recordEvent("playback_main_operation_slow", level: .warning,
+          attributes: ["operation": operation],
+          metrics: ["operation_started_uptime_seconds": start, "duration_seconds": elapsed])
+      }
+    }
+    return body()
   }
 
   var sessionID: String? { session?.id }
@@ -130,6 +268,8 @@ final class PlaybackTelemetryRecorder {
 
   func endSession(reason: String) {
     guard let session else { return }
+    schedulerProbe?.stop()
+    schedulerProbe = nil
     recordItemLogs()
     endStall(outcome: "session_ended")
     emit(
@@ -149,6 +289,7 @@ final class PlaybackTelemetryRecorder {
     recordItemLogs()
     endStall(outcome: "interrupted")
     item = newItem
+    if newItem == nil { schedulerProbe?.setEnabled(false) }
     self.source = newItem == nil ? "none" : source
     itemID += 1
     resetItemState()
@@ -248,6 +389,7 @@ final class PlaybackTelemetryRecorder {
 
   func recordSnapshot(_ input: PlaybackTelemetrySnapshot, uptime: Double = ProcessInfo.processInfo.systemUptime) {
     guard session != nil else { return }
+    schedulerProbe?.setEnabled(input.flags["background"] != true && input.flags["playback_requested"] == true)
     if let seek = pendingSeek, uptime - seek.startedAt >= 15 {
       recordEvent("seek_deadline_exceeded", level: .warning, attributes: ["seek_id": seek.id],
                   metrics: ["target_seconds": seek.target])
@@ -335,7 +477,7 @@ final class PlaybackTelemetryRecorder {
 
   func recordItemLogs() {
     guard session != nil, let item else { return }
-    let accesses = item.accessLog()?.events ?? []
+    let accesses = measure("access_log") { item.accessLog()?.events ?? [] }
     // The final entry is mutable/cumulative. Revisit it, but don't duplicate an
     // unchanged vector. Entry indices, not AVPlayer's private GUID, identify resets.
     let nextAccess = min(max(0, accessCount - 1), accesses.count)
@@ -354,7 +496,7 @@ final class PlaybackTelemetryRecorder {
       }
     }
     accessCount = accesses.count
-    let errors = item.errorLog()?.events ?? []
+    let errors = measure("error_log") { item.errorLog()?.events ?? [] }
     let nextError = min(errorCount, errors.count)
     let errorStart = max(nextError, errors.count - 8)
     if errorStart > nextError {

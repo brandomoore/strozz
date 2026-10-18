@@ -276,7 +276,8 @@ final class NativeRenditionReportTests: XCTestCase {
     XCTAssertEqual(value.attributes["error_code"], "-1001")
     XCTAssertFalse(value.attributes.values.joined().contains("secret"))
     XCTAssertFalse(value.attributes.values.joined().contains("private"))
-    XCTAssertTrue(value.metrics.isEmpty)
+    XCTAssertEqual(Set(value.metrics.keys), ["native_event_uptime_seconds"])
+    XCTAssertTrue(value.metrics["native_event_uptime_seconds"]?.isFinite == true)
   }
 
   private func makeFailingOrigin(fixture: FailingRenditionFixture, diagnostics: NativeFailureCapture,

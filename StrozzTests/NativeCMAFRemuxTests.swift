@@ -6,6 +6,20 @@ import XCTest
 #endif
 
 final class NativeCMAFRemuxTests: XCTestCase {
+  func testUnknownEightByteMediaBoxReportsOnlyItsStructuralIdentity() throws {
+    let format = try NativeCMAFRemuxer.Format(initialization())
+    var converter = try NativeCMAFRemuxer(format: format, videoDescriptionIndex: 1,
+      firstSequence: 1, presentationReference: nil)
+    XCTAssertThrowsError(try converter.append(box("zzzz", Data()))) { error in
+      XCTAssertEqual(NativeHLSError.classify(error), .unsupported)
+      let diagnostic = NativeHLSFailureDiagnostic(error: error, operation: "indexing",
+        rendition: 0, active: 0, fatal: true)
+      XCTAssertEqual(diagnostic.attributes["detail"], "unsupported_iso_box")
+      XCTAssertEqual(diagnostic.counters["iso_box_type"], 0x7A7A7A7A)
+      XCTAssertEqual(diagnostic.counters["iso_box_bytes"], 8)
+    }
+  }
+
   func testControlledPlaybackIsTheReleaseDefaultWithoutDiagnosticLaunchArguments() {
     #if DEBUG
     XCTAssertEqual(NativeLowLatencyHLS.controlledAutoEnabled,

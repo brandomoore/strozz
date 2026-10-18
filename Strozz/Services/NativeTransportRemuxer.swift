@@ -61,7 +61,11 @@ struct NativeTransportRemuxer {
     guard !completed else { throw NativeHLSError.invalidMedia }
     _ = try transport.finish(expectedDuration: expectedDuration)
     try observe(demuxer.finishSegment())
-    guard let previousVideo, let lastVideoInterval else { throw NativeHLSError.invalidMedia }
+    guard let previousVideo, let lastVideoInterval else {
+      throw NativeHLSFailureDetail.transportFinalization(
+        video: video.count + queuedVideo.reduce(0) { $0 + $1.count } + (previousVideo == nil ? 0 : 1),
+        audio: audio.count + rawAudio.count)
+    }
     try appendVideo(previousVideo, duration: lastVideoInterval)
     self.previousVideo = nil
     if !video.isEmpty {
@@ -70,7 +74,10 @@ struct NativeTransportRemuxer {
       videoDuration = 0
     }
     let output = try publish(final: true)
-    guard queuedVideo.isEmpty, audio.isEmpty, rawAudio.isEmpty else { throw NativeHLSError.invalidMedia }
+    guard queuedVideo.isEmpty, audio.isEmpty, rawAudio.isEmpty else {
+      throw NativeHLSFailureDetail.transportRemainder(
+        video: queuedVideo.reduce(0) { $0 + $1.count }, audio: audio.count + rawAudio.count)
+    }
     completed = true
     return output
   }

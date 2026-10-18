@@ -35,6 +35,7 @@ enum MultiviewQualityTier {
 @Observable
 final class MultiviewPlaybackContext {
   var isExpanded = false
+  var videoIsVisible = true
   var qualityTier: MultiviewQualityTier = .grid
   var profile = LivePlaybackProfile.nativeLowLatency
   var quality = "Auto"
@@ -212,6 +213,7 @@ final class MultiviewController {
 
   private func refreshQuality() {
     for pane in panes {
+      pane.presentation.videoIsVisible = expandedPaneID == nil || pane.id == expandedPaneID
       if let expandedPaneID {
         pane.presentation.qualityTier = pane.id == expandedPaneID ? .source : .thumbnail
       } else if layout == .spotlight {
