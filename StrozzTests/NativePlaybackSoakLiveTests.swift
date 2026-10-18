@@ -101,9 +101,12 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     private var stagnantSeconds = 0.0
     private var clockFrozen = false
     private var knownItems = Set<ObjectIdentifier>()
+    private var previousVideoVisibility: Bool
+    private var revealedVideoSeconds: Double?
 
     init(model: PlayerModel, channel: String, phase: String, seconds: Int) {
       self.model = model
+      previousVideoVisibility = model.isVideoPresentationVisible
       evidence = Evidence(channel: channel, phase: phase)
       evidence.plannedSeconds = seconds
       if let item = model.player.currentItem { knownItems.insert(ObjectIdentifier(item)) }
@@ -156,8 +159,11 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
         evidence.unavailableSeconds += interval
       }
       if model.isVideoPresentationVisible {
+        if !previousVideoVisibility { revealedVideoSeconds = 0 }
+        revealedVideoSeconds = revealedVideoSeconds.map { $0 + interval }
         evidence.visibleVideoSeconds += interval
-        if model.playbackTelemetry.videoFrameAge.map({ $0 >= 4 }) ?? true {
+        if (model.playbackTelemetry.videoFrameAge.map({ $0 >= 4 }) ?? true),
+          revealedVideoSeconds.map({ $0 >= 4 }) ?? true {
           evidence.staleVideoSeconds += interval
         }
         if let size = model.playbackTelemetry.decodedVideoSize,
@@ -165,8 +171,10 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
           evidence.decodedSizes["\(Int(size.width))x\(Int(size.height))", default: 0] += 1
         }
       } else {
+        revealedVideoSeconds = nil
         evidence.hiddenVideoSeconds += interval
       }
+      previousVideoVisibility = model.isVideoPresentationVisible
       // A sampling gap is missing evidence, not proof the clock froze.
       if interval <= 0.75, let clock, clock.isFinite, let previousClock, clock - previousClock < 0.02 {
         stagnantSeconds += interval
@@ -224,6 +232,27 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     XCTAssertTrue(evidence.clean)
     evidence.decodeRecoveryObserved = true
     XCTAssertFalse(evidence.clean, "A fixed-quality override is never an Auto pass")
+  }
+
+  func testVisibleFrameDeadlineExcludesThePrecedingIntentionalHiddenInterval() {
+    let model = PlayerModel()
+    let context = MultiviewPlaybackContext()
+    model.multiviewContext = context
+    context.videoIsVisible = false
+    let watch = Watch(model: model, channel: "fixture", phase: "return", seconds: 10)
+    defer { watch.stop() }
+    context.videoIsVisible = true
+    for _ in 0..<15 { watch.sample(interval: 0.25) }
+    XCTAssertEqual(watch.evidence.staleVideoSeconds, 0)
+    watch.sample(interval: 0.25)
+    watch.sample(interval: 0.25)
+    XCTAssertEqual(watch.evidence.staleVideoSeconds, 0.5,
+      "Revealed video must still produce fresh frame evidence within the existing four-second deadline")
+    let alreadyVisible = Watch(model: model, channel: "fixture", phase: "steady", seconds: 10)
+    defer { alreadyVisible.stop() }
+    alreadyVisible.sample(interval: 0.25)
+    XCTAssertEqual(alreadyVisible.evidence.staleVideoSeconds, 0.25,
+      "Starting another phase must not grant already-visible video a new deadline")
   }
 
   func testProgressCheckpointsOverwriteOnlyProgressAndArchiveOnceAtCompletion() async throws {
@@ -435,10 +464,10 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     try await observe(models, channels: logins, phase: "grid", seconds: seconds, sink: sink)
     let players = models.map(\.player)
     let items = players.map(\.currentItem)
-    controller.expand(controller.panes[0].id)
-    try await observe(models, channels: logins, phase: "expanded", seconds: seconds, sink: sink)
-    controller.collapse()
-    try await observe(models, channels: logins, phase: "returned_grid", seconds: seconds, sink: sink)
+    try await observe(models, channels: logins, phase: "expanded", seconds: seconds, sink: sink,
+      transition: { controller.expand(controller.panes[0].id) })
+    try await observe(models, channels: logins, phase: "returned_grid", seconds: seconds, sink: sink,
+      transition: { controller.collapse() })
     for (index, model) in models.enumerated() {
       XCTAssertTrue(model.player === players[index], "Expansion must retain player ownership")
       XCTAssertTrue(model.player.currentItem === items[index], "Expansion must retain item ownership")
@@ -446,9 +475,10 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
   }
 
   private static func observe(_ models: [PlayerModel], channels: [String], phase: String,
-                       seconds: Int, sink: Sink) async throws {
+                       seconds: Int, sink: Sink, transition: (() -> Void)? = nil) async throws {
     let watches = zip(models, channels).map { Watch(model: $0.0, channel: $0.1, phase: phase, seconds: seconds) }
     defer { watches.forEach { $0.stop() } }
+    transition?()
     let began = ProcessInfo.processInfo.systemUptime
     var previous = began
     var savedAt = began
