@@ -276,6 +276,9 @@ record the actual workload rather than claiming unavailable four-pane coverage.
 `STROZZ_SOAK_MODE=multiview` runs only those stages against freshly qualified
 inputs. Video freshness/quality is assessed only while the pane is visible;
 hidden time is reported separately, without exempting clock/engine failures.
+The separate `testOptInShortMultiviewVisibilityRegression` uses
+`STROZZ_VISIBILITY_CHECK=1` for a fixed, 30-second-per-stage reproduction against
+Valkyrae/Gaules/Burn when all three are live; it is not sustained-soak coverage.
 Sampling-only gaps are marked incomplete separately from playback faults; neither
 is a clean pass. Unsupported CMAF boxes report numeric type/size, and TS
 finalization failures report pending sample/PES byte counts, not media payloads.

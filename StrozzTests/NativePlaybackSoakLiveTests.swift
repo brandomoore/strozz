@@ -269,6 +269,25 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     #endif
   }
 
+  func testOptInShortMultiviewVisibilityRegression() async throws {
+    #if targetEnvironment(simulator)
+    executionTimeAllowance = 300
+    guard ProcessInfo.processInfo.environment["STROZZ_VISIBILITY_CHECK"] == "1" else {
+      throw XCTSkip("Explicit simulator-only visibility regression; not a sustained soak.")
+    }
+    var inputs: [Input] = []
+    for channel in ["valkyrae", "gaules", "burn"] { inputs.append(try await Self.describe(channel)) }
+    let directory = URL.cachesDirectory.appendingPathComponent("PlaybackSoak/\(UUID().uuidString)", isDirectory: true)
+    let sink = Sink(directory: directory,
+      diagnosticsDirectory: URL.cachesDirectory.appendingPathComponent(PlaybackTelemetryRecorder.directoryName))
+    print("SOAK_OUTPUT \(directory.path)")
+    try await sink.save(inputs, name: "selected-inputs")
+    try await Self.multiview(inputs, seconds: 30, sink: sink)
+    #else
+    throw XCTSkip("Never take over a physical TV for this regression.")
+    #endif
+  }
+
   private static func runLongSoak(settings: [String: String], names: String) async throws {
     let candidates = names.split(separator: ",").map(String.init)
     let mode = settings["STROZZ_SOAK_MODE"] ?? "all"
