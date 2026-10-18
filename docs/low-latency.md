@@ -95,6 +95,10 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   its replacement. Native PiP is a separate background lifecycle. Deliberate
   foreground/error recovery can rebuild the engine/player; TV must also replace
   its AVKit surface then, preserving mute/volume and pause/DVR intent.
+  Fully hidden expanded peers do not owe visible decoded frames: the same
+  visibility state drives opacity and decoder-watchdog eligibility. Their clock,
+  network and engine-error monitoring remains active; missing hidden frames must
+  not force a fixed-quality decode recovery.
 - **Audio ownership is separate from video health.** One multiview pane is
   audible. See `PlayerView+AudioSession.swift` and `PlaybackAudioSessionTests`
   before changing interruption/reclaim behavior; do not repeatedly fight another
@@ -269,6 +273,9 @@ not listed in `STROZZ_SOAK_COMPLETED_CHANNELS`, and runs that single-stream stag
 plus the multiview stages. It supplements, never replaces, the original reports.
 `STROZZ_SOAK_MULTIVIEW_PANES` explicitly selects 2...4 panes (default four);
 record the actual workload rather than claiming unavailable four-pane coverage.
+`STROZZ_SOAK_MODE=multiview` runs only those stages against freshly qualified
+inputs. Video freshness/quality is assessed only while the pane is visible;
+hidden time is reported separately, without exempting clock/engine failures.
 Sampling-only gaps are marked incomplete separately from playback faults; neither
 is a clean pass. Unsupported CMAF boxes report numeric type/size, and TS
 finalization failures report pending sample/PES byte counts, not media payloads.

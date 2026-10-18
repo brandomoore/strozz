@@ -41,6 +41,7 @@ final class PlayerModel {
 
   var player = AVPlayer()
   @ObservationIgnored var multiviewContext: MultiviewPlaybackContext?
+  var isVideoPresentationVisible: Bool { multiviewContext?.videoIsVisible ?? true }
   @ObservationIgnored var activateAudioSession: @MainActor () throws -> Void = PlaybackAudioSession.activate
   @ObservationIgnored var audioSessionActivationFailed = false
   @ObservationIgnored var audioInterrupted = false

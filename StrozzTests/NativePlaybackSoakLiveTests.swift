@@ -37,6 +37,8 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     var waitingSeconds = 0.0
     var unavailableSeconds = 0.0
     var staleVideoSeconds = 0.0
+    var visibleVideoSeconds = 0.0
+    var hiddenVideoSeconds = 0.0
     var decodeRecoveryObserved = false
     var nativeOnly = true
     var controlledAutoOnly = true
@@ -45,7 +47,8 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
 
     var completeSampling: Bool {
       plannedSeconds > 0 && observedSeconds >= Double(plannedSeconds)
-        && samples >= plannedSeconds * 3 && !decodedSizes.isEmpty
+        && visibleVideoSeconds + hiddenVideoSeconds >= Double(plannedSeconds)
+        && samples >= plannedSeconds * 3 && (!decodedSizes.isEmpty || visibleVideoSeconds == 0)
         && samplingGaps == 0
     }
 
@@ -152,11 +155,17 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
       if model.isLoading || model.errorMessage != nil || item == nil {
         evidence.unavailableSeconds += interval
       }
-      if model.playbackTelemetry.videoFrameAge.map({ $0 >= 4 }) ?? true {
-        evidence.staleVideoSeconds += interval
-      }
-      if let size = model.playbackTelemetry.decodedVideoSize {
-        evidence.decodedSizes["\(Int(size.width))x\(Int(size.height))", default: 0] += 1
+      if model.isVideoPresentationVisible {
+        evidence.visibleVideoSeconds += interval
+        if model.playbackTelemetry.videoFrameAge.map({ $0 >= 4 }) ?? true {
+          evidence.staleVideoSeconds += interval
+        }
+        if let size = model.playbackTelemetry.decodedVideoSize,
+          model.playbackTelemetry.videoFrameAge.map({ $0 < 4 }) == true {
+          evidence.decodedSizes["\(Int(size.width))x\(Int(size.height))", default: 0] += 1
+        }
+      } else {
+        evidence.hiddenVideoSeconds += interval
       }
       // A sampling gap is missing evidence, not proof the clock froze.
       if interval <= 0.75, let clock, clock.isFinite, let previousClock, clock - previousClock < 0.02 {
@@ -182,6 +191,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     evidence.plannedSeconds = 2
     evidence.observedSeconds = 2
     evidence.samples = 8
+    evidence.visibleVideoSeconds = 2
     evidence.decodedSizes = ["1920x1080": 8]
     XCTAssertTrue(evidence.clean)
     evidence.stallNotifications = 1
@@ -196,6 +206,24 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     evidence.samplingGaps = 0
     evidence.decodeRecoveryObserved = true
     XCTAssertFalse(evidence.clean)
+  }
+
+  func testOnlyIntentionallyHiddenVideoIsExemptFromVisibleFrameEvidence() {
+    var evidence = Evidence(channel: "fixture", phase: "expanded", plannedSeconds: 2,
+      observedSeconds: 2, samples: 8)
+    XCTAssertFalse(evidence.clean, "Unaccounted visibility is missing evidence")
+    evidence.hiddenVideoSeconds = 2
+    XCTAssertTrue(evidence.clean)
+    evidence.frozenClockEpisodes = 1
+    XCTAssertFalse(evidence.clean, "Hidden playback still owes clock progress")
+    evidence.frozenClockEpisodes = 0
+    evidence.hiddenVideoSeconds = 0
+    evidence.visibleVideoSeconds = 2
+    XCTAssertFalse(evidence.clean, "Visible playback still owes fresh decoded frames")
+    evidence.decodedSizes = ["1920x1080": 8]
+    XCTAssertTrue(evidence.clean)
+    evidence.decodeRecoveryObserved = true
+    XCTAssertFalse(evidence.clean, "A fixed-quality override is never an Auto pass")
   }
 
   func testProgressCheckpointsOverwriteOnlyProgressAndArchiveOnceAtCompletion() async throws {
@@ -245,7 +273,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     let candidates = names.split(separator: ",").map(String.init)
     let mode = settings["STROZZ_SOAK_MODE"] ?? "all"
     guard (6...16).contains(candidates.count), Set(candidates).count == candidates.count,
-      ["all", "followup"].contains(mode),
+      ["all", "followup", "multiview"].contains(mode),
       candidates.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") } }),
       let seconds = Int(settings["STROZZ_SOAK_SECONDS"] ?? "1800"), (1800...3600).contains(seconds),
       let multiviewSeconds = Int(settings["STROZZ_SOAK_MULTIVIEW_SECONDS"] ?? "900"),
@@ -270,7 +298,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     try await sink.save(inputs, name: "available-inputs")
     try await sink.save(unavailable, name: "unavailable-candidates")
     let completed = Set((settings["STROZZ_SOAK_COMPLETED_CHANNELS"] ?? "").split(separator: ",").map(String.init))
-    let required = mode == "followup" ? paneCount : 6
+    let required = mode == "all" ? 6 : paneCount
     var selected: [Input] = []
     let replacement = mode == "followup" ? inputs.first(where: { !completed.contains($0.channel) }) : inputs.first
     if let replacement { selected.append(replacement) }
@@ -288,7 +316,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     if Set(selected.map(\.format)).count < 2 {
       XCTFail("Only one input container is currently available; TS/CMAF coverage is incomplete")
     }
-    let singles = mode == "followup" ? replacement.map { [$0] } ?? [] : selected
+    let singles = mode == "multiview" ? [] : (mode == "followup" ? replacement.map { [$0] } ?? [] : selected)
     if mode == "followup", replacement == nil { XCTFail("No new live single-stream replacement is available") }
     for input in singles {
       try Task.checkCancellation()

@@ -5,6 +5,39 @@ import XCTest
 
 @MainActor
 final class MultiviewForegroundRecoveryTests: XCTestCase {
+  func testHiddenExpandedPeersCannotForceDecodeRecoveryAndBecomeVisibleAgain() {
+    let controller = controller(count: 3)
+    defer { controller.teardown() }
+    let selected = controller.panes[0]
+    let hidden = controller.panes[1]
+    XCTAssertTrue(controller.panes.allSatisfy { $0.model.isVideoPresentationVisible })
+    controller.spotlight(selected.id)
+    XCTAssertTrue(controller.panes.allSatisfy { $0.model.isVideoPresentationVisible },
+      "Filmstrip peers remain visible even though they are not expanded")
+    controller.expand(selected.id)
+    XCTAssertTrue(selected.model.isVideoPresentationVisible)
+    XCTAssertFalse(hidden.model.isVideoPresentationVisible)
+    let view = PlayerView(channel: hidden.channel.login, auth: TwitchAuthSession(), model: hidden.model)
+    let url = URL(string: "https://example.invalid/source.m3u8")!
+    view.playback = StreamPlayback(master: url, qualities: [
+      StreamQuality(id: "source", name: "1080p60 (Source)", url: url, isAudioOnly: false, bitrate: 8_000_000),
+    ])
+    view.videoDecodeFrozenSince = .distantPast
+    view.checkVideoDecodeFreeze(item: AVPlayerItem(url: url), clockAdvanced: 2)
+    XCTAssertNil(view.videoDecodeFrozenSince)
+    XCTAssertFalse(view.recoverUndecodableVideo())
+    XCTAssertFalse(hidden.model.triedDecodeRecovery)
+    XCTAssertNil(hidden.model.decodeRecoveryQualityID)
+    XCTAssertEqual(hidden.presentation.quality, "Auto")
+    controller.collapse()
+    XCTAssertTrue(controller.panes.allSatisfy { $0.model.isVideoPresentationVisible })
+    view.currentSourceURL = url
+    hidden.player.replaceCurrentItem(with: AVPlayerItem(url: url))
+    XCTAssertTrue(view.recoverUndecodableVideo(), "Visible panes retain genuine decode recovery")
+    XCTAssertEqual(hidden.model.decodeRecoveryQualityID, "source")
+    XCTAssertTrue(PlayerModel().isVideoPresentationVisible)
+  }
+
   private func controller(count: Int = 4, controlledAuto: Bool = false) -> MultiviewController {
     MultiviewController(channels: (0..<count).map { index in
       FollowedChannel(id: "\(index)", login: "fixture\(index)", displayName: "Fixture \(index)",

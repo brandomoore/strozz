@@ -250,7 +250,7 @@ extension PlayerView {
   /// User pause/scrub are excluded upstream in `samplePlaybackHealth`. Audio-only
   /// renditions have no video output and are skipped.
   func checkVideoDecodeFreeze(item: AVPlayerItem, clockAdvanced: Double) {
-    guard !isVOD, pinnedToLive, !isAudioOnlyActive,
+    guard model.isVideoPresentationVisible, !isVOD, pinnedToLive, !isAudioOnlyActive,
       clockAdvanced >= 0.05, player.timeControlStatus != .paused,
       let output = playerItemVideoOutput
     else {
