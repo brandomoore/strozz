@@ -171,6 +171,13 @@ struct NativeTransportDemuxer {
       result.append(try finishVideo())
     }
     if currentVideoClock == nil { currentVideoClock = anchor.clock }
+    let sampleNAL: Data
+    if type == 6 {
+      guard let retained = try Self.removingTransportTimingSEI(nal) else { return result }
+      sampleNAL = retained
+    } else {
+      sampleNAL = nal
+    }
     if type == 7 {
       if let sps, sps != nal { throw NativeHLSError.transition }
       sps = nal
@@ -180,12 +187,12 @@ struct NativeTransportDemuxer {
     } else {
       currentVideoHasSlice = currentVideoHasSlice || (1...5).contains(type)
       currentVideoIndependent = currentVideoIndependent || type == 5
-      let count = UInt32(nal.count)
+      let count = UInt32(sampleNAL.count)
       currentVideoBytes.append(contentsOf: [
         UInt8(count >> 24), UInt8((count >> 16) & 255),
         UInt8((count >> 8) & 255), UInt8(count & 255),
       ])
-      currentVideoBytes.append(nal)
+      currentVideoBytes.append(sampleNAL)
       guard currentVideoBytes.count <= 4 * 1024 * 1024 else { throw NativeHLSError.invalidMedia }
     }
     return result
@@ -298,5 +305,68 @@ struct NativeTransportDemuxer {
     var suffix: UInt32 = 0
     for _ in 0..<count { suffix = suffix << 1 | (try bit()) }
     return (UInt32(1) << count) - 1 + suffix
+  }
+
+  // HRD buffering/picture timing belongs to the TS clock model, not the MP4
+  // sample timeline. Preserve other SEI, including captions and user metadata.
+  static func removingTransportTimingSEI(_ nal: Data) throws -> Data? {
+    guard let header = nal.first, header & 31 == 6 else { throw NativeHLSError.invalidMedia }
+    let source = Array(nal.dropFirst())
+    var rbsp: [UInt8] = []
+    var zeros = 0
+    var index = 0
+    while index < source.count {
+      let byte = source[index]
+      if zeros >= 2, byte == 3 {
+        guard index + 1 < source.count, source[index + 1] <= 3 else { throw NativeHLSError.invalidMedia }
+        zeros = 0
+      } else {
+        rbsp.append(byte)
+        zeros = byte == 0 ? zeros + 1 : 0
+      }
+      index += 1
+    }
+    var position = 0
+    var retained: [UInt8] = []
+    var removed = false
+    var trailing = false
+    while position < rbsp.count {
+      if rbsp[position] == 0x80, rbsp[(position + 1)...].allSatisfy({ $0 == 0 }) {
+        trailing = true
+        break
+      }
+      let beginning = position
+      func field() throws -> Int {
+        var value = 0
+        while position < rbsp.count {
+          let byte = rbsp[position]
+          position += 1
+          value += Int(byte)
+          if byte != 255 { return value }
+        }
+        throw NativeHLSError.invalidMedia
+      }
+      let type = try field()
+      let count = try field()
+      guard count <= rbsp.count - position else { throw NativeHLSError.invalidMedia }
+      position += count
+      if type == 0 || type == 1 { removed = true }
+      else { retained.append(contentsOf: rbsp[beginning..<position]) }
+    }
+    guard trailing else { throw NativeHLSError.invalidMedia }
+    guard removed else { return nal }
+    guard !retained.isEmpty else { return nil }
+    retained.append(0x80)
+    var output = Data([header])
+    zeros = 0
+    for byte in retained {
+      if zeros >= 2, byte <= 3 {
+        output.append(3)
+        zeros = 0
+      }
+      output.append(byte)
+      zeros = byte == 0 ? zeros + 1 : 0
+    }
+    return output
   }
 }

@@ -6,6 +6,49 @@ import XCTest
 #endif
 
 final class NativeTransportRemuxTests: XCTestCase {
+  func testTransportTimingRemovalPreservesCaptionAndUserSEIWithEmulationPrevention() throws {
+    let original = Data([6, 0, 1, 0x11, 1, 1, 0x22, 4, 4, 0xB5, 0, 0, 3, 1, 5, 1, 0x55, 0x80])
+    let expected = Data([6, 4, 4, 0xB5, 0, 0, 3, 1, 5, 1, 0x55, 0x80])
+    XCTAssertEqual(try NativeTransportDemuxer.removingTransportTimingSEI(original), expected)
+    XCTAssertNil(try NativeTransportDemuxer.removingTransportTimingSEI(
+      Data([6, 0, 1, 0x11, 1, 1, 0x22, 0x80])))
+    XCTAssertEqual(try NativeTransportDemuxer.removingTransportTimingSEI(expected), expected)
+  }
+
+  func testTransportTimingRemovalRetainsExtendedSEIFieldsAndRejectsTruncation() throws {
+    let retained = Data([255, 45, 255, 5]) + Data(repeating: 1, count: 260)
+    XCTAssertEqual(try NativeTransportDemuxer.removingTransportTimingSEI(
+      Data([6, 0, 1, 0x11]) + retained + Data([0x80])),
+      Data([6]) + retained + Data([0x80]))
+    for malformed in [Data([6, 4, 5, 1, 0x80]), Data([6, 4, 1, 1]), Data([6, 4, 3, 0, 0, 3])] {
+      XCTAssertThrowsError(try NativeTransportDemuxer.removingTransportTimingSEI(malformed))
+    }
+  }
+
+  func testRemovingTransportTimingKeepsAccessUnitClocksAndEncodedSlices() throws {
+    var demuxer = NativeTransportDemuxer()
+    var counter = 0
+    let aud = Data([9, 0xF0])
+    let timing = Data([6, 1, 1, 0x11, 0x80])
+    let caption = Data([6, 4, 1, 0x55, 0x80])
+    let idr = Data([0x65, 0x80, 0x88])
+    let predicted = Data([0x41, 0x80, 0x99])
+    var units: [NativeTransportDemuxer.Unit] = []
+    for (payload, clock) in [
+      (nal(aud) + nal(sps) + nal(pps) + nal(timing) + nal(caption) + nal(idr), UInt64(90_000)),
+      (nal(aud) + nal(timing) + nal(predicted), 93_000),
+    ] {
+      for packet in packets(pes(payload, pts: clock), pid: 257, counter: &counter) {
+        units += try demuxer.append(packet, videoPID: 257, audioPID: 256)
+      }
+    }
+    units += try demuxer.finishSegment()
+    let video = videoUnits(units)
+    XCTAssertEqual(video.map(\.decodeTime), [90_000, 93_000])
+    XCTAssertEqual(try avcNALs(video[0].bytes), [aud, caption, idr])
+    XCTAssertEqual(try avcNALs(video[1].bytes), [aud, predicted])
+  }
+
   private let sps = Data([0x67, 0x4D, 0x40, 0x0A, 0xEC, 0xA2, 0x13, 0x60, 0x22, 0,
                           0, 3, 0, 2, 0, 0, 3, 0, 0x78, 0x1E, 0x24, 0x4B, 0x2C])
   private let pps = Data([0x68, 0xEB, 0xE3, 0xCB, 0x20])

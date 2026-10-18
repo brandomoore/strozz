@@ -60,7 +60,14 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   and recover common A/V phase across CMAF's per-timescale version-zero wraps;
   keep rewind timestamps positive and periods separate. GOP decode-origin
   changes require inverse signed composition-offset changes so presentation
-  times and compressed payloads remain unchanged.
+  times and compressed picture payloads remain unchanged.
+  When converting TS to MP4, remove only HRD buffering-period/picture-timing SEI
+  messages (types 0/1), not entire SEI NALs. Their transport clock model can
+  freeze Apple's decoder after a rendition change even when FFmpeg decodes the
+  same picture bytes. Preserve caption/user/other SEI and VCL bytes; see
+  `NativeTransportDemuxer.removingTransportTimingSEI` and its regressions.
+  Adaptive decode checks must feed `updateControlledPlayback` and inspect actual
+  CVPixelBuffer dimensions; AVPlayer preferences alone do not drive this engine.
 - **Respect format and part contracts.** Source-CMAF requires muxed AVC/AAC-LC,
   compatible track IDs/timebases and audio configuration within a period, and no
   edit lists. Unsupported media fails explicitly, not by silently hiding a
