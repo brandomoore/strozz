@@ -68,6 +68,39 @@ test("unknown availability fails instead of claiming a successful rollout", asyn
   await assert.rejects(execute(process.execPath, [join(root, "tools/build-website.mjs")]), /Unknown public beta availability/);
 });
 
+test("the orbital hero ships static local artwork, credits, and motion controls", async (t) => {
+  const root = await fixture(t, "available");
+  await execute(process.execPath, [join(root, "tools/build-website.mjs")]);
+  const output = join(root, "build/website");
+  const html = await readFile(join(output, "index.html"), "utf8");
+  assert.equal([...html.matchAll(/class="orbit-track /g)].length, 3);
+  assert.match(html, /<input class="orbit-pause" type="checkbox" id="pause-orbits">/);
+  assert.match(html, /<label class="orbit-control" for="pause-orbits">Pause emote animation<\/label>/);
+  assert.match(html, /class="orbit-art" aria-hidden="true"/);
+  assert.doesNotMatch(html, /<script|<img[^>]+src="https?:/);
+  const emotes = [...html.matchAll(/<img src="(\/emotes\/[^"]+\.svg)" width="48" height="48" alt="">/g)];
+  assert.equal(emotes.length, 6);
+  assert.equal(new Set(emotes.map((match) => match[1])).size, 6);
+  for (const [, path] of emotes) {
+    const svg = await readFile(join(output, path), "utf8");
+    assert.match(svg, /<svg/);
+    assert.doesNotMatch(svg, /<script|<animate|<set\b|<image|(?:xlink:)?href=["']https?:/i);
+    assert.equal(svg, await readFile(join(root, "website", path), "utf8"));
+  }
+  const css = await readFile(join(output, "styles.css"), "utf8");
+  assert.match(css, /\.orbit-emote\s*\{[^}]*animation-play-state: paused;/);
+  assert.match(css, /@media \(prefers-reduced-motion: no-preference\)\s*\{\s*\.orbit-emote \{ animation-play-state: running; \}/);
+  assert.match(css, /\.orbit-pause:checked ~ \.orbit-art \.orbit-emote \{ animation-play-state: paused; \}/);
+  const credits = await readFile(join(output, "credits/index.html"), "utf8");
+  assert.match(credits, /John Hobbs|Blobmoji/);
+  assert.match(credits, /creativecommons\.org\/licenses\/by-sa\/4\.0/);
+  assert.ok(credits.includes(`data-beta-link href="${publicInvite}"`));
+  assert.doesNotMatch(credits, /\{\{/);
+  for (const license of ["LICENSE-BlobEmoji.txt", "LICENSE-Blobmoji.txt"]) {
+    assert.match(await readFile(join(output, "emotes", license), "utf8"), /Apache License/);
+  }
+});
+
 test("download URLs must be actual HTTPS TestFlight invitations", async (t) => {
   const root = await fixture(t, "available", "https://example.com/not-testflight");
   await assert.rejects(execute(process.execPath, [join(root, "tools/build-website.mjs")]), /AssertionError/);

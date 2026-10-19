@@ -140,6 +140,12 @@ update the getting-started notice above, rebuild, and deploy. The build generate
 the download labels from this state so an unapproved beta never claims to be ready.
 The hero and header download actions open the same TestFlight invitation directly.
 The app's public privacy policy is served at `/privacy/`.
+The hero uses three CSS motion paths around a decorative TV, with a native
+pause checkbox and a still presentation for reduced-motion preferences.
+The six static emote SVGs in `website/emotes/` are self-hosted, so pausing stops
+all artwork movement and visitors make no requests to emote providers.
+Artist attribution, upstream sources, and licenses are linked at `/credits/`;
+preserve these notices when changing the artwork.
 
 With Node.js and an authenticated Wrangler CLI:
 

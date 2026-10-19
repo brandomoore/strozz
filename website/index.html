@@ -31,17 +31,43 @@
 
     <main id="main">
       <section class="hero wrap" aria-labelledby="hero-title">
-        <div class="hero-emblem" aria-hidden="true">
-          <img src="/strozz.svg" width="96" height="96" alt="">
+        <div class="hero-copy">
+          <p class="eyebrow">Made for Apple TV, iPhone &amp; iPad</p>
+          <h1 id="hero-title">Your streams.<br><span class="gradient-text">Together.</span></h1>
+          <p class="intro">Live streams. All the chat.<br>The gang's all here.</p>
         </div>
-        <p class="eyebrow">Made for Apple TV, iPhone &amp; iPad</p>
-        <h1 id="hero-title">Your streams.<br><span class="gradient-text">Together.</span></h1>
-        <p class="intro">Live streams. All the chat.<br>A little more room to enjoy it.</p>
-        <div class="actions">
-          <a class="button" data-beta-link href="{{BETA_URL}}">{{BETA_ACTION}}</a>
-          <span class="hero-note">Free &amp; open source</span>
+        <div class="orbit-scene">
+          <input class="orbit-pause" type="checkbox" id="pause-orbits">
+          <label class="orbit-control" for="pause-orbits">Pause emote animation</label>
+          <div class="orbit-art" aria-hidden="true">
+            <div class="orbit-track orbit-inner">
+              <span class="orbit-emote"><img src="/emotes/party-parrot.svg" width="48" height="48" alt=""></span>
+              <span class="orbit-emote"><img src="/emotes/blob-cool.svg" width="48" height="48" alt=""></span>
+            </div>
+            <div class="orbit-track orbit-middle">
+              <span class="orbit-emote"><img src="/emotes/blob-laugh.svg" width="48" height="48" alt=""></span>
+              <span class="orbit-emote"><img src="/emotes/blob-think.svg" width="48" height="48" alt=""></span>
+            </div>
+            <div class="orbit-track orbit-outer">
+              <span class="orbit-emote"><img src="/emotes/blob-owo.svg" width="48" height="48" alt=""></span>
+              <span class="orbit-emote"><img src="/emotes/blob-cry.svg" width="48" height="48" alt=""></span>
+            </div>
+            <div class="orbit-tv">
+              <div class="tv-screen">
+                <span class="tv-live">LIVE</span>
+                <img src="/strozz.svg" width="64" height="64" alt="">
+                <span class="tv-caption">chat, meet couch.</span>
+              </div>
+            </div>
+          </div>
         </div>
-        <p class="beta-note">{{BETA_STATUS}}</p>
+        <div class="hero-actions">
+          <div class="actions">
+            <a class="button" data-beta-link href="{{BETA_URL}}">{{BETA_ACTION}}</a>
+            <span class="hero-note">Free &amp; open source</span>
+          </div>
+          <p class="beta-note">{{BETA_STATUS}}</p>
+        </div>
         <div class="platforms" aria-label="Streaming services on Apple TV">
           <span>Twitch</span>
           <span>YouTube</span>
@@ -108,6 +134,7 @@
       <nav aria-label="Footer navigation">
         <a href="https://github.com/brandomoore/strozz">Source code</a>
         <a href="https://github.com/brandomoore/strozz/issues">Support</a>
+        <a href="/credits/">Emote credits</a>
         <a href="/privacy/">Privacy</a>
       </nav>
       <p>Independent. Open source. Not affiliated with Twitch, YouTube, or Kick.</p>
