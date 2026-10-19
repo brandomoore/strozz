@@ -47,6 +47,20 @@ test("approved availability leads to the actual public TestFlight invite", async
   assert.match(html, /The public beta is here/);
   assert.ok(html.includes(`href="${publicInvite}"`));
   assert.doesNotMatch(html, /Apple review pending|Once the beta is available|awaiting Apple's approval|\{\{/);
+  const hero = html.match(/<section class="hero wrap"[\s\S]*?<\/section>/)?.[0];
+  assert.ok(hero, "The homepage has a hero");
+  assert.ok(
+    hero.includes(`<a class="button" data-beta-link href="${publicInvite}">Download on TestFlight</a>`),
+    "The hero must open TestFlight directly, not scroll to another download button",
+  );
+  assert.deepEqual(
+    [...html.matchAll(/data-beta-link href="([^"]+)"/g)].map((match) => match[1]),
+    [publicInvite, publicInvite, publicInvite],
+  );
+  assert.doesNotMatch(html, /href="#download"/);
+  const privacy = await readFile(join(root, "build/website/privacy/index.html"), "utf8");
+  assert.ok(privacy.includes(`data-beta-link href="${publicInvite}"`));
+  assert.doesNotMatch(privacy, /href="\/#download"|\{\{/);
 });
 
 test("unknown availability fails instead of claiming a successful rollout", async (t) => {

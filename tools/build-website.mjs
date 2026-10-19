@@ -18,18 +18,23 @@ const replacements = {
     : "The first public builds are awaiting Apple's approval. Downloads will open here once they're approved.",
   BETA_ACTION: available ? "Download on TestFlight" : "View on TestFlight",
 };
-const source = await readFile(new URL("website/index.html", root), "utf8");
-const html = source.replace(/\{\{(\w+)\}\}/g, (_, name) => {
-  assert.ok(Object.hasOwn(replacements, name), `Unknown website placeholder: ${name}`);
-  return replacements[name];
-});
-assert.ok(!html.includes("{{"), "Unresolved website placeholder");
+async function renderPage(file) {
+  const source = await readFile(new URL(`website/${file}`, root), "utf8");
+  const html = source.replace(/\{\{(\w+)\}\}/g, (_, name) => {
+    assert.ok(Object.hasOwn(replacements, name), `Unknown website placeholder: ${name}`);
+    return replacements[name];
+  });
+  assert.ok(!html.includes("{{"), "Unresolved website placeholder");
+  return html;
+}
+
+const [html, privacy] = await Promise.all([renderPage("index.html"), renderPage("privacy.html")]);
 
 await mkdir(new URL("privacy/", output), { recursive: true });
 await Promise.all([
   writeFile(new URL("index.html", output), html),
   ...files.map((file) => copyFile(new URL(`website/${file}`, root), new URL(file, output))),
-  copyFile(new URL("website/privacy.html", root), new URL("privacy/index.html", output)),
+  writeFile(new URL("privacy/index.html", output), privacy),
   copyFile(new URL("Branding/strozz_logo.svg", root), new URL("strozz.svg", output)),
 ]);
 console.log("Built the static website in build/website/");

@@ -138,6 +138,7 @@ set to `review` until App Store Connect confirms external testing is available
 for both iOS and tvOS builds in the public group; then set it to `available`,
 update the getting-started notice above, rebuild, and deploy. The build generates
 the download labels from this state so an unapproved beta never claims to be ready.
+The hero and header download actions open the same TestFlight invitation directly.
 The app's public privacy policy is served at `/privacy/`.
 
 With Node.js and an authenticated Wrangler CLI:
