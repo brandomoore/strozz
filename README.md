@@ -22,8 +22,8 @@ watch several channels in multi-view. It's built for the Apple TV remote and the
 tvOS focus engine — not a stretched phone app — with native 7TV, BTTV, and FFZ
 emotes. It's free and open source.
 
-An initial **iPhone and iPad app (iOS 18+)** is also available to build from the
-`StrozzMobile` scheme. It shares the Twitch streaming, account, and chat services,
+An **iPhone and iPad app (iOS 18+)** is part of the same TestFlight beta.
+It shares the Twitch streaming, account, and chat services,
 with a separate touch interface rather than the TV's remote controls.
 
 ## Features
@@ -105,16 +105,15 @@ The feature list below describes the Apple TV app. See
 
 ## Getting started
 
-Strozz is an early, non-commercial project and isn't on the App Store. To run it
-you'll build it yourself from source with Xcode and your own Twitch developer
-`client_id`. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full setup.
+Get Strozz through **[TestFlight](https://testflight.apple.com/join/36mzCevV)**,
+Apple's app for trying betas. The first public iPhone/iPad and Apple TV builds
+are awaiting Apple's beta approval; downloads open once they're approved.
+See **[strozz.brando.page](https://strozz.brando.page/#download)** for availability
+and Apple TV installation help.
 
-You'll want:
-
-- An Apple TV running **tvOS 18 or newer** (live playback and Top Shelf need
-  real hardware).
-- A Twitch account, if you want to sign in — browsing and anonymous chat work
-  without one.
+You'll need **tvOS 18+** or **iOS/iPadOS 18+**. A Twitch account is optional for
+browsing and reading chat. Developers who want to build or contribute can use
+**[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 ## Reporting bugs & requesting features
 
@@ -129,10 +128,17 @@ The landing page lives in `website/` and uses Cloudflare Workers Static Assets.
 It has no JavaScript, third-party fonts, analytics, or runtime dependencies.
 The build copies the canonical logo from `Branding/`; do not maintain a separate
 website logo.
+The public invite and availability live in `website/beta.json`. Keep availability
+set to `review` until App Store Connect confirms external testing is available
+for both iOS and tvOS builds in the public group; then set it to `available`,
+update the getting-started notice above, rebuild, and deploy. The build generates
+the download labels from this state so an unapproved beta never claims to be ready.
+The app's public privacy policy is served at `/privacy/`.
 
 With Node.js and an authenticated Wrangler CLI:
 
 ```sh
+node --test tools/build-website.test.mjs
 node tools/build-website.mjs
 wrangler deploy --config website/wrangler.jsonc
 ```

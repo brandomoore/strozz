@@ -3,15 +3,15 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="light dark">
-    <meta name="theme-color" content="#7243c3">
-    <title>Strozz — Your streams. Chat included.</title>
-    <meta name="description" content="Live streams, chat, and native emotes on Apple TV. Twitch on iPhone and iPad, too. Strozz is free and open source.">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#09090f">
+    <title>Strozz — Your streams. Together.</title>
+    <meta name="description" content="Your streams and chat, together on Apple TV. Twitch on iPhone and iPad, too. Get the free Strozz beta through TestFlight.">
     <link rel="canonical" href="https://strozz.brando.page/">
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="Strozz">
-    <meta property="og:title" content="Strozz — Your streams. Chat included.">
-    <meta property="og:description" content="Live streams, chat, and native emotes on Apple TV. Twitch on iPhone and iPad, too. Free and open source.">
+    <meta property="og:title" content="Strozz — Your streams. Together.">
+    <meta property="og:description" content="Live streams. All the chat. A little more room to enjoy it. Get Strozz for Apple TV, iPhone, and iPad through TestFlight.">
     <meta property="og:url" content="https://strozz.brando.page/">
     <link rel="icon" href="/strozz.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/styles.css">
@@ -20,94 +20,97 @@
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header wrap">
       <a class="wordmark" href="/" aria-label="Strozz home">
-        <img src="/strozz.svg" width="36" height="36" alt="">
+        <img src="/strozz.svg" width="32" height="32" alt="">
         <span>Strozz</span>
       </a>
       <nav aria-label="Main navigation">
-        <a href="#features">Features</a>
-        <a href="https://github.com/brandomoore/strozz">GitHub</a>
+        <a class="nav-features" href="#features">The experience</a>
+        <a class="nav-download" href="#download">Get Strozz</a>
       </nav>
     </header>
 
     <main id="main">
       <section class="hero wrap" aria-labelledby="hero-title">
-        <div class="hero-copy">
-          <p class="eyebrow">Apple TV / iPhone / iPad</p>
-          <h1 id="hero-title">Your streams.<br><span>Chat included.</span></h1>
-          <p class="intro">The stream on the big screen. The chat right beside it.
-            Watch Twitch and YouTube on Apple TV, without missing the conversation.</p>
-          <div class="actions">
-            <a class="button" href="https://github.com/brandomoore/strozz">Get Strozz on GitHub</a>
-            <a class="text-link" href="#features">Take a look</a>
-          </div>
-          <p class="hero-note">Free and open source. Built for the remote, not a browser.</p>
+        <div class="hero-emblem" aria-hidden="true">
+          <img src="/strozz.svg" width="96" height="96" alt="">
         </div>
-        <div class="brand-stage" aria-hidden="true">
-          <img class="hero-mark" src="/strozz.svg" width="320" height="320" alt="">
-          <div class="platforms">
-            <span>Twitch</span>
-            <span>YouTube</span>
-            <span>Kick simulcasts</span>
-          </div>
+        <p class="eyebrow">Made for Apple TV, iPhone &amp; iPad</p>
+        <h1 id="hero-title">Your streams.<br><span class="gradient-text">Together.</span></h1>
+        <p class="intro">Live streams. All the chat.<br>A little more room to enjoy it.</p>
+        <div class="actions">
+          <a class="button" href="#download">Get Strozz</a>
+          <span class="hero-note">Free &amp; open source</span>
+        </div>
+        <p class="beta-note">{{BETA_STATUS}}</p>
+        <div class="platforms" aria-label="Streaming services on Apple TV">
+          <span>Twitch</span>
+          <span>YouTube</span>
+          <span>Kick <small>simulcasts</small></span>
         </div>
       </section>
 
       <section class="features wrap" id="features" aria-labelledby="features-title">
         <div class="section-heading">
-          <p class="eyebrow">More of the live part</p>
-          <h2 id="features-title">Watching is better together.</h2>
+          <p class="eyebrow">Settle in. Stay a while.</p>
+          <h2 id="features-title">Everything you came for.<br><span class="muted-heading">Nothing in the way.</span></h2>
         </div>
         <div class="feature-grid">
-          <article>
-            <h3>Chat that feels like chat.</h3>
-            <p>Twitch, 7TV, BTTV, and FFZ emotes, including animated ones.
-              Read along without an account, or sign in to join in.</p>
+          <article class="feature feature-chat">
+            <p class="feature-label">The conversation</p>
+            <h3>Yes, all<br>the emotes.</h3>
+            <p>Live chat with Twitch, 7TV, BTTV, and FFZ emotes.
+              Read along, or sign in and join in.</p>
+            <div class="feature-detail" aria-label="Supported emote providers">7TV <span>BTTV</span> FFZ</div>
           </article>
-          <article>
-            <h3>One screen. More streams.</h3>
-            <p>Watch several channels in multi-view on Apple TV. Rewind live,
-              choose your quality, or catch a past broadcast.</p>
+          <article class="feature feature-watch">
+            <p class="feature-label">The big screen</p>
+            <h3>One stream?<br>Or a few.</h3>
+            <p>Multi-view on Apple TV. Low-latency playback, live rewind,
+              and your choice of quality.</p>
+            <p class="feature-detail">Your remote. Your way.</p>
           </article>
-          <article>
-            <h3>Follow the creator.</h3>
-            <p>Watch Twitch and YouTube. For supported creators, find their
-              YouTube and Kick simulcasts, with experimental merged chat.</p>
+          <article class="feature feature-mobile">
+            <p class="feature-label">The smaller screens</p>
+            <h3>Good company.<br>To go.</h3>
+            <p>Twitch streams, follows, chat, and past broadcasts.
+              Made for touch on iPhone and iPad.</p>
+            <p class="feature-detail">Same stream. New spot.</p>
           </article>
         </div>
+        <p class="platform-note">YouTube and supported Kick simulcasts are available on Apple TV.
+          iPhone and iPad currently support Twitch.</p>
       </section>
 
-      <section class="mobile-section wrap" aria-labelledby="mobile-title">
-        <p class="eyebrow">Away from the TV?</p>
-        <div>
-          <h2 id="mobile-title">Twitch, to go.</h2>
-          <p>Your followed channels, live chat, emotes, and past broadcasts on
-            iPhone and iPad. A separate touch interface, built around a smaller screen.</p>
-          <a class="text-link" href="https://github.com/brandomoore/strozz#iphone-and-ipad">Explore the mobile app</a>
+      <section class="download wrap" id="download" aria-labelledby="download-title" data-beta-availability="{{BETA_AVAILABILITY}}">
+        <p class="eyebrow">Your streams are waiting</p>
+        <h2 id="download-title">Make yourself<br><span class="gradient-text">at home.</span></h2>
+        <p class="download-intro">Get Strozz through TestFlight,<br>Apple's app for trying betas.</p>
+        <div class="beta-status">
+          <p class="status-label">{{BETA_STATUS}}</p>
+          <p>{{BETA_MESSAGE}}</p>
         </div>
-      </section>
-
-      <section class="get-started wrap" aria-labelledby="get-started-title">
-        <div>
-          <p class="eyebrow">Make yourself at home</p>
-          <h2 id="get-started-title">Open source.<br>Open invitation.</h2>
-          <p>Strozz is an early project. Build it from source with Xcode,
-            help improve it, or tell us what isn't working.</p>
-          <p class="requirements">Requires tvOS 18+ or iOS / iPadOS 18+.</p>
-        </div>
-        <div class="closing-links">
-          <a class="button" href="https://github.com/brandomoore/strozz/blob/main/CONTRIBUTING.md">Build instructions</a>
-          <a class="text-link" href="https://github.com/brandomoore/strozz/issues">Bugs &amp; feature requests</a>
-        </div>
+        <a class="button" data-beta-link href="{{BETA_URL}}">{{BETA_ACTION}}</a>
+        <p class="requirements">Apple TV · iPhone · iPad<br>tvOS 18+ or iOS / iPadOS 18+</p>
+        <details class="install-help">
+          <summary>Installing on Apple TV?</summary>
+          <p>Once the beta is available, accept the TestFlight invitation on an iPhone
+            or iPad. Then install TestFlight on your Apple TV using the same
+            Apple Account, and select Strozz.</p>
+        </details>
       </section>
     </main>
 
     <footer class="site-footer wrap">
       <a class="wordmark" href="/" aria-label="Strozz home">
-        <img src="/strozz.svg" width="28" height="28" alt="" loading="lazy">
+        <img src="/strozz.svg" width="28" height="28" alt="">
         <span>Strozz</span>
       </a>
-      <p>An independent project. Not affiliated with Twitch, YouTube, or Kick.</p>
-      <a href="https://github.com/brandomoore/strozz/blob/main/LICENSE">MIT license</a>
+      <nav aria-label="Footer navigation">
+        <a href="https://github.com/brandomoore/strozz">Source code</a>
+        <a href="https://github.com/brandomoore/strozz/issues">Support</a>
+        <a href="/privacy/">Privacy</a>
+      </nav>
+      <p>Independent. Open source. Not affiliated with Twitch, YouTube, or Kick.</p>
     </footer>
   </body>
 </html>
