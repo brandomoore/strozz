@@ -14,7 +14,9 @@
   <a href="https://github.com/sponsors/thatcube"><img src="https://img.shields.io/badge/Donate-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white" alt="Donate" /></a>
 </p>
 
-**[strozz.brando.page](https://strozz.brando.page)** — the project website.
+**[Download Strozz on TestFlight](https://testflight.apple.com/join/36mzCevV)** —
+free public beta for **Apple TV, iPhone, and iPad**.
+**[Website](https://strozz.brando.page)** · **[Installation help](#getting-started)**
 
 Strozz brings live streams and chat together on the big screen. Watch Twitch and
 YouTube, follow supported creators across their YouTube and Kick simulcasts, or
@@ -106,10 +108,13 @@ The feature list below describes the Apple TV app. See
 ## Getting started
 
 Get Strozz through **[TestFlight](https://testflight.apple.com/join/36mzCevV)**,
-Apple's app for trying betas. The first public iPhone/iPad and Apple TV builds
-are awaiting Apple's beta approval; downloads open once they're approved.
-See **[strozz.brando.page](https://strozz.brando.page/#download)** for availability
-and Apple TV installation help.
+Apple's app for trying betas. The public beta is available now for iPhone, iPad,
+and Apple TV. Install TestFlight, open the invitation, and tap **Accept**, then
+**Install**.
+
+For **Apple TV**, accept the invitation in TestFlight on an iPhone or iPad first.
+Then open TestFlight on your Apple TV using the same App Store account and
+install Strozz.
 
 You'll need **tvOS 18+** or **iOS/iPadOS 18+**. A Twitch account is optional for
 browsing and reading chat. Developers who want to build or contribute can use

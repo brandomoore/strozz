@@ -46,7 +46,7 @@ test("approved availability leads to the actual public TestFlight invite", async
   assert.match(html, /Download on TestFlight/);
   assert.match(html, /The public beta is here/);
   assert.ok(html.includes(`href="${publicInvite}"`));
-  assert.doesNotMatch(html, /Apple review pending|\{\{/);
+  assert.doesNotMatch(html, /Apple review pending|Once the beta is available|awaiting Apple's approval|\{\{/);
 });
 
 test("unknown availability fails instead of claiming a successful rollout", async (t) => {
