@@ -84,7 +84,7 @@ test("the orbital hero uses recognizable chat emotes with restricted delivery an
   assert.match(html, /<script src="\/orbits\.js" defer><\/script>/);
   assert.equal([...html.matchAll(/<script\b/g)].length, 1);
   assert.equal(await readFile(join(output, "orbits.js"), "utf8"), await readFile(join(root, "website/orbits.js"), "utf8"));
-  const emotes = [...html.matchAll(/class="orbit-emote" data-emote="([^"]+)"><img src="([^"]+)"([^>]*)>/g)];
+  const emotes = [...html.matchAll(/<button class="orbit-emote" data-emote="([^"]+)" type="button" aria-label="Pop [^"]+" disabled><img src="([^"]+)"([^>]*)>/g)];
   assert.equal(emotes.length, 6);
   const expected = {
     "Party Parrot": "/emotes/party-parrot.svg",

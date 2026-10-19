@@ -148,6 +148,14 @@ resets on pause, scrolling, focus/visibility changes, or reduced motion.
 Clicking the TV toggles a native pause checkbox; keyboard users can Tab to it
 and press Space. CSS motion and this control still work without JavaScript.
 Reduced motion disables both orbiting and cursor nudges.
+Clicking the visible artwork of an emote scatters eight tiny copies; transparent
+pixels and the `object-fit` padding do not count. Hit testing samples each image's
+alpha channel through its current on-screen transform, including cursor nudges.
+Only decoded, readable images become keyboard-accessible buttons (Enter/Space).
+Paused or reduced-motion scenes acknowledge a catch with a still highlight instead
+of a burst. Bursts are bounded, replaced on another catch, and cleared on lifecycle
+changes. If image decoding or pixel access fails, that emote remains decorative
+and the browser logs a warning; there is no rectangular hit-box fallback.
 The hero uses peepoHappy, monkaS, PepeHands, OMEGALUL, and KEKW from FFZ's
 published API image URLs, alongside the self-hosted Party Parrot SVG.
 Use static image renditions so pausing stops all artwork movement. FFZ images
