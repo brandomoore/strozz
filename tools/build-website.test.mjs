@@ -110,6 +110,8 @@ test("the orbital hero uses recognizable chat emotes with restricted delivery an
   assert.match(headers, /script-src 'self';/);
   assert.doesNotMatch(headers, /unsafe-inline|unsafe-eval/);
   const css = await readFile(join(output, "styles.css"), "utf8");
+  assert.match(css, /transition: transform 240ms ease-out/);
+  assert.match(css, /\.orbit-emote\[data-popped\] img \{ opacity: 0; transition: none;/);
   assert.match(css, /\.orbit-emote\s*\{[^}]*animation-play-state: paused;/);
   assert.match(css, /@media \(prefers-reduced-motion: no-preference\)\s*\{\s*\.orbit-emote \{ animation-play-state: running; \}/);
   assert.match(css, /\.orbit-pause:checked ~ \.orbit-art \.orbit-emote \{ animation-play-state: paused; \}/);
