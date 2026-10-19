@@ -20,6 +20,7 @@
   pause.disabled = reducedMotion.matches;
   let pointer = null;
   let frame = null;
+  let held = null;
 
   const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
 
@@ -27,7 +28,7 @@
     return {
       anchor, art, image: anchor.querySelector("img"), track: tracks.indexOf(anchor.parentElement),
       order: nextOrder++, active: true, busy: false, pixels: null, arrival: null, fade: null,
-      restUntil: 0,
+      restUntil: 0, nextHoldAt: 0,
     };
   }
 
@@ -101,7 +102,15 @@
     }
   }
 
+  function releaseHold() {
+    if (!held) return;
+    held.emote.anchor.removeAttribute("data-catch-rest");
+    held.emote.image.style.removeProperty("transform");
+    held = null;
+  }
+
   function discard(emote) {
+    if (held?.emote === emote) releaseHold();
     const index = emotes.indexOf(emote);
     if (index !== -1) emotes.splice(index, 1);
     emote.active = false;
@@ -218,6 +227,7 @@
   }
 
   function reset() {
+    releaseHold();
     pointer = null;
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
@@ -241,11 +251,21 @@
 
     const bounds = scene.getBoundingClientRect();
     const radius = Math.min(120, bounds.width * 0.24);
-    const strength = Math.min(36, bounds.width * 0.08);
+    const strength = Math.min(24, bounds.width * 0.055);
     const now = performance.now();
+    const target = hitTest(pointer.x, pointer.y);
+    if (held && (held.emote !== target || now >= held.until)) releaseHold();
+    if (!held && target && !target.arrival && now >= target.nextHoldAt) {
+      // Preserve the rendered pose, not the destination of an unfinished nudge.
+      const transform = getComputedStyle(target.image).transform;
+      target.anchor.setAttribute("data-catch-rest", "");
+      target.image.style.setProperty("transform", transform);
+      target.nextHoldAt = now + 1600;
+      held = { emote: target, until: now + 500 };
+    }
     // Read the unnudged anchors together, before writing any image transforms.
-    const offsets = emotes.map((emote, index) => {
-      if (emote.busy) return null;
+    const offsets = emotes.map((emote) => {
+      if (emote.busy || held?.emote === emote) return null;
       if (now < emote.restUntil) return { x: 0, y: 0 };
       const { anchor } = emote;
       const rect = anchor.getBoundingClientRect();
@@ -255,31 +275,37 @@
       const dy = y - pointer.y;
       const distance = Math.hypot(dx, dy);
       const sizeFactor = anchor.hasAttribute("data-offspring") ? 0.75 : 1;
-      const force = strength * sizeFactor * Math.max(0, 1 - distance / radius) ** 2;
+      const proximity = Math.max(0, 1 - distance / radius);
+      const force = strength * sizeFactor * proximity ** 2;
       if (force === 0) return { x: 0, y: 0 };
 
+      const wave = Math.sin(now / 180 + emote.order * 1.8) * sizeFactor * proximity;
+      const sidestep = wave * 7;
+      const directionX = distance > 0 ? dx / distance : emote.order % 2 === 0 ? 1 : -1;
+      const directionY = distance > 0 ? dy / distance : 0;
       const half = Math.max(rect.width, rect.height) / 2 + 8;
       return {
         x: clamp(
-          (distance > 0 ? dx / distance : index % 2 === 0 ? 1 : -1) * force,
+          directionX * force - directionY * sidestep,
           Math.max(bounds.left, 0) + half - x,
           Math.min(bounds.right, window.innerWidth) - half - x,
         ),
         y: clamp(
-          (distance > 0 ? dy / distance : 0) * force,
+          directionY * force + directionX * sidestep,
           bounds.top + half - y,
           bounds.bottom - half - y,
         ),
+        tilt: wave * 8,
       };
     });
-    scene.toggleAttribute("data-catchable", hitTest(pointer.x, pointer.y) !== null);
+    scene.toggleAttribute("data-catchable", target !== null);
     offsets.forEach((offset, index) => {
       if (!offset) return;
-      const { x, y } = offset;
+      const { x, y, tilt = 0 } = offset;
       const { style } = emotes[index].image;
       style.setProperty("--nudge-x", `${x.toFixed(2)}px`);
       style.setProperty("--nudge-y", `${y.toFixed(2)}px`);
-      style.setProperty("--nudge-rotate", `${(x * 0.18).toFixed(2)}deg`);
+      style.setProperty("--nudge-rotate", `${(x * 0.18 + tilt).toFixed(2)}deg`);
     });
     frame = requestAnimationFrame(update);
   }

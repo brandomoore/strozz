@@ -127,8 +127,9 @@ h1, h2 { text-wrap: balance; }
   user-select: none;
 }
 .orbit-emote[data-opposite] { animation-delay: var(--opposite-delay); }
-.orbit-emote[data-offspring] { width: clamp(26px, 3vw, 34px); height: clamp(26px, 3vw, 34px); }
+.orbit-emote[data-offspring] { width: clamp(28px, 3.2vw, 38px); height: clamp(28px, 3.2vw, 38px); }
 .orbit-emote[data-retiring] { animation-play-state: paused; }
+.orbit-emote[data-catch-rest] { animation-play-state: paused; }
 .orbit-middle .orbit-emote { animation-direction: reverse; }
 .orbit-emote img {
   width: 100%;
@@ -203,7 +204,8 @@ h1, h2 { text-wrap: balance; }
 .orbit-pause:checked ~ .orbit-art .tv-live::before { background: var(--muted); }
 @media (prefers-reduced-motion: no-preference) {
   .orbit-emote { animation-play-state: running; }
-  .orbit-scene[data-interacting] .orbit-emote img { transition: transform 240ms ease-out; }
+  .orbit-scene[data-interacting] .orbit-emote img { transition: transform 320ms ease-out; }
+  .orbit-scene[data-interacting] .orbit-emote[data-catch-rest] img { transition: none; }
   .orbit-tv:hover { border-color: var(--accent); }
 }
 @media (prefers-reduced-motion: reduce) {
