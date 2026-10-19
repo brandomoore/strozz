@@ -126,7 +126,9 @@ h1, h2 { text-wrap: balance; }
   pointer-events: none;
   user-select: none;
 }
-.orbit-emote:nth-child(2) { animation-delay: var(--opposite-delay); }
+.orbit-emote[data-opposite] { animation-delay: var(--opposite-delay); }
+.orbit-emote[data-offspring] { width: clamp(26px, 3vw, 34px); height: clamp(26px, 3vw, 34px); }
+.orbit-emote[data-retiring] { animation-play-state: paused; }
 .orbit-middle .orbit-emote { animation-direction: reverse; }
 .orbit-emote img {
   width: 100%;
@@ -139,21 +141,9 @@ h1, h2 { text-wrap: balance; }
 .orbit-emote:focus-visible { outline: none; animation-play-state: paused; }
 .orbit-emote:focus-visible img { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
 .orbit-emote[data-caught] img { filter: brightness(1.15) drop-shadow(0 0 8px var(--violet)); }
-.orbit-scene .orbit-art .orbit-emote[data-popped] img { opacity: 0; transition: none; transform: rotate(calc(-1 * var(--tilt))); }
-.orbit-emote[data-popped]:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
 .orbit-scene[data-catchable] { cursor: pointer; }
-.emote-burst { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
-.emote-particle {
-  position: absolute;
-  width: var(--size);
-  height: var(--size);
-  object-fit: contain;
-}
-@keyframes emote-pop {
-  from { opacity: 1; transform: translate(-50%, -50%) scale(0.6); }
-  20% { opacity: 1; }
-  to { opacity: 0; transform: translate(calc(-50% + var(--travel-x)), calc(-50% + var(--travel-y))) rotate(var(--spin)) scale(0.35); }
-}
+.orbit-status { position: absolute; bottom: 0; width: 100%; color: var(--muted); text-align: center; font-size: 0.75rem; }
+.orbit-status:empty { display: none; }
 @keyframes emote-orbit {
   from { offset-distance: 0%; }
   to { offset-distance: 100%; }
@@ -214,7 +204,6 @@ h1, h2 { text-wrap: balance; }
 @media (prefers-reduced-motion: no-preference) {
   .orbit-emote { animation-play-state: running; }
   .orbit-scene[data-interacting] .orbit-emote img { transition: transform 240ms ease-out; }
-  .emote-particle { animation: emote-pop 650ms ease-out both; }
   .orbit-tv:hover { border-color: var(--accent); }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -225,7 +214,6 @@ h1, h2 { text-wrap: balance; }
   .orbit-scene:has(.orbit-emote:enabled) .orbit-tv { pointer-events: auto; }
   .tv-playing { display: none; }
   .tv-paused { display: inline; }
-  .emote-burst { display: none; }
 }
 .eyebrow { color: var(--soft); font-size: 0.75rem; font-weight: 500; letter-spacing: 0.045em; }
 h1 { margin-top: 24px; font-size: clamp(3.5rem, 7vw, 6rem); line-height: 1; letter-spacing: -0.065em; }

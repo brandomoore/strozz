@@ -149,20 +149,24 @@ resets on pause, scrolling, focus/visibility changes, or reduced motion.
 Clicking the TV toggles a native pause checkbox; keyboard users can Tab to it
 and press Space. CSS motion and this control still work without JavaScript.
 Reduced motion disables both orbiting and cursor nudges.
-Clicking the visible artwork of an emote scatters eight tiny copies; transparent
-pixels and the `object-fit` padding do not count. Hit testing samples each image's
-alpha channel through its current on-screen transform, including cursor nudges.
-During the burst, the caught artwork disappears and cannot be caught again.
-After 700ms it returns to its current orbital position with its nudge cleared
-and a 350ms breather before dodging again. Catching another emote or a lifecycle
-reset restores the previous one immediately; an emote is never left hidden.
-Only decoded, readable images become keyboard-accessible buttons (Enter/Space).
-Paused or reduced-motion scenes acknowledge a catch with a still highlight instead
-of a burst. Bursts are bounded, replaced on another catch, and cleared on lifecycle
-changes. If image decoding or pixel access fails, that emote remains decorative
-and the browser logs a warning; there is no rectangular hit-box fallback.
-The hero uses peepoHappy, monkaS, PepeHands, OMEGALUL, and KEKW from FFZ's
-published API image URLs, alongside the self-hosted Party Parrot SVG.
+Clicking the visible artwork replaces an emote with six randomly selected,
+related reactions that disperse onto all three orbits and stay there. These
+offspring are clickable too. The 40-reaction catalog in
+`website/emote-catalog.json` groups happy, laughing, nervous, sad, and party
+emotes; the builder embeds inert JSON and generates `/credits/` from that same
+source. Image pixels/decodes are shared and loaded only when needed.
+At 120 active emotes, new catches fade out the oldest (except the focused
+keyboard control). At most six retiring nodes remain during their short fades.
+The population is local to the page and resets on reload.
+Transparent pixels and `object-fit` padding do not count as hits, even during
+arrival animations. Offspring use gentler repulsion and a settling interval.
+Native keyboard focus transfers to a new emote when its parent is consumed.
+Paused or reduced-motion growth happens without travel/fade animations;
+lifecycle changes settle the population rather than deleting it.
+Failed offspring loads preserve the parent and show a retry message. Failed
+initial image/pixel reads leave that artwork decorative and log a warning;
+there is no rectangular hit-box fallback.
+FFZ artwork uses published API image URLs alongside the self-hosted Party Parrot SVG.
 Use static image renditions so pausing stops all artwork movement. FFZ images
 load anonymously without a referrer; CSP allows only that CDN in addition to
 local images. Keep this provider disclosure in `/privacy/` and the source

@@ -82,9 +82,14 @@ test("the orbital hero uses recognizable chat emotes with restricted delivery an
   assert.match(html, /class="tv-screen" aria-hidden="true"/);
   assert.doesNotMatch(html, /blob-(?:cool|laugh|think|owo|cry)/);
   assert.match(html, /<script src="\/orbits\.js" defer><\/script>/);
-  assert.equal([...html.matchAll(/<script\b/g)].length, 1);
+  assert.equal([...html.matchAll(/<script\b/g)].length, 2);
+  const embeddedCatalog = html.match(/<script id="emote-catalog" type="application\/json">([^<]+)<\/script>/)?.[1];
+  assert.ok(embeddedCatalog);
+  const families = JSON.parse(embeddedCatalog);
+  assert.equal(Object.keys(families).length, 5);
+  assert.equal(Object.values(families).flat().length, 40);
   assert.equal(await readFile(join(output, "orbits.js"), "utf8"), await readFile(join(root, "website/orbits.js"), "utf8"));
-  const emotes = [...html.matchAll(/<button class="orbit-emote" data-emote="([^"]+)" type="button" aria-label="Pop [^"]+" disabled><img src="([^"]+)"([^>]*)>/g)];
+  const emotes = [...html.matchAll(/<button class="orbit-emote" data-emote="([^"]+)" type="button" aria-label="Pop [^"]+" disabled(?: data-opposite)?><img src="([^"]+)"([^>]*)>/g)];
   assert.equal(emotes.length, 6);
   const expected = {
     "Party Parrot": "/emotes/party-parrot.svg",
@@ -111,7 +116,9 @@ test("the orbital hero uses recognizable chat emotes with restricted delivery an
   assert.doesNotMatch(headers, /unsafe-inline|unsafe-eval/);
   const css = await readFile(join(output, "styles.css"), "utf8");
   assert.match(css, /transition: transform 240ms ease-out/);
-  assert.match(css, /\.orbit-emote\[data-popped\] img \{ opacity: 0; transition: none;/);
+  assert.match(css, /\.orbit-emote\[data-offspring\] \{ width:/);
+  assert.match(css, /\.orbit-emote\[data-opposite\] \{ animation-delay: var\(--opposite-delay\); \}/);
+  assert.doesNotMatch(css, /\.orbit-emote:nth-child|emote-burst|data-popped/);
   assert.match(css, /\.orbit-emote\s*\{[^}]*animation-play-state: paused;/);
   assert.match(css, /@media \(prefers-reduced-motion: no-preference\)\s*\{\s*\.orbit-emote \{ animation-play-state: running; \}/);
   assert.match(css, /\.orbit-pause:checked ~ \.orbit-art \.orbit-emote \{ animation-play-state: paused; \}/);
@@ -125,6 +132,14 @@ test("the orbital hero uses recognizable chat emotes with restricted delivery an
     if (name === "Party Parrot") continue;
     const id = new URL(url).pathname.split("/")[2];
     assert.ok(credits.includes(`https://www.frankerfacez.com/emoticon/${id}-${name}`));
+  }
+  for (const family of Object.values(families)) {
+    for (const art of family) {
+      if (art.name === "Party Parrot") continue;
+      assert.match(art.src, /^https:\/\/cdn\.frankerfacez\.com\/emote\/[0-9]+\/4$/);
+      const id = new URL(art.src).pathname.split("/")[2];
+      assert.ok(credits.includes(`https://www.frankerfacez.com/emoticon/${id}-${art.name}`));
+    }
   }
   assert.doesNotMatch(credits, /Blobmoji|Blob OwO|No emote-provider requests/);
   const privacy = await readFile(join(output, "privacy/index.html"), "utf8");
@@ -145,4 +160,27 @@ test("rebuilding removes retired local emotes from the deployed assets", async (
 test("download URLs must be actual HTTPS TestFlight invitations", async (t) => {
   const root = await fixture(t, "available", "https://example.com/not-testflight");
   await assert.rejects(execute(process.execPath, [join(root, "tools/build-website.mjs")]), /AssertionError/);
+});
+
+test("catalog validation rejects incomplete families and initial emotes missing from the pool", async (t) => {
+  const root = await fixture(t, "available");
+  const file = join(root, "website/emote-catalog.json");
+  const catalog = JSON.parse(await readFile(file, "utf8"));
+  catalog.party = catalog.party.slice(0, 2);
+  await writeFile(file, JSON.stringify(catalog));
+  await assert.rejects(execute(process.execPath, [join(root, "tools/build-website.mjs")]), /needs at least seven/);
+  await writeFile(file, "{}");
+  await assert.rejects(execute(process.execPath, [join(root, "tools/build-website.mjs")]), /Initial emote missing/);
+});
+
+test("catalog credits escape submitter text instead of inserting active HTML", async (t) => {
+  const root = await fixture(t, "available");
+  const file = join(root, "website/emote-catalog.json");
+  const catalog = JSON.parse(await readFile(file, "utf8"));
+  catalog.happy[0].submitter = "<script>alert('unsafe')</script>";
+  await writeFile(file, JSON.stringify(catalog));
+  await execute(process.execPath, [join(root, "tools/build-website.mjs")]);
+  const credits = await readFile(join(root, "build/website/credits/index.html"), "utf8");
+  assert.match(credits, /&lt;script&gt;alert\(&#39;unsafe&#39;\)&lt;\/script&gt;/);
+  assert.doesNotMatch(credits, /<script>/);
 });

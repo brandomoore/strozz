@@ -1,0 +1,52 @@
+{
+  "happy": [
+    { "name": "peepoHappy", "id": 228449, "submitter": "Klotzi" },
+    { "name": "peepoLove", "id": 250614, "submitter": "voparoS_" },
+    { "name": "peepoHey", "id": 493118, "submitter": "Grayekk" },
+    { "name": "peepoHug", "id": 237403, "submitter": "Teaguenho" },
+    { "name": "peepoClap", "id": 720647, "submitter": "TrippyColour" },
+    { "name": "PogU", "id": 422810, "submitter": "ali2465" },
+    { "name": "POGGERS", "id": 214129, "submitter": "Klotzi" },
+    { "name": "Pog", "id": 210748, "submitter": "Teyn" }
+  ],
+  "laughs": [
+    { "name": "OMEGALUL", "id": 128054, "submitter": "DourGent" },
+    { "name": "KEKW", "id": 381875, "submitter": "Keesual" },
+    { "name": "LULW", "id": 139407, "submitter": "Ian678" },
+    { "name": "KEKWait", "id": 390750, "submitter": "foxboxx" },
+    { "name": "KEKLEO", "id": 505263, "submitter": "Brosabi" },
+    { "name": "OMEGAKEKW", "id": 387828, "submitter": "WarriorGPlays" },
+    { "name": "peepoLaugh", "id": 318646, "submitter": "OkayMercer" },
+    { "name": "PepeLaugh", "id": 64785, "submitter": "Lukas_Wergutz" }
+  ],
+  "nervous": [
+    { "name": "monkaS", "id": 130762, "submitter": "FabulousPotato69" },
+    { "name": "monkaW", "id": 214681, "submitter": "voparoS_" },
+    { "name": "monkaHmm", "id": 240746, "submitter": "Klotzi" },
+    { "name": "monkaTOS", "id": 237857, "submitter": "voparoS_" },
+    { "name": "monkaEyes", "id": 268204, "submitter": "libertyass" },
+    { "name": "monkaGIGA", "id": 183221, "submitter": "\u96f7\u660298" },
+    { "name": "monkaX", "id": 226921, "submitter": "sleepyspaceraccoon" },
+    { "name": "PauseChamp", "id": 557676, "submitter": "REZN0R" }
+  ],
+  "sad": [
+    { "name": "PepeHands", "id": 231552, "submitter": "igoresque" },
+    { "name": "Sadge", "id": 425196, "submitter": "vicneeI" },
+    { "name": "FeelsBadMan", "id": 33355, "submitter": "Urboymag" },
+    { "name": "FeelsRainMan", "id": 135526, "submitter": "Anotherorangejuice" },
+    { "name": "peepoSad", "id": 230082, "submitter": "Nclnat" },
+    { "name": "widepeepoSad", "id": 303899, "submitter": "rSHERMS" },
+    { "name": "peepoLeave", "id": 474605, "submitter": "Luuuwun" },
+    { "name": "FeelsStrongMan", "id": 64210, "submitter": "Lukas_Wergutz" }
+  ],
+  "party": [
+    { "name": "Party Parrot", "src": "/emotes/party-parrot.svg" },
+    { "name": "catJAM", "id": 564062, "submitter": "Erkkthebeast" },
+    { "name": "ratJAM", "id": 724093, "submitter": "mrchonks" },
+    { "name": "peepoDJ", "id": 385761, "submitter": "NeonXLUL" },
+    { "name": "duckDance", "id": 766887, "submitter": "KatieElis" },
+    { "name": "HYPERS", "id": 236895, "submitter": "Ruse69Master" },
+    { "name": "PartyKirby", "id": 765431, "submitter": "DylanDesign13" },
+    { "name": "Dance", "id": 724094, "submitter": "mrchonks" }
+  ]
+}
