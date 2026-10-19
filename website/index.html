@@ -15,6 +15,7 @@
     <meta property="og:url" content="https://strozz.brando.page/">
     <link rel="icon" href="/strozz.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/styles.css">
+    <script src="/orbits.js" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -37,28 +38,27 @@
           <p class="intro">Live streams. All the chat.<br>The gang's all here.</p>
         </div>
         <div class="orbit-scene">
-          <input class="orbit-pause" type="checkbox" id="pause-orbits">
-          <label class="orbit-control" for="pause-orbits">Pause emote animation</label>
-          <div class="orbit-art" aria-hidden="true">
-            <div class="orbit-track orbit-inner">
+          <input class="orbit-pause" type="checkbox" id="pause-orbits" aria-label="Pause emote animation">
+          <div class="orbit-art">
+            <div class="orbit-track orbit-inner" aria-hidden="true">
               <span class="orbit-emote" data-emote="Party Parrot"><img src="/emotes/party-parrot.svg" width="48" height="48" alt=""></span>
               <span class="orbit-emote" data-emote="peepoHappy"><img src="https://cdn.frankerfacez.com/emote/228449/4" width="48" height="48" alt="" crossorigin="anonymous" referrerpolicy="no-referrer"></span>
             </div>
-            <div class="orbit-track orbit-middle">
+            <div class="orbit-track orbit-middle" aria-hidden="true">
               <span class="orbit-emote" data-emote="OMEGALUL"><img src="https://cdn.frankerfacez.com/emote/128054/4" width="48" height="48" alt="" crossorigin="anonymous" referrerpolicy="no-referrer"></span>
               <span class="orbit-emote" data-emote="monkaS"><img src="https://cdn.frankerfacez.com/emote/130762/4" width="48" height="48" alt="" crossorigin="anonymous" referrerpolicy="no-referrer"></span>
             </div>
-            <div class="orbit-track orbit-outer">
+            <div class="orbit-track orbit-outer" aria-hidden="true">
               <span class="orbit-emote" data-emote="KEKW"><img src="https://cdn.frankerfacez.com/emote/381875/4" width="48" height="48" alt="" crossorigin="anonymous" referrerpolicy="no-referrer"></span>
               <span class="orbit-emote" data-emote="PepeHands"><img src="https://cdn.frankerfacez.com/emote/231552/4" width="48" height="48" alt="" crossorigin="anonymous" referrerpolicy="no-referrer"></span>
             </div>
-            <div class="orbit-tv">
-              <div class="tv-screen">
-                <span class="tv-live">LIVE</span>
+            <label class="orbit-tv" for="pause-orbits" title="Click the TV to pause or resume the emotes">
+              <span class="tv-screen" aria-hidden="true">
+                <span class="tv-live"><span class="tv-playing">LIVE</span><span class="tv-paused">PAUSED</span></span>
                 <img src="/strozz.svg" width="64" height="64" alt="">
                 <span class="tv-caption">chat, meet couch.</span>
-              </div>
-            </div>
+              </span>
+            </label>
           </div>
         </div>
         <div class="hero-actions">

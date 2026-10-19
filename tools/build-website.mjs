@@ -4,7 +4,7 @@ import { copyFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 
 const root = new URL("../", import.meta.url);
 const output = new URL("build/website/", root);
-const files = ["404.html", "styles.css", "_headers", "robots.txt"];
+const files = ["404.html", "styles.css", "orbits.js", "_headers", "robots.txt"];
 const beta = JSON.parse(await readFile(new URL("website/beta.json", root), "utf8"));
 assert.match(beta.testFlightUrl, /^https:\/\/testflight\.apple\.com\/join\/[A-Za-z0-9]+$/);
 assert.ok(["review", "available"].includes(beta.availability), "Unknown public beta availability");

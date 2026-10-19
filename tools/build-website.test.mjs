@@ -74,10 +74,16 @@ test("the orbital hero uses recognizable chat emotes with restricted delivery an
   const output = join(root, "build/website");
   const html = await readFile(join(output, "index.html"), "utf8");
   assert.equal([...html.matchAll(/class="orbit-track /g)].length, 3);
-  assert.match(html, /<input class="orbit-pause" type="checkbox" id="pause-orbits">/);
-  assert.match(html, /<label class="orbit-control" for="pause-orbits">Pause emote animation<\/label>/);
-  assert.match(html, /class="orbit-art" aria-hidden="true"/);
-  assert.doesNotMatch(html, /<script|blob-(?:cool|laugh|think|owo|cry)/);
+  assert.match(html, /<input class="orbit-pause" type="checkbox" id="pause-orbits" aria-label="Pause emote animation">/);
+  assert.match(html, /<label class="orbit-tv" for="pause-orbits"/);
+  assert.doesNotMatch(html, /class="orbit-control"/);
+  assert.doesNotMatch(html, /class="orbit-art" aria-hidden="true"/);
+  assert.equal([...html.matchAll(/class="orbit-track [^"]+" aria-hidden="true"/g)].length, 3);
+  assert.match(html, /class="tv-screen" aria-hidden="true"/);
+  assert.doesNotMatch(html, /blob-(?:cool|laugh|think|owo|cry)/);
+  assert.match(html, /<script src="\/orbits\.js" defer><\/script>/);
+  assert.equal([...html.matchAll(/<script\b/g)].length, 1);
+  assert.equal(await readFile(join(output, "orbits.js"), "utf8"), await readFile(join(root, "website/orbits.js"), "utf8"));
   const emotes = [...html.matchAll(/class="orbit-emote" data-emote="([^"]+)"><img src="([^"]+)"([^>]*)>/g)];
   assert.equal(emotes.length, 6);
   const expected = {
@@ -101,10 +107,13 @@ test("the orbital hero uses recognizable chat emotes with restricted delivery an
   assert.equal(parrot, await readFile(join(root, "website", expected["Party Parrot"]), "utf8"));
   const headers = await readFile(join(output, "_headers"), "utf8");
   assert.match(headers, /default-src 'none'; style-src 'self'; img-src 'self' https:\/\/cdn\.frankerfacez\.com;/);
+  assert.match(headers, /script-src 'self';/);
+  assert.doesNotMatch(headers, /unsafe-inline|unsafe-eval/);
   const css = await readFile(join(output, "styles.css"), "utf8");
   assert.match(css, /\.orbit-emote\s*\{[^}]*animation-play-state: paused;/);
   assert.match(css, /@media \(prefers-reduced-motion: no-preference\)\s*\{\s*\.orbit-emote \{ animation-play-state: running; \}/);
   assert.match(css, /\.orbit-pause:checked ~ \.orbit-art \.orbit-emote \{ animation-play-state: paused; \}/);
+  assert.match(css, /\.orbit-pause:focus-visible ~ \.orbit-art \.orbit-tv \{ outline:/);
   const credits = await readFile(join(output, "credits/index.html"), "utf8");
   assert.match(credits, /John Hobbs/);
   assert.match(credits, /creativecommons\.org\/licenses\/by-sa\/4\.0/);

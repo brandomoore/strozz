@@ -130,7 +130,8 @@ model, tvOS version, and the stream where something went wrong helps a lot. See
 ## Website
 
 The landing page lives in `website/` and uses Cloudflare Workers Static Assets.
-It has no JavaScript, third-party fonts, analytics, or runtime dependencies.
+It has one small local interaction script, with no JavaScript libraries,
+third-party fonts, or analytics.
 The build copies the canonical logo from `Branding/`; do not maintain a separate
 website logo.
 The public invite and availability live in `website/beta.json`. Keep availability
@@ -140,8 +141,13 @@ update the getting-started notice above, rebuild, and deploy. The build generate
 the download labels from this state so an unapproved beta never claims to be ready.
 The hero and header download actions open the same TestFlight invitation directly.
 The app's public privacy policy is served at `/privacy/`.
-The hero uses three CSS motion paths around a decorative TV, with a native
-pause checkbox and a still presentation for reduced-motion preferences.
+The hero uses three CSS motion paths around a TV. Nearby emotes dodge the mouse
+and spring back when it leaves; touch scrolling is unaffected. The local
+`orbits.js` script only runs its frame loop while the mouse is interacting and
+resets on pause, scrolling, focus/visibility changes, or reduced motion.
+Clicking the TV toggles a native pause checkbox; keyboard users can Tab to it
+and press Space. CSS motion and this control still work without JavaScript.
+Reduced motion disables both orbiting and cursor nudges.
 The hero uses peepoHappy, monkaS, PepeHands, OMEGALUL, and KEKW from FFZ's
 published API image URLs, alongside the self-hosted Party Parrot SVG.
 Use static image renditions so pausing stops all artwork movement. FFZ images
@@ -154,7 +160,7 @@ accidentally redeployed.
 With Node.js and an authenticated Wrangler CLI:
 
 ```sh
-node --test tools/build-website.test.mjs
+node --test tools/*website*.test.mjs
 node tools/build-website.mjs
 wrangler deploy --config website/wrangler.jsonc
 ```
