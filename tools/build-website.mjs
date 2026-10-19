@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, writeFile } from "node:fs/promises";
 
 const root = new URL("../", import.meta.url);
 const output = new URL("build/website/", root);
@@ -28,13 +28,20 @@ async function renderPage(file) {
   return html;
 }
 
-const [html, privacy] = await Promise.all([renderPage("index.html"), renderPage("privacy.html")]);
+const [html, privacy, credits] = await Promise.all([
+  renderPage("index.html"), renderPage("privacy.html"), renderPage("credits.html"),
+]);
 
-await mkdir(new URL("privacy/", output), { recursive: true });
+await Promise.all([
+  mkdir(new URL("privacy/", output), { recursive: true }),
+  mkdir(new URL("credits/", output), { recursive: true }),
+]);
 await Promise.all([
   writeFile(new URL("index.html", output), html),
   ...files.map((file) => copyFile(new URL(`website/${file}`, root), new URL(file, output))),
   writeFile(new URL("privacy/index.html", output), privacy),
+  writeFile(new URL("credits/index.html", output), credits),
+  cp(new URL("website/emotes/", root), new URL("emotes/", output), { recursive: true }),
   copyFile(new URL("Branding/strozz_logo.svg", root), new URL("strozz.svg", output)),
 ]);
 console.log("Built the static website in build/website/");
