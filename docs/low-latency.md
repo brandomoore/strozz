@@ -61,7 +61,7 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   keep rewind timestamps positive and periods separate. GOP decode-origin
   changes require inverse signed composition-offset changes so presentation
   times and compressed picture payloads remain unchanged.
-  When converting TS to MP4, remove only HRD buffering-period/picture-timing SEI
+  When converting TS or remapping source-CMAF clocks, remove only HRD buffering-period/picture-timing SEI
   messages (types 0/1), not entire SEI NALs. Their transport clock model can
   freeze Apple's decoder after a rendition change even when FFmpeg decodes the
   same picture bytes. Preserve caption/user/other SEI and VCL bytes; see
@@ -74,6 +74,11 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   quality. Compatible initialization-URL rotations are not new periods.
   Nonterminal parts must meet the 85% minimum of the 450-ms target (382.5 ms);
   cutting at 380 ms has produced invalid 50-fps playlists.
+  Upstream CMAF fragment boundaries are not necessarily valid part boundaries:
+  variable 100/133-ms fragments can strand a 366-ms group. Split normalized
+  video/audio runs at encoded-sample boundaries when needed, preserving sample
+  bytes, flags, descriptions and presentation clocks rather than widening the
+  target or rejecting a supported rendition. Bound each media entry to ten seconds.
 - **Keep normal latency policy.** Incremental-prefetch sources target 1.5-second
   hold-back and a three-second preferred forward buffer. Completed-only sources
   use cadence-aware timing; do not force the incremental constants onto them.

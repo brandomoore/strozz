@@ -199,6 +199,7 @@ enum NativeFragmentedMP4 {
     let mediaHeader = try NativeCMAF.integer(data, originalLength) == 1 ? 16 : 8
     var seen = Set<UInt64>()
     var components: [(String, Data)] = []
+    var media = Data()
     for item in try NativeCMAF.boxes(boxes[0].payload) {
       if item.type == "mfhd" {
         guard item.payload.count == 8 else { throw NativeHLSError.invalidMedia }
@@ -242,7 +243,7 @@ enum NativeFragmentedMP4 {
           var p = 12
           let firstFlags = sourceFlags & 4 != 0 ? try NativeCMAF.integer(child.payload, p) : sampleFlags
           if sourceFlags & 4 != 0 { p += 4 }
-          var entries = u32(UInt32(count)) + u32(rawOffset)
+          var entries = u32(UInt32(count)) + u32(UInt32(media.count))
           var byteCount: UInt64 = 0
           for index in 0..<count {
             let d = sourceFlags & 0x100 != 0 ? try NativeCMAF.integer(child.payload, p) : duration
@@ -261,7 +262,11 @@ enum NativeFragmentedMP4 {
             guard d > 0, s > 0, p <= child.payload.count else { throw NativeHLSError.invalidMedia }
             byteCount += s
             guard byteCount <= data.count - offset else { throw NativeHLSError.invalidMedia }
-            entries += u32(UInt32(d)) + u32(UInt32(s)) + u32(UInt32(f))
+            let start = offset + Int(byteCount - s)
+            let sample = data.subdata(in: start..<(start + Int(s)))
+            let payload = isVideo ? try removingRemappedTimingAVC(sample) : sample
+            media.append(payload)
+            entries += u32(UInt32(d)) + u32(UInt32(payload.count)) + u32(UInt32(f))
             if isVideo {
               let shifted = composition.addingReportingOverflow(compositionShift)
               guard !shifted.overflow, let c = Int32(exactly: shifted.partialValue) else {
@@ -284,7 +289,6 @@ enum NativeFragmentedMP4 {
       throw NativeHLSError.invalidMedia
     }
     let newLength = components.reduce(8) { $0 + $1.1.count + 8 }
-    let growth = newLength - originalLength + 8 - mediaHeader
     var movie = Data()
     for (type, payload) in components {
       guard type == "traf" else { movie.append(box(type, payload)); continue }
@@ -292,7 +296,7 @@ enum NativeFragmentedMP4 {
       for child in try NativeCMAF.boxes(payload) {
         var value = child.payload
         if child.type == "trun" {
-          let offset = Int64(Int32(bitPattern: UInt32(try NativeCMAF.integer(value, 8)))) + Int64(growth)
+          let offset = Int64(try NativeCMAF.integer(value, 8)) + Int64(newLength + 8)
           guard let checked = Int32(exactly: offset), checked > 0 else { throw NativeHLSError.invalidMedia }
           value.replaceSubrange(8..<12, with: u32(UInt32(bitPattern: checked)))
         }
@@ -300,7 +304,164 @@ enum NativeFragmentedMP4 {
       }
       movie.append(box(type, traf))
     }
-    return box("moof", movie) + box("mdat", boxes[1].payload)
+    return box("moof", movie) + box("mdat", media)
+  }
+
+  static func removingRemappedTimingAVC(_ sample: Data) throws -> Data {
+    var position = 0
+    var result: Data?
+    while position < sample.count {
+      let size = Int(try NativeCMAF.integer(sample, position))
+      guard size > 0, position + 4 <= sample.count - size else { throw NativeHLSError.invalidMedia }
+      let start = position + 4
+      let end = start + size
+      if sample[start] & 31 == 6 {
+        let original = sample.subdata(in: start..<end)
+        let filtered = try NativeTransportDemuxer.removingTransportTimingSEI(original)
+        if filtered != original {
+          if result == nil { result = Data(sample.prefix(position)) }
+          if let filtered { result?.append(u32(UInt32(filtered.count)) + filtered) }
+        } else { result?.append(sample.subdata(in: position..<end)) }
+      } else { result?.append(sample.subdata(in: position..<end)) }
+      position = end
+    }
+    guard result?.isEmpty != true else { throw NativeHLSError.invalidMedia }
+    return result ?? sample
+  }
+
+  /// Split an already-normalized fragment at sample boundaries, retaining
+  /// compressed sample bytes, flags, clocks and sample descriptions.
+  static func splitControlledFragment(_ data: Data, video: NativeCMAF.Track, audio: NativeCMAF.Track,
+                                      maximumDuration: Double, sequence: UInt32) throws -> (Data, Data) {
+    struct Run {
+      let header: Data
+      let video: Bool
+      let clock: UInt64
+      let entries: [Data]
+      let durations: [UInt64]
+      let samples: [Data]
+      let dependencies: Data?
+    }
+    guard maximumDuration.isFinite, maximumDuration > 0 else { throw NativeHLSError.partDuration }
+    let top = try NativeCMAF.boxes(data)
+    guard top.count == 2, top[0].type == "moof", top[1].type == "mdat" else {
+      throw NativeHLSError.invalidMedia
+    }
+    let movieSize = top[0].payload.count + 8
+    var runs: [Run] = []
+    for child in try NativeCMAF.boxes(top[0].payload) where child.type != "mfhd" {
+      guard child.type == "traf" else { throw NativeHLSError.unsupported }
+      let header = try NativeCMAF.child(child.payload, "tfhd")
+      let id = try NativeCMAF.integer(header, 4)
+      guard id == video.id || id == audio.id,
+        try NativeCMAF.integer(header, 0) & 0xFFFFFF == 0x020002 else { throw NativeHLSError.invalidMedia }
+      let isVideo = id == video.id
+      let clock = try NativeCMAF.child(child.payload, "tfdt")
+      guard clock.first == 1 else { throw NativeHLSError.invalidMedia }
+      var entries: [Data] = []
+      var durations: [UInt64] = []
+      var samples: [Data] = []
+      var dependencies: Data?
+      for item in try NativeCMAF.boxes(child.payload) {
+        if item.type == "tfhd" || item.type == "tfdt" { continue }
+        if item.type == "sdtp" { dependencies = item.payload; continue }
+        guard item.type == "trun" else { throw NativeHLSError.unsupported }
+        let flags = try NativeCMAF.integer(item.payload, 0) & 0xFFFFFF
+        guard flags == (isVideo ? 0xF01 : 0x701) else { throw NativeHLSError.invalidMedia }
+        let count = Int(try NativeCMAF.integer(item.payload, 4))
+        let stride = isVideo ? 16 : 12
+        guard count > 0, count <= 10_000, item.payload.count == 12 + count * stride else {
+          throw NativeHLSError.invalidMedia
+        }
+        var offset = Int(try NativeCMAF.integer(item.payload, 8))
+        for index in 0..<count {
+          let start = 12 + index * stride
+          let duration = try NativeCMAF.integer(item.payload, start)
+          let size = Int(try NativeCMAF.integer(item.payload, start + 4))
+          guard duration > 0, size > 0, offset >= movieSize + 8, offset <= data.count - size else {
+            throw NativeHLSError.invalidMedia
+          }
+          entries.append(item.payload.subdata(in: start..<(start + stride)))
+          durations.append(duration)
+          samples.append(data.subdata(in: offset..<(offset + size)))
+          offset += size
+        }
+      }
+      if let dependencies {
+        guard dependencies.count == entries.count + 4 else { throw NativeHLSError.invalidMedia }
+      }
+      runs.append(Run(header: header, video: isVideo,
+        clock: try NativeCMAF.integer(clock, 4, 8), entries: entries, durations: durations,
+        samples: samples, dependencies: dependencies))
+    }
+    guard runs.count == 2, let image = runs.first(where: \.video),
+      let sound = runs.first(where: { !$0.video }) else { throw NativeHLSError.invalidMedia }
+    var elapsed: UInt64 = 0
+    var cut: (video: Int, audio: Int)?
+    for index in image.durations.indices.dropLast() {
+      elapsed += image.durations[index]
+      guard Double(elapsed) / Double(video.scale) <= maximumDuration else { break }
+      let boundary = Double(image.clock + elapsed) / Double(video.scale)
+      var audioClock = sound.clock
+      var count = 0
+      for duration in sound.durations {
+        if Double(audioClock) / Double(audio.scale) >= boundary { break }
+        count += 1
+        audioClock += duration
+      }
+      if count > 0, count < sound.entries.count { cut = (index + 1, count) }
+    }
+    guard let cut, sequence < UInt32.max else { throw NativeHLSError.partDuration }
+    func fragment(first: Bool) throws -> Data {
+      var components: [(Data, Data)] = []
+      for run in runs {
+        let count = run.video ? cut.video : cut.audio
+        let range = first ? 0..<count : count..<run.entries.count
+        let clock = run.clock + (first ? 0 : run.durations.prefix(count).reduce(0, +))
+        var payload = run.header
+        payload = box("tfhd", payload) + full("tfdt", u64(clock), version: 1)
+        let entries = range.reduce(into: Data()) { $0.append(run.entries[$1]) }
+        payload += full("trun", u32(UInt32(range.count)) + u32(0) + entries,
+          version: run.video ? 1 : 0, flags: run.video ? 0xF01 : 0x701)
+        if let dependencies = run.dependencies {
+          payload += box("sdtp", Data(dependencies.prefix(4))
+            + dependencies.subdata(in: (4 + range.lowerBound)..<(4 + range.upperBound)))
+        }
+        let media = range.reduce(into: Data()) { $0.append(run.samples[$1]) }
+        components.append((payload, media))
+      }
+      let mfhd = full("mfhd", u32(first ? sequence : sequence + 1))
+      let size = components.reduce(8 + mfhd.count) { $0 + $1.0.count + 8 }
+      var offset = size + 8
+      var movie = mfhd
+      var media = Data()
+      for (payload, bytes) in components {
+        var track = Data()
+        for item in try NativeCMAF.boxes(payload) {
+          var value = item.payload
+          if item.type == "trun" {
+            guard offset <= Int(Int32.max) else { throw NativeHLSError.invalidMedia }
+            value.replaceSubrange(8..<12, with: u32(UInt32(offset)))
+          }
+          track += box(item.type, value)
+        }
+        movie += box("traf", track)
+        media += bytes
+        offset += bytes.count
+      }
+      return box("moof", movie) + box("mdat", media)
+    }
+    return try (fragment(first: true), fragment(first: false))
+  }
+
+  static func resequencedFragment(_ data: Data, sequence: UInt32) throws -> Data {
+    let moof = try NativeCMAF.child(data, "moof")
+    if try NativeCMAF.integer(NativeCMAF.child(moof, "mfhd"), 4) == UInt64(sequence) { return data }
+    var movie = Data()
+    for item in try NativeCMAF.boxes(moof) {
+      movie += box(item.type, item.type == "mfhd" ? Data(item.payload.prefix(4)) + u32(sequence) : item.payload)
+    }
+    return box("moof", movie) + box("mdat", try NativeCMAF.child(data, "mdat"))
   }
 
   /// Keep presentation clocks and compressed payloads unchanged while giving a

@@ -212,8 +212,10 @@ final class ChatBadgeRenderingTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(80))
         host.view.layoutIfNeeded()
         try await waitUntil {
+          host.view.layoutIfNeeded()
           guard let view = self.imageView(in: host.view) else { return false }
           return view.image != nil && view.isAnimating == (animated && preference)
+            && abs(view.bounds.width - 104) <= 1 && abs(view.bounds.height - 26) <= 1
         }
         let view = try XCTUnwrap(imageView(in: host.view))
         XCTAssertNotNil(view.window)

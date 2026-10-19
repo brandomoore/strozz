@@ -307,8 +307,8 @@ struct NativeTransportDemuxer {
     return (UInt32(1) << count) - 1 + suffix
   }
 
-  // HRD buffering/picture timing belongs to the TS clock model, not the MP4
-  // sample timeline. Preserve other SEI, including captions and user metadata.
+  // HRD buffering/picture timing describes the encoder's original decode clock,
+  // not the remapped sample timeline. Preserve captions and other user metadata.
   static func removingTransportTimingSEI(_ nal: Data) throws -> Data? {
     guard let header = nal.first, header & 31 == 6 else { throw NativeHLSError.invalidMedia }
     let source = Array(nal.dropFirst())
