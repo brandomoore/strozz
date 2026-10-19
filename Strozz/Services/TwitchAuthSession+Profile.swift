@@ -8,7 +8,7 @@ extension TwitchAuthSession {
         let req = TwitchAPIClient.helixRequest(
             url: components.url!, accessToken: accessToken, clientID: clientID)
 
-        let (data, response) = try await NetworkClient.api.data(for: req)
+        let (data, response) = try await loadAuthData(req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard (200...299).contains(status) else {
             throw makeHTTPError(context: "loading Twitch profile", status: status, data: data)

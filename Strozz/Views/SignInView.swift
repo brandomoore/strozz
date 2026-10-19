@@ -32,7 +32,9 @@ struct SignInView: View {
         signInContent
       }
     }
-    .task { await auth.beginDeviceCodeSignIn() }
+    .task {
+      await auth.beginDeviceCodeSignIn(useSavedConnection: auth.cloudSync?.needsRenewalSignIn != true)
+    }
     .onDisappear { auth.cancelSignIn() }
     .onChange(of: auth.isAuthenticated) { _, signedIn in
       if signedIn {
@@ -45,48 +47,60 @@ struct SignInView: View {
   // MARK: - Signed out
 
   private var signInContent: some View {
-    VStack(spacing: 64) {
-      if auth.isRestoringConnection {
-        ProgressView("Checking your saved connection...")
-      } else {
-        HStack(alignment: .center, spacing: 96) {
-          qrOption
+    ScrollView {
+      VStack(spacing: 32) {
+        if auth.isRestoringConnection {
+          ProgressView("Checking your saved connection...")
+        } else if auth.isAuthenticating, auth.activationCode != nil {
+          HStack(alignment: .center, spacing: 64) {
+            qrOption
 
-          orDivider
+            orDivider
 
-          codeOption
+            codeOption
+          }
+          .frame(maxWidth: .infinity)
+        } else if auth.isAuthenticating {
+          ProgressView("Requesting a sign-in code...")
+        } else if auth.errorMessage != nil {
+          Text("Reconnect Twitch")
+            .font(.system(size: 48, weight: .bold))
+        } else {
+          ProgressView("Connecting to Twitch...")
         }
-        .padding(.horizontal, 32)
-        .frame(maxWidth: .infinity)
-      }
 
-      statusArea
-      if !auth.isRestoringConnection, !auth.isAuthenticating, auth.errorMessage != nil {
-        Button("Try again") { Task { await auth.beginDeviceCodeSignIn() } }
-        Button("Sign in with Twitch instead") {
-          Task { await auth.beginDeviceCodeSignIn(useSavedConnection: false) }
+        statusArea
+        if !auth.isRestoringConnection, !auth.isAuthenticating, auth.errorMessage != nil {
+          HStack(spacing: 32) {
+            Button("Sign in with Twitch instead") {
+              Task { await auth.beginDeviceCodeSignIn(useSavedConnection: false) }
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("twitch-sign-in-fresh")
+            Button("Try again") { Task { await auth.beginDeviceCodeSignIn() } }
+              .buttonStyle(.bordered)
+          }
+        }
+
+        if !isEmbedded {
+          Button("Cancel") {
+            auth.cancelSignIn()
+            dismiss()
+          }
+          .padding(.top, 8)
         }
       }
-
-      if !isEmbedded {
-        Button("Cancel") {
-          auth.cancelSignIn()
-          dismiss()
-        }
-        .padding(.top, 8)
-        .padding(.bottom, 48)
-      }
+      .padding(.horizontal, 96)
+      .padding(.vertical, 64)
+      .frame(maxWidth: .infinity)
     }
-    .padding(.horizontal, 96)
-    .padding(.top, 168)
-    .padding(.bottom, 40)
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
   // MARK: - Option: scan QR
 
   private var qrOption: some View {
-    VStack(spacing: 40) {
+    VStack(spacing: 24) {
       Text("Scan with your phone")
         .font(.system(size: 48, weight: .bold))
 
@@ -98,7 +112,7 @@ struct SignInView: View {
   // MARK: - Option: enter a code
 
   private var codeOption: some View {
-    VStack(spacing: 40) {
+    VStack(spacing: 24) {
       Text("Or enter a code")
         .font(.system(size: 48, weight: .bold))
 
@@ -109,7 +123,7 @@ struct SignInView: View {
             .foregroundStyle(.secondary)
           Text(displayURL)
             .font(.system(size: 84, weight: .heavy, design: .rounded))
-            .foregroundStyle(Color(red: 0.58, green: 0.41, blue: 0.96))
+            .foregroundStyle(.primary)
             .lineLimit(1)
             .minimumScaleFactor(0.5)
         }
@@ -128,7 +142,7 @@ struct SignInView: View {
   private var orDivider: some View {
     VStack(spacing: 20) {
       Rectangle()
-        .fill(Color.white.opacity(0.15))
+        .fill(palette.cardOpaqueBorder)
         .frame(width: 2)
         .frame(maxHeight: .infinity)
 
@@ -137,24 +151,27 @@ struct SignInView: View {
         .foregroundStyle(.secondary)
 
       Rectangle()
-        .fill(Color.white.opacity(0.15))
+        .fill(palette.cardOpaqueBorder)
         .frame(width: 2)
         .frame(maxHeight: .infinity)
     }
-    .frame(height: 620)
+    .frame(height: 480)
   }
 
   @ViewBuilder
   private var qrCodeView: some View {
-    let payload = auth.verificationURIComplete ?? auth.verificationURI ?? "https://www.twitch.tv/activate"
-    BrandQRCodeView(payload: payload, logoName: "twitch-logo", moduleColor: Color(red: 0.58, green: 0.41, blue: 0.96))
+    if let payload = auth.verificationURIComplete ?? auth.verificationURI {
+      BrandQRCodeView(payload: payload, logoName: "twitch-logo",
+        moduleColor: palette.chromeOnOpaque, backgroundColor: palette.cardOpaqueSurface, size: 380)
+        .accessibilityIdentifier("twitch-sign-in-qr")
+    }
   }
 
   @ViewBuilder
   private var codeView: some View {
     if let code = auth.activationCode {
       Text(code)
-        .font(.system(size: 156, weight: .black, design: .monospaced))
+        .font(.system(size: 132, weight: .black, design: .monospaced))
         .tracking(10)
         .lineLimit(1)
         .minimumScaleFactor(0.5)
@@ -173,9 +190,13 @@ struct SignInView: View {
     if let error = auth.errorMessage {
       Text(error)
         .font(.title3)
-        .foregroundStyle(.orange)
+        .foregroundStyle(.primary)
         .multilineTextAlignment(.center)
-    } else if auth.isAuthenticating {
+        .lineLimit(nil)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: 1200)
+        .accessibilityIdentifier("twitch-sign-in-error")
+    } else if auth.isAuthenticating, auth.activationCode != nil {
       SignInWaitingView()
     } else if let status = auth.statusMessage {
       Text(status)

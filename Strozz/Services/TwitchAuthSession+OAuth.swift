@@ -206,9 +206,12 @@ extension TwitchAuthSession {
     }
 
     func beginDeviceCodeSignIn(useSavedConnection: Bool = true) async {
-        errorMessage = nil
-
         guard !isAuthenticated, !isAuthenticating, !isRestoringConnection else { return }
+        errorMessage = nil
+        activationCode = nil
+        verificationURI = nil
+        verificationURIComplete = nil
+        if !useSavedConnection { cloudSync?.recordFreshSignInRequest() }
         let attempt = UUID()
         signInAttempt = attempt
         if useSavedConnection, let cloudSync {

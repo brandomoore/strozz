@@ -5,6 +5,35 @@ import XCTest
 
 @MainActor
 final class BrandQRCodeTests: XCTestCase {
+  func testTwitchSignInCodeIsMonochromeAndScansAcrossThemes() throws {
+    let payload = "https://www.twitch.tv/activate?device-code=TESTCODE"
+    let detector = try XCTUnwrap(CIDetector(ofType: CIDetectorTypeQRCode,
+      context: CIContext(options: [.useSoftwareRenderer: true]),
+      options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]))
+    for theme in AppTheme.allCases {
+      for scheme in [ColorScheme.dark, .light] {
+        let palette = theme.palette(systemColorScheme: scheme)
+        let ink = components(palette.chromeOnOpaque)
+        XCTAssertEqual(ink.rgb[0], ink.rgb[1], accuracy: 0.001)
+        XCTAssertEqual(ink.rgb[1], ink.rgb[2], accuracy: 0.001)
+        if !palette.isLight { XCTAssertEqual(ink.rgb[0], 1, accuracy: 0.001) }
+        for opaque in [false, true] {
+          let renderer = ImageRenderer(content: BrandQRCodeView(
+            payload: payload, logoName: "twitch-logo", moduleColor: palette.chromeOnOpaque,
+            backgroundColor: palette.cardOpaqueSurface, size: 380)
+            .environment(\.themePalette, palette)
+            .environment(\.glassDisabled, opaque)
+            .environment(\.colorScheme, theme.preferredColorScheme ?? scheme))
+          renderer.scale = 2
+          let image = try XCTUnwrap(renderer.uiImage)
+          let features = detector.features(in: try XCTUnwrap(CIImage(image: image)))
+          XCTAssertEqual(features.compactMap { ($0 as? CIQRCodeFeature)?.messageString }, [payload],
+            "\(theme.rawValue) \(scheme) opaque=\(opaque)")
+        }
+      }
+    }
+  }
+
   func testRewardsCodeScansInEveryThemeAndTransparencySetting() throws {
     let payload = "https://www.twitch.tv/activate?device-code=TESTCODE"
     let detector = try XCTUnwrap(CIDetector(
