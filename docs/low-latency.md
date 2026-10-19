@@ -212,6 +212,11 @@ are inactive for background/idle playback; absence of a delay event is not proof
 of healthy playback. `playback_main_operation_slow` names slow synchronous
 snapshot, audio-track, access-log or error-log reads.
 
+Check auxiliary chat work too: merged YouTube chat can repeatedly resolve and
+bootstrap large watch pages when unavailable. Keep HTML decoding and literal
+marker searches off the main actor, with cancellation; only publish the parsed
+result/status on the main actor. See `ChatService+YouTube.swift`.
+
 Debug controlled playback emits `native_hls_delivery_timing` per segment:
 `max_ingress_wait_seconds` excludes the preceding chunk's processing;
 `max_consumer_queue_seconds` measures receipt-to-consumption delay;
