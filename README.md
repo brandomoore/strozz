@@ -142,10 +142,14 @@ The hero and header download actions open the same TestFlight invitation directl
 The app's public privacy policy is served at `/privacy/`.
 The hero uses three CSS motion paths around a decorative TV, with a native
 pause checkbox and a still presentation for reduced-motion preferences.
-The six static emote SVGs in `website/emotes/` are self-hosted, so pausing stops
-all artwork movement and visitors make no requests to emote providers.
-Artist attribution, upstream sources, and licenses are linked at `/credits/`;
-preserve these notices when changing the artwork.
+The hero uses peepoHappy, monkaS, PepeHands, OMEGALUL, and KEKW from FFZ's
+published API image URLs, alongside the self-hosted Party Parrot SVG.
+Use static image renditions so pausing stops all artwork movement. FFZ images
+load anonymously without a referrer; CSP allows only that CDN in addition to
+local images. Keep this provider disclosure in `/privacy/` and the source
+listings and Party Parrot license in `/credits/` accurate when changing artwork.
+The build replaces its generated emote directory so removed artwork is not
+accidentally redeployed.
 
 With Node.js and an authenticated Wrangler CLI:
 

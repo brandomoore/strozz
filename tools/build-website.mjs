@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { copyFile, cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 
 const root = new URL("../", import.meta.url);
 const output = new URL("build/website/", root);
@@ -36,6 +36,7 @@ await Promise.all([
   mkdir(new URL("privacy/", output), { recursive: true }),
   mkdir(new URL("credits/", output), { recursive: true }),
 ]);
+await rm(new URL("emotes/", output), { recursive: true, force: true });
 await Promise.all([
   writeFile(new URL("index.html", output), html),
   ...files.map((file) => copyFile(new URL(`website/${file}`, root), new URL(file, output))),
