@@ -214,12 +214,17 @@ test("nearby emotes dodge the cursor while distant emotes stay on their paths", 
   for (let i = 0; i < 20; i++) f.move();
   assert.equal(f.frames.size, 1, "pointer events share one frame loop");
   f.tick();
-  assert.equal(Number.parseFloat(f.styles[0].get("--nudge-x")), 16);
-  assert.equal(Number.parseFloat(f.styles[0].get("--nudge-y")), 0);
+  assert.equal(Number.parseFloat(f.styles[0].get("--nudge-x")), 10.67);
+  const sidestep = Number.parseFloat(f.styles[0].get("--nudge-y"));
+  assert.ok(Math.abs(sidestep) > 0 && Math.abs(sidestep) <= 7);
   assert.equal(f.styles[5].get("--nudge-x"), "0.00px");
   assert.equal(f.styles[5].get("--nudge-y"), "0.00px");
   assert.equal(f.frames.size, 1, "a stationary cursor still influences moving orbits");
   assert.equal(f.attributes.has("data-interacting"), true);
+  f.advance(300);
+  f.tick();
+  assert.notEqual(Number.parseFloat(f.styles[0].get("--nudge-y")), sidestep, "nearby artwork keeps playfully sidestepping");
+  assert.equal(f.styles[5].get("--nudge-rotate"), "0.00deg");
 });
 
 test("a cursor at an emote's exact center produces a finite bounded nudge", () => {
@@ -228,8 +233,8 @@ test("a cursor at an emote's exact center produces a finite bounded nudge", () =
   f.tick();
   const x = Number.parseFloat(f.styles[0].get("--nudge-x"));
   const y = Number.parseFloat(f.styles[0].get("--nudge-y"));
-  assert.equal(x, 36);
-  assert.equal(y, 0);
+  assert.equal(x, 24);
+  assert.ok(Math.hypot(x, y) <= 25);
 });
 
 test("nudges keep artwork inside the scene and viewport", () => {
@@ -255,20 +260,83 @@ test("leaving the scene cancels the loop and lets CSS return the emotes to orbit
   assert.ok(f.styles.every((style) => style.size === 0));
 });
 
-test("pause, lifecycle changes, and input preferences clear active interaction", () => {
+test("pause, lifecycle changes, and input preferences clear active interaction and catch holds", async () => {
   for (const [name, event] of [
     ["pause", "change"], ["reducedMotion", "change"], ["finePointer", "change"],
     ["window", "blur"], ["window", "resize"], ["window", "scroll"],
     ["document", "visibilitychange"], ["scene", "pointercancel"],
   ]) {
     const f = fixture();
-    f.move();
+    await f.ready();
+    f.move(370, 270);
     f.tick();
+    assert.equal(f.anchors[0].hasAttribute("data-catch-rest"), true);
     f[name].emit(event);
     assert.equal(f.frames.size, 0, `${name}:${event} cancels the frame loop`);
     assert.ok(f.styles.every((style) => style.size === 0));
     assert.equal(f.attributes.has("data-interacting"), false);
+    assert.equal(f.anchors[0].hasAttribute("data-catch-rest"), false);
   }
+});
+
+test("landing on artwork holds its rendered pose for 500ms, then allows teasing before another hold", async () => {
+  const f = fixture();
+  await f.ready();
+  const transform = "matrix(1,0,0,1,5,-2)";
+  f.images[0].computed.transform = transform;
+  f.move(370, 270);
+  f.tick();
+  assert.equal(f.anchors[0].hasAttribute("data-catch-rest"), true);
+  assert.equal(f.styles[0].get("transform"), transform);
+  f.advance(499);
+  f.tick();
+  assert.equal(f.anchors[0].hasAttribute("data-catch-rest"), true);
+  f.advance(1);
+  f.tick();
+  assert.equal(f.anchors[0].hasAttribute("data-catch-rest"), false);
+  assert.equal(f.styles[0].has("transform"), false);
+  f.advance(1099);
+  f.tick();
+  assert.equal(f.anchors[0].hasAttribute("data-catch-rest"), false, "a stationary pointer must not freeze it permanently");
+  f.advance(1);
+  f.tick();
+  assert.equal(f.anchors[0].hasAttribute("data-catch-rest"), true);
+  f.click();
+  await f.ready();
+  assert.equal(f.active().length, 11, "the resting artwork is still clickable");
+  assert.equal(f.anchors[0].hasAttribute("data-catch-rest"), false);
+  assert.equal(f.styles[0].has("transform"), false);
+});
+
+test("transparent padding never holds an emote, and leaving visible pixels releases the hold", async () => {
+  const f = fixture();
+  await f.ready();
+  f.move(351, 251);
+  f.tick();
+  assert.equal(f.anchors[0].hasAttribute("data-catch-rest"), false);
+  f.move(370, 270);
+  f.tick();
+  assert.equal(f.anchors[0].hasAttribute("data-catch-rest"), true);
+  f.move(351, 251);
+  f.tick();
+  assert.equal(f.anchors[0].hasAttribute("data-catch-rest"), false);
+  assert.equal(f.styles[0].has("transform"), false);
+});
+
+test("catch holds wait until offspring finish their arrival flight", async () => {
+  const f = fixture();
+  await f.ready();
+  f.pop(f.anchors[0]);
+  await f.ready();
+  const child = f.active().find((a) => a.hasAttribute("data-offspring"));
+  f.move(child.rect.left + 20, child.rect.top + 20);
+  f.tick();
+  assert.equal(child.hasAttribute("data-catch-rest"), false);
+  f.finishAnimations();
+  f.tick();
+  assert.equal(child.hasAttribute("data-catch-rest"), true);
+  f.scene.emit("pointerleave");
+  assert.equal(child.hasAttribute("data-catch-rest"), false);
 });
 
 test("touch, reduced motion, coarse input, pause, and hidden pages never start nudging", () => {
@@ -448,7 +516,7 @@ test("offspring get a settling interval and gentler pixel-accurate dodging", asy
   assert.equal(image.style.getPropertyValue("--nudge-x"), "0.00px");
   f.advance(1);
   f.tick();
-  assert.equal(Math.abs(parseFloat(image.style.getPropertyValue("--nudge-x"))), 27);
+  assert.equal(Math.abs(parseFloat(image.style.getPropertyValue("--nudge-x"))), 18);
 });
 
 test("growth recycles the oldest at 120 and also bounds fading nodes and animations", async () => {

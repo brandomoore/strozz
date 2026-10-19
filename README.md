@@ -142,8 +142,11 @@ the download labels from this state so an unapproved beta never claims to be rea
 The hero and header download actions open the same TestFlight invitation directly.
 The app's public privacy policy is served at `/privacy/`.
 The hero uses three CSS motion paths around a TV. Nearby emotes gently dodge the
-mouse (up to 36px over a 240ms transition) and spring back when it leaves;
-touch scrolling is unaffected. The local
+mouse (up to 24px away plus a small sideways wiggle and tilt, with a 320ms
+transition) and spring back when it leaves. Landing on visible artwork holds
+its current pose and orbit for 500ms to give you time to click, with a cooldown
+before it can rest again. Moving off it releases the hold; touch scrolling is
+unaffected. The local
 `orbits.js` script only runs its frame loop while the mouse is interacting and
 resets on pause, scrolling, focus/visibility changes, or reduced motion.
 Clicking the TV toggles a native pause checkbox; keyboard users can Tab to it
@@ -159,7 +162,8 @@ At 120 active emotes, new catches fade out the oldest (except the focused
 keyboard control). At most six retiring nodes remain during their short fades.
 The population is local to the page and resets on reload.
 Transparent pixels and `object-fit` padding do not count as hits, even during
-arrival animations. Offspring use gentler repulsion and a settling interval.
+arrival animations. Offspring have slightly larger 28–38px artwork, gentler
+repulsion, and a settling interval.
 Native keyboard focus transfers to a new emote when its parent is consumed.
 Paused or reduced-motion growth happens without travel/fade animations;
 lifecycle changes settle the population rather than deleting it.
