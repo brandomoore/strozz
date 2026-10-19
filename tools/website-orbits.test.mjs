@@ -120,8 +120,10 @@ function fixture({ reduced = false, fine = true, paused = false, decodeFailure =
   });
   let nextFrame = 0;
   let nextTimer = 0;
+  let now = 1000;
   runInNewContext(source, {
     window, document, DOMMatrix: Matrix,
+    performance: { now: () => now },
     console: { warn: (...args) => warnings.push(args) },
     getComputedStyle: (node) => node.computed,
     setTimeout: (callback) => { timers.set(++nextTimer, callback); return nextTimer; },
@@ -135,6 +137,7 @@ function fixture({ reduced = false, fine = true, paused = false, decodeFailure =
   return {
     frames, timers, warnings, attributes: scene.attributes, styles, images, anchors, scene, tv, pause, reducedMotion, finePointer, window, document,
     ready: () => new Promise(setImmediate),
+    advance: (milliseconds) => { now += milliseconds; },
     move: (clientX = 330, clientY = 270, pointerType = "mouse") => scene.emit("pointermove", { clientX, clientY, pointerType }),
     click: (clientX = 370, clientY = 270, extra = {}) => scene.emit("click", {
       button: 0, detail: 1, clientX, clientY, target: scene, ...extra,
@@ -154,7 +157,7 @@ test("nearby emotes dodge the cursor while distant emotes stay on their paths", 
   for (let i = 0; i < 20; i++) f.move();
   assert.equal(f.frames.size, 1, "pointer events share one frame loop");
   f.tick();
-  assert.ok(Number.parseFloat(f.styles[0].get("--nudge-x")) > 20);
+  assert.equal(Number.parseFloat(f.styles[0].get("--nudge-x")), 16);
   assert.equal(Number.parseFloat(f.styles[0].get("--nudge-y")), 0);
   assert.equal(f.styles[5].get("--nudge-x"), "0.00px");
   assert.equal(f.styles[5].get("--nudge-y"), "0.00px");
@@ -168,7 +171,7 @@ test("a cursor at an emote's exact center produces a finite bounded nudge", () =
   f.tick();
   const x = Number.parseFloat(f.styles[0].get("--nudge-x"));
   const y = Number.parseFloat(f.styles[0].get("--nudge-y"));
-  assert.equal(x, 54);
+  assert.equal(x, 36);
   assert.equal(y, 0);
 });
 
@@ -236,13 +239,17 @@ test("only visible image pixels produce a bounded burst of matching emotes", asy
   assert.equal(f.scene.children[0].children.length, 8);
   assert.ok(f.scene.children[0].children.every((particle) => particle.src === "emote-0.png"));
   assert.equal(f.anchors[0].attributes.has("data-caught"), true);
+  assert.equal(f.anchors[0].attributes.has("data-popped"), true);
+  const originalTimer = [...f.timers.keys()][0];
   for (let index = 0; index < 30; index++) f.click();
-  assert.equal(f.scene.children.length, 1, "rapid clicks replace rather than accumulate bursts");
+  assert.equal(f.scene.children.length, 1, "hidden artwork cannot start another burst");
+  assert.equal([...f.timers.keys()][0], originalTimer, "clicking hidden artwork must not delay its return");
   assert.equal(f.timers.size, 1);
   f.expire();
   assert.equal(f.scene.children.length, 0);
   assert.equal(f.timers.size, 0);
   assert.equal(f.anchors[0].attributes.has("data-caught"), false);
+  assert.equal(f.anchors[0].attributes.has("data-popped"), false);
 });
 
 test("hit testing combines current image and track transforms at the nudged position", async () => {
@@ -303,8 +310,10 @@ test("keyboard catches work without pointer coordinates; pause and reduced motio
     f.click(0, 0, { detail: 0, target: f.anchors[0] });
     assert.equal(f.anchors[0].attributes.has("data-caught"), true);
     assert.equal(f.scene.children.length, options.paused || options.reduced ? 0 : 1);
+    assert.equal(f.anchors[0].attributes.has("data-popped"), !options.paused && !options.reduced);
     f.expire();
     assert.equal(f.anchors[0].attributes.has("data-caught"), false);
+    assert.equal(f.anchors[0].attributes.has("data-popped"), false);
     f.reducedMotion.matches = !options.reduced;
     f.reducedMotion.emit("change");
     assert.equal(f.pause.disabled, !options.reduced);
@@ -339,7 +348,49 @@ test("lifecycle changes clear catches; pointer leave lets an already-earned burs
     assert.equal(f.scene.children.length, 0);
     assert.equal(f.timers.size, 0);
     assert.equal(f.anchors[0].attributes.has("data-caught"), false);
+    assert.equal(f.anchors[0].attributes.has("data-popped"), false);
   }
+});
+
+test("caught emotes return to the orbit with a short breather before dodging again", async () => {
+  const f = fixture();
+  await f.ready();
+  f.move();
+  f.tick();
+  assert.equal(f.styles[0].get("--nudge-x"), "16.00px");
+  f.click();
+  assert.equal(f.styles[0].size, 0, "catching clears the old displacement immediately");
+  f.tick();
+  assert.equal(f.styles[0].get("--nudge-x"), "0.00px", "hidden emotes must stay on their orbital anchor");
+  f.advance(700);
+  f.expire();
+  assert.equal(f.anchors[0].attributes.has("data-popped"), false);
+  f.tick();
+  assert.equal(f.styles[0].get("--nudge-x"), "0.00px");
+  f.advance(349);
+  f.tick();
+  assert.equal(f.styles[0].get("--nudge-x"), "0.00px");
+  f.advance(1);
+  f.tick();
+  assert.equal(f.styles[0].get("--nudge-x"), "16.00px");
+  f.click();
+  assert.equal(f.anchors[0].attributes.has("data-popped"), true, "the restored emote can be caught again");
+});
+
+test("catching another emote restores the previous one and repeated keyboard input cannot catch hidden art", async () => {
+  const f = fixture();
+  await f.ready();
+  f.click();
+  const originalTimer = [...f.timers.keys()][0];
+  f.click(0, 0, { detail: 0, target: f.anchors[0] });
+  assert.equal([...f.timers.keys()][0], originalTimer);
+  f.click(415, 285);
+  assert.equal(f.anchors[0].attributes.has("data-popped"), false);
+  assert.equal(f.anchors[1].attributes.has("data-popped"), true);
+  assert.equal(f.scene.children.length, 1);
+  assert.equal(f.timers.size, 1);
+  f.expire();
+  assert.ok(f.anchors.every((anchor) => !anchor.attributes.has("data-popped")));
 });
 
 test("right clicks and hidden pages cannot catch emotes", async () => {

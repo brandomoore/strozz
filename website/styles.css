@@ -139,6 +139,8 @@ h1, h2 { text-wrap: balance; }
 .orbit-emote:focus-visible { outline: none; animation-play-state: paused; }
 .orbit-emote:focus-visible img { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
 .orbit-emote[data-caught] img { filter: brightness(1.15) drop-shadow(0 0 8px var(--violet)); }
+.orbit-scene .orbit-art .orbit-emote[data-popped] img { opacity: 0; transition: none; transform: rotate(calc(-1 * var(--tilt))); }
+.orbit-emote[data-popped]:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
 .orbit-scene[data-catchable] { cursor: pointer; }
 .emote-burst { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .emote-particle {
@@ -211,7 +213,7 @@ h1, h2 { text-wrap: balance; }
 .orbit-pause:checked ~ .orbit-art .tv-live::before { background: var(--muted); }
 @media (prefers-reduced-motion: no-preference) {
   .orbit-emote { animation-play-state: running; }
-  .orbit-scene[data-interacting] .orbit-emote img { transition: transform 180ms ease-out; }
+  .orbit-scene[data-interacting] .orbit-emote img { transition: transform 240ms ease-out; }
   .emote-particle { animation: emote-pop 650ms ease-out both; }
   .orbit-tv:hover { border-color: var(--accent); }
 }

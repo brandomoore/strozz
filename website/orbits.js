@@ -5,6 +5,7 @@
   const emotes = [...scene.querySelectorAll(".orbit-emote")].map((anchor) => ({
     anchor,
     image: anchor.querySelector("img"),
+    restUntil: 0,
   }));
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const finePointer = window.matchMedia("(any-hover: hover) and (any-pointer: fine)");
@@ -40,7 +41,7 @@
     // Later tracks paint above earlier ones. Transparent pixels let clicks through.
     for (const emote of [...emotes].reverse()) {
       const { image, anchor, pixels } = emote;
-      if (!pixels) continue;
+      if (!pixels || (emote === caught && burst)) continue;
       const rect = image.getBoundingClientRect();
       if (x < rect.left || x >= rect.right || y < rect.top || y >= rect.bottom) continue;
       const style = getComputedStyle(image);
@@ -63,10 +64,23 @@
     return null;
   }
 
+  function resetNudge({ image }) {
+    for (const property of ["--nudge-x", "--nudge-y", "--nudge-rotate"]) {
+      image.style.removeProperty(property);
+    }
+  }
+
   function clearCatch() {
     if (catchTimer !== null) clearTimeout(catchTimer);
     catchTimer = null;
-    caught?.anchor.removeAttribute("data-caught");
+    if (caught) {
+      caught.anchor.removeAttribute("data-caught");
+      if (burst) {
+        resetNudge(caught);
+        caught.restUntil = performance.now() + 350;
+        caught.anchor.removeAttribute("data-popped");
+      }
+    }
     caught = null;
     burst?.remove();
     burst = null;
@@ -97,6 +111,9 @@
         burst.append(particle);
       }
       scene.append(burst);
+      resetNudge(emote);
+      emote.anchor.setAttribute("data-popped", "");
+      scene.removeAttribute("data-catchable");
     }
     catchTimer = setTimeout(clearCatch, 700);
   }
@@ -107,11 +124,7 @@
     frame = null;
     scene.removeAttribute("data-interacting");
     scene.removeAttribute("data-catchable");
-    for (const { image } of emotes) {
-      for (const property of ["--nudge-x", "--nudge-y", "--nudge-rotate"]) {
-        image.style.removeProperty(property);
-      }
-    }
+    emotes.forEach(resetNudge);
   }
 
   function stop() {
@@ -125,9 +138,12 @@
 
     const bounds = scene.getBoundingClientRect();
     const radius = Math.min(120, bounds.width * 0.24);
-    const strength = Math.min(54, bounds.width * 0.12);
+    const strength = Math.min(36, bounds.width * 0.08);
+    const now = performance.now();
     // Read the unnudged anchors together, before writing any image transforms.
-    const offsets = emotes.map(({ anchor }, index) => {
+    const offsets = emotes.map((emote, index) => {
+      if ((emote === caught && burst) || now < emote.restUntil) return { x: 0, y: 0 };
+      const { anchor } = emote;
       const rect = anchor.getBoundingClientRect();
       const x = rect.left + rect.width / 2;
       const y = rect.top + rect.height / 2;
@@ -174,7 +190,7 @@
     const emote = event.detail === 0
       ? emotes.find(({ anchor }) => anchor === event.target.closest(".orbit-emote"))
       : hitTest(event.clientX, event.clientY);
-    if (emote?.pixels) pop(emote);
+    if (emote?.pixels && !(emote === caught && burst)) pop(emote);
   });
   scene.addEventListener("focusin", (event) => {
     if (event.target.closest(".orbit-emote")) reset();

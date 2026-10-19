@@ -141,8 +141,9 @@ update the getting-started notice above, rebuild, and deploy. The build generate
 the download labels from this state so an unapproved beta never claims to be ready.
 The hero and header download actions open the same TestFlight invitation directly.
 The app's public privacy policy is served at `/privacy/`.
-The hero uses three CSS motion paths around a TV. Nearby emotes dodge the mouse
-and spring back when it leaves; touch scrolling is unaffected. The local
+The hero uses three CSS motion paths around a TV. Nearby emotes gently dodge the
+mouse (up to 36px over a 240ms transition) and spring back when it leaves;
+touch scrolling is unaffected. The local
 `orbits.js` script only runs its frame loop while the mouse is interacting and
 resets on pause, scrolling, focus/visibility changes, or reduced motion.
 Clicking the TV toggles a native pause checkbox; keyboard users can Tab to it
@@ -151,6 +152,10 @@ Reduced motion disables both orbiting and cursor nudges.
 Clicking the visible artwork of an emote scatters eight tiny copies; transparent
 pixels and the `object-fit` padding do not count. Hit testing samples each image's
 alpha channel through its current on-screen transform, including cursor nudges.
+During the burst, the caught artwork disappears and cannot be caught again.
+After 700ms it returns to its current orbital position with its nudge cleared
+and a 350ms breather before dodging again. Catching another emote or a lifecycle
+reset restores the previous one immediately; an emote is never left hidden.
 Only decoded, readable images become keyboard-accessible buttons (Enter/Space).
 Paused or reduced-motion scenes acknowledge a catch with a still highlight instead
 of a burst. Bursts are bounded, replaced on another catch, and cleared on lifecycle
