@@ -79,6 +79,19 @@ Keep archives, dSYMs, receipts and scoped evidence until their owner releases
 them. Do not stop another build, alter signing or clean shared caches during
 shipping. Keep credentials and local release artifacts out of commits.
 
+### Public TestFlight beta
+
+The new Strozz app's external group is **Public Beta**, with invitation
+**https://testflight.apple.com/join/36mzCevV**. This is separate from the internal
+group used by the existing upload lane.
+
+For public distribution, attach the intended iOS and tvOS builds to this group
+and submit each for beta review when required. Verify external availability for
+both platforms; a valid upload or internal testing status is not enough.
+The public privacy policy is **https://strozz.brando.page/privacy/**.
+Keep `website/beta.json` and the README's getting-started notice aligned with
+Apple's actual external-testing state, then rebuild and deploy the website.
+
 ### Explicit tvOS development profiles
 
 If automatic signing falls back to a wildcard profile that lacks App Groups,
