@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -68,7 +68,7 @@ test("unknown availability fails instead of claiming a successful rollout", asyn
   await assert.rejects(execute(process.execPath, [join(root, "tools/build-website.mjs")]), /Unknown public beta availability/);
 });
 
-test("the orbital hero ships static local artwork, credits, and motion controls", async (t) => {
+test("the orbital hero uses recognizable chat emotes with restricted delivery and motion controls", async (t) => {
   const root = await fixture(t, "available");
   await execute(process.execPath, [join(root, "tools/build-website.mjs")]);
   const output = join(root, "build/website");
@@ -77,28 +77,58 @@ test("the orbital hero ships static local artwork, credits, and motion controls"
   assert.match(html, /<input class="orbit-pause" type="checkbox" id="pause-orbits">/);
   assert.match(html, /<label class="orbit-control" for="pause-orbits">Pause emote animation<\/label>/);
   assert.match(html, /class="orbit-art" aria-hidden="true"/);
-  assert.doesNotMatch(html, /<script|<img[^>]+src="https?:/);
-  const emotes = [...html.matchAll(/<img src="(\/emotes\/[^"]+\.svg)" width="48" height="48" alt="">/g)];
+  assert.doesNotMatch(html, /<script|blob-(?:cool|laugh|think|owo|cry)/);
+  const emotes = [...html.matchAll(/class="orbit-emote" data-emote="([^"]+)"><img src="([^"]+)"([^>]*)>/g)];
   assert.equal(emotes.length, 6);
-  assert.equal(new Set(emotes.map((match) => match[1])).size, 6);
-  for (const [, path] of emotes) {
-    const svg = await readFile(join(output, path), "utf8");
-    assert.match(svg, /<svg/);
-    assert.doesNotMatch(svg, /<script|<animate|<set\b|<image|(?:xlink:)?href=["']https?:/i);
-    assert.equal(svg, await readFile(join(root, "website", path), "utf8"));
+  const expected = {
+    "Party Parrot": "/emotes/party-parrot.svg",
+    peepoHappy: "https://cdn.frankerfacez.com/emote/228449/4",
+    OMEGALUL: "https://cdn.frankerfacez.com/emote/128054/4",
+    monkaS: "https://cdn.frankerfacez.com/emote/130762/4",
+    KEKW: "https://cdn.frankerfacez.com/emote/381875/4",
+    PepeHands: "https://cdn.frankerfacez.com/emote/231552/4",
+  };
+  assert.deepEqual(Object.fromEntries(emotes.map(([, name, url]) => [name, url])), expected);
+  for (const [, name, url, attributes] of emotes) {
+    assert.match(attributes, /width="48" height="48" alt=""/);
+    if (name !== "Party Parrot") {
+      assert.match(attributes, /crossorigin="anonymous" referrerpolicy="no-referrer"/);
+      assert.equal(new URL(url).hostname, "cdn.frankerfacez.com");
+    }
   }
+  const parrot = await readFile(join(output, expected["Party Parrot"]), "utf8");
+  assert.doesNotMatch(parrot, /<script|<animate|<set\b|<image|(?:xlink:)?href=["']https?:/i);
+  assert.equal(parrot, await readFile(join(root, "website", expected["Party Parrot"]), "utf8"));
+  const headers = await readFile(join(output, "_headers"), "utf8");
+  assert.match(headers, /default-src 'none'; style-src 'self'; img-src 'self' https:\/\/cdn\.frankerfacez\.com;/);
   const css = await readFile(join(output, "styles.css"), "utf8");
   assert.match(css, /\.orbit-emote\s*\{[^}]*animation-play-state: paused;/);
   assert.match(css, /@media \(prefers-reduced-motion: no-preference\)\s*\{\s*\.orbit-emote \{ animation-play-state: running; \}/);
   assert.match(css, /\.orbit-pause:checked ~ \.orbit-art \.orbit-emote \{ animation-play-state: paused; \}/);
   const credits = await readFile(join(output, "credits/index.html"), "utf8");
-  assert.match(credits, /John Hobbs|Blobmoji/);
+  assert.match(credits, /John Hobbs/);
   assert.match(credits, /creativecommons\.org\/licenses\/by-sa\/4\.0/);
   assert.ok(credits.includes(`data-beta-link href="${publicInvite}"`));
   assert.doesNotMatch(credits, /\{\{/);
-  for (const license of ["LICENSE-BlobEmoji.txt", "LICENSE-Blobmoji.txt"]) {
-    assert.match(await readFile(join(output, "emotes", license), "utf8"), /Apache License/);
+  for (const [name, url] of Object.entries(expected)) {
+    if (name === "Party Parrot") continue;
+    const id = new URL(url).pathname.split("/")[2];
+    assert.ok(credits.includes(`https://www.frankerfacez.com/emoticon/${id}-${name}`));
   }
+  assert.doesNotMatch(credits, /Blobmoji|Blob OwO|No emote-provider requests/);
+  const privacy = await readFile(join(output, "privacy/index.html"), "utf8");
+  assert.match(privacy, /cdn\.frankerfacez\.com/);
+  assert.match(privacy, /omit cookies and the referring page URL/);
+});
+
+test("rebuilding removes retired local emotes from the deployed assets", async (t) => {
+  const root = await fixture(t, "available");
+  const emotes = join(root, "build/website/emotes");
+  await mkdir(emotes, { recursive: true });
+  await writeFile(join(emotes, "blob-cool.svg"), "<svg/>");
+  await writeFile(join(emotes, "LICENSE-Blobmoji.txt"), "Retired license");
+  await execute(process.execPath, [join(root, "tools/build-website.mjs")]);
+  assert.deepEqual(await readdir(emotes), ["party-parrot.svg"]);
 });
 
 test("download URLs must be actual HTTPS TestFlight invitations", async (t) => {
