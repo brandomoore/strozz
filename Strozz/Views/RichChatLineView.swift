@@ -519,6 +519,7 @@ struct ChatEmoteImage: UIViewRepresentable {
     final class Coordinator {
         var request = UUID()
         var animated: Bool?
+        var playbackActive = false
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -535,8 +536,9 @@ struct ChatEmoteImage: UIViewRepresentable {
     func updateUIView(_ view: SDAnimatedImageView, context: Context) {
         let coordinator = context.coordinator
         view.autoPlayAnimatedImage = animated && active
-        view.clearBufferWhenStopped = !active
-        view.maxBufferSize = isGIF ? 2 * 1024 * 1024 : 0
+        view.clearBufferWhenStopped = false
+        let bufferSize: UInt = isGIF ? 2 * 1024 * 1024 : 0
+        if view.maxBufferSize != bufferSize { view.maxBufferSize = bufferSize }
         if view.sd_imageURL != url || coordinator.animated != animated {
             coordinator.request = UUID()
             coordinator.animated = animated
@@ -559,8 +561,7 @@ struct ChatEmoteImage: UIViewRepresentable {
                 }
             }
         }
-        if animated && active { view.startAnimating() }
-        else { view.stopAnimating() }
+        Self.updateAnimation(view, coordinator: coordinator, shouldAnimate: animated && active)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: SDAnimatedImageView, context: Context) -> CGSize? {
@@ -570,9 +571,22 @@ struct ChatEmoteImage: UIViewRepresentable {
     static func dismantleUIView(_ view: SDAnimatedImageView, coordinator: Coordinator) {
         coordinator.request = UUID()
         view.autoPlayAnimatedImage = false
-        view.clearBufferWhenStopped = true
-        view.stopAnimating()
+        updateAnimation(view, coordinator: coordinator, shouldAnimate: false)
         view.sd_cancelCurrentImageLoad()
+    }
+
+    static func updateAnimation(_ view: SDAnimatedImageView, coordinator: Coordinator, shouldAnimate: Bool) {
+        view.clearBufferWhenStopped = false
+        if shouldAnimate {
+            if !view.isAnimating { view.startAnimating() }
+        } else if coordinator.playbackActive || view.isAnimating {
+            // The SDK pool is shared by identical images. Purge once when this
+            // consumer stops, not again on every inactive update or teardown.
+            view.clearBufferWhenStopped = true
+            view.stopAnimating()
+            view.clearBufferWhenStopped = false
+        }
+        coordinator.playbackActive = shouldAnimate
     }
 }
 

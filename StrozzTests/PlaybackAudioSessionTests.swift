@@ -4,6 +4,46 @@ import XCTest
 
 @MainActor
 final class PlaybackAudioSessionTests: XCTestCase {
+  func testAudioDiagnosticSnapshotDoesNotActivateResumeOrUnmutePlayback() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let recorder = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(
+      directory: directory, mirrorToSystemLog: false))
+    let model = PlayerModel(playbackTelemetry: recorder)
+    model.player.isMuted = true
+    model.player.volume = 0.35
+    model.isUserPaused = true
+    model.nativeNeedsRefresh = true
+    model.multiviewContext = MultiviewPlaybackContext()
+    model.multiviewContext?.videoIsVisible = false
+    var activations = 0
+    model.activateAudioSession = { activations += 1 }
+    let original = model.player
+    let view = PlayerView(channel: "fixture", auth: TwitchAuthSession(), model: model)
+    view.didRequestPlayback = true
+    recorder.beginSession(channel: "fixture", playbackMode: "live")
+    view.recordAudioPlaybackState(reason: "test_snapshot")
+    await recorder.flush()
+    let rows = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+      .filter { $0.pathExtension == "jsonl" }
+      .flatMap { try Data(contentsOf: $0).split(separator: 0x0A) }
+      .map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any]) }
+    let state = try XCTUnwrap(rows.first { $0["name"] as? String == "audio_playback_state" })
+    let flags = try XCTUnwrap(state["flags"] as? [String: Bool])
+    XCTAssertEqual(flags["player_muted"], true)
+    XCTAssertEqual(flags["user_paused"], true)
+    XCTAssertEqual(flags["native_needs_refresh"], true)
+    XCTAssertEqual(flags["video_presentation_visible"], false)
+    XCTAssertEqual(activations, 0)
+    XCTAssertTrue(model.player === original)
+    XCTAssertTrue(model.player.isMuted)
+    XCTAssertTrue(model.isUserPaused)
+    XCTAssertEqual(model.player.volume, 0.35, accuracy: 0.001)
+    XCTAssertEqual(model.player.rate, 0)
+    recorder.endSession(reason: "test")
+    await recorder.flush()
+  }
+
   func testMutedMultiviewPaneResumesOnlyAfterAudibleOwnerReclaimsAudio() {
     for paused in [false, true] {
       let model = PlayerModel()

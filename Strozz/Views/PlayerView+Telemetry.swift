@@ -429,6 +429,7 @@ extension PlayerView {
   }
 
   func rebuildPlaybackPlayer(reason: String, isFailure: Bool = true) {
+    recordAudioPlaybackState(reason: "before_player_rebuild:\(reason)")
     recordPlaybackEvent(isFailure ? "failed_player_replaced" : "playback_player_recreated",
       level: isFailure ? .error : .info,
       attributes: PlaybackTelemetryRecorder.errorAttributes(player.error)
@@ -445,6 +446,7 @@ extension PlayerView {
     replacement.actionAtItemEnd = previous.actionAtItemEnd
     replacement.allowsExternalPlayback = previous.allowsExternalPlayback
     model.player = replacement
+    recordAudioPlaybackState(reason: "after_player_rebuild:\(reason)")
   }
 
   private func telemetryItemStatus(_ status: AVPlayerItem.Status?) -> String {

@@ -119,7 +119,7 @@ final class YouTubeConcurrentViewersService {
 
   /// Also used by the merged-chat bootstrap, which already fetches this same
   /// live watch page even for streamers absent from the shared alias snapshot.
-  static func concurrentViewers(inWatchHTML html: String) -> Int? {
+  nonisolated static func concurrentViewers(inWatchHTML html: String) -> Int? {
     guard firstMatch(in: html, pattern: "\"isLiveNow\":true") != nil else { return nil }
     if let raw = firstMatch(in: html, pattern: "\"originalViewCount\":\"([0-9]+)\""),
       let value = Int(raw), value > 0 {
@@ -136,7 +136,7 @@ final class YouTubeConcurrentViewersService {
 
   /// Returns the first capture group of `pattern` in `text`, or the whole match
   /// when the pattern has no capture group.
-  private static func firstMatch(in text: String, pattern: String) -> String? {
+  nonisolated private static func firstMatch(in text: String, pattern: String) -> String? {
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
     let range = NSRange(text.startIndex..., in: text)
     guard let match = regex.firstMatch(in: text, range: range) else { return nil }

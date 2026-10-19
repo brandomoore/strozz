@@ -51,7 +51,7 @@ enum TwitchSyncError: LocalizedError, Equatable {
     case .invalidAccount: "The saved connection could not be verified. Sign in to Twitch again."
     case .accountChanged: "The Apple Account changed. Sync again before using this connection."
     case .accountConflict: "This device and iCloud use different Twitch accounts. Choose which connection to keep."
-    case .refreshPending: "Another device is finishing Twitch sign-in renewal. Open Strozz there, or sign in again if renewal was interrupted."
+    case .refreshPending: String(localized: "Your saved Twitch connection couldn't finish refreshing. Try syncing again, or sign in with Twitch to reconnect.")
     case .busy: "An account update is already in progress. Try again shortly."
     }
   }

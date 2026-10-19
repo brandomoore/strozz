@@ -11,7 +11,115 @@ import XCTest
 #endif
 
 @MainActor
+private final class AnimationCountingView: SDAnimatedImageView {
+  var starts = 0
+  var stops = 0
+  var purges = 0
+  private var playing = false
+
+  override var isAnimating: Bool { playing }
+  override func startAnimating() { starts += 1; playing = true }
+  override func stopAnimating() {
+    stops += 1
+    if clearBufferWhenStopped { purges += 1 }
+    playing = false
+  }
+}
+
+private final class DecodeCountingImage: SDAnimatedImage, @unchecked Sendable {
+  private let countLock = NSLock()
+  private var count = 0
+  var decodedFrames: Int { countLock.withLock { count } }
+
+  override func animatedImageFrame(at index: UInt) -> UIImage? {
+    countLock.withLock { count += 1 }
+    return super.animatedImageFrame(at: index)
+  }
+}
+
+@MainActor
 final class ChatBadgeRenderingTests: XCTestCase {
+  func testIdleEmoteUpdatesAndTeardownDoNotRepeatedlyPurgeTheSharedPool() {
+    let view = AnimationCountingView()
+    let coordinator = ChatEmoteImage.Coordinator()
+    for _ in 0..<100 {
+      ChatEmoteImage.updateAnimation(view, coordinator: coordinator, shouldAnimate: false)
+    }
+    XCTAssertEqual(view.stops, 0)
+    for _ in 0..<100 {
+      ChatEmoteImage.updateAnimation(view, coordinator: coordinator, shouldAnimate: true)
+    }
+    XCTAssertEqual(view.starts, 1)
+    for _ in 0..<100 {
+      ChatEmoteImage.updateAnimation(view, coordinator: coordinator, shouldAnimate: false)
+    }
+    XCTAssertEqual(view.stops, 1)
+    XCTAssertEqual(view.purges, 1, "Leaving the viewport must still release this consumer's buffers once")
+    ChatEmoteImage.dismantleUIView(view, coordinator: coordinator)
+    XCTAssertEqual(view.stops, 1, "Removing an already-inactive row must not flush another visible copy's frames")
+    XCTAssertFalse(view.clearBufferWhenStopped, "UIKit cleanup must not repeat the shared-pool purge")
+  }
+
+  func testOptInSharedAnimatedEmoteCacheAvoidsRepeatedIdleDecodeWork() async throws {
+    guard ProcessInfo.processInfo.environment["STROZZ_EMOTE_CACHE_PERFORMANCE"] == "1" else {
+      throw XCTSkip("Opt in on an isolated simulator to compare native shared-frame decode work.")
+    }
+    let frames = (0..<8).map { index in
+      SDImageFrame(image: UIGraphicsImageRenderer(size: CGSize(width: 128, height: 128)).image {
+        UIColor(hue: CGFloat(index) / 8, saturation: 1, brightness: 1, alpha: 1).setFill()
+        $0.fill(CGRect(x: 0, y: 0, width: 128, height: 128))
+      }, duration: 0.06)
+    }
+    let source = try XCTUnwrap(SDImageCoderHelper.animatedImage(with: frames))
+    let data = try XCTUnwrap(SDImageWebPCoder.shared.encodedData(with: source, format: .webP, options: nil))
+    let image = try XCTUnwrap(DecodeCountingImage(data: data))
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let previous = scene.keyWindow
+    let controller = UIViewController()
+    let visible = SDAnimatedImageView(frame: CGRect(x: 0, y: 0, width: 128, height: 128))
+    let inactive = SDAnimatedImageView(frame: CGRect(x: 140, y: 0, width: 128, height: 128))
+    visible.autoPlayAnimatedImage = true
+    inactive.autoPlayAnimatedImage = false
+    controller.view.addSubview(visible)
+    controller.view.addSubview(inactive)
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = controller
+    window.makeKeyAndVisible()
+    visible.image = image
+    inactive.image = image
+    defer {
+      visible.stopAnimating()
+      inactive.stopAnimating()
+      window.isHidden = true
+      window.rootViewController = nil
+      previous?.makeKey()
+    }
+    try await waitUntil { visible.isAnimating }
+    var before = image.decodedFrames
+    for _ in 0..<60 {
+      inactive.clearBufferWhenStopped = true
+      inactive.stopAnimating()
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    let legacy = image.decodedFrames - before
+    let coordinator = ChatEmoteImage.Coordinator()
+    before = image.decodedFrames
+    var visibleFrameIndices = Set<UInt>()
+    for _ in 0..<60 {
+      ChatEmoteImage.updateAnimation(inactive, coordinator: coordinator, shouldAnimate: false)
+      try await Task.sleep(for: .milliseconds(20))
+      if let index = visible.player?.currentFrameIndex { visibleFrameIndices.insert(index) }
+    }
+    let optimized = image.decodedFrames - before
+    print("EMOTE_CACHE legacy_idle_stop_decodes=\(legacy) optimized_idle_updates_decodes=\(optimized)")
+    XCTAssertTrue(visible.isAnimating, "Keep the visible copy animated")
+    XCTAssertFalse(inactive.isAnimating)
+    XCTAssertEqual(image.cgImage?.width, frames[0].image.cgImage?.width, "Preserve source pixel width")
+    XCTAssertEqual(image.cgImage?.height, frames[0].image.cgImage?.height, "Preserve source pixel height")
+    XCTAssertGreaterThan(visibleFrameIndices.count, 1, "Visible frames must continue advancing")
+    XCTAssertLessThan(optimized, legacy, "Inactive row updates must preserve the shared native frame cache")
+  }
+
   func testOptInBurnEmotesRenderFromTheCompleteCatalog() async throws {
     guard ProcessInfo.processInfo.environment["STROZZ_EMOTE_LIVE_TESTS"] == "1" else {
       throw XCTSkip("Opt in to verify current provider assets.")
@@ -104,8 +212,10 @@ final class ChatBadgeRenderingTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(80))
         host.view.layoutIfNeeded()
         try await waitUntil {
+          host.view.layoutIfNeeded()
           guard let view = self.imageView(in: host.view) else { return false }
           return view.image != nil && view.isAnimating == (animated && preference)
+            && abs(view.bounds.width - 104) <= 1 && abs(view.bounds.height - 26) <= 1
         }
         let view = try XCTUnwrap(imageView(in: host.view))
         XCTAssertNotNil(view.window)

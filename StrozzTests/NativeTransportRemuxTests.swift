@@ -401,15 +401,19 @@ final class NativeTransportRemuxTests: XCTestCase {
 
   private func controlledFixture(slow: Bool, crossesDiscontinuity: Bool = false,
                                  noisyProbe: Bool = false,
+                                 advancesTo: Int? = nil,
                                  trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil,
                                  failure: @escaping @Sendable (NativeHLSError) -> Void) throws
     -> NativeControlledHLSOrigin {
     actor Publication {
       private var crossed = false
       private var probes = 0
+      private var completedSequence = 19
       func advance() { crossed = true }
       func hasAdvanced() -> Bool { crossed }
       func nextProbe() -> Int { probes += 1; return probes }
+      func completed(_ sequence: Int) { completedSequence = max(completedSequence, sequence) }
+      func latest() -> Int { completedSequence }
     }
     let publication = Publication()
     let base = Date().addingTimeInterval(-40)
@@ -427,10 +431,23 @@ final class NativeTransportRemuxTests: XCTestCase {
       text += "#EXT-X-PROGRAM-DATE-TIME:\(formatter.string(from: base.addingTimeInterval(41)))\n"
     }
     text += "#EXT-X-TWITCH-PREFETCH:20.ts\n"
-    for sequence in 0...20 {
+    for sequence in 0...(advancesTo ?? 20) {
       let localSequence = crossesDiscontinuity ? sequence % 10 : sequence
       media["\(sequence).ts"] = transportFixture(clock: UInt64((localSequence * 2 + 1) * 90_000))
         .reduce(into: Data()) { $0.append($1) }
+    }
+    var advancingManifests: [Int: Data] = [:]
+    if let advancesTo {
+      for latest in 19...advancesTo {
+        let first = max(0, latest - 19)
+        var playlist = "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:\(first)\n"
+        for sequence in first...latest {
+          playlist += "#EXT-X-PROGRAM-DATE-TIME:\(formatter.string(from: base.addingTimeInterval(Double(sequence * 2))))\n"
+          playlist += "#EXTINF:2,\n\(sequence).ts\n"
+        }
+        playlist += latest == advancesTo ? "#EXT-X-ENDLIST\n" : "#EXT-X-TWITCH-PREFETCH:\(latest + 1).ts\n"
+        advancingManifests[latest] = Data(playlist.utf8)
+      }
     }
     let body = Data(text.utf8)
     let rolledBody = Data("""
@@ -444,6 +461,7 @@ final class NativeTransportRemuxTests: XCTestCase {
       #EXT-X-ENDLIST
       """.utf8)
     let mediaSamples = media
+    let advancingBodies = advancingManifests
     let variants = try (0..<2).map { id in
       let url = URL(string: "https://fixture.test/\(id)/live.m3u8")!
       return NativeControlledHLSOrigin.Variant(id: id, url: url, bitrate: id == 0 ? 230_000 : 1_400_000,
@@ -455,7 +473,8 @@ final class NativeTransportRemuxTests: XCTestCase {
         let data: Data
         if url.pathExtension == "m3u8" {
           let advanced = await publication.hasAdvanced()
-          data = crossesDiscontinuity && advanced ? rolledBody : body
+          let latest = await publication.latest()
+          data = advancingBodies[latest] ?? (crossesDiscontinuity && advanced ? rolledBody : body)
         }
         else {
           if slow { try await Task.sleep(for: .seconds(30)) }
@@ -465,6 +484,10 @@ final class NativeTransportRemuxTests: XCTestCase {
           }
           guard let sample = mediaSamples[url.lastPathComponent] else { throw URLError(.fileDoesNotExist) }
           data = sample
+          if advancesTo != nil, request.value(forHTTPHeaderField: "Range") == nil,
+            let sequence = Int(url.deletingPathExtension().lastPathComponent) {
+            await publication.completed(sequence)
+          }
           if crossesDiscontinuity, url.lastPathComponent == "20.ts" { await publication.advance() }
         }
         guard let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil) else {
@@ -510,6 +533,11 @@ final class NativeTransportRemuxTests: XCTestCase {
       try await Task.sleep(for: .milliseconds(25))
     } while ContinuousClock.now < deadline
     XCTAssertTrue(playlist.contains("#EXT-X-ENDLIST"), "The real producer must finish the successor period")
+    guard case .playlist(let ended) = try await origin.response(
+      URL(string: "strozz-native-ll://fixture/media/0.m3u8?_HLS_msn=1000")!) else {
+      return XCTFail("An ended publication must remain readable for later reload requests")
+    }
+    XCTAssertEqual(String(decoding: ended, as: UTF8.self), playlist)
     for period in 0...2 {
       XCTAssertTrue(playlist.contains("/init/0/\(period).mp4"))
       let initialization = await origin.media("/init/0/\(period).mp4")
@@ -525,6 +553,70 @@ final class NativeTransportRemuxTests: XCTestCase {
     let oldBytes = await origin.media("/segment/0/9.mp4")
     XCTAssertNotNil(oldBytes, "Old-period metadata must survive the upstream manifest sliding past it")
     await fulfillment(of: [failure], timeout: 0.1)
+  }
+
+  func testStableControlledPublicationPreservesPartBytesAndCacheAccounting() async throws {
+    let origin = try controlledFixture(slow: false) { error in XCTFail("Unexpected origin failure: \(error)") }
+    addTeardownBlock { await origin.stop() }
+    _ = try await origin.response(URL(string: "strozz-native-ll://fixture/root.m3u8")!)
+    let url = URL(string: "strozz-native-ll://fixture/media/0.m3u8")!
+    _ = try await origin.response(url)
+    for _ in 0..<100 {
+      if await origin.snapshot().parts == 10 { break }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    let before = await origin.snapshot()
+    XCTAssertEqual(before.parts, 10)
+    guard case .playlist(let expected) = try await origin.response(url) else { return XCTFail("Expected playlist") }
+    for _ in 0..<20 {
+      guard case .playlist(let repeated) = try await origin.response(url) else { return XCTFail("Expected playlist") }
+      XCTAssertEqual(repeated, expected, "Stable publication must not alter wire bytes")
+    }
+    let text = String(decoding: expected, as: UTF8.self)
+    var resources = Set<String>()
+    for line in text.components(separatedBy: .newlines)
+      where line.hasPrefix("#EXT-X-PART:") || line.hasPrefix("#EXT-X-PRELOAD-HINT:") {
+      let attributes = NativeCMAF.attributes(String(line.split(separator: ":", maxSplits: 1)[1]))
+      let resource = try XCTUnwrap(attributes["URI"].flatMap(URL.init(string:)))
+      resources.insert(resource.path)
+    }
+    XCTAssertEqual(resources.count, 10, "Include the intentionally withheld preload part in byte accounting")
+    var bytes = 0
+    for resource in resources {
+      let value = await origin.media(resource)
+      bytes += try XCTUnwrap(value).count
+    }
+    XCTAssertEqual(before.cachedMediaBytes, bytes)
+    let pending = Task {
+      try await origin.response(URL(string: "strozz-native-ll://fixture/media/0.m3u8?_HLS_msn=20&_HLS_part=127")!)
+    }
+    try await Task.sleep(for: .milliseconds(35))
+    pending.cancel()
+    do {
+      _ = try await pending.value
+      XCTFail("A cancelled blocked reload must not return cached success")
+    } catch { XCTAssertTrue(error is CancellationError) }
+    guard case .playlist(let healthy) = try await origin.response(url) else { return XCTFail("Live must stay healthy") }
+    XCTAssertEqual(healthy, expected)
+    await origin.stop()
+    let stopped = await origin.snapshot()
+    XCTAssertEqual(stopped.cachedMediaBytes, 0)
+  }
+
+  func testManifestDateReusePreservesFractionPrecisionOffsetsAndFallback() throws {
+    let fractional = ISO8601DateFormatter()
+    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let whole = ISO8601DateFormatter()
+    whole.formatOptions = [.withInternetDateTime]
+    let values = ["2026-10-19T01:00:00.123Z", "2026-10-19T01:00:02Z",
+      "2026-10-19T01:00:04.123456Z", "2026-10-19T01:00:06.9999999+05:30",
+      "2026-10-19T01:00:08.123-0700"]
+    var text = "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n"
+    for (index, value) in values.enumerated() {
+      text += "#EXT-X-PROGRAM-DATE-TIME:\(value)\n#EXTINF:2,\n\(index).ts\n"
+    }
+    let manifest = try NativeCMAF.manifest(text, url: URL(string: "https://fixture.test/live.m3u8")!)
+    XCTAssertEqual(manifest.entries.map(\.date), values.map { fractional.date(from: $0) ?? whole.date(from: $0) })
   }
 
   func testExpiredHistoricalRequestDoesNotTerminateHealthyControlledLivePlayback() async throws {
@@ -567,5 +659,49 @@ final class NativeTransportRemuxTests: XCTestCase {
       XCTFail("Stopped startup must not publish a master")
     } catch { XCTAssertTrue(error is CancellationError || (error as? URLError)?.code == .cancelled) }
     await fulfillment(of: [failure], timeout: 0.1)
+  }
+
+  func testAdvancingPublicationInvalidatesCachedPlaylistsAndRetainsDVRMetadataAfterMediaEviction() async throws {
+    let origin = try controlledFixture(slow: false, advancesTo: 50) { error in
+      XCTFail("Unexpected advancing origin failure: \(error)")
+    }
+    addTeardownBlock { await origin.stop() }
+    _ = try await origin.response(URL(string: "strozz-native-ll://fixture/root.m3u8")!)
+    let url = URL(string: "strozz-native-ll://fixture/media/0.m3u8")!
+    var ended = ""
+    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+    repeat {
+      guard case .playlist(let data) = try await origin.response(url) else { return XCTFail("Expected playlist") }
+      ended = String(decoding: data, as: UTF8.self)
+      if ended.contains("#EXT-X-ENDLIST") { break }
+      try await Task.sleep(for: .milliseconds(10))
+    } while ContinuousClock.now < deadline
+    XCTAssertTrue(ended.contains("#EXT-X-ENDLIST"), "Completion must invalidate an earlier live response")
+    XCTAssertTrue(ended.contains("PART-HOLD-BACK=3.5"),
+      "Losing prefetch changes the existing cadence policy and must invalidate cached server control")
+    XCTAssertTrue(ended.contains("/segment/0/50.mp4"))
+    XCTAssertFalse(ended.contains("/segment/0/19.mp4"), "The bounded history must evict expired metadata")
+    XCTAssertTrue(ended.contains("/segment/0/35.mp4"), "Keep the complete requested rewind duration")
+    XCTAssertFalse(ended.contains("#EXTINF:0.000000"), "Evicting encoded parts must retain segment duration")
+    XCTAssertEqual(ended.components(separatedBy: "#EXTINF:2.000000,").count - 1, 16)
+    let latest = await origin.media("/segment/0/50.mp4")
+    let initial = await origin.media("/segment/0/19.mp4")
+    let retainedHistory = await origin.media("/segment/0/35.mp4")
+    XCTAssertNotNil(latest)
+    XCTAssertNil(initial)
+    XCTAssertNotNil(retainedHistory, "Uncached rewind media must still be reconstructed without changing byte accounting")
+    let before = await origin.snapshot()
+    let retained = try XCTUnwrap(retainedHistory)
+    // Encoded media retains only the last 26 seconds; the 30-second metadata
+    // window includes older segments whose bytes are fetched on demand.
+    var retainedBytes = 0
+    for sequence in 38...50 {
+      let media = await origin.media("/segment/0/\(sequence).mp4")
+      retainedBytes += try XCTUnwrap(media).count
+    }
+    XCTAssertEqual(before.cachedMediaBytes, retainedBytes)
+    XCTAssertGreaterThan(retained.count, 0)
+    let after = await origin.snapshot()
+    XCTAssertEqual(before.cachedMediaBytes, after.cachedMediaBytes)
   }
 }

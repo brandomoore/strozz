@@ -25,7 +25,9 @@ struct MobileAccountView: View {
           Button("Sign out", role: .destructive) { showLocalSignOut = true }
             .accessibilityIdentifier("account-sign-out-local")
         } else {
-          Text(sync.isSignedOutLocally
+          Text(sync.needsRenewalSignIn
+            ? "Your saved Twitch connection needs attention. Sign in with Twitch to reconnect."
+            : sync.isSignedOutLocally
             ? "Signed out on this device. Sign in to reconnect."
             : "Your saved Twitch connection restores automatically through iCloud.")
             .foregroundStyle(.secondary)
@@ -161,7 +163,9 @@ private struct MobileTwitchSignInSheet: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
     }
-    .task { await auth.beginDeviceCodeSignIn() }
+    .task {
+      await auth.beginDeviceCodeSignIn(useSavedConnection: auth.cloudSync?.needsRenewalSignIn != true)
+    }
     .onChange(of: auth.isAuthenticated) { _, connected in if connected { dismiss() } }
     .onDisappear { auth.cancelSignIn() }
   }

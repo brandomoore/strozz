@@ -7,8 +7,96 @@ import XCTest
 @testable import StrozzMobile
 #endif
 
+private final class TelemetryTestClock: @unchecked Sendable {
+  private let lock = NSLock()
+  private var time: TimeInterval = 0
+  var now: TimeInterval { lock.withLock { time } }
+  func advance(_ seconds: TimeInterval) { lock.withLock { time += seconds } }
+}
+
 @MainActor
 final class PlaybackTelemetryTests: XCTestCase {
+  func testAnActiveLogRecoversWhenItsCacheFileDisappears() async throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let clock = TelemetryTestClock()
+    let writer = PlaybackTelemetryWriter(directory: directory, mirrorToSystemLog: false, uptime: { clock.now })
+    let recorder = PlaybackTelemetryRecorder(writer: writer)
+    recorder.beginSession(channel: "fixture", playbackMode: "live")
+    await recorder.flush()
+    let file = try XCTUnwrap(FileManager.default.contentsOfDirectory(
+      at: directory, includingPropertiesForKeys: nil).first { $0.pathExtension == "jsonl" })
+    try FileManager.default.removeItem(at: file)
+    clock.advance(16)
+    recorder.recordEvent("audio_probe")
+    await recorder.flush()
+    let saved = try records(in: directory)
+    XCTAssertEqual(saved.last?.name, "audio_probe",
+      "Writing to an unlinked handle must not silently lose the rest of an active pane's session")
+    XCTAssertEqual(saved.last?.attributes["telemetry_persistence_recovery"], "active_file_missing")
+    XCTAssertEqual(saved.last?.sessionID, recorder.sessionID)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "Never overwrite an old part name")
+  }
+
+  func testTransientPersistenceFailureBacksOffAndRecoversWithinTheSameSession() async throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    XCTAssertTrue(FileManager.default.createFile(atPath: directory.path, contents: Data()))
+    let clock = TelemetryTestClock()
+    let writer = PlaybackTelemetryWriter(directory: directory, mirrorToSystemLog: false, uptime: { clock.now })
+    let recorder = PlaybackTelemetryRecorder(writer: writer)
+    recorder.beginSession(channel: "fixture", playbackMode: "live")
+    await recorder.flush()
+    try FileManager.default.removeItem(at: directory)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    clock.advance(1)
+    recorder.recordEvent("during_backoff")
+    await recorder.flush()
+    XCTAssertTrue(try records(in: directory).isEmpty)
+    clock.advance(5)
+    recorder.recordEvent("after_retry")
+    await recorder.flush()
+    let saved = try records(in: directory)
+    XCTAssertEqual(saved.last?.name, "after_retry",
+      "One failed disk write must not permanently disable audio/recovery evidence until the app restarts")
+    XCTAssertEqual(saved.last?.attributes["telemetry_persistence_recovery"], "write_failure")
+    XCTAssertEqual(saved.last?.counters["telemetry_persistence_records_unconfirmed"], 2)
+    XCTAssertGreaterThan(saved.last?.counters["telemetry_last_write_error_code"] ?? 0, 0)
+    XCTAssertEqual(saved.last?.sessionID, recorder.sessionID)
+  }
+
+  func testAWriterRecoversWhenActiveCapacityIsReleasedWithoutExceedingTheBudget() async throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let clock = TelemetryTestClock()
+    let recorders = (0..<3).map { _ in
+      PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(
+        directory: directory, maximumFiles: 2, mirrorToSystemLog: false, uptime: { clock.now }))
+    }
+    for (index, recorder) in recorders.enumerated() {
+      recorder.beginSession(channel: "fixture\(index)", playbackMode: "live")
+      await recorder.flush()
+    }
+    XCTAssertEqual(try records(in: directory).count, 2)
+    recorders[0].endSession(reason: "test")
+    await recorders[0].flush()
+    clock.advance(6)
+    recorders[2].recordEvent("capacity_recovered")
+    await recorders[2].flush()
+    let saved = try records(in: directory)
+    let recovered = try XCTUnwrap(saved.first { $0.name == "capacity_recovered" })
+    XCTAssertEqual(recovered.sessionID, recorders[2].sessionID)
+    XCTAssertEqual(recovered.counters["telemetry_persistence_records_unconfirmed"], 1)
+    XCTAssertTrue(saved.contains { $0.sessionID == recorders[1].sessionID },
+      "Reopening one pane must never evict another pane's active file")
+    XCTAssertEqual(try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+      .filter { $0.pathExtension == "jsonl" }.count, 2)
+    for recorder in recorders {
+      recorder.endSession(reason: "test")
+      await recorder.flush()
+    }
+  }
+
   func testNativeSourceTimeIsNotReplacedByDelayedMainDelivery() {
     let detail = NativeHLSPlaybackDiagnostic(event: .delivery, attributes: ["stage": "ingress_remux"],
       metrics: ["max_ingress_wait_seconds": 0.1], counters: ["ingress_chunks": 4], uptime: 10)

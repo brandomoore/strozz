@@ -61,7 +61,7 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   keep rewind timestamps positive and periods separate. GOP decode-origin
   changes require inverse signed composition-offset changes so presentation
   times and compressed picture payloads remain unchanged.
-  When converting TS to MP4, remove only HRD buffering-period/picture-timing SEI
+  When converting TS or remapping source-CMAF clocks, remove only HRD buffering-period/picture-timing SEI
   messages (types 0/1), not entire SEI NALs. Their transport clock model can
   freeze Apple's decoder after a rendition change even when FFmpeg decodes the
   same picture bytes. Preserve caption/user/other SEI and VCL bytes; see
@@ -74,12 +74,23 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   quality. Compatible initialization-URL rotations are not new periods.
   Nonterminal parts must meet the 85% minimum of the 450-ms target (382.5 ms);
   cutting at 380 ms has produced invalid 50-fps playlists.
+  Upstream CMAF fragment boundaries are not necessarily valid part boundaries:
+  variable 100/133-ms fragments can strand a 366-ms group. Split normalized
+  video/audio runs at encoded-sample boundaries when needed, preserving sample
+  bytes, flags, descriptions and presentation clocks rather than widening the
+  target or rejecting a supported rendition. Bound each media entry to ten seconds.
 - **Keep normal latency policy.** Incremental-prefetch sources target 1.5-second
   hold-back and a three-second preferred forward buffer. Completed-only sources
   use cadence-aware timing; do not force the incremental constants onto them.
   Initial live alignment is separate from steady playback. Healthy drift uses
   bounded, held rate correction, not repeated seeks or item replacements.
   Missing/inconsistent date samples must not invent latency or trigger catch-up.
+- **Keep publication caching coherent.** Controlled playback retains one encoded
+  playlist per unchanged publication and constant-time byte/completed-duration
+  totals. Parts, completion, eviction, end-of-stream and hold-back changes
+  invalidate it; blocked reloads still wait for the requested part. Cache PDT
+  text per segment and reuse actor-confined/per-parse date formatters without
+  changing timestamp precision, rewind retention or withheld-part semantics.
 - **Keep recovery bounded and Native-only.** `NativePlaybackRecovery` shares two
   fresh-source/engine attempts per rolling minute across origin, startup and
   stall failures. Unsupported formats and exhausted attempts show an error and
@@ -212,6 +223,27 @@ are inactive for background/idle playback; absence of a delay event is not proof
 of healthy playback. `playback_main_operation_slow` names slow synchronous
 snapshot, audio-track, access-log or error-log reads.
 
+For lost sound after a stall, treat reconnecting the output as a workaround,
+not evidence against an app bug. `audio_playback_state` records route port types,
+mute/volume, playback intent, enabled audio tracks and restart serial around
+activation and Native/player recovery. Route events include previous/current
+port types, never device names or identifiers. Video progress alone is not
+proof that audio rendering survived.
+
+An active telemetry file can disappear or a write can fail. The writer checks
+the active path every 15 seconds and retries persistence failures after five
+seconds without waiting for a new playback session. A recovered record marks
+`telemetry_persistence_recovery` and any
+`telemetry_persistence_records_unconfirmed`; those missing/uncertain records are
+not healthy playback evidence. Retention still protects other open pane files
+within the same file budget. Keep the foreground log before interpreting peer
+audio events as the foreground failure.
+
+Check auxiliary chat work too: merged YouTube chat can repeatedly resolve and
+bootstrap large watch pages when unavailable. Keep HTML decoding and literal
+marker searches off the main actor, with cancellation; only publish the parsed
+result/status on the main actor. See `ChatService+YouTube.swift`.
+
 Debug controlled playback emits `native_hls_delivery_timing` per segment:
 `max_ingress_wait_seconds` excludes the preceding chunk's processing;
 `max_consumer_queue_seconds` measures receipt-to-consumption delay;
@@ -289,9 +321,21 @@ panes do not receive another deadline just because the observation phase changes
 The separate `testOptInShortMultiviewVisibilityRegression` uses
 `STROZZ_VISIBILITY_CHECK=1` for a fixed, 30-second-per-stage reproduction against
 Valkyrae/Gaules/Burn when all three are live; it is not sustained-soak coverage.
+`testOptInSixPaneOptimizationContinuity` uses six distinct, currently live
+`STROZZ_SIX_PANE_CHANNELS` logins for two-minute grid/expanded/returned-grid stages.
+It uses the same strict playback/evidence checks, but is not a long soak or a
+physical decoder-capacity measurement.
 Sampling-only gaps are marked incomplete separately from playback faults; neither
 is a clean pass. Unsupported CMAF boxes report numeric type/size, and TS
 finalization failures report pending sample/PES byte counts, not media payloads.
+
+For emote-cache changes, `ChatBadgeRenderingTests` checks source pixels,
+animation and lifecycle. `STROZZ_EMOTE_CACHE_PERFORMANCE=1` additionally compares
+native WebP frame-decode counts while an inactive copy receives repeated updates.
+Do not repeatedly stop an already-inactive view: SDWebImage's frame pool is
+shared by image providers, so repeated buffer purges make visible copies decode
+the same frames again. Stop/purge on the visibility transition, not every update
+or teardown of an already-stopped consumer; keep the native memory budget.
 
 A skipped test is not a pass for the behavior being investigated. The simulator-only
 `NativeStreamMatrixLiveTests/testOptInUnrequestedPauseRecoversWithoutChangingAutoOrItem`

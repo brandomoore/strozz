@@ -526,6 +526,7 @@ struct HomeView: View {
             isRestoringAccount: environment.accountSync.isRestoringAccount,
             isUsingDemoData: follows.isUsingDemoData,
             errorMessage: follows.errorMessage,
+            onSignIn: environment.accountSync.needsRenewalSignIn ? { showSignIn = true } : nil,
             showingFollowingDirectory: $showingFollowingDirectory,
             onRefresh: { performManualRefresh() },
             onWatch: { openFollowingChannel($0) },

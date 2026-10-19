@@ -6,6 +6,177 @@ import XCTest
 #endif
 
 final class NativeCMAFRemuxTests: XCTestCase {
+  func testMappedCMAFDropsOnlyIncompatibleHRDTimingAndRewritesSampleSizes() throws {
+    let format = try NativeCMAFRemuxer.Format(initialization())
+    let timingAndCaption = Data([6, 0, 1, 0x11, 1, 1, 0x22, 4, 1, 0x55, 0x80])
+    let caption = Data([6, 4, 1, 0x55, 0x80])
+    let picture = Data([0x65, 0x80, 0x88])
+    let payload = word(UInt64(timingAndCaption.count)) + timingAndCaption + word(UInt64(picture.count)) + picture
+    let source = fragment(videoClock: 1_000_000, audioClock: 48_000, audioCount: 5,
+      sequence: 1, independent: true, videoPayload: payload)
+    var converter = try NativeCMAFRemuxer(format: format, videoDescriptionIndex: 1,
+      firstSequence: 1, presentationReference: nil)
+    let parts = try converter.append(source) + converter.finish(expectedDuration: 0.1)
+    let output = try XCTUnwrap(parts.first).bytes
+    let image = try samples(output, track: format.video)
+    XCTAssertEqual(image.bytes, [word(UInt64(caption.count)) + caption + word(UInt64(picture.count)) + picture])
+    XCTAssertEqual(image.durations, [100_000])
+    let originalAudio = try samples(source, track: format.audio)
+    let audio = try samples(output, track: format.audio)
+    XCTAssertEqual(originalAudio.bytes, audio.bytes)
+    XCTAssertEqual(originalAudio.durations, audio.durations)
+    XCTAssertThrowsError(try NativeFragmentedMP4.removingRemappedTimingAVC(Data([0, 0, 0, 8, 6])))
+  }
+
+  func testVariableCMAFFragmentsSplitAtSamplesWithoutChangingPayloadOrLatencyContract() throws {
+    let format = try NativeCMAFRemuxer.Format(initialization())
+    var source = Data()
+    var videoClock: UInt64 = 1_000_000
+    var audioClock: UInt64 = 48_000
+    for (index, durations) in [[33_000, 34_000, 33_000, 33_000], [33_000, 34_000, 33_000],
+      [33_000, 34_000, 33_000, 33_000], [33_000, 34_000, 33_000]].enumerated() {
+      var time = videoClock
+      let video = durations.enumerated().map { number, duration in
+        defer { time += UInt64(duration) }
+        return NativeFragmentedMP4.Sample(decodeTime: time, duration: UInt32(duration),
+          compositionOffset: number == 1 ? -1000 : 0, independent: index == 0 && number == 0,
+          bytes: Data([0, 0, 0, 3, index == 0 && number == 0 ? 0x65 : 0x41, UInt8(index), UInt8(number)]))
+      }
+      let target = UInt64((Double(time) * 48_000 / 1_000_000).rounded())
+      let count = Int((target - audioClock + 1023) / 1024)
+      let audio = (0..<count).map { number in
+        NativeFragmentedMP4.Sample(decodeTime: audioClock + UInt64(number * 1024), duration: 1024,
+          compositionOffset: 0, independent: true, bytes: Data([0x21, UInt8(number), UInt8(index)]))
+      }
+      let original = try NativeFragmentedMP4.fragment(sequence: UInt32(index + 1), video: video, audio: audio)
+      var movie = Data()
+      for item in try NativeCMAF.boxes(NativeCMAF.child(original, "moof")) {
+        guard item.type == "traf" else { movie += box(item.type, item.payload); continue }
+        var track = Data()
+        for component in try NativeCMAF.boxes(item.payload) {
+          var value = component.payload
+          if component.type == "tfhd" {
+            value.replaceSubrange(4..<8, with: word(try NativeCMAF.integer(value, 4) == 1 ? 2 : 1))
+          }
+          track += box(component.type, value)
+        }
+        movie += box("traf", track)
+      }
+      source += box("moof", movie) + box("mdat", try NativeCMAF.child(original, "mdat"))
+      videoClock = time
+      audioClock += UInt64(count * 1024)
+    }
+    var converter = try NativeCMAFRemuxer(format: format, videoDescriptionIndex: 2,
+      firstSequence: 40, presentationReference: nil)
+    let parts = try converter.append(source) + converter.finish(expectedDuration: 0.466)
+    XCTAssertEqual(parts.count, 2)
+    XCTAssertEqual(parts[0].duration, 0.433, accuracy: 0.000001)
+    XCTAssertEqual(parts[1].duration, 0.033, accuracy: 0.000001)
+    XCTAssertTrue(parts[0].independent)
+    XCTAssertFalse(parts[1].independent)
+    XCTAssertEqual(parts.reduce(0) { $0 + $1.videoSamples }, 14)
+    let output = parts.reduce(into: Data()) { $0.append($1.bytes) }
+    for track in [format.video, format.audio] {
+      let before = try samples(source, track: track)
+      let after = try samples(output, track: track)
+      XCTAssertEqual(before.bytes, after.bytes, "Do not re-encode, reorder or discard any compressed samples")
+      XCTAssertEqual(before.presentation.map { $0 - before.presentation[0] },
+        after.presentation.map { $0 - after.presentation[0] })
+      XCTAssertEqual(before.decode.map { $0 - before.decode[0] }, after.decode.map { $0 - after.decode[0] })
+      XCTAssertEqual(before.durations, after.durations)
+      XCTAssertEqual(before.flags, after.flags)
+    }
+    let sequences = try NativeCMAF.boxes(output).filter { $0.type == "moof" }
+      .map { try NativeCMAF.integer(NativeCMAF.child($0.payload, "mfhd"), 4) }
+    XCTAssertEqual(sequences, Array(40..<45).map(UInt64.init))
+    XCTAssertEqual(converter.nextSequence, 45)
+  }
+
+  private func samples(_ data: Data, track: NativeCMAF.Track) throws ->
+    (bytes: [Data], presentation: [Int64], decode: [Int64], durations: [UInt64], flags: [UInt64]) {
+    var payloads: [Data] = [], presentation: [Int64] = [], decode: [Int64] = []
+    var durations: [UInt64] = [], flags: [UInt64] = []
+    var offset = 0
+    for item in try NativeCMAF.boxes(data) {
+      defer { offset += item.payload.count + 8 }
+      guard item.type == "moof" else { continue }
+      for child in try NativeCMAF.boxes(item.payload) where child.type == "traf" {
+        let header = try NativeCMAF.child(child.payload, "tfhd")
+        guard try NativeCMAF.integer(header, 4) == track.id else { continue }
+        let clock = try NativeCMAF.child(child.payload, "tfdt")
+        var time = Int64(try NativeCMAF.integer(clock, 4, clock.first == 1 ? 8 : 4))
+        for run in try NativeCMAF.boxes(child.payload) where run.type == "trun" {
+          let fields = try NativeCMAF.integer(run.payload, 0) & 0xFFFFFF
+          let count = Int(try NativeCMAF.integer(run.payload, 4))
+          var body = offset + Int(try NativeCMAF.integer(run.payload, 8))
+          var position = 12
+          for _ in 0..<count {
+            let duration = try NativeCMAF.integer(run.payload, position)
+            let size = Int(try NativeCMAF.integer(run.payload, position + 4))
+            var next = position + 8
+            let flag = fields & 0x400 != 0 ? try NativeCMAF.integer(run.payload, next) : track.flags
+            if fields & 0x400 != 0 { next += 4 }
+            let composition: Int64
+            if fields & 0x800 != 0 {
+              composition = Int64(Int32(bitPattern: UInt32(try NativeCMAF.integer(run.payload, next))))
+              next += 4
+            } else { composition = 0 }
+            guard size > 0, body >= 0, body <= data.count - size else { throw NativeHLSError.invalidMedia }
+            payloads.append(data.subdata(in: body..<(body + size)))
+            presentation.append(time + composition)
+            decode.append(time)
+            durations.append(duration)
+            flags.append(flag)
+            time += Int64(duration)
+            body += size
+            position = next
+          }
+        }
+      }
+    }
+    return (payloads, presentation, decode, durations, flags)
+  }
+
+  func testSplittingAnOversizedNormalizedFragmentKeepsEverySampleAndRejectsInvalidBounds() throws {
+    let videoTrack = NativeCMAF.Track(id: 1, scale: 90_000, duration: 0, flags: 0)
+    let audioTrack = NativeCMAF.Track(id: 2, scale: 48_000, duration: 0, flags: 0)
+    let video = (0..<30).map { index -> NativeFragmentedMP4.Sample in
+      let clock = UInt64(9_000_000) + UInt64(index) * 1500
+      let composition: Int32 = index.isMultiple(of: 2) ? 0 : -750
+      let kind: UInt8 = index == 0 ? 0x65 : 0x41
+      let bytes = Data([0, 0, 0, 2, kind, UInt8(index)])
+      return .init(decodeTime: clock, duration: 1500,
+        compositionOffset: composition, independent: index == 0, bytes: bytes)
+    }
+    let audio = (0..<24).map { index in
+      NativeFragmentedMP4.Sample(decodeTime: UInt64(4_800_000 + index * 1024), duration: 1024,
+        compositionOffset: 0, independent: true, bytes: Data([0x21, UInt8(index)]))
+    }
+    let source = try NativeFragmentedMP4.fragment(sequence: 1, video: video, audio: audio)
+    let normalized = try NativeFragmentedMP4.controlledFragment(source, video: videoTrack, audio: audioTrack,
+      videoDescriptionIndex: 2, videoDecodeTime: 9_000_000, compositionShift: 0,
+      audioDecodeTime: 4_800_000, sequence: 7)
+    let split = try NativeFragmentedMP4.splitControlledFragment(normalized, video: videoTrack,
+      audio: audioTrack, maximumDuration: 0.45, sequence: 7)
+    let first = try NativeCMAF.fragmentTiming(NativeCMAF.child(split.0, "moof"), track: videoTrack)
+    XCTAssertEqual(first.duration, 40_500)
+    for track in [videoTrack, audioTrack] {
+      let before = try samples(normalized, track: track)
+      let after = try samples(split.0 + split.1, track: track)
+      XCTAssertEqual(before.bytes, after.bytes)
+      XCTAssertEqual(before.presentation, after.presentation)
+      XCTAssertEqual(before.decode, after.decode)
+      XCTAssertEqual(before.durations, after.durations)
+      XCTAssertEqual(before.flags, after.flags)
+    }
+    for (limit, sequence) in [(Double.nan, UInt32(7)), (0.001, 7), (0.45, UInt32.max)] {
+      XCTAssertThrowsError(try NativeFragmentedMP4.splitControlledFragment(normalized,
+        video: videoTrack, audio: audioTrack, maximumDuration: limit, sequence: sequence))
+    }
+    XCTAssertThrowsError(try NativeFragmentedMP4.splitControlledFragment(Data(normalized.dropLast()),
+      video: videoTrack, audio: audioTrack, maximumDuration: 0.45, sequence: 7))
+  }
+
   func testUnknownEightByteMediaBoxReportsOnlyItsStructuralIdentity() throws {
     let format = try NativeCMAFRemuxer.Format(initialization())
     var converter = try NativeCMAFRemuxer(format: format, videoDescriptionIndex: 1,
@@ -66,8 +237,8 @@ final class NativeCMAFRemuxTests: XCTestCase {
   }
 
   private func fragment(videoClock: UInt64, audioClock: UInt64, audioCount: Int,
-                        sequence: UInt64, independent: Bool) -> Data {
-    let videoBytes = Data([0, 0, 0, UInt8(sequence & 255)])
+                        sequence: UInt64, independent: Bool, videoPayload: Data? = nil) -> Data {
+    let videoBytes = videoPayload ?? Data([0, 0, 0, 2, independent ? 0x65 : 0x41, UInt8(sequence & 255)])
     let audioBytes = Data(repeating: 0x21, count: audioCount * 3)
     func traf(id: UInt64, audio: Bool, offset: Int) -> Data {
       let header = full("tfhd", word(id), flags: 0x020000)
@@ -218,8 +389,8 @@ final class NativeCMAFRemuxTests: XCTestCase {
       XCTAssertTrue(output.indices.contains(offset))
       XCTAssertGreaterThan(offset, outputMovie.count + 8)
       let id = try NativeCMAF.integer(NativeCMAF.child(track.payload, "tfhd"), 4)
-      XCTAssertEqual(output.subdata(in: offset..<(offset + (id == 2 ? 4 : 3))),
-        id == 2 ? Data([0, 0, 0, 1]) : Data(repeating: 0x21, count: 3))
+      XCTAssertEqual(output.subdata(in: offset..<(offset + (id == 2 ? 6 : 3))),
+        id == 2 ? Data([0, 0, 0, 2, 0x65, 1]) : Data(repeating: 0x21, count: 3))
     }
   }
 
@@ -258,9 +429,9 @@ final class NativeCMAFRemuxTests: XCTestCase {
     let format = try NativeCMAFRemuxer.Format(initialization())
     let samples = [
       NativeFragmentedMP4.Sample(decodeTime: 9_000_000, duration: 50_000, compositionOffset: 100_000,
-        independent: true, bytes: Data([1, 2, 3])),
+        independent: true, bytes: Data([0, 0, 0, 2, 0x65, 3])),
       NativeFragmentedMP4.Sample(decodeTime: 9_050_000, duration: 50_000, compositionOffset: -50_000,
-        independent: false, bytes: Data([4, 5])),
+        independent: false, bytes: Data([0, 0, 0, 2, 0x41, 5])),
     ]
     let audio = (0..<5).map { index in
       NativeFragmentedMP4.Sample(decodeTime: UInt64(432_000 + index * 1024), duration: 1024,

@@ -544,6 +544,30 @@ may be necessary again. Expiry, revoked Twitch permission, or an unavailable
 iCloud account can also require attention; the UI reports these rather than
 claiming a permanent login.
 
+An unfinished renewal is reported without guessing which device started it.
+Following offers **Sign in with Twitch** when an expired connection cannot be
+renewed; the sign-in screen keeps retry and fresh Twitch approval separate. QR
+codes and approval instructions appear only after Twitch issues a device code,
+not while saved-connection recovery is blocked. A fresh approval does not require
+signing out everywhere or reusing the uncertain refresh token.
+Once Twitch approval has been accepted, dismissing the sign-in screen no longer
+cancels its iCloud publication; account changes and explicit sign-out remain fenced.
+
+TV keeps its device-local renewal history in
+`Library/Caches/AccountDiagnostics/renewal.json`, using tvOS-supported writable
+storage. Mobile uses `Library/Application Support/AccountDiagnostics/renewal.json`.
+Both are bounded to 256 events and survive normal app restarts; tvOS may purge
+caches under storage pressure, so retrieve TV evidence promptly.
+The history records foreground/background transitions, reservation,
+token-exchange, Keychain-journal and cloud-publication stages, pending-publication
+recovery, cancellations and sanitized error categories/status codes. Known OAuth
+rejection reasons use a fixed allowlist, never arbitrary server text. Random reservation/process IDs correlate
+stages; no tokens, account/device identities, activation codes, URLs, response
+bodies or error descriptions are recorded. A process ending after an exchange
+request without a durable replacement pair remains **ambiguous**, not proof that
+Twitch rejected the request. Diagnostics never authorize taking over a reservation.
+Existing incidents cannot be reconstructed from events this build did not record.
+
 `Config/StrozzAccounts.ckdb` is the versioned CloudKit schema. Deploy its
 Development schema to Production before shipping TestFlight builds. Simulator
 tests cover conditional-write contention, account boundaries, pending renewal

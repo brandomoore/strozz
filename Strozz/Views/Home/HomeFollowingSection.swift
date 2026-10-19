@@ -13,6 +13,7 @@ struct HomeFollowingSection: View {
   let isRestoringAccount: Bool
   let isUsingDemoData: Bool
   let errorMessage: String?
+  var onSignIn: (() -> Void)? = nil
   @Binding var showingFollowingDirectory: Bool
   let onRefresh: () -> Void
   let onWatch: (FollowedChannel) -> Void
@@ -75,12 +76,14 @@ struct HomeFollowingSection: View {
           HomeFollowingRecoveryRail(
             rail: rail, style: style,
             isUsingDemoData: isUsingDemoData, errorMessage: errorMessage,
+            onSignIn: onSignIn,
             onRefresh: retry, focusedItemID: $focusedItemID)
         }
       } else {
         if let errorMessage {
           HomeFollowingErrorNotice(
             isUsingDemoData: isUsingDemoData, errorMessage: errorMessage, onRefresh: retry,
+            onSignIn: onSignIn,
             focusedItemID: $focusedItemID)
         }
         HomeRailScrollView(rail: rail, style: style) {
@@ -133,6 +136,7 @@ private struct HomeFollowingRecoveryRail: View {
   let style: HomeRailStyle
   let isUsingDemoData: Bool
   let errorMessage: String?
+  let onSignIn: (() -> Void)?
   let onRefresh: () -> Void
   @FocusState.Binding var focusedItemID: String?
   @Environment(\.themePalette) private var palette
@@ -162,7 +166,10 @@ private struct HomeFollowingRecoveryRail: View {
               .fixedSize(horizontal: false, vertical: true)
               .accessibilityIdentifier("following-error")
           }
-          Button("Try Again", action: onRefresh)
+          Button(action: onSignIn ?? onRefresh) {
+            if onSignIn != nil { Text("Sign in with Twitch") }
+            else { Text("Try Again") }
+          }
             .buttonStyle(.bordered)
             .focused($focusedItemID, equals: HomeFollowingFocus.retry)
             .accessibilityIdentifier(HomeFollowingFocus.retry)
@@ -189,6 +196,7 @@ private struct HomeFollowingErrorNotice: View {
   let isUsingDemoData: Bool
   let errorMessage: String
   let onRefresh: () -> Void
+  let onSignIn: (() -> Void)?
   @FocusState.Binding var focusedItemID: String?
 
   var body: some View {
@@ -205,7 +213,10 @@ private struct HomeFollowingErrorNotice: View {
           .accessibilityIdentifier("following-error")
       }
       Spacer()
-      Button("Try Again", action: onRefresh)
+      Button(action: onSignIn ?? onRefresh) {
+        if onSignIn != nil { Text("Sign in with Twitch") }
+        else { Text("Try Again") }
+      }
         .buttonStyle(.bordered)
         .focused($focusedItemID, equals: HomeFollowingFocus.cachedRetry)
         .accessibilityIdentifier(HomeFollowingFocus.cachedRetry)

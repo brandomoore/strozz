@@ -152,6 +152,7 @@ targets:
       - path: StrozzTests/TwitchChannelFollowTests.swift
       - path: StrozzTests/TwitchGIFTests.swift
       - path: StrozzTests/ChatBadgeRenderingTests.swift
+      - path: StrozzTests/YouTubeMergedChatViewerTests.swift
     dependencies:
       - target: StrozzMobile
     settings:

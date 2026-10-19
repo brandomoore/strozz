@@ -2,6 +2,7 @@ import CloudKit
 import Foundation
 import Observation
 import OSLog
+import UIKit
 
 @MainActor
 @Observable
@@ -20,6 +21,7 @@ final class TwitchAccountSync {
   private(set) var errorMessage: String?
   private(set) var isSignedOutLocally: Bool
   private(set) var hasAccountConflict = false
+  private(set) var isRenewalPending = false
   private(set) var hasCompletedInitialSync = false
   @ObservationIgnored private let database: any TwitchCloudDatabase
   @ObservationIgnored private let defaults: UserDefaults
@@ -30,14 +32,21 @@ final class TwitchAccountSync {
   @ObservationIgnored private var loop: Task<Void, Never>?
   @ObservationIgnored private var initialSync: Task<Void, Never>?
   @ObservationIgnored private var accountObserver: NSObjectProtocol?
+  @ObservationIgnored private var lifecycleObservers: [NSObjectProtocol] = []
   @ObservationIgnored private let pendingService: String
   @ObservationIgnored private let rewardsChangeService: String
+  @ObservationIgnored let renewalDiagnostics: TwitchCloudRenewalDiagnostics
+  @ObservationIgnored private var observedReservation: UUID?
+  @ObservationIgnored private var observedPendingPublication: UUID?
+  @ObservationIgnored private var lastReportedFailure: String?
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "account-sync")
 
   init(database: any TwitchCloudDatabase = CloudKitTwitchDatabase(), defaults: UserDefaults = .standard,
-       storagePrefix: String = "com.thatcube.Strozz") {
+       storagePrefix: String = "com.thatcube.Strozz",
+       renewalDiagnostics: TwitchCloudRenewalDiagnostics? = nil) {
     self.database = database
     self.defaults = defaults
+    self.renewalDiagnostics = renewalDiagnostics ?? TwitchCloudRenewalDiagnostics()
     pendingService = "\(storagePrefix).pending-token-publication"
     rewardsChangeService = "\(storagePrefix).pending-rewards-change"
     isSignedOutLocally = defaults.bool(forKey: PersistenceKey.icloudAccountSignedOut)
@@ -58,6 +67,15 @@ final class TwitchAccountSync {
     self.rewards = rewards
     auth.cloudSync = self
     auth.restore()
+    let transitions: [(Notification.Name, TwitchCloudRenewalDiagnostics.Stage)] = [
+      (UIApplication.didEnterBackgroundNotification, .applicationBackgrounded),
+      (UIApplication.didBecomeActiveNotification, .applicationForegrounded)
+    ]
+    lifecycleObservers = transitions.map { name, stage in
+      NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+        Task { @MainActor [weak self] in self?.renewalDiagnostics.record(stage) }
+      }
+    }
     rewards.onCredentialChange = { [weak self] in
       guard let self, let userID = self.auth?.userID else { return }
       let change = TwitchRewardsChange(owner: self.auth?.credentialCloudOwner, userID: userID,
@@ -107,6 +125,14 @@ final class TwitchAccountSync {
     (!hasCompletedInitialSync && !isSignedOutLocally) || auth?.isRestoringConnection == true
   }
 
+  var needsRenewalSignIn: Bool {
+    isRenewalPending && auth?.isAuthenticated == false && !isRestoringAccount
+  }
+
+  func recordFreshSignInRequest() {
+    renewalDiagnostics.record(.freshSignInRequested)
+  }
+
   /// A user-selected Sign in first adopts a saved connection. Automatic sync
   /// never clears the local sign-out choice or replaces a different account.
   func restoreBeforeSignIn() async -> Bool {
@@ -128,6 +154,8 @@ final class TwitchAccountSync {
     loop = nil
     if let accountObserver { NotificationCenter.default.removeObserver(accountObserver) }
     accountObserver = nil
+    for observer in lifecycleObservers { NotificationCenter.default.removeObserver(observer) }
+    lifecycleObservers.removeAll()
     hasCompletedInitialSync = false
   }
 
@@ -138,6 +166,7 @@ final class TwitchAccountSync {
     clearRewardChange()
     status = "Signed out on this device"
     errorMessage = nil
+    isRenewalPending = false
   }
 
   func useICloudAccount() async {
@@ -152,7 +181,13 @@ final class TwitchAccountSync {
   func signedIn(_ credential: TwitchCredential) async {
     isSignedOutLocally = false
     defaults.set(false, forKey: PersistenceKey.icloudAccountSignedOut)
-    await publishSignIn(credential, replacingAccount: false)
+    let generation = auth?.sessionGeneration
+    // Dismissing the successful sign-in screen cancels its polling task, not
+    // publication of the already accepted grant. Account changes still fence it.
+    await Task {
+      guard auth?.sessionGeneration == generation else { return }
+      await publishSignIn(credential, replacingAccount: false)
+    }.value
   }
 
   func replaceICloudAccount() async {
@@ -165,6 +200,7 @@ final class TwitchAccountSync {
     isBusy = true
     defer { isBusy = false }
     let generation = auth.sessionGeneration
+    renewalDiagnostics.record(.signInPublicationRequested)
     do {
       let owner = try await database.owner()
       let snapshot = try await database.fetch(owner: owner)
@@ -188,9 +224,14 @@ final class TwitchAccountSync {
       try CredentialKeychain.remove(service: pendingService)
       clearRewardChange()
       succeeded()
+      renewalDiagnostics.record(.freshSignInPublished)
     } catch is CancellationError {
+      renewalDiagnostics.record(.signInPublicationFailed, error: CancellationError())
       return
-    } catch { report(error) }
+    } catch {
+      renewalDiagnostics.record(.signInPublicationFailed, error: error)
+      report(error)
+    }
   }
 
   func synchronize(preferCloud: Bool = false) async {
@@ -235,6 +276,7 @@ final class TwitchAccountSync {
         } else {
           status = "Sign in once to connect your devices"
           errorMessage = nil
+          isRenewalPending = false
           return
         }
       }
@@ -244,6 +286,7 @@ final class TwitchAccountSync {
         rewards?.clearLocalConnection()
         status = "Signed out in iCloud"
         errorMessage = nil
+        isRenewalPending = false
         return
       }
       if let local = auth.storedCredential, local.userID != credential.userID, !preferCloud {
@@ -315,6 +358,14 @@ final class TwitchAccountSync {
       succeeded()
       return updated.accessToken
     } catch {
+      if error as? TwitchSyncError == .refreshPending, rejectedAccessToken != nil {
+        // A rejected token is not a usable signed-in session. Keep the credentials
+        // and reservation, but expose explicit reapproval instead of a retry loop.
+        auth.isAuthenticated = false
+        auth.errorMessage = error.localizedDescription
+        do { try auth.saveTopShelf(nil) }
+        catch { Self.logger.error("Cannot clear expired Top Shelf credential: code=\((error as NSError).code)") }
+      }
       report(error)
       throw error
     }
@@ -341,37 +392,67 @@ final class TwitchAccountSync {
     guard let auth else { throw CancellationError() }
     try check(generation)
     let id = UUID()
-    let reserved = try await database.save(TwitchCloudRefresh.reserve(snapshot, id: id), replacing: snapshot)
-    try check(generation)
-    guard let previous = reserved.account.credential else { throw TwitchSyncError.invalidAccount }
-    // A failed/ambiguous exchange deliberately leaves the reservation in place.
-    // A second device must never guess that the single-use token is unspent.
-    let fresh = try await auth.refreshSyncedCredential(previous)
-    let pending = TwitchPendingPublication(owner: reserved.account.owner, refreshID: id, credential: fresh)
-    try CredentialKeychain.write(JSONEncoder().encode(pending), service: pendingService)
-    guard try await database.owner() == pending.owner else { throw TwitchSyncError.accountChanged }
-    let latest = try await database.fetch(owner: pending.owner)
-    guard let latest else { throw TwitchSyncError.conflict }
-    _ = try await database.save(TwitchCloudRefresh.publication(pending, into: latest), replacing: latest)
-    try CredentialKeychain.remove(service: pendingService)
-    try check(generation)
-    return fresh
+    let candidate = try TwitchCloudRefresh.reserve(snapshot, id: id)
+    var stage = TwitchCloudRenewalDiagnostics.Stage.reservationRequested
+    func record(_ next: TwitchCloudRenewalDiagnostics.Stage) {
+      stage = next
+      renewalDiagnostics.record(next, attempt: id)
+    }
+    do {
+      record(.reservationRequested)
+      let reserved = try await database.save(candidate, replacing: snapshot)
+      record(.reservationSaved)
+      try check(generation)
+      guard let previous = reserved.account.credential else { throw TwitchSyncError.invalidAccount }
+      // An ambiguous exchange must never be retried with the old refresh token.
+      record(.exchangeRequested)
+      let fresh = try await auth.refreshSyncedCredential(previous)
+      stage = .exchangeReceived
+      let pending = TwitchPendingPublication(owner: reserved.account.owner, refreshID: id, credential: fresh)
+      try CredentialKeychain.write(JSONEncoder().encode(pending), service: pendingService)
+      record(.credentialsJournaled)
+      guard try await database.owner() == pending.owner else { throw TwitchSyncError.accountChanged }
+      let latest = try await database.fetch(owner: pending.owner)
+      guard let latest else { throw TwitchSyncError.conflict }
+      record(.publicationRequested)
+      _ = try await database.save(TwitchCloudRefresh.publication(pending, into: latest), replacing: latest)
+      record(.publicationSaved)
+      try CredentialKeychain.remove(service: pendingService)
+      try check(generation)
+      record(.renewalCompleted)
+      return fresh
+    } catch {
+      renewalDiagnostics.record(.renewalFailed, attempt: id, failedStage: stage, error: error)
+      throw error
+    }
   }
 
   private func finishPending(owner: String) async throws -> TwitchCloudSnapshot? {
     let snapshot = try await database.fetch(owner: owner)
-    guard let data = try CredentialKeychain.read(service: pendingService) else { return snapshot }
+    guard let data = try CredentialKeychain.read(service: pendingService) else {
+      if let id = snapshot?.account.refreshID, observedReservation != id {
+        observedReservation = id
+        renewalDiagnostics.record(.reservationObservedWithoutJournal, attempt: id)
+      }
+      return snapshot
+    }
     let pending = try JSONDecoder().decode(TwitchPendingPublication.self, from: data)
+    if observedPendingPublication != pending.refreshID {
+      observedPendingPublication = pending.refreshID
+      renewalDiagnostics.record(.pendingPublicationFound, attempt: pending.refreshID)
+    }
     guard pending.owner == owner else {
       try CredentialKeychain.remove(service: pendingService)
       throw TwitchSyncError.accountChanged
     }
     guard let snapshot, snapshot.account.refreshID == pending.refreshID else {
       try CredentialKeychain.remove(service: pendingService)
+      renewalDiagnostics.record(.pendingPublicationSuperseded, attempt: pending.refreshID)
       return snapshot
     }
     let saved = try await database.save(TwitchCloudRefresh.publication(pending, into: snapshot), replacing: snapshot)
     try CredentialKeychain.remove(service: pendingService)
+    renewalDiagnostics.record(.pendingPublicationCompleted, attempt: pending.refreshID)
     return saved
   }
 
@@ -403,6 +484,10 @@ final class TwitchAccountSync {
     status = "Connected through iCloud"
     errorMessage = nil
     hasAccountConflict = false
+    isRenewalPending = false
+    observedReservation = nil
+    observedPendingPublication = nil
+    lastReportedFailure = nil
   }
 
   private func clearRewardChange() {
@@ -417,9 +502,15 @@ final class TwitchAccountSync {
     if error is CancellationError { return }
     status = isSignedOutLocally ? "Signed out on this device" : "Connection needs attention"
     hasAccountConflict = error as? TwitchSyncError == .accountConflict
+    isRenewalPending = error as? TwitchSyncError == .refreshPending
     if let error = error as? TwitchSyncError { errorMessage = error.localizedDescription }
     else if error is CredentialKeychain.StorageError { errorMessage = error.localizedDescription }
     else { errorMessage = "iCloud account sync is unavailable right now. Retry when you are online." }
+    let failure = "\((error as NSError).domain):\((error as NSError).code)"
+    if failure != lastReportedFailure {
+      renewalDiagnostics.record(.syncFailed, error: error)
+      lastReportedFailure = failure
+    }
     Self.logger.error("Account sync failed: \((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
   }
 }

@@ -328,6 +328,10 @@ enum NativeCMAF {
 
   static func manifest(_ text: String, url: URL) throws -> Manifest {
     guard text.hasPrefix("#EXTM3U") else { throw NativeHLSError.invalidMedia }
+    let fractionalDate = ISO8601DateFormatter()
+    fractionalDate.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let wholeDate = ISO8601DateFormatter()
+    wholeDate.formatOptions = [.withInternetDateTime]
     var map: URL?
     var sequence: Int?
     var discontinuity = 0
@@ -367,13 +371,7 @@ enum NativeCMAF {
         guard attrs["BYTERANGE"] == nil, let path = attrs["URI"] else { throw NativeHLSError.unsupported }
         map = URL(string: path, relativeTo: url)?.absoluteURL
       } else if line.hasPrefix("#EXT-X-PROGRAM-DATE-TIME:") {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        date = formatter.date(from: value)
-        if date == nil {
-          formatter.formatOptions = [.withInternetDateTime]
-          date = formatter.date(from: value)
-        }
+        date = fractionalDate.date(from: value) ?? wholeDate.date(from: value)
         guard date != nil else { throw NativeHLSError.invalidMedia }
         explicitDate = true
       } else if line.hasPrefix("#EXTINF:") {

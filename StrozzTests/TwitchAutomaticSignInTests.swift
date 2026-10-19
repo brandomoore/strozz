@@ -308,6 +308,241 @@ final class TwitchAutomaticSignInTests: XCTestCase {
     XCTAssertNil(fixture.sync.errorMessage)
   }
 
+  func testExpiredReservedConnectionOffersReapprovalWithoutSpendingOrClearingTheToken() async throws {
+    let fixture = try Fixture()
+    defer { fixture.stop() }
+    try await fixture.saveCloudAccount()
+    await fixture.start()
+    fixture.auth.validationTask?.cancel()
+    let snapshot = try await fixture.requireCloudSnapshot()
+    let id = UUID()
+    _ = try await fixture.database.save(TwitchCloudRefresh.reserve(snapshot, id: id), replacing: snapshot)
+    do {
+      _ = try await fixture.auth.recoverAccessToken(afterUnauthorized: "synthetic-access")
+      XCTFail("An ambiguous reservation must not be reused")
+    } catch { XCTAssertEqual(error as? TwitchSyncError, .refreshPending) }
+    XCTAssertTrue(fixture.sync.needsRenewalSignIn)
+    XCTAssertFalse(fixture.auth.isAuthenticated)
+    XCTAssertNotNil(fixture.auth.storedCredential, "Keep the account and its credentials")
+    XCTAssertFalse(fixture.sync.isSignedOutLocally, "Expiry is not an explicit local sign-out")
+    let blocked = await fixture.cloudSnapshot()
+    XCTAssertEqual(blocked?.account.refreshID, id)
+    XCTAssertFalse(try XCTUnwrap(fixture.sync.errorMessage).contains("Another device"))
+
+    await fixture.network.enableRefresh()
+    await fixture.auth.beginDeviceCodeSignIn(useSavedConnection: false)
+    for _ in 0..<200 {
+      if fixture.auth.isAuthenticated && fixture.diagnostics.events.contains(where: { $0.stage == .freshSignInPublished }) {
+        break
+      }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    XCTAssertTrue(fixture.auth.isAuthenticated)
+    let renewed = await fixture.cloudSnapshot()
+    XCTAssertNil(renewed?.account.refreshID)
+    XCTAssertEqual(renewed?.account.credential?.accessToken, "rotated-access")
+    let exchanges = await fixture.network.refreshExchanges
+    XCTAssertEqual(exchanges, 0, "Fresh device approval must never exchange the uncertain refresh token")
+    XCTAssertFalse(fixture.sync.needsRenewalSignIn)
+    XCTAssertTrue(fixture.diagnostics.events.contains { $0.stage == .reservationObservedWithoutJournal && $0.attempt == id })
+    XCTAssertTrue(fixture.diagnostics.events.contains { $0.stage == .freshSignInRequested })
+    XCTAssertTrue(fixture.diagnostics.events.contains { $0.stage == .freshSignInPublished })
+  }
+
+  func testDismissingAcceptedSignInDoesNotCancelItsCloudPublication() async throws {
+    let fixture = try Fixture()
+    defer { fixture.stop() }
+    try await fixture.saveCloudAccount()
+    await fixture.start()
+    fixture.auth.validationTask?.cancel()
+    await fixture.auth.validationTask?.value
+    fixture.auth.isAuthenticated = false
+    await fixture.network.enableRefresh()
+    await fixture.database.holdNextSignInPublication()
+    await fixture.auth.beginDeviceCodeSignIn(useSavedConnection: false)
+    for _ in 0..<200 {
+      if fixture.auth.isAuthenticated && fixture.sync.isBusy { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    XCTAssertTrue(fixture.auth.isAuthenticated)
+    XCTAssertTrue(fixture.sync.isBusy)
+    fixture.auth.cancelSignIn() // The sign-in view dismisses on authentication.
+    await fixture.database.releaseSignInPublication()
+    for _ in 0..<200 {
+      if !fixture.sync.isBusy { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let snapshot = await fixture.cloudSnapshot()
+    XCTAssertEqual(snapshot?.account.credential?.accessToken, "rotated-access")
+    XCTAssertTrue(fixture.diagnostics.events.contains { $0.stage == .freshSignInPublished })
+    XCTAssertNil(fixture.sync.errorMessage)
+  }
+
+  func testFailedExchangeRetainsReservationAndRecordsItsExactStageWithoutCredentials() async throws {
+    let fixture = try Fixture()
+    defer { fixture.stop() }
+    try await fixture.saveCloudAccount()
+    await fixture.start()
+    fixture.auth.validationTask?.cancel()
+    await fixture.network.failRefresh(.networkConnectionLost)
+    do {
+      _ = try await fixture.auth.recoverAccessToken(afterUnauthorized: "synthetic-access")
+      XCTFail("The synthetic exchange should fail")
+    } catch { XCTAssertEqual((error as? URLError)?.code, .networkConnectionLost) }
+    let reserved = await fixture.cloudSnapshot()
+    let id = try XCTUnwrap(reserved?.account.refreshID)
+    XCTAssertEqual(reserved?.account.credential?.accessToken, "synthetic-access")
+    let failure = try XCTUnwrap(fixture.diagnostics.events.last { $0.stage == .renewalFailed })
+    XCTAssertEqual(failure.attempt, id)
+    XCTAssertEqual(failure.failedStage, .exchangeRequested)
+    XCTAssertEqual(failure.errorKind, "network")
+    XCTAssertEqual(failure.errorCode, URLError.networkConnectionLost.rawValue)
+    XCTAssertFalse(fixture.diagnostics.events.contains { $0.stage == .credentialsJournaled })
+    let data = try String(contentsOf: fixture.diagnostics.file, encoding: .utf8)
+    XCTAssertFalse(data.contains("synthetic-access"))
+    XCTAssertFalse(data.contains("synthetic-refresh"))
+    XCTAssertFalse(data.contains("fixture"))
+  }
+
+  func testAcceptedPublicationCannotRestoreAnExplicitLocalSignOut() async throws {
+    let fixture = try Fixture()
+    defer { fixture.stop() }
+    try await fixture.saveCloudAccount()
+    await fixture.start()
+    fixture.auth.validationTask?.cancel()
+    await fixture.auth.validationTask?.value
+    fixture.auth.isAuthenticated = false
+    await fixture.network.enableRefresh()
+    await fixture.database.holdNextSignInPublication()
+    await fixture.auth.beginDeviceCodeSignIn(useSavedConnection: false)
+    for _ in 0..<200 {
+      if fixture.auth.isAuthenticated && fixture.sync.isBusy { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    XCTAssertTrue(fixture.sync.isBusy)
+    fixture.auth.signOut()
+    await fixture.database.releaseSignInPublication()
+    for _ in 0..<200 {
+      if !fixture.sync.isBusy { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    XCTAssertTrue(fixture.sync.isSignedOutLocally)
+    XCTAssertFalse(fixture.auth.isAuthenticated)
+    XCTAssertNil(fixture.auth.storedCredential)
+    XCTAssertTrue(fixture.diagnostics.events.contains { $0.stage == .signInPublicationFailed && $0.errorKind == "cancelled" })
+  }
+
+  func testPublicationFailureResumesJournalAfterRestartWithoutAnotherTokenExchange() async throws {
+    let fixture = try Fixture()
+    defer { fixture.stop() }
+    try await fixture.saveCloudAccount()
+    await fixture.start()
+    fixture.auth.validationTask?.cancel()
+    await fixture.network.enableRefresh()
+    await fixture.database.failNextPublication()
+    do {
+      _ = try await fixture.auth.recoverAccessToken(afterUnauthorized: "synthetic-access")
+      XCTFail("The synthetic publication should fail")
+    } catch { XCTAssertEqual((error as? URLError)?.code, .notConnectedToInternet) }
+    let failure = try XCTUnwrap(fixture.diagnostics.events.last { $0.stage == .renewalFailed })
+    XCTAssertEqual(failure.failedStage, .publicationRequested)
+    XCTAssertTrue(fixture.diagnostics.events.contains { $0.stage == .credentialsJournaled })
+    fixture.sync.stop()
+    let restartedDiagnostics = TwitchCloudRenewalDiagnostics(directory: fixture.diagnosticDirectory)
+    let restarted = TwitchAccountSync(database: fixture.database, defaults: fixture.defaults,
+      storagePrefix: fixture.prefix, renewalDiagnostics: restartedDiagnostics)
+    defer { restarted.stop() }
+    await restarted.start(auth: fixture.auth, rewards: fixture.rewards)
+    let recovered = await fixture.cloudSnapshot()
+    XCTAssertNil(recovered?.account.refreshID)
+    XCTAssertEqual(recovered?.account.credential?.accessToken, "rotated-access")
+    XCTAssertTrue(fixture.auth.isAuthenticated)
+    let exchanges = await fixture.network.refreshExchanges
+    XCTAssertEqual(exchanges, 1)
+    XCTAssertTrue(restartedDiagnostics.events.contains { $0.stage == .renewalFailed })
+    XCTAssertTrue(restartedDiagnostics.events.contains { $0.stage == .pendingPublicationCompleted })
+    XCTAssertEqual(Set(restartedDiagnostics.events.map(\.process)).count, 2)
+  }
+
+  func testLostReservationSaveResponseDoesNotExchangeAndIsDistinguishableFromExchangeFailure() async throws {
+    let fixture = try Fixture()
+    defer { fixture.stop() }
+    try await fixture.saveCloudAccount()
+    await fixture.start()
+    fixture.auth.validationTask?.cancel()
+    await fixture.database.loseNextReservationResponse()
+    do {
+      _ = try await fixture.auth.recoverAccessToken(afterUnauthorized: "synthetic-access")
+      XCTFail("The synthetic response should be lost")
+    } catch { XCTAssertEqual((error as? URLError)?.code, .networkConnectionLost) }
+    let saved = await fixture.cloudSnapshot()
+    XCTAssertNotNil(saved?.account.refreshID)
+    let failure = try XCTUnwrap(fixture.diagnostics.events.last { $0.stage == .renewalFailed })
+    XCTAssertEqual(failure.failedStage, .reservationRequested)
+    let exchanges = await fixture.network.refreshExchanges
+    XCTAssertEqual(exchanges, 0)
+    XCTAssertFalse(fixture.diagnostics.events.contains { $0.stage == .exchangeRequested })
+  }
+
+  func testRenewalDiagnosticsAreBoundedPersistentAndExcludeArbitraryErrorDetails() throws {
+    let fixture = try Fixture()
+    defer { fixture.stop() }
+    let secret = "private-access-token-owner-device-url"
+    let error = NSError(domain: secret, code: 123, userInfo: [NSLocalizedDescriptionKey: secret])
+    fixture.diagnostics.record(.syncFailed, error: error)
+    let stored = try String(contentsOf: fixture.diagnostics.file, encoding: .utf8)
+    XCTAssertFalse(stored.contains(secret))
+    XCTAssertTrue(stored.contains("other"))
+    fixture.diagnostics.record(.renewalFailed,
+      error: TwitchAuthHTTPError(context: secret, status: 400, message: "Invalid refresh token"))
+    XCTAssertEqual(fixture.diagnostics.events.last?.oauthReason, "invalid_refresh")
+    fixture.diagnostics.record(.renewalFailed,
+      error: TwitchAuthHTTPError(context: secret, status: 400, message: secret))
+    XCTAssertNil(fixture.diagnostics.events.last?.oauthReason)
+    XCTAssertFalse(try String(contentsOf: fixture.diagnostics.file, encoding: .utf8).contains(secret))
+    for _ in 0..<TwitchCloudRenewalDiagnostics.capacity + 3 {
+      fixture.diagnostics.record(.reservationRequested, attempt: UUID())
+    }
+    let restarted = TwitchCloudRenewalDiagnostics(directory: fixture.diagnosticDirectory)
+    XCTAssertEqual(restarted.events.count, TwitchCloudRenewalDiagnostics.capacity)
+    XCTAssertEqual(Set(restarted.events.map(\.process)).count, 2)
+    XCTAssertLessThan(try Data(contentsOf: restarted.file).count, 256 * 1024)
+  }
+
+  func testDefaultRenewalDiagnosticsUsePlatformSupportedStorage() throws {
+    #if os(tvOS)
+    let root = URL.cachesDirectory
+    #else
+    let root = URL.applicationSupportDirectory
+    #endif
+    XCTAssertEqual(TwitchCloudRenewalDiagnostics.directory,
+      root.appendingPathComponent("AccountDiagnostics", isDirectory: true))
+    let directory = TwitchCloudRenewalDiagnostics.directory
+      .appendingPathComponent("StorageProbe-\(UUID())", isDirectory: true)
+    defer {
+      do { try FileManager.default.removeItem(at: directory) }
+      catch { XCTFail("Cannot remove owned diagnostic storage probe: \(error)") }
+    }
+    let diagnostics = TwitchCloudRenewalDiagnostics(directory: directory)
+    let stored = try JSONDecoder().decode([TwitchCloudRenewalDiagnostics.Event].self,
+      from: Data(contentsOf: diagnostics.file))
+    XCTAssertEqual(stored.last?.stage, .processStarted)
+  }
+
+  func testRepeatedBlockedSyncDoesNotFillTheDiagnosticHistory() async throws {
+    let fixture = try Fixture()
+    defer { fixture.stop() }
+    try await fixture.saveCloudAccount()
+    let snapshot = try await fixture.requireCloudSnapshot()
+    _ = try await fixture.database.save(TwitchCloudRefresh.reserve(snapshot, id: UUID()), replacing: snapshot)
+    await fixture.start()
+    fixture.auth.validationTask?.cancel()
+    for _ in 0..<10 { await fixture.sync.synchronize() }
+    XCTAssertEqual(fixture.diagnostics.events.filter { $0.stage == .reservationObservedWithoutJournal }.count, 1)
+    XCTAssertEqual(fixture.diagnostics.events.filter { $0.stage == .syncFailed }.count, 1)
+    XCTAssertTrue(fixture.auth.isAuthenticated, "A reservation alone must not invalidate a still-valid access token")
+  }
+
   private func waitForBusy(_ sync: TwitchAccountSync) async throws {
     for _ in 0..<100 {
       if sync.isBusy { return }
@@ -324,6 +559,8 @@ private final class Fixture {
   let auth: TwitchAuthSession
   let sync: TwitchAccountSync
   let rewards: TwitchWatchRewardsSession
+  let diagnostics: TwitchCloudRenewalDiagnostics
+  let diagnosticDirectory: URL
   let database = AutomaticSignInDatabase()
   let network = AutomaticSignInNetwork()
 
@@ -332,7 +569,10 @@ private final class Fixture {
     let network = network
     auth = TwitchAuthSession(userDefaults: defaults, secureService: prefix + ".auth", saveTopShelf: { _ in },
       loadAuthData: { try await network.load($0) })
-    sync = TwitchAccountSync(database: database, defaults: defaults, storagePrefix: prefix)
+    diagnosticDirectory = URL.temporaryDirectory.appendingPathComponent(prefix, isDirectory: true)
+    diagnostics = TwitchCloudRenewalDiagnostics(directory: diagnosticDirectory)
+    sync = TwitchAccountSync(database: database, defaults: defaults, storagePrefix: prefix,
+      renewalDiagnostics: diagnostics)
     rewards = TwitchWatchRewardsSession(store: .init(read: { nil }, write: { _ in }, remove: {}),
       preferences: defaults)
   }
@@ -353,6 +593,13 @@ private final class Fixture {
     await sync.start(auth: auth, rewards: rewards)
   }
 
+  func cloudSnapshot() async -> TwitchCloudSnapshot? { await database.fetch(owner: "owner") }
+
+  func requireCloudSnapshot() async throws -> TwitchCloudSnapshot {
+    let snapshot = await cloudSnapshot()
+    return try XCTUnwrap(snapshot)
+  }
+
   func stop() {
     sync.stop()
     auth.cancelSignIn()
@@ -364,15 +611,20 @@ private final class Fixture {
       }
     } catch { XCTFail("Synthetic credential cleanup failed: \(error)") }
     defaults.removePersistentDomain(forName: prefix)
+    do { try FileManager.default.removeItem(at: diagnosticDirectory) }
+    catch { XCTFail("Synthetic diagnostic cleanup failed: \(error)") }
   }
 }
 
 private actor AutomaticSignInNetwork {
   private var client = ""
   private var refreshEnabled = false
+  private var refreshFailure: URLError.Code?
+  private(set) var refreshExchanges = 0
   private(set) var requests: [String] = []
   func setClientID(_ value: String) { client = value }
   func enableRefresh() { refreshEnabled = true }
+  func failRefresh(_ code: URLError.Code) { refreshFailure = code }
   func load(_ request: URLRequest) throws -> (Data, URLResponse) {
     let url = try XCTUnwrap(request.url)
     requests.append(url.path)
@@ -388,6 +640,10 @@ private actor AutomaticSignInNetwork {
         "verification_uri": "https://www.twitch.tv/activate", "expires_in": 600, "interval": 2]
       status = 200
     case "/oauth2/token":
+      if String(data: request.httpBody ?? Data(), encoding: .utf8)?.contains("grant_type=refresh_token") == true {
+        refreshExchanges += 1
+        if let refreshFailure { throw URLError(refreshFailure) }
+      }
       if refreshEnabled {
         body = ["access_token": "rotated-access", "refresh_token": "rotated-refresh",
           "token_type": "bearer", "expires_in": 3600]
@@ -408,10 +664,17 @@ private actor AutomaticSignInDatabase: TwitchCloudDatabase {
   private var snapshot: TwitchCloudSnapshot?
   private var unavailable = false
   private var hold = false
+  private var publicationFailure = false
+  private var lostReservationResponse = false
+  private var holdSignInPublication = false
   private(set) var ownerRequests = 0
   func setUnavailable() { unavailable = true }
   func holdOwner() { hold = true }
   func releaseOwner() { hold = false }
+  func failNextPublication() { publicationFailure = true }
+  func loseNextReservationResponse() { lostReservationResponse = true }
+  func holdNextSignInPublication() { holdSignInPublication = true }
+  func releaseSignInPublication() { holdSignInPublication = false }
   func owner() async throws -> String {
     ownerRequests += 1
     while hold { try await Task.sleep(for: .milliseconds(5)) }
@@ -419,10 +682,22 @@ private actor AutomaticSignInDatabase: TwitchCloudDatabase {
     return "owner"
   }
   func fetch(owner: String) -> TwitchCloudSnapshot? { snapshot }
-  func save(_ account: TwitchCloudAccount, replacing previous: TwitchCloudSnapshot?) throws -> TwitchCloudSnapshot {
+  func save(_ account: TwitchCloudAccount, replacing previous: TwitchCloudSnapshot?) async throws -> TwitchCloudSnapshot {
+    if account.refreshID == nil {
+      while holdSignInPublication { try await Task.sleep(for: .milliseconds(5)) }
+      try Task.checkCancellation()
+    }
     guard previous?.version == snapshot?.version else { throw TwitchSyncError.conflict }
+    if publicationFailure, account.refreshID == nil, previous?.account.refreshID != nil {
+      publicationFailure = false
+      throw URLError(.notConnectedToInternet)
+    }
     let next = TwitchCloudSnapshot(account: try account.validated(), version: Data(UUID().uuidString.utf8))
     snapshot = next
+    if lostReservationResponse, account.refreshID != nil {
+      lostReservationResponse = false
+      throw URLError(.networkConnectionLost)
+    }
     return next
   }
 }

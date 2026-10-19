@@ -192,7 +192,8 @@ struct NativeCMAFRemuxer {
   private var compositionShift: Int64?
   private var pending = Data()
   private var partDuration = 0.0
-  private var totalDuration = 0.0
+  private var totalVideoTicks: UInt64 = 0
+  private var totalDuration: Double { Double(totalVideoTicks) / Double(format.video.scale) }
   private var partVideoStart: UInt64 = 0
   private var partPresentationStart: Int64 = 0
   private var partAudioStart: UInt64 = 0
@@ -291,24 +292,47 @@ struct NativeCMAFRemuxer {
     guard mapped >= 0, mapped <= NativeMediaClock.maximum, nextSequence < UInt32.max else {
       throw NativeHLSError.invalidMedia
     }
-    let duration = Double(video.duration) / Double(format.video.scale)
-    var output: [NativeTransportRemuxer.Part] = []
-    if try NativeCMAF.shouldFlushPart(accumulated: partDuration, next: duration) {
-      guard partDuration >= 0.3825 else { throw NativeHLSError.partDuration }
-      output.append(flush())
+    let maximumTicks = format.video.scale * 10
+    guard video.duration <= maximumTicks, totalVideoTicks <= maximumTicks - video.duration else {
+      throw NativeHLSError.invalidMedia
     }
-    if partDuration == 0 {
-      partVideoStart = UInt64(mapped)
-      partPresentationStart = Int64(clocks.0) + video.firstComposition
-      partAudioStart = clocks.1
-      partIndependent = video.independent
-    }
-    pending += try NativeFragmentedMP4.controlledFragment(data, video: format.video, audio: format.audio,
+    totalVideoTicks += video.duration
+    let normalized = try NativeFragmentedMP4.controlledFragment(data, video: format.video, audio: format.audio,
       videoDescriptionIndex: descriptionIndex, videoDecodeTime: UInt64(mapped),
       compositionShift: compositionShift, audioDecodeTime: clocks.1, sequence: nextSequence)
+    return try appendNormalized(normalized)
+  }
+
+  private mutating func appendNormalized(_ data: Data) throws -> [NativeTransportRemuxer.Part] {
+    let moof = try NativeCMAF.child(data, "moof")
+    let video = try NativeCMAF.fragmentTiming(moof, track: format.video)
+    let audio = try NativeCMAF.fragmentTiming(moof, track: format.audio)
+    let duration = Double(video.duration) / Double(format.video.scale)
+    var output: [NativeTransportRemuxer.Part] = []
+    if partDuration + duration > 0.45 {
+      if partDuration >= 0.3825 {
+        output.append(flush())
+        output += try appendNormalized(data)
+        return output
+      } else {
+        let pieces = try NativeFragmentedMP4.splitControlledFragment(data,
+          video: format.video, audio: format.audio, maximumDuration: 0.45 - partDuration,
+          sequence: nextSequence)
+        output += try appendNormalized(pieces.0)
+        output += try appendNormalized(pieces.1)
+        return output
+      }
+    }
+    if partDuration == 0 {
+      partVideoStart = video.decodeTime
+      partPresentationStart = Int64(video.decodeTime) + video.firstComposition
+      partAudioStart = audio.decodeTime
+      partIndependent = video.independent
+    }
+    guard nextSequence < UInt32.max else { throw NativeHLSError.invalidMedia }
+    pending += try NativeFragmentedMP4.resequencedFragment(data, sequence: nextSequence)
     nextSequence += 1
     partDuration += duration
-    totalDuration += duration
     videoSamples += video.samples
     audioSamples += audio.samples
     if partDuration >= 0.3825 { output.append(flush()) }

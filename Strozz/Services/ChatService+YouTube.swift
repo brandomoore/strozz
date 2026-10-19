@@ -149,30 +149,10 @@ extension ChatService {
         return nil
       }
 
-      if let finalURL = http.url?.absoluteString,
-        let id = Self.extractYouTubeVideoID(from: finalURL)
-      {
-        return id
-      }
-
-      let html = String(decoding: data, as: UTF8.self)
-      if let canonical = Self.extractQuotedValue(after: "\"canonicalUrl\":\"", in: html) {
-        let decodedCanonical = Self.decodeEscapedJSONString(canonical)
-        if let id = Self.extractYouTubeVideoID(from: decodedCanonical) {
-          return id
-        }
-      }
-
-      if let id = Self.extractQuotedValue(after: "\"videoId\":\"", in: html)
-        .flatMap(Self.sanitizedYouTubeVideoID)
-      {
-        return id
-      }
+      return try await Self.resolveYouTubeLookup(data, finalURL: http.url)
     } catch {
       return nil
     }
-
-    return nil
   }
 
   private func filterAndRememberYouTubeMessages(_ entries: [YouTubePollEntry]) -> [ChatMessage] {
@@ -199,7 +179,7 @@ extension ChatService {
     return out
   }
 
-  private struct YouTubeBootstrap {
+  struct YouTubeBootstrap: Sendable {
     let apiKey: String
     let clientVersion: String
     let continuation: String
@@ -252,21 +232,52 @@ extension ChatService {
       throw YouTubeScrapeError.httpFailure(http.statusCode)
     }
 
-    let html = String(decoding: data, as: UTF8.self)
-    guard
-      let apiKey = Self.extractQuotedValue(after: "\"INNERTUBE_API_KEY\":\"", in: html),
-      let clientVersion = Self.extractQuotedValue(after: "\"INNERTUBE_CLIENT_VERSION\":\"", in: html),
-      let continuation = Self.extractInitialYouTubeContinuation(in: html)
-    else {
-      throw YouTubeScrapeError.bootstrapUnavailable
-    }
+    return try await Self.parseYouTubeBootstrap(data)
+  }
 
-    return YouTubeBootstrap(
-      apiKey: Self.decodeEscapedJSONString(apiKey),
-      clientVersion: Self.decodeEscapedJSONString(clientVersion),
-      continuation: Self.decodeEscapedJSONString(continuation),
-      concurrentViewers: YouTubeConcurrentViewersService.concurrentViewers(inWatchHTML: html)
-    )
+  // Watch pages are large: decoding and literal HTML searches must not inherit
+  // ChatService's main actor, including while an unavailable chat is retrying.
+  nonisolated static func resolveYouTubeLookup(_ data: Data, finalURL: URL?) async throws -> String? {
+    try Task.checkCancellation()
+    let parsing = Task<String?, Error>.detached(priority: .utility) {
+      try Task.checkCancellation()
+      if let finalURL, let id = Self.extractYouTubeVideoID(from: finalURL.absoluteString) { return id }
+      let html = String(decoding: data, as: UTF8.self)
+      if let canonical = Self.extractQuotedValue(after: "\"canonicalUrl\":\"", in: html),
+        let id = Self.extractYouTubeVideoID(from: canonical) { return id }
+      try Task.checkCancellation()
+      return Self.extractQuotedValue(after: "\"videoId\":\"", in: html).flatMap(Self.sanitizedYouTubeVideoID)
+    }
+    return try await withTaskCancellationHandler {
+      let result = try await parsing.value
+      try Task.checkCancellation()
+      return result
+    } onCancel: {
+      parsing.cancel()
+    }
+  }
+
+  nonisolated static func parseYouTubeBootstrap(_ data: Data) async throws -> YouTubeBootstrap {
+    try Task.checkCancellation()
+    let parsing = Task.detached(priority: .utility) {
+      try Task.checkCancellation()
+      let html = String(decoding: data, as: UTF8.self)
+      guard let apiKey = Self.extractQuotedValue(after: "\"INNERTUBE_API_KEY\":\"", in: html),
+        let clientVersion = Self.extractQuotedValue(after: "\"INNERTUBE_CLIENT_VERSION\":\"", in: html),
+        let continuation = Self.extractInitialYouTubeContinuation(in: html) else {
+        throw YouTubeScrapeError.bootstrapUnavailable
+      }
+      try Task.checkCancellation()
+      return YouTubeBootstrap(apiKey: apiKey, clientVersion: clientVersion, continuation: continuation,
+        concurrentViewers: YouTubeConcurrentViewersService.concurrentViewers(inWatchHTML: html))
+    }
+    return try await withTaskCancellationHandler {
+      let result = try await parsing.value
+      try Task.checkCancellation()
+      return result
+    } onCancel: {
+      parsing.cancel()
+    }
   }
 
   private func fetchYouTubeChatBatch(
@@ -516,21 +527,19 @@ extension ChatService {
     return nil
   }
 
-  private static func extractInitialYouTubeContinuation(in html: String) -> String? {
-    if let liveIndex = html.range(of: "\"liveChatRenderer\"") {
-      let tail = String(html[liveIndex.lowerBound...])
-      if let continuation = extractQuotedValue(after: "\"continuation\":\"", in: tail) {
+  nonisolated private static func extractInitialYouTubeContinuation(in html: String) -> String? {
+    if let liveIndex = html.range(of: "\"liveChatRenderer\"", options: .literal) {
+      if let continuation = extractQuotedValue(after: "\"continuation\":\"", in: html[liveIndex.lowerBound...]) {
         return continuation
       }
     }
     return extractQuotedValue(after: "\"continuation\":\"", in: html)
   }
 
-  private static func extractQuotedValue(after marker: String, in text: String) -> String? {
-    guard let markerRange = text.range(of: marker) else { return nil }
+  nonisolated private static func extractQuotedValue<S: StringProtocol>(after marker: String, in text: S) -> String? {
+    guard let markerRange = text.range(of: marker, options: .literal) else { return nil }
 
     var index = markerRange.upperBound
-    var out = ""
     var escaped = false
 
     while index < text.endIndex {
@@ -538,7 +547,6 @@ extension ChatService {
       text.formIndex(after: &index)
 
       if escaped {
-        out.append(char)
         escaped = false
         continue
       }
@@ -549,20 +557,13 @@ extension ChatService {
       }
 
       if char == "\"" {
-        return out
+        let end = text.index(before: index)
+        let quoted = "\"" + String(text[markerRange.upperBound..<end]) + "\""
+        return try? JSONDecoder().decode(String.self, from: Data(quoted.utf8))
       }
-
-      out.append(char)
     }
 
     return nil
-  }
-
-  private static func decodeEscapedJSONString(_ input: String) -> String {
-    input
-      .replacingOccurrences(of: "\\u0026", with: "&")
-      .replacingOccurrences(of: "\\u003d", with: "=")
-      .replacingOccurrences(of: "\\/", with: "/")
   }
 
   private static func makeYouTubeLiveLookupURL(from input: String) -> URL? {
@@ -600,7 +601,7 @@ extension ChatService {
     return nil
   }
 
-  private static func extractYouTubeVideoID(from input: String) -> String? {
+  nonisolated private static func extractYouTubeVideoID(from input: String) -> String? {
     let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
 
@@ -647,7 +648,7 @@ extension ChatService {
     return nil
   }
 
-  private static func sanitizedYouTubeVideoID(_ raw: String) -> String? {
+  nonisolated private static func sanitizedYouTubeVideoID(_ raw: String) -> String? {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard trimmed.count == 11 else { return nil }
 
