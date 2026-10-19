@@ -497,9 +497,12 @@ signing out everywhere or reusing the uncertain refresh token.
 Once Twitch approval has been accepted, dismissing the sign-in screen no longer
 cancels its iCloud publication; account changes and explicit sign-out remain fenced.
 
-TV and mobile keep a bounded, device-local renewal history in
-`Library/Application Support/AccountDiagnostics/renewal.json` (256 events).
-It survives app restarts and records foreground/background transitions, reservation,
+TV keeps its device-local renewal history in
+`Library/Caches/AccountDiagnostics/renewal.json`, using tvOS-supported writable
+storage. Mobile uses `Library/Application Support/AccountDiagnostics/renewal.json`.
+Both are bounded to 256 events and survive normal app restarts; tvOS may purge
+caches under storage pressure, so retrieve TV evidence promptly.
+The history records foreground/background transitions, reservation,
 token-exchange, Keychain-journal and cloud-publication stages, pending-publication
 recovery, cancellations and sanitized error categories/status codes. Known OAuth
 rejection reasons use a fixed allowlist, never arbitrary server text. Random reservation/process IDs correlate

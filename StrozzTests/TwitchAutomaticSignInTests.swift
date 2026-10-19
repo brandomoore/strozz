@@ -509,6 +509,26 @@ final class TwitchAutomaticSignInTests: XCTestCase {
     XCTAssertLessThan(try Data(contentsOf: restarted.file).count, 256 * 1024)
   }
 
+  func testDefaultRenewalDiagnosticsUsePlatformSupportedStorage() throws {
+    #if os(tvOS)
+    let root = URL.cachesDirectory
+    #else
+    let root = URL.applicationSupportDirectory
+    #endif
+    XCTAssertEqual(TwitchCloudRenewalDiagnostics.directory,
+      root.appendingPathComponent("AccountDiagnostics", isDirectory: true))
+    let directory = TwitchCloudRenewalDiagnostics.directory
+      .appendingPathComponent("StorageProbe-\(UUID())", isDirectory: true)
+    defer {
+      do { try FileManager.default.removeItem(at: directory) }
+      catch { XCTFail("Cannot remove owned diagnostic storage probe: \(error)") }
+    }
+    let diagnostics = TwitchCloudRenewalDiagnostics(directory: directory)
+    let stored = try JSONDecoder().decode([TwitchCloudRenewalDiagnostics.Event].self,
+      from: Data(contentsOf: diagnostics.file))
+    XCTAssertEqual(stored.last?.stage, .processStarted)
+  }
+
   func testRepeatedBlockedSyncDoesNotFillTheDiagnosticHistory() async throws {
     let fixture = try Fixture()
     defer { fixture.stop() }

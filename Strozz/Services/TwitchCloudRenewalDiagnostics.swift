@@ -28,7 +28,11 @@ final class TwitchCloudRenewalDiagnostics {
   }
 
   static let capacity = 256
+  #if os(tvOS)
+  static let directory = URL.cachesDirectory.appendingPathComponent("AccountDiagnostics", isDirectory: true)
+  #else
   static let directory = URL.applicationSupportDirectory.appendingPathComponent("AccountDiagnostics", isDirectory: true)
+  #endif
   let file: URL
   private(set) var events: [Event] = []
   private let process = UUID()
