@@ -8,6 +8,7 @@ const files = ["404.html", "styles.css", "orbits.js", "_headers", "robots.txt"];
 const beta = JSON.parse(await readFile(new URL("website/beta.json", root), "utf8"));
 const catalog = JSON.parse(await readFile(new URL("website/emote-catalog.json", root), "utf8"));
 const names = new Set();
+const artwork = new Set();
 for (const [family, entries] of Object.entries(catalog)) {
   assert.match(family, /^[a-z]+$/);
   assert.ok(Array.isArray(entries) && entries.length >= 7, `Emote family ${family} needs at least seven reactions`);
@@ -23,6 +24,9 @@ for (const [family, entries] of Object.entries(catalog)) {
       assert.equal(entry.name, "Party Parrot");
       assert.equal(entry.src, "/emotes/party-parrot.svg");
     }
+    const source = entry.id ?? entry.src;
+    assert.ok(!artwork.has(source), `Duplicate emote artwork: ${entry.name}`);
+    artwork.add(source);
   }
 }
 const escapeHTML = (text) => text.replace(/[&<>"']/g, (character) => ({
@@ -67,6 +71,7 @@ const [html, privacy, credits] = await Promise.all([
 for (const [, name] of html.matchAll(/class="orbit-emote" data-emote="([^"]+)"/g)) {
   assert.ok(names.has(name), `Initial emote missing from catalog: ${name}`);
 }
+assert.ok(names.size >= 132, "The emote catalog needs 120 active reactions, six fading, and six new choices");
 
 await Promise.all([
   mkdir(new URL("privacy/", output), { recursive: true }),

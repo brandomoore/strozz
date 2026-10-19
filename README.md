@@ -153,11 +153,17 @@ Clicking the TV toggles a native pause checkbox; keyboard users can Tab to it
 and press Space. CSS motion and this control still work without JavaScript.
 Reduced motion disables both orbiting and cursor nudges.
 Clicking the visible artwork replaces an emote with six randomly selected,
-related reactions that disperse onto all three orbits and stay there. These
-offspring are clickable too. The 40-reaction catalog in
+unused reactions that disperse onto all three orbits and stay there. Related
+reactions are preferred; other families fill the burst when those are already
+on screen. These offspring are clickable too. The 203-reaction catalog in
 `website/emote-catalog.json` groups happy, laughing, nervous, sad, and party
 emotes; the builder embeds inert JSON and generates `/credits/` from that same
 source. Image pixels/decodes are shared and loaded only when needed.
+No artwork appears twice at once, including during fade-outs. Pending catches
+reserve their choices before loading images so overlapping clicks stay unique.
+Failed or obsolete batches release those reservations. If too many catches
+are loading at once, the parent remains in orbit and a short status message asks you
+to try again when the choices are free.
 At 120 active emotes, new catches fade out the oldest (except the focused
 keyboard control). At most six retiring nodes remain during their short fades.
 The population is local to the page and resets on reload.
