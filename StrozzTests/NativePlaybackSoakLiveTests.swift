@@ -317,6 +317,29 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     #endif
   }
 
+  func testOptInSixPaneOptimizationContinuity() async throws {
+    #if targetEnvironment(simulator)
+    guard let names = ProcessInfo.processInfo.environment["STROZZ_SIX_PANE_CHANNELS"] else {
+      throw XCTSkip("Select six currently live logins on an isolated simulator; this is not a long soak.")
+    }
+    executionTimeAllowance = 900
+    let channels = names.split(separator: ",").map(String.init)
+    guard channels.count == 6, Set(channels).count == 6,
+      channels.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") } })
+      else { return XCTFail("Select exactly six distinct ASCII channel logins") }
+    var inputs: [Input] = []
+    for channel in channels { inputs.append(try await Self.describe(channel)) }
+    let directory = URL.cachesDirectory.appendingPathComponent("PlaybackSoak/\(UUID().uuidString)", isDirectory: true)
+    let sink = Sink(directory: directory,
+      diagnosticsDirectory: URL.cachesDirectory.appendingPathComponent(PlaybackTelemetryRecorder.directoryName))
+    print("SOAK_OUTPUT \(directory.path)")
+    try await sink.save(inputs, name: "selected-inputs")
+    try await Self.multiview(inputs, seconds: 120, sink: sink)
+    #else
+    throw XCTSkip("Optimization verification must never take over the physical TV.")
+    #endif
+  }
+
   private static func runLongSoak(settings: [String: String], names: String) async throws {
     let candidates = names.split(separator: ",").map(String.init)
     let mode = settings["STROZZ_SOAK_MODE"] ?? "all"

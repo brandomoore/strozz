@@ -30,11 +30,11 @@ actor NativeControlledHLSOrigin {
     let variant: Int
     let entry: NativeCMAF.Entry
     let date: Date
+    let dateTag: String
     let firstMovieSequence: UInt32
     var parts: [NativeTransportRemuxer.Part] = []
     var complete = false
-    var declaredDuration: Double?
-    var duration: Double { parts.isEmpty ? (declaredDuration ?? 0) : parts.reduce(0) { $0 + $1.duration } }
+    var duration = 0.0
   }
 
   private struct Bootstrap: Sendable {
@@ -138,6 +138,15 @@ actor NativeControlledHLSOrigin {
   private var manifests: [Int: NativeCMAF.Manifest] = [:]
   private var bootstraps: [Int: Bootstrap] = [:]
   private var segments: [Segment] = []
+  // Updated with segment mutations; blocked reloads must not rescan DVR history.
+  private var cachedBytes = 0
+  private var completedDuration = 0.0
+  private var cachedPlaylist: Data?
+  private let playlistDateFormatter: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+  }()
   private var policy: NativeAdaptiveRenditionPolicy?
   private var budget: NativeAdaptiveRenditionPolicy.Budget
   private var forwardBuffer = 0.0
@@ -249,15 +258,17 @@ actor NativeControlledHLSOrigin {
   }
 
   func snapshot() -> NativeHLSOrigin.Snapshot {
-    let tail = publishedSegments.last
+    let tail = publishedTail?.value
     return (publishedParts, variants.count,
       tail.map { Date().timeIntervalSince($0.date.addingTimeInterval($0.duration)) },
       holdBack, hasPrefetch, max(3, holdBack), nil, nil, segments.last?.entry.discontinuity ?? 0, cachedBytes)
   }
 
   func liveEdgeDate() -> Date? {
-    guard reachedLive, let last = publishedSegments.last(where: { $0.duration > 0 }) else { return nil }
-    return last.date.addingTimeInterval(last.duration)
+    guard reachedLive, let tail = publishedTail else { return nil }
+    if tail.value.duration > 0 { return tail.value.date.addingTimeInterval(tail.value.duration) }
+    guard let previous = segments[..<tail.index].last(where: { $0.duration > 0 }) else { return nil }
+    return previous.date.addingTimeInterval(previous.duration)
   }
 
   func liveTargetDate() -> Date? { liveEdgeDate()?.addingTimeInterval(-holdBack) }
@@ -296,13 +307,20 @@ actor NativeControlledHLSOrigin {
       let deadline = ContinuousClock.now.advanced(by: .seconds(12))
       while true {
         try checkRunning()
-        let published = publishedSegments
-        if reachedLive, let tail = published.last, published.contains(where: { !$0.parts.isEmpty }),
-          published.filter(\.complete).reduce(0, { $0 + $1.duration }) >= Double(target * 3) {
+        if reachedLive, let publication = publishedTail,
+          cachedBytes > publication.withheldBytes,
+          completedDuration - (!ended && segments[publication.index].complete
+            ? segments[publication.index].duration : 0) >= Double(target * 3) {
+          let tail = publication.value
           let ready = msn == nil || tail.sequence > msn!
             || (tail.sequence == msn! && (part.map { tail.parts.count > $0 } ?? tail.complete))
           if ready || ended || ContinuousClock.now >= deadline {
-            let bytes = try playlist(published)
+            let bytes: Data
+            if let cachedPlaylist { bytes = cachedPlaylist }
+            else {
+              bytes = try playlist(publishedSegments)
+              cachedPlaylist = bytes
+            }
             #if DEBUG
             servedBytes = bytes.count
             #endif
@@ -318,16 +336,25 @@ actor NativeControlledHLSOrigin {
     }
   }
 
-  private var cachedBytes: Int {
-    segments.reduce(0) { total, segment in total + segment.parts.reduce(0) { $0 + $1.bytes.count } }
+  private var publishedTail: (index: Int, value: Segment, withheldBytes: Int)? {
+    guard let index = ended ? segments.indices.last : segments.lastIndex(where: { !$0.parts.isEmpty }) else {
+      return nil
+    }
+    var value = segments[index]
+    var withheldBytes = 0
+    if !ended {
+      // Hold one produced part back without copying the entire retained window.
+      withheldBytes = value.parts.removeLast().bytes.count
+      value.duration = value.parts.reduce(0) { $0 + $1.duration }
+      value.complete = false
+    }
+    return (index, value, withheldBytes)
   }
 
   private var publishedSegments: [Segment] {
-    guard !ended, let last = segments.lastIndex(where: { !$0.parts.isEmpty }) else { return segments }
-    var result = Array(segments[...last])
-    result[last].parts.removeLast()
-    result[last].complete = false
-    result[last].declaredDuration = nil
+    guard let tail = publishedTail else { return segments }
+    var result = Array(segments[...tail.index])
+    result[tail.index] = tail.value
     return result
   }
 
@@ -559,8 +586,10 @@ actor NativeControlledHLSOrigin {
             counters: ["rendition": variant.id, "height": chosen.variant.height]))
         }
         let current = try await manifest(variant, purpose: "producer")
+        let duration = current.entries.compactMap(\.duration).max() ?? Double(current.targetDuration)
+        if hasPrefetch != current.hasPrefetch || publicationDuration != duration { cachedPlaylist = nil }
         hasPrefetch = current.hasPrefetch
-        publicationDuration = current.entries.compactMap(\.duration).max() ?? Double(current.targetDuration)
+        publicationDuration = duration
         let entries = dated(current.entries)
         let entry: NativeCMAF.Entry
         let date: Date
@@ -575,6 +604,7 @@ actor NativeControlledHLSOrigin {
                 throw NativeHLSError.transition
               }
               ended = true
+              cachedPlaylist = nil
               return
             }
             if let first = entries.first, first.1.timeIntervalSince(nextDate) > 0.2 {
@@ -588,11 +618,16 @@ actor NativeControlledHLSOrigin {
           guard let found = entries.last(where: { $0.0.duration != nil }) else { throw NativeHLSError.unsupported }
           (entry, date) = found
           let prefix = entries.filter { $0.1 < date && $0.0.duration != nil }
-          segments = prefix.map { value in
-            Segment(sequence: value.0.sequence, variant: variant.id, entry: value.0, date: value.1,
+          segments = try prefix.map { value in
+            guard let duration = value.0.duration else { throw NativeHLSError.invalidMedia }
+            return Segment(sequence: value.0.sequence, variant: variant.id, entry: value.0, date: value.1,
+              dateTag: playlistDateFormatter.string(from: value.1),
               firstMovieSequence: UInt32(value.0.sequence % 1_000_000) * 128 + 1,
-              complete: true, declaredDuration: value.0.duration)
+              complete: true, duration: duration)
           }
+          completedDuration = segments.reduce(0) { $0 + $1.duration }
+          cachedBytes = 0
+          cachedPlaylist = nil
           nextVirtual = entry.sequence
         }
         guard let sequence = nextVirtual else { throw NativeHLSError.invalidMedia }
@@ -611,7 +646,7 @@ actor NativeControlledHLSOrigin {
         }
         let startSequence = nextMovieSequence
         segments.append(Segment(sequence: sequence, variant: variant.id, entry: entry, date: date,
-          firstMovieSequence: startSequence))
+          dateTag: playlistDateFormatter.string(from: date), firstMovieSequence: startSequence))
         let format = try await format(for: entry, variant: variant.id, movie: movie)
         var remuxer = try Remuxer(format: format, configuration: configuration,
           description: UInt32(description + 1), sequence: startSequence,
@@ -685,6 +720,8 @@ actor NativeControlledHLSOrigin {
         bootstraps.removeAll()
         guard let last = segments.indices.last else { throw NativeHLSError.invalidMedia }
         segments[last].complete = true
+        completedDuration += segments[last].duration
+        cachedPlaylist = nil
         nextMovieSequence = remuxer.nextSequence
         nextDate = date.addingTimeInterval(segments[last].duration)
         guard sequence < Int.max else { throw NativeHLSError.invalidMedia }
@@ -830,6 +867,9 @@ actor NativeControlledHLSOrigin {
       }
       if segments[index].parts.isEmpty, !part.independent { throw NativeHLSError.invalidMedia }
       segments[index].parts.append(part)
+      segments[index].duration += part.duration
+      cachedBytes += part.bytes.count
+      cachedPlaylist = nil
       if segments[index].parts.count == 1 { traceSegment(segments[index], part: part, event: .segment) }
       publishedParts += 1
       reachedLive = true
@@ -844,12 +884,17 @@ actor NativeControlledHLSOrigin {
     let edge = last.date.addingTimeInterval(last.duration)
     while segments.count > 10, let first = segments.first,
       edge.timeIntervalSince(first.date.addingTimeInterval(first.duration)) > history {
-      segments.removeFirst()
+      let removed = segments.removeFirst()
+      cachedBytes -= removed.parts.reduce(0) { $0 + $1.bytes.count }
+      if removed.complete { completedDuration -= removed.duration }
+      cachedPlaylist = nil
     }
-    for index in segments.indices where edge.timeIntervalSince(segments[index].date) > Double(target * 3 + 8) {
+    for index in segments.indices where !segments[index].parts.isEmpty
+      && edge.timeIntervalSince(segments[index].date) > Double(target * 3 + 8) {
       if segments[index].complete {
-        segments[index].declaredDuration = segments[index].duration
+        cachedBytes -= segments[index].parts.reduce(0) { $0 + $1.bytes.count }
         segments[index].parts.removeAll()
+        cachedPlaylist = nil
       }
     }
   }
@@ -972,8 +1017,6 @@ actor NativeControlledHLSOrigin {
       "#EXT-X-MAP:URI=\"\(mediaBase.absoluteString)/init/0/\(first.entry.discontinuity).mp4\"",
       "#EXT-X-PART-INF:PART-TARGET=0.45",
       "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=\(holdBack)"]
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     var remaining = values.reduce(0) { $0 + $1.duration }
     var period = first.entry.discontinuity
     for segment in values {
@@ -986,7 +1029,7 @@ actor NativeControlledHLSOrigin {
         period = segment.entry.discontinuity
       }
       lines += segment.entry.tags
-      lines.append("#EXT-X-PROGRAM-DATE-TIME:\(formatter.string(from: segment.date))")
+      lines.append("#EXT-X-PROGRAM-DATE-TIME:\(segment.dateTag)")
       if remaining <= Double(target * 3) {
         for (index, part) in segment.parts.enumerated() {
           lines.append("#EXT-X-PART:DURATION=\(String(format: "%.6f", part.duration)),URI=\"\(mediaBase.absoluteString)/part/0/\(segment.sequence)/\(index).mp4\"\(part.independent ? ",INDEPENDENT=YES" : "")")
@@ -1060,6 +1103,9 @@ actor NativeControlledHLSOrigin {
     historyLoads.removeAll()
     bootstraps.removeAll()
     segments.removeAll()
+    cachedBytes = 0
+    completedDuration = 0
+    cachedPlaylist = nil
     movies.removeAll()
     movieLoads.removeAll()
   }

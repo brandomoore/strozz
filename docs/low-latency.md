@@ -80,6 +80,12 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   Initial live alignment is separate from steady playback. Healthy drift uses
   bounded, held rate correction, not repeated seeks or item replacements.
   Missing/inconsistent date samples must not invent latency or trigger catch-up.
+- **Keep publication caching coherent.** Controlled playback retains one encoded
+  playlist per unchanged publication and constant-time byte/completed-duration
+  totals. Parts, completion, eviction, end-of-stream and hold-back changes
+  invalidate it; blocked reloads still wait for the requested part. Cache PDT
+  text per segment and reuse actor-confined/per-parse date formatters without
+  changing timestamp precision, rewind retention or withheld-part semantics.
 - **Keep recovery bounded and Native-only.** `NativePlaybackRecovery` shares two
   fresh-source/engine attempts per rolling minute across origin, startup and
   stall failures. Unsupported formats and exhausted attempts show an error and
@@ -294,9 +300,21 @@ panes do not receive another deadline just because the observation phase changes
 The separate `testOptInShortMultiviewVisibilityRegression` uses
 `STROZZ_VISIBILITY_CHECK=1` for a fixed, 30-second-per-stage reproduction against
 Valkyrae/Gaules/Burn when all three are live; it is not sustained-soak coverage.
+`testOptInSixPaneOptimizationContinuity` uses six distinct, currently live
+`STROZZ_SIX_PANE_CHANNELS` logins for two-minute grid/expanded/returned-grid stages.
+It uses the same strict playback/evidence checks, but is not a long soak or a
+physical decoder-capacity measurement.
 Sampling-only gaps are marked incomplete separately from playback faults; neither
 is a clean pass. Unsupported CMAF boxes report numeric type/size, and TS
 finalization failures report pending sample/PES byte counts, not media payloads.
+
+For emote-cache changes, `ChatBadgeRenderingTests` checks source pixels,
+animation and lifecycle. `STROZZ_EMOTE_CACHE_PERFORMANCE=1` additionally compares
+native WebP frame-decode counts while an inactive copy receives repeated updates.
+Do not repeatedly stop an already-inactive view: SDWebImage's frame pool is
+shared by image providers, so repeated buffer purges make visible copies decode
+the same frames again. Stop/purge on the visibility transition, not every update
+or teardown of an already-stopped consumer; keep the native memory budget.
 
 A skipped test is not a pass for the behavior being investigated. The simulator-only
 `NativeStreamMatrixLiveTests/testOptInUnrequestedPauseRecoversWithoutChangingAutoOrItem`
