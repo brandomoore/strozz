@@ -2,30 +2,61 @@
   const scene = document.querySelector(".orbit-scene");
   const pause = document.querySelector("#pause-orbits");
   const tv = scene.querySelector(".orbit-tv");
-  const emotes = [...scene.querySelectorAll(".orbit-emote")].map((anchor) => ({
-    anchor,
-    image: anchor.querySelector("img"),
-    restUntil: 0,
-  }));
+  const status = scene.querySelector(".orbit-status");
+  const tracks = [...scene.querySelectorAll(".orbit-track")];
+  const families = Object.fromEntries(Object.entries(
+    JSON.parse(document.querySelector("#emote-catalog").textContent),
+  ).map(([family, entries]) => [family, entries.map((entry) => ({ ...entry, family }))]));
+  const catalog = new Map(Object.values(families).flat().map((art) => [art.name, art]));
+  const loaded = new Map();
+  const retiring = new Set();
+  const populationLimit = 120;
+  const childrenPerCatch = 6;
+  let nextOrder = 0;
+  const emotes = [...scene.querySelectorAll(".orbit-emote")].map((anchor) =>
+    record(anchor, catalog.get(anchor.dataset.emote)));
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const finePointer = window.matchMedia("(any-hover: hover) and (any-pointer: fine)");
   pause.disabled = reducedMotion.matches;
   let pointer = null;
   let frame = null;
-  let caught = null;
-  let burst = null;
-  let catchTimer = null;
 
   const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
 
-  for (const emote of emotes) {
-    emote.image.decode().then(() => {
+  function record(anchor, art) {
+    return {
+      anchor, art, image: anchor.querySelector("img"), track: tracks.indexOf(anchor.parentElement),
+      order: nextOrder++, active: true, busy: false, pixels: null, arrival: null, fade: null,
+      restUntil: 0,
+    };
+  }
+
+  function loadArt(art, image) {
+    if (loaded.has(art.src)) return loaded.get(art.src);
+    if (!image) {
+      image = new Image();
+      image.crossOrigin = "anonymous";
+      image.referrerPolicy = "no-referrer";
+      image.src = art.src;
+    }
+    const ready = image.decode().then(() => {
       const canvas = document.createElement("canvas");
-      canvas.width = emote.image.naturalWidth;
-      canvas.height = emote.image.naturalHeight;
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
       const context = canvas.getContext("2d");
-      context.drawImage(emote.image, 0, 0);
-      emote.pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0);
+      return { image, pixels: context.getImageData(0, 0, canvas.width, canvas.height) };
+    }).catch((error) => {
+      loaded.delete(art.src);
+      throw error;
+    });
+    loaded.set(art.src, ready);
+    return ready;
+  }
+
+  for (const emote of emotes) {
+    loadArt(emote.art, emote.image).then(({ pixels }) => {
+      emote.pixels = pixels;
       emote.anchor.disabled = false;
       emote.anchor.parentElement.removeAttribute("aria-hidden");
     }).catch((error) => {
@@ -41,7 +72,7 @@
     // Later tracks paint above earlier ones. Transparent pixels let clicks through.
     for (const emote of [...emotes].reverse()) {
       const { image, anchor, pixels } = emote;
-      if (!pixels || (emote === caught && burst)) continue;
+      if (!pixels) continue;
       const rect = image.getBoundingClientRect();
       if (x < rect.left || x >= rect.right || y < rect.top || y >= rect.bottom) continue;
       const style = getComputedStyle(image);
@@ -59,7 +90,7 @@
       const pixelX = Math.floor((localX - (width - pixels.width * scale) / 2) / scale);
       const pixelY = Math.floor((localY - (height - pixels.height * scale) / 2) / scale);
       if (pixelX < 0 || pixelX >= pixels.width || pixelY < 0 || pixelY >= pixels.height) continue;
-      if (pixels.data[(pixelY * pixels.width + pixelX) * 4 + 3] > 0) return emote;
+      if (pixels.data[(pixelY * pixels.width + pixelX) * 4 + 3] > 0) return emote.busy ? null : emote;
     }
     return null;
   }
@@ -70,52 +101,120 @@
     }
   }
 
-  function clearCatch() {
-    if (catchTimer !== null) clearTimeout(catchTimer);
-    catchTimer = null;
-    if (caught) {
-      caught.anchor.removeAttribute("data-caught");
-      if (burst) {
-        resetNudge(caught);
-        caught.restUntil = performance.now() + 350;
-        caught.anchor.removeAttribute("data-popped");
-      }
-    }
-    caught = null;
-    burst?.remove();
-    burst = null;
+  function discard(emote) {
+    const index = emotes.indexOf(emote);
+    if (index !== -1) emotes.splice(index, 1);
+    emote.active = false;
+    emote.arrival?.cancel();
+    emote.fade?.cancel();
+    retiring.delete(emote);
+    emote.anchor.remove();
   }
 
-  function pop(emote) {
-    clearCatch();
-    caught = emote;
-    emote.anchor.setAttribute("data-caught", "");
-    if (!reducedMotion.matches && !pause.checked) {
-      const bounds = scene.getBoundingClientRect();
-      const rect = emote.image.getBoundingClientRect();
-      burst = document.createElement("div");
-      burst.className = "emote-burst";
-      burst.setAttribute("aria-hidden", "true");
-      for (let index = 0; index < 8; index++) {
-        const particle = emote.image.cloneNode();
-        particle.removeAttribute("style");
-        particle.className = "emote-particle";
-        const angle = (index + 0.5) * Math.PI / 4;
-        const distance = Math.min(85, bounds.width * 0.17) * (index % 2 ? 1 : 0.7);
-        particle.style.setProperty("left", `${rect.left + rect.width / 2 - bounds.left}px`);
-        particle.style.setProperty("top", `${rect.top + rect.height / 2 - bounds.top}px`);
-        particle.style.setProperty("--size", `${16 + index % 3 * 4}px`);
-        particle.style.setProperty("--travel-x", `${Math.cos(angle) * distance}px`);
-        particle.style.setProperty("--travel-y", `${Math.sin(angle) * distance}px`);
-        particle.style.setProperty("--spin", `${index % 2 ? 35 : -35}deg`);
-        burst.append(particle);
+  function canAnimate() {
+    return !reducedMotion.matches && !pause.checked && !document.hidden;
+  }
+
+  function recycleOldest() {
+    while (emotes.length > populationLimit) {
+      const oldest = emotes.filter((emote) => emote.anchor !== document.activeElement)
+        .reduce((a, b) => a.order < b.order ? a : b);
+      if (!canAnimate()) {
+        discard(oldest);
+        continue;
       }
-      scene.append(burst);
-      resetNudge(emote);
-      emote.anchor.setAttribute("data-popped", "");
-      scene.removeAttribute("data-catchable");
+      // Bound fading nodes too, even when catches arrive faster than fades finish.
+      if (retiring.size >= childrenPerCatch) discard(retiring.values().next().value);
+      emotes.splice(emotes.indexOf(oldest), 1);
+      oldest.active = false;
+      oldest.anchor.disabled = true;
+      oldest.anchor.setAttribute("aria-hidden", "true");
+      oldest.anchor.setAttribute("data-retiring", "");
+      retiring.add(oldest);
+      oldest.fade = oldest.anchor.animate([{ opacity: 1 }, { opacity: 0 }], {
+        duration: 220, easing: "ease-out",
+      });
+      oldest.fade.onfinish = () => discard(oldest);
     }
-    catchTimer = setTimeout(clearCatch, 700);
+  }
+
+  function relatedArt(art) {
+    const pool = families[art.family].filter((candidate) => candidate.name !== art.name);
+    for (let index = pool.length - 1; index > 0; index--) {
+      const other = Math.floor(Math.random() * (index + 1));
+      [pool[index], pool[other]] = [pool[other], pool[index]];
+    }
+    return pool.slice(0, childrenPerCatch);
+  }
+
+  function addChild(art, asset, trackIndex, phase) {
+    const anchor = document.createElement("button");
+    anchor.className = "orbit-emote";
+    anchor.type = "button";
+    anchor.dataset.emote = art.name;
+    anchor.setAttribute("aria-label", `Pop ${art.name}`);
+    anchor.setAttribute("data-offspring", "");
+    const duration = Number.parseFloat(getComputedStyle(tracks[trackIndex]).getPropertyValue("--duration"));
+    anchor.style.setProperty("animation-delay", `${-duration * phase}s`);
+    const image = asset.image.cloneNode();
+    image.removeAttribute("style");
+    image.alt = "";
+    image.width = image.height = 48;
+    anchor.append(image);
+    tracks[trackIndex].append(anchor);
+    tracks[trackIndex].removeAttribute("aria-hidden");
+    const child = record(anchor, art);
+    child.pixels = asset.pixels;
+    child.restUntil = performance.now() + 1000;
+    emotes.push(child);
+    return child;
+  }
+
+  async function pop(emote) {
+    emote.busy = true;
+    emote.anchor.setAttribute("data-caught", "");
+    emote.anchor.setAttribute("aria-busy", "true");
+    status.textContent = "";
+    const choices = relatedArt(emote.art);
+    let assets;
+    try {
+      assets = await Promise.all(choices.map((art) => loadArt(art)));
+    } catch (error) {
+      console.warn(`Could not multiply ${emote.art.name}:`, error);
+      if (emote.active) {
+        emote.busy = false;
+        emote.anchor.removeAttribute("data-caught");
+        emote.anchor.removeAttribute("aria-busy");
+        status.textContent = "Emotes couldn't load. Try again.";
+      }
+      return;
+    }
+    if (!emote.active) return;
+    const origin = emote.image.getBoundingClientRect();
+    const transferFocus = document.activeElement === emote.anchor;
+    const phase = Math.random();
+    const children = choices.map((art, index) =>
+      addChild(art, assets[index], (emote.track + index) % tracks.length, (phase + index / choices.length) % 1));
+    // Read destinations together before animating; their orbit clocks keep running.
+    const destinations = children.map(({ image }) => image.getBoundingClientRect());
+    if (canAnimate()) {
+      children.forEach((child, index) => {
+        const destination = destinations[index];
+        const x = origin.left + origin.width / 2 - destination.left - destination.width / 2;
+        const y = origin.top + origin.height / 2 - destination.top - destination.height / 2;
+        const base = getComputedStyle(child.image).transform;
+        child.arrival = child.image.animate([
+          { transform: `${base} translate(${x}px, ${y}px) scale(0.65)` },
+          { transform: base },
+        ], { duration: 650, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
+        child.arrival.onfinish = () => { child.arrival = null; };
+      });
+    }
+    discard(emote);
+    emotes.sort((a, b) => a.track - b.track || a.order - b.order);
+    if (transferFocus) children[0].anchor.focus({ preventScroll: true });
+    recycleOldest();
+    scene.removeAttribute("data-catchable");
   }
 
   function reset() {
@@ -129,7 +228,11 @@
 
   function stop() {
     reset();
-    clearCatch();
+    for (const emote of emotes) {
+      emote.arrival?.cancel();
+      emote.arrival = null;
+    }
+    for (const emote of retiring) discard(emote);
   }
 
   function update() {
@@ -142,7 +245,8 @@
     const now = performance.now();
     // Read the unnudged anchors together, before writing any image transforms.
     const offsets = emotes.map((emote, index) => {
-      if ((emote === caught && burst) || now < emote.restUntil) return { x: 0, y: 0 };
+      if (emote.busy) return null;
+      if (now < emote.restUntil) return { x: 0, y: 0 };
       const { anchor } = emote;
       const rect = anchor.getBoundingClientRect();
       const x = rect.left + rect.width / 2;
@@ -150,7 +254,8 @@
       const dx = x - pointer.x;
       const dy = y - pointer.y;
       const distance = Math.hypot(dx, dy);
-      const force = strength * Math.max(0, 1 - distance / radius) ** 2;
+      const sizeFactor = anchor.hasAttribute("data-offspring") ? 0.75 : 1;
+      const force = strength * sizeFactor * Math.max(0, 1 - distance / radius) ** 2;
       if (force === 0) return { x: 0, y: 0 };
 
       const half = Math.max(rect.width, rect.height) / 2 + 8;
@@ -168,7 +273,9 @@
       };
     });
     scene.toggleAttribute("data-catchable", hitTest(pointer.x, pointer.y) !== null);
-    offsets.forEach(({ x, y }, index) => {
+    offsets.forEach((offset, index) => {
+      if (!offset) return;
+      const { x, y } = offset;
       const { style } = emotes[index].image;
       style.setProperty("--nudge-x", `${x.toFixed(2)}px`);
       style.setProperty("--nudge-y", `${y.toFixed(2)}px`);
@@ -190,7 +297,7 @@
     const emote = event.detail === 0
       ? emotes.find(({ anchor }) => anchor === event.target.closest(".orbit-emote"))
       : hitTest(event.clientX, event.clientY);
-    if (emote?.pixels && !(emote === caught && burst)) pop(emote);
+    if (emote?.pixels && !emote.busy) void pop(emote);
   });
   scene.addEventListener("focusin", (event) => {
     if (event.target.closest(".orbit-emote")) reset();

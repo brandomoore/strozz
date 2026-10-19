@@ -4,6 +4,12 @@ import test from "node:test";
 import { runInNewContext } from "node:vm";
 
 const source = await readFile(new URL("../website/orbits.js", import.meta.url), "utf8");
+const catalog = JSON.parse(await readFile(new URL("../website/emote-catalog.json", import.meta.url), "utf8"));
+const families = Object.fromEntries(Object.entries(catalog).map(([family, entries]) => [
+  family, entries.map(({ name, id, src }) => ({ name, src: id ? `https://cdn.frankerfacez.com/emote/${id}/4` : src })),
+]));
+const artByName = new Map(Object.values(families).flat().map((art) => [art.name, art]));
+const initialNames = ["Party Parrot", "peepoHappy", "OMEGALUL", "monkaS", "KEKW", "PepeHands"];
 
 function target(properties = {}) {
   const listeners = new Map();
@@ -40,13 +46,16 @@ function element(properties = {}) {
   const attributes = new Map();
   const values = new Map();
   return target({
-    attributes, children: [], computed: { transform: "none" },
+    attributes, children: [], dataset: {}, computed: { transform: "none" },
     style: {
+      values,
       setProperty: (key, value) => values.set(key, value),
+      getPropertyValue: (key) => values.get(key) ?? "",
       removeProperty: (key) => values.delete(key),
     },
     setAttribute: (key, value) => attributes.set(key, value),
-    removeAttribute: (key) => attributes.delete(key),
+    hasAttribute: (key) => attributes.has(key),
+    removeAttribute(key) { attributes.delete(key); if (key === "style") this.style.values.clear(); },
     toggleAttribute: (key, force) => force ? attributes.set(key, "") : attributes.delete(key),
     closest: () => null,
     append(child) { this.children.push(child); child.parentElement = this; },
@@ -55,42 +64,86 @@ function element(properties = {}) {
   });
 }
 
-function fixture({ reduced = false, fine = true, paused = false, decodeFailure = false, canvasFailure = false } = {}) {
+function fixture({ reduced = false, fine = true, paused = false, decodeFailure = false, canvasFailure = false, seed = 1 } = {}) {
   const frames = new Map();
-  const timers = new Map();
+  const animations = new Set();
+  const decodes = new Map();
+  const pendingLoads = [];
+  const loading = { fail: false, holdFamily: null };
   const warnings = [];
-  const styles = Array.from({ length: 6 }, () => new Map());
   const images = [];
-  const anchors = styles.map((properties, index) => {
+  let buttonCount = 0;
+  let document;
+  function animate(keyframes, options) {
+    const animation = {
+      keyframes, options, onfinish: null,
+      cancel: () => animations.delete(animation),
+      finish: () => { animations.delete(animation); animation.onfinish?.(); },
+    };
+    animations.add(animation);
+    return animation;
+  }
+  function makeButton() {
+    const index = buttonCount++;
     const anchor = element({
-      dataset: { emote: `Emote ${index}` }, disabled: true,
-      parentElement: element(),
-      rect: rect(350 + index * 45, 250 + index * 15, 40, 40),
+      className: "orbit-emote", disabled: false, animate,
+      rect: rect(350 + index % 8 * 30, 250 + index % 3 * 20, 40, 40),
       getBoundingClientRect() { return this.rect; },
       closest: (selector) => selector === ".orbit-emote" ? anchor : null,
+      querySelector() { return this.children[0]; },
+      focus: () => { document.activeElement = anchor; },
     });
+    return anchor;
+  }
+  function makeImage(initialIndex) {
     const image = element({
-      naturalWidth: 4, naturalHeight: 4,
+      naturalWidth: 4, naturalHeight: 4, animate,
       computed: { width: "40px", height: "40px", transform: "none" },
       pixels: { width: 4, height: 4, data: new Uint8ClampedArray(64) },
-      decode: () => decodeFailure && index === 0 ? Promise.reject(new Error("Image failed")) : Promise.resolve(),
-      getBoundingClientRect() { return this.rect ?? anchor.rect; },
-      cloneNode: () => element({ src: `emote-${index}.png` }),
-      style: {
-        setProperty: (key, value) => properties.set(key, value),
-        removeProperty: (key) => properties.delete(key),
+      decode() {
+        decodes.set(this.src, (decodes.get(this.src) ?? 0) + 1);
+        if ((decodeFailure && initialIndex === 0) || (loading.fail && initialIndex === undefined)) {
+          return Promise.reject(new Error("Image failed"));
+        }
+        if (initialIndex === undefined && families[loading.holdFamily]?.some((art) => art.src === this.src)) {
+          return new Promise((resolve) => pendingLoads.push(resolve));
+        }
+        return Promise.resolve();
+      },
+      getBoundingClientRect() { return this.rect ?? this.parentElement.rect; },
+      cloneNode() {
+        return Object.assign(makeImage(), {
+          src: this.src, crossOrigin: this.crossOrigin, referrerPolicy: this.referrerPolicy, pixels: this.pixels,
+        });
       },
     });
     for (const pixel of [5, 6, 9, 10]) image.pixels.data[pixel * 4 + 3] = 255;
+    return image;
+  }
+  const tracks = [42, 58, 76].map((duration) => element({
+    computed: { transform: "none", getPropertyValue: () => `${duration}s` },
+  }));
+  const anchors = initialNames.map((name, index) => {
+    const anchor = makeButton();
+    anchor.rect = rect(350 + index * 45, 250 + index * 15, 40, 40);
+    anchor.dataset.emote = name;
+    anchor.disabled = true;
+    const image = makeImage(index);
+    image.src = artByName.get(name).src;
     images.push(image);
-    anchor.querySelector = () => image;
+    anchor.append(image);
+    tracks[Math.floor(index / 2)].append(anchor);
     return anchor;
   });
+  const styles = images.map((image) => image.style.values);
+  const all = () => tracks.flatMap((track) => track.children);
+  const active = () => all().filter((anchor) => !anchor.hasAttribute("data-retiring"));
+  const status = { textContent: "" };
   const tv = { rect: rect(1000, 1000, 100, 100), getBoundingClientRect() { return this.rect; } };
   const scene = element({
     rect: rect(200, 100, 500, 400),
-    querySelectorAll: () => anchors,
-    querySelector: () => tv,
+    querySelectorAll: (selector) => selector === ".orbit-track" ? tracks : all(),
+    querySelector: (selector) => selector === ".orbit-tv" ? tv : status,
     getBoundingClientRect() { return this.rect; },
   });
   const pause = target({ checked: paused });
@@ -100,11 +153,13 @@ function fixture({ reduced = false, fine = true, paused = false, decodeFailure =
     innerWidth: 900,
     matchMedia: (query) => query.includes("reduced-motion") ? reducedMotion : finePointer,
   });
-  const document = target({
-    hidden: false,
-    querySelector: (selector) => selector === ".orbit-scene" ? scene : pause,
+  document = target({
+    hidden: false, activeElement: null,
+    querySelector: (selector) => selector === ".orbit-scene" ? scene
+      : selector === "#emote-catalog" ? { textContent: JSON.stringify(families) } : pause,
     elementFromPoint() { return this.hitTarget ?? scene; },
     createElement(tag) {
+      if (tag === "button") return makeButton();
       if (tag !== "canvas") return element();
       let image;
       return {
@@ -119,15 +174,14 @@ function fixture({ reduced = false, fine = true, paused = false, decodeFailure =
     },
   });
   let nextFrame = 0;
-  let nextTimer = 0;
   let now = 1000;
+  const math = Object.create(Math);
+  math.random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
   runInNewContext(source, {
-    window, document, DOMMatrix: Matrix,
+    window, document, DOMMatrix: Matrix, Math: math, Image: function () { return makeImage(); },
     performance: { now: () => now },
     console: { warn: (...args) => warnings.push(args) },
     getComputedStyle: (node) => node.computed,
-    setTimeout: (callback) => { timers.set(++nextTimer, callback); return nextTimer; },
-    clearTimeout: (id) => timers.delete(id),
     requestAnimationFrame: (callback) => {
       frames.set(++nextFrame, callback);
       return nextFrame;
@@ -135,14 +189,17 @@ function fixture({ reduced = false, fine = true, paused = false, decodeFailure =
     cancelAnimationFrame: (id) => frames.delete(id),
   });
   return {
-    frames, timers, warnings, attributes: scene.attributes, styles, images, anchors, scene, tv, pause, reducedMotion, finePointer, window, document,
+    frames, animations, decodes, loading, warnings, all, active, status, tracks,
+    attributes: scene.attributes, styles, images, anchors, scene, tv, pause, reducedMotion, finePointer, window, document,
     ready: () => new Promise(setImmediate),
     advance: (milliseconds) => { now += milliseconds; },
     move: (clientX = 330, clientY = 270, pointerType = "mouse") => scene.emit("pointermove", { clientX, clientY, pointerType }),
     click: (clientX = 370, clientY = 270, extra = {}) => scene.emit("click", {
       button: 0, detail: 1, clientX, clientY, target: scene, ...extra,
     }),
-    expire: () => [...timers.values()].forEach((callback) => callback()),
+    finishAnimations: () => [...animations].forEach((animation) => animation.finish()),
+    releaseLoads: () => { loading.holdFamily = null; pendingLoads.splice(0).forEach((resolve) => resolve()); },
+    pop: (anchor) => scene.emit("click", { button: 0, detail: 0, target: anchor }),
     tick: () => {
       const callbacks = [...frames.values()];
       frames.clear();
@@ -228,28 +285,47 @@ test("touch, reduced motion, coarse input, pause, and hidden pages never start n
   assert.equal(f.frames.size, 0);
 });
 
-test("only visible image pixels produce a bounded burst of matching emotes", async () => {
+test("a visible-pixel catch becomes six persistent, distinct related emotes", async () => {
   const f = fixture();
   await f.ready();
   assert.ok(f.anchors.every((anchor) => !anchor.disabled));
   f.click(351, 251);
-  assert.equal(f.scene.children.length, 0, "transparent padding must not catch");
+  assert.equal(f.active().length, 6, "transparent padding must not catch");
   f.click();
-  assert.equal(f.scene.children.length, 1);
-  assert.equal(f.scene.children[0].children.length, 8);
-  assert.ok(f.scene.children[0].children.every((particle) => particle.src === "emote-0.png"));
-  assert.equal(f.anchors[0].attributes.has("data-caught"), true);
-  assert.equal(f.anchors[0].attributes.has("data-popped"), true);
-  const originalTimer = [...f.timers.keys()][0];
   for (let index = 0; index < 30; index++) f.click();
-  assert.equal(f.scene.children.length, 1, "hidden artwork cannot start another burst");
-  assert.equal([...f.timers.keys()][0], originalTimer, "clicking hidden artwork must not delay its return");
-  assert.equal(f.timers.size, 1);
-  f.expire();
-  assert.equal(f.scene.children.length, 0);
-  assert.equal(f.timers.size, 0);
-  assert.equal(f.anchors[0].attributes.has("data-caught"), false);
-  assert.equal(f.anchors[0].attributes.has("data-popped"), false);
+  await f.ready();
+  assert.equal(f.active().length, 11, "busy input must not multiply the same parent twice");
+  assert.ok(!f.active().includes(f.anchors[0]));
+  const children = f.active().filter((anchor) => anchor.hasAttribute("data-offspring"));
+  const names = children.map((anchor) => anchor.dataset.emote);
+  assert.equal(new Set(names).size, 6);
+  assert.ok(names.every((name) => families.party.some((art) => art.name === name) && name !== "Party Parrot"));
+  assert.deepEqual(f.tracks.map((track) => children.filter((child) => child.parentElement === track).length), [2, 2, 2]);
+  assert.equal(f.animations.size, 6);
+  f.finishAnimations();
+  f.advance(10000);
+  assert.equal(f.active().length, 11, "the scattered copies must not expire");
+  f.pop(children[0]);
+  await f.ready();
+  assert.equal(f.active().length, 16, "offspring must themselves multiply");
+});
+
+test("related choices vary randomly, while decoded artwork is shared between generations", async () => {
+  const selections = [];
+  for (const seed of [1, 10000, 123456]) {
+    const f = fixture({ seed });
+    await f.ready();
+    f.pop(f.anchors[2]);
+    await f.ready();
+    selections.push(f.active().filter((a) => a.hasAttribute("data-offspring")).map((a) => a.dataset.emote).sort().join(","));
+    for (let index = 0; index < 15; index++) {
+      f.pop(f.active().find((a) => a.hasAttribute("data-offspring")));
+      await f.ready();
+    }
+    assert.ok([...f.decodes.values()].every((count) => count === 1));
+    assert.ok(f.decodes.size <= 12, "only the initial six and the selected reaction family should load");
+  }
+  assert.ok(new Set(selections).size > 1);
 });
 
 test("hit testing combines current image and track transforms at the nudged position", async () => {
@@ -261,9 +337,11 @@ test("hit testing combines current image and track transforms at the nudged posi
   f.images[0].rect = rect(380, 250, 40, 40);
   await f.ready();
   f.click(385, 265);
-  assert.equal(f.scene.children.length, 0, "untransformed coordinates must miss");
+  assert.equal(f.anchors[0].hasAttribute("data-caught"), false);
   f.click(405, 255);
-  assert.equal(f.scene.children.length, 1, "a visible pixel rotated 90 degrees must hit");
+  assert.equal(f.anchors[0].hasAttribute("data-caught"), true);
+  await f.ready();
+  assert.equal(f.active().length, 11, "a visible pixel rotated 90 degrees must hit");
 });
 
 test("object-fit letterboxing and rotated square corners are not artwork", async () => {
@@ -271,52 +349,56 @@ test("object-fit letterboxing and rotated square corners are not artwork", async
   f.images[0].pixels = { width: 4, height: 2, data: new Uint8ClampedArray(32).fill(255) };
   await f.ready();
   f.click(370, 255);
-  assert.equal(f.scene.children.length, 0, "space above a wide image must miss");
-  f.click(370, 265);
-  assert.equal(f.scene.children.length, 1);
-  f.expire();
+  assert.equal(f.anchors[0].hasAttribute("data-caught"), false, "space above a wide image must miss");
   f.images[0].computed.transform = "matrix(0.7071,0.7071,-0.7071,0.7071,0,0)";
   f.images[0].rect = rect(341.716, 241.716, 56.568, 56.568);
   f.click(342, 242);
-  assert.equal(f.scene.children.length, 0, "the rotated bounding rectangle is not the image");
+  assert.equal(f.anchors[0].hasAttribute("data-caught"), false, "the rotated bounding rectangle is not the image");
 });
 
-test("transparent foreground emotes let visible underlying pixels be caught, but the TV does not", async () => {
+test("transparent pixels let clicks through, but opaque busy art and the TV occlude them", async () => {
   const f = fixture();
   f.images[1].rect = f.anchors[0].rect;
   f.images[1].pixels.data.fill(0);
   await f.ready();
-  f.click();
-  assert.equal(f.anchors[0].attributes.has("data-caught"), true);
-  f.expire();
   f.images[1].pixels.data[10 * 4 + 3] = 255;
+  f.loading.holdFamily = "happy";
   f.click();
   assert.equal(f.anchors[1].attributes.has("data-caught"), true);
-  f.expire();
+  f.click();
+  assert.equal(f.anchors[0].hasAttribute("data-caught"), false, "do not click through a visible busy emote");
+  f.images[1].pixels.data.fill(0);
   f.document.hitTarget = { closest: () => ({}) };
   f.click();
-  assert.equal(f.scene.children.length, 0, "the TV occludes emotes behind it");
+  assert.equal(f.anchors[0].hasAttribute("data-caught"), false);
   f.document.hitTarget = f.scene;
   f.tv.rect = f.anchors[0].rect;
   f.click();
-  assert.equal(f.scene.children.length, 0, "a pointer-transparent TV still visually occludes emotes");
+  assert.equal(f.anchors[0].hasAttribute("data-caught"), false);
+  f.tv.rect = rect(1000, 1000, 100, 100);
+  f.click();
+  assert.equal(f.anchors[0].hasAttribute("data-caught"), true);
+  f.releaseLoads();
+  await f.ready();
 });
 
-test("keyboard catches work without pointer coordinates; pause and reduced motion only highlight", async () => {
+test("keyboard focus transfers to offspring; paused and reduced-motion growth stays still", async () => {
   for (const options of [{}, { paused: true }, { reduced: true }]) {
     const f = fixture(options);
     await f.ready();
     assert.equal(f.pause.disabled, !!options.reduced);
-    f.click(0, 0, { detail: 0, target: f.anchors[0] });
-    assert.equal(f.anchors[0].attributes.has("data-caught"), true);
-    assert.equal(f.scene.children.length, options.paused || options.reduced ? 0 : 1);
-    assert.equal(f.anchors[0].attributes.has("data-popped"), !options.paused && !options.reduced);
-    f.expire();
-    assert.equal(f.anchors[0].attributes.has("data-caught"), false);
-    assert.equal(f.anchors[0].attributes.has("data-popped"), false);
+    f.anchors[0].focus();
+    f.pop(f.anchors[0]);
+    await f.ready();
+    assert.equal(f.active().length, 11);
+    assert.equal(f.animations.size, options.paused || options.reduced ? 0 : 6);
+    assert.ok(f.active().includes(f.document.activeElement));
+    assert.ok(f.document.activeElement.hasAttribute("data-offspring"));
     f.reducedMotion.matches = !options.reduced;
     f.reducedMotion.emit("change");
     assert.equal(f.pause.disabled, !options.reduced);
+    assert.equal(f.animations.size, 0);
+    assert.equal(f.active().length, 11);
   }
 });
 
@@ -329,12 +411,12 @@ test("unreadable or failed images log a warning and never gain a rectangular fal
     assert.equal(f.anchors[1].disabled, false);
     assert.equal(f.warnings.length, 1);
     f.click();
-    assert.equal(f.scene.children.length, 0);
-    assert.equal(f.timers.size, 0);
+    await f.ready();
+    assert.equal(f.active().length, 6);
   }
 });
 
-test("lifecycle changes clear catches; pointer leave lets an already-earned burst finish", async () => {
+test("lifecycle changes finish travel without removing the multiplied population", async () => {
   for (const [name, event] of [
     ["pause", "change"], ["reducedMotion", "change"], ["finePointer", "change"],
     ["window", "blur"], ["window", "resize"], ["window", "scroll"], ["document", "visibilitychange"],
@@ -342,63 +424,107 @@ test("lifecycle changes clear catches; pointer leave lets an already-earned burs
     const f = fixture();
     await f.ready();
     f.click();
+    await f.ready();
     f.scene.emit("pointerleave");
-    assert.equal(f.scene.children.length, 1);
+    assert.equal(f.animations.size, 6);
     f[name].emit(event);
-    assert.equal(f.scene.children.length, 0);
-    assert.equal(f.timers.size, 0);
-    assert.equal(f.anchors[0].attributes.has("data-caught"), false);
-    assert.equal(f.anchors[0].attributes.has("data-popped"), false);
+    assert.equal(f.animations.size, 0);
+    assert.equal(f.active().length, 11);
   }
 });
 
-test("caught emotes return to the orbit with a short breather before dodging again", async () => {
+test("offspring get a settling interval and gentler pixel-accurate dodging", async () => {
   const f = fixture();
   await f.ready();
-  f.move();
+  f.pop(f.anchors[0]);
+  await f.ready();
+  const child = f.active().find((a) => a.hasAttribute("data-offspring"));
+  const image = child.querySelector("img");
+  f.move(child.rect.left + 20, child.rect.top + 20);
   f.tick();
-  assert.equal(f.styles[0].get("--nudge-x"), "16.00px");
-  f.click();
-  assert.equal(f.styles[0].size, 0, "catching clears the old displacement immediately");
+  assert.equal(image.style.getPropertyValue("--nudge-x"), "0.00px");
+  f.advance(999);
   f.tick();
-  assert.equal(f.styles[0].get("--nudge-x"), "0.00px", "hidden emotes must stay on their orbital anchor");
-  f.advance(700);
-  f.expire();
-  assert.equal(f.anchors[0].attributes.has("data-popped"), false);
-  f.tick();
-  assert.equal(f.styles[0].get("--nudge-x"), "0.00px");
-  f.advance(349);
-  f.tick();
-  assert.equal(f.styles[0].get("--nudge-x"), "0.00px");
+  assert.equal(image.style.getPropertyValue("--nudge-x"), "0.00px");
   f.advance(1);
   f.tick();
-  assert.equal(f.styles[0].get("--nudge-x"), "16.00px");
-  f.click();
-  assert.equal(f.anchors[0].attributes.has("data-popped"), true, "the restored emote can be caught again");
+  assert.equal(Math.abs(parseFloat(image.style.getPropertyValue("--nudge-x"))), 27);
 });
 
-test("catching another emote restores the previous one and repeated keyboard input cannot catch hidden art", async () => {
+test("growth recycles the oldest at 120 and also bounds fading nodes and animations", async () => {
   const f = fixture();
   await f.ready();
-  f.click();
-  const originalTimer = [...f.timers.keys()][0];
-  f.click(0, 0, { detail: 0, target: f.anchors[0] });
-  assert.equal([...f.timers.keys()][0], originalTimer);
-  f.click(415, 285);
-  assert.equal(f.anchors[0].attributes.has("data-popped"), false);
-  assert.equal(f.anchors[1].attributes.has("data-popped"), true);
-  assert.equal(f.scene.children.length, 1);
-  assert.equal(f.timers.size, 1);
-  f.expire();
-  assert.ok(f.anchors.every((anchor) => !anchor.attributes.has("data-popped")));
+  f.anchors[1].focus();
+  for (let index = 0; index < 70; index++) {
+    const parent = f.active().find((a) => a.hasAttribute("data-offspring")) ?? f.anchors[2];
+    f.pop(parent);
+    await f.ready();
+    assert.ok(f.active().length <= 120);
+    assert.ok(f.all().length <= 126);
+    assert.ok(f.animations.size <= 132);
+  }
+  assert.equal(f.active().length, 120);
+  assert.ok(!f.active().includes(f.anchors[0]), "the oldest art is recycled");
+  assert.ok(f.active().includes(f.anchors[1]), "do not recycle the currently keyboard-focused control");
+  f.finishAnimations();
+  assert.equal(f.all().length, 120);
+  assert.equal(f.animations.size, 0);
+});
+
+test("failed offspring loads keep the parent, report the failure, and can be retried", async () => {
+  const f = fixture();
+  await f.ready();
+  f.loading.fail = true;
+  f.pop(f.anchors[0]);
+  await f.ready();
+  assert.equal(f.active().length, 6);
+  assert.equal(f.anchors[0].hasAttribute("aria-busy"), false);
+  assert.match(f.status.textContent, /couldn't load/);
+  assert.equal(f.warnings.length, 1);
+  f.loading.fail = false;
+  f.pop(f.anchors[0]);
+  await f.ready();
+  assert.equal(f.active().length, 11);
+  assert.equal(f.status.textContent, "");
+});
+
+test("late image completions cannot resurrect a parent already recycled at capacity", async () => {
+  const f = fixture();
+  await f.ready();
+  f.loading.holdFamily = "party";
+  f.pop(f.anchors[0]);
+  for (let index = 0; index < 26; index++) {
+    f.pop(f.active().find((a) => a.hasAttribute("data-offspring")) ?? f.anchors[2]);
+    await f.ready();
+  }
+  assert.equal(f.active().length, 120);
+  assert.ok(!f.active().includes(f.anchors[0]));
+  const survivors = f.active().slice();
+  f.releaseLoads();
+  await f.ready();
+  assert.deepEqual(f.active(), survivors);
+});
+
+test("new inner-track art never steals pixel hits from an older outer-track emote", async () => {
+  const f = fixture();
+  await f.ready();
+  f.pop(f.anchors[0]);
+  await f.ready();
+  const inner = f.tracks[0].children.find((a) => a.hasAttribute("data-offspring"));
+  inner.rect = rect(250, 150, 40, 40);
+  f.anchors[4].rect = inner.rect;
+  f.click(270, 170);
+  assert.equal(f.anchors[4].hasAttribute("aria-busy"), true);
+  assert.equal(inner.hasAttribute("aria-busy"), false);
+  await f.ready();
 });
 
 test("right clicks and hidden pages cannot catch emotes", async () => {
   const f = fixture();
   await f.ready();
   f.click(370, 270, { button: 2 });
-  assert.equal(f.scene.children.length, 0);
+  assert.equal(f.anchors[0].hasAttribute("aria-busy"), false);
   f.document.hidden = true;
   f.click();
-  assert.equal(f.scene.children.length, 0);
+  assert.equal(f.anchors[0].hasAttribute("aria-busy"), false);
 });
