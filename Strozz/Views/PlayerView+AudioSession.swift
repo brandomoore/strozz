@@ -2,15 +2,50 @@ import AVFoundation
 import Foundation
 
 extension PlayerView {
+  func recordAudioPlaybackState(reason: String) {
+    guard model.playbackTelemetry.sessionID != nil else { return }
+    let session = AVAudioSession.sharedInstance()
+    let item = player.currentItem
+    var counters: [String: Int] = ["native_restart_serial": model.nativeRestartSerial]
+    if let item, item.status == .readyToPlay {
+      let audio = model.playbackTelemetry.measure("audio_state_tracks") {
+        item.tracks.filter { $0.assetTrack?.mediaType == .audio }
+      }
+      counters["audio_track_count"] = audio.count
+      counters["enabled_audio_track_count"] = audio.filter(\.isEnabled).count
+    }
+    var metrics: [String: Double] = [
+      "player_rate": Double(player.rate), "player_volume": Double(player.volume),
+      "audio_output_volume": Double(session.outputVolume),
+    ]
+    metrics["buffer_ahead_seconds"] = item.flatMap(bufferAheadSeconds)
+    recordPlaybackEvent("audio_playback_state", attributes: [
+      "reason": reason,
+      "audio_output_ports": session.currentRoute.outputs.map(\.portType.rawValue).joined(separator: ","),
+      "audio_session_category": session.category.rawValue,
+      "audio_session_mode": session.mode.rawValue,
+    ], metrics: metrics, counters: counters, flags: [
+      "player_muted": player.isMuted, "user_paused": isUserPaused,
+      "playback_requested": didRequestPlayback,
+      "audio_interrupted": model.audioInterrupted,
+      "audio_session_activation_failed": model.audioSessionActivationFailed,
+      "media_services_unavailable": model.mediaServicesUnavailable,
+      "native_needs_refresh": model.nativeNeedsRefresh,
+      "video_presentation_visible": model.isVideoPresentationVisible,
+    ])
+  }
+
   @discardableResult
   func preparePlaybackAudio(reason: String) -> Bool {
     guard !model.audioInterrupted, !model.mediaServicesUnavailable, !model.multiviewSleepSuspended,
       backgroundedAt == nil else { return false }
+    recordAudioPlaybackState(reason: "before_audio_activation:\(reason)")
     do {
       try model.activateAudioSession()
       if model.audioSessionActivationFailed { errorMessage = nil }
       model.audioSessionActivationFailed = false
       recordPlaybackEvent("audio_session_activated", attributes: ["reason": reason])
+      recordAudioPlaybackState(reason: "after_audio_activation:\(reason)")
       if !player.isMuted, player.volume > 0 {
         NotificationCenter.default.post(name: PlaybackAudioSession.audiblePlayerActivated, object: player)
       }
@@ -23,6 +58,7 @@ extension PlayerView {
       recordPlaybackEvent("audio_session_activation_failed", level: .error,
         attributes: PlaybackTelemetryRecorder.errorAttributes(error)
           .merging(["reason": reason]) { _, new in new })
+      recordAudioPlaybackState(reason: "failed_audio_activation:\(reason)")
       return false
     }
   }

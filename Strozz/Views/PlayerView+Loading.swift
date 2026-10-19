@@ -537,6 +537,7 @@ extension PlayerView {
       return
     }
     model.nativeRestartSerial += 1
+    recordAudioPlaybackState(reason: "before_native_retry")
     recordPlaybackEvent("native_hls_retry", level: .warning,
       attributes: ["reason": reason.rawValue],
       counters: ["attempts_in_window": model.nativeRecovery.attempts.count])
@@ -1117,12 +1118,14 @@ extension PlayerView {
       recordPlaybackEvent("native_unrequested_pause_resume", level: .warning,
         flags: ["automatically_waits": player.automaticallyWaitsToMinimizeStalling])
       player.play()
+      recordAudioPlaybackState(reason: "after_unrequested_pause_resume")
       return
     case .resume:
       cancelNativeCatchUp(reason: "buffered_resume")
       recordPlaybackEvent("native_buffered_resume_requested", level: .warning,
         metrics: ["buffer_ahead_seconds": bufferAheadSeconds(item) ?? 0])
       player.playImmediately(atRate: 1)
+      recordAudioPlaybackState(reason: "after_buffered_resume")
       return
     case .awaitingProgress:
       return

@@ -223,6 +223,22 @@ are inactive for background/idle playback; absence of a delay event is not proof
 of healthy playback. `playback_main_operation_slow` names slow synchronous
 snapshot, audio-track, access-log or error-log reads.
 
+For lost sound after a stall, treat reconnecting the output as a workaround,
+not evidence against an app bug. `audio_playback_state` records route port types,
+mute/volume, playback intent, enabled audio tracks and restart serial around
+activation and Native/player recovery. Route events include previous/current
+port types, never device names or identifiers. Video progress alone is not
+proof that audio rendering survived.
+
+An active telemetry file can disappear or a write can fail. The writer checks
+the active path every 15 seconds and retries persistence failures after five
+seconds without waiting for a new playback session. A recovered record marks
+`telemetry_persistence_recovery` and any
+`telemetry_persistence_records_unconfirmed`; those missing/uncertain records are
+not healthy playback evidence. Retention still protects other open pane files
+within the same file budget. Keep the foreground log before interpreting peer
+audio events as the foreground failure.
+
 Check auxiliary chat work too: merged YouTube chat can repeatedly resolve and
 bootstrap large watch pages when unavailable. Keep HTML decoding and literal
 marker searches off the main actor, with cancellation; only publish the parsed

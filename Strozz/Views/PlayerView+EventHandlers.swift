@@ -159,9 +159,14 @@ extension PlayerView {
     }
     .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
       .receive(on: RunLoop.main)) { notification in
-      recordPlaybackEvent("audio_route_changed", counters: [
+      let previous = notification.userInfo?[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
+      recordPlaybackEvent("audio_route_changed", attributes: [
+        "previous_audio_output_ports": previous?.outputs.map(\.portType.rawValue).joined(separator: ",") ?? "unknown",
+        "audio_output_ports": AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType.rawValue).joined(separator: ","),
+      ], counters: [
         "reason": (notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? NSNumber)?.intValue ?? -1
       ])
+      recordAudioPlaybackState(reason: "route_changed")
       recordPlaybackTelemetrySnapshot()
     }
 
@@ -249,6 +254,7 @@ extension PlayerView {
       guard now.timeIntervalSince(lastStallNotificationAt) >= stallNotificationDebounceSeconds
       else { return }
       lastStallNotificationAt = now
+      recordAudioPlaybackState(reason: "playback_stalled")
       if isUsingAltSource {
         model.altRecovery.notePlaybackStall(now: ProcessInfo.processInfo.systemUptime)
       }

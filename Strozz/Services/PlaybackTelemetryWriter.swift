@@ -21,12 +21,17 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
   private let maximumFiles: Int
   private let mirrorToSystemLog: Bool
   private let encoder: JSONEncoder
+  private let uptime: @Sendable () -> TimeInterval
   private var handle: FileHandle?
   private var partURL: URL?
   private var bytes = 0
   private var part = 0
   private var manifest: Manifest?
-  private var writeFailed = false
+  private var retryAt: TimeInterval = 0
+  private var nextFileCheckAt: TimeInterval = 0
+  private var persistenceRecovery: String?
+  private var unconfirmedRecords = 0
+  private var lastWriteErrorCode: Int?
 
   private struct Manifest: Encodable {
     let schemaVersion = 1
@@ -42,7 +47,8 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
     directory: URL = URL.cachesDirectory.appendingPathComponent("PlaybackDiagnostics", isDirectory: true),
     maximumFileBytes: Int = 4 * 1024 * 1024, maximumFiles: Int = 8,
     maximumPending: Int = 256, mirrorToSystemLog: Bool = true,
-    queue: DispatchQueue = DispatchQueue(label: "com.thatcube.Strozz.playback-telemetry", qos: .utility)
+    queue: DispatchQueue = DispatchQueue(label: "com.thatcube.Strozz.playback-telemetry", qos: .utility),
+    uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
   ) {
     precondition(maximumFileBytes > 0 && maximumFiles > 0 && maximumPending > 0)
     self.directory = directory.standardizedFileURL
@@ -51,6 +57,7 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
     self.maximumPending = maximumPending
     self.mirrorToSystemLog = mirrorToSystemLog
     self.queue = queue
+    self.uptime = uptime
     encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .custom { date, encoder in
       var container = encoder.singleValueContainer()
@@ -107,6 +114,7 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
       if mirrorToSystemLog, record.level != .debug {
         Self.log.info("session=\(record.sessionID, privacy: .public) #\(record.sequence) \(record.name, privacy: .public)")
       }
+      let now = uptime()
       do {
         var data = try encoder.encode(record)
         data.append(0x0A)
@@ -117,16 +125,48 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
         if manifest?.sessionID != record.sessionID {
           try closePart()
           part = 0
-          writeFailed = false
+          retryAt = 0
+          nextFileCheckAt = 0
+          persistenceRecovery = nil
+          unconfirmedRecords = 0
+          lastWriteErrorCode = nil
           manifest = Manifest(sessionID: record.sessionID, fileName: "", channel: record.channel,
                               playbackMode: record.playbackMode, startedAt: record.timestamp)
         }
-        guard !writeFailed else { return }
+        guard now >= retryAt else {
+          unconfirmedRecords += 1
+          return
+        }
+        if let partURL, now >= nextFileCheckAt {
+          nextFileCheckAt = now + 15
+          if !FileManager.default.fileExists(atPath: partURL.path) {
+            Self.log.error("An active playback telemetry file disappeared; opening a new part")
+            try closePart()
+            persistenceRecovery = "active_file_missing"
+          }
+        }
+        if let persistenceRecovery {
+          record.attributes["telemetry_persistence_recovery"] = persistenceRecovery
+          if unconfirmedRecords > 0 { record.counters["telemetry_persistence_records_unconfirmed"] = unconfirmedRecords }
+          record.counters["telemetry_last_write_error_code"] = lastWriteErrorCode
+          data = try encoder.encode(record)
+          data.append(0x0A)
+          guard data.count <= maximumFileBytes else {
+            unconfirmedRecords += 1
+            Self.log.error("Recovered telemetry record exceeds file limit; dropping sequence \(record.sequence)")
+            return
+          }
+        }
         if handle == nil || bytes + data.count > maximumFileBytes {
           try openPart()
+          nextFileCheckAt = now + 15
         }
         try handle?.write(contentsOf: data)
         bytes += data.count
+        retryAt = 0
+        persistenceRecovery = nil
+        unconfirmedRecords = 0
+        lastWriteErrorCode = nil
         if record.name == "session_ended" {
           manifest?.endedAt = record.timestamp
           try saveManifest()
@@ -134,10 +174,14 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
           try closePart()
         }
       } catch {
-        writeFailed = true
+        unconfirmedRecords += 1
+        retryAt = now + 5
+        persistenceRecovery = "write_failure"
+        lastWriteErrorCode = (error as NSError).code
         // Do not print NSError/userInfo or paths which might contain user data.
-        Self.log.error("Playback telemetry persistence failed (code \((error as NSError).code)); retrying next session")
-        try? closePart()
+        Self.log.error("Playback telemetry persistence failed (code \((error as NSError).code)); retrying after backoff")
+        do { try closePart() }
+        catch { Self.log.error("Playback telemetry recovery close failed (code \((error as NSError).code))") }
       }
     }
   }
