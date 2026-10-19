@@ -14,6 +14,8 @@
   <a href="https://github.com/sponsors/thatcube"><img src="https://img.shields.io/badge/Donate-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white" alt="Donate" /></a>
 </p>
 
+**[strozz.brando.page](https://strozz.brando.page)** — the project website.
+
 Strozz brings live streams and chat together on the big screen. Watch Twitch and
 YouTube, follow supported creators across their YouTube and Kick simulcasts, or
 watch several channels in multi-view. It's built for the Apple TV remote and the
@@ -120,6 +122,24 @@ Found a bug or have an idea? Please open a
 [GitHub issue](https://github.com/brandomoore/strozz/issues). Including your Apple TV
 model, tvOS version, and the stream where something went wrong helps a lot. See
 **[CONTRIBUTING.md](CONTRIBUTING.md)** for details.
+
+## Website
+
+The landing page lives in `website/` and uses Cloudflare Workers Static Assets.
+It has no JavaScript, third-party fonts, analytics, or runtime dependencies.
+The build copies the canonical logo from `Branding/`; do not maintain a separate
+website logo.
+
+With Node.js and an authenticated Wrangler CLI:
+
+```sh
+node tools/build-website.mjs
+wrangler deploy --config website/wrangler.jsonc
+```
+
+The configuration owns only `strozz.brando.page`. The domain and HTTPS certificate
+are managed by Cloudflare. App builds and website deployments are independent;
+changing the website does not require building or installing the apps.
 
 ## iPhone and iPad
 

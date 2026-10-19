@@ -49,6 +49,7 @@ AGENTS.local.md
 
 # Misc
 *.log
+.wrangler/
 
 # Apple sysdiagnose captures (never commit)
 sysdiagnose_*/
