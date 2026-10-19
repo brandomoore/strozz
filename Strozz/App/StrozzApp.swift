@@ -22,6 +22,8 @@ struct StrozzApp: App {
         #if DEBUG && targetEnvironment(simulator)
         if ProcessInfo.processInfo.environment["STROZZ_FOLLOW_FIXTURE"] == "1" {
           ChannelFollowFixture()
+        } else if ProcessInfo.processInfo.environment["STROZZ_MULTIVIEW_STATUS_FIXTURE"] == "1" {
+          MultiviewStatusFixture()
         } else if ProcessInfo.processInfo.environment["STROZZ_SIGN_IN_FIXTURE"] == "1" {
           TwitchSignInFixture()
         } else if ProcessInfo.processInfo.environment["STROZZ_HOME_ERROR_FIXTURE"] == "1" {

@@ -31,13 +31,16 @@ final class NativePlaybackRecoveryTests: XCTestCase {
 
 @MainActor
 final class NativeRecoveryIntegrationTests: XCTestCase {
-  private func withModel(_ body: (PlayerModel, PlayerView) async throws -> Void) async rethrows {
+  private func withModel(
+    loadStreamStatus: @escaping @Sendable (String) async -> StreamLiveStatus = { _ in .unknown },
+    _ body: (PlayerModel, PlayerView) async throws -> Void
+  ) async rethrows {
     let defaults = UserDefaults.standard
     let keys = [PersistenceKey.preferredQuality, PersistenceKey.livePlaybackProfile]
     let saved = keys.map { defaults.object(forKey: $0) }
     defaults.set("Auto", forKey: PersistenceKey.preferredQuality)
     defaults.set(LivePlaybackProfile.nativeLowLatency.rawValue, forKey: PersistenceKey.livePlaybackProfile)
-    let model = PlayerModel()
+    let model = PlayerModel(loadStreamStatus: loadStreamStatus)
     model.activeChannel = "fixture"
     model.isUsingNativeHLS = true
     model.isUserPaused = true
@@ -58,6 +61,58 @@ final class NativeRecoveryIntegrationTests: XCTestCase {
       }
     }
     try await body(model, view)
+  }
+
+  func testTerminalNativeFailureConfirmsOfflineAfterRemovingThePlayerItem() async {
+    await withModel(loadStreamStatus: { _ in .offline }) { model, view in
+      model.isUserPaused = false
+      view.failNativeHLS(.unavailable)
+      let probe = model.offlineProbeTask
+      XCTAssertNotNil(probe, "An ended stream must still be checked after its failed item is removed")
+      await probe?.value
+      XCTAssertTrue(model.isOffline)
+      XCTAssertNil(model.errorMessage)
+      XCTAssertNil(model.player.currentItem)
+      XCTAssertFalse(model.mon.offlineProbeInFlight)
+    }
+  }
+
+  func testTerminalNativeFailureDoesNotCallLiveOrUnknownStreamsOffline() async {
+    for status in [StreamLiveStatus.live, .unknown] {
+      await withModel(loadStreamStatus: { _ in status }) { model, view in
+        model.isUserPaused = false
+        view.failNativeHLS(.unavailable)
+        XCTAssertNotNil(model.offlineProbeTask)
+        await model.offlineProbeTask?.value
+        XCTAssertFalse(model.isOffline)
+        XCTAssertTrue(model.errorMessage?.contains("Native playback failed") == true)
+        XCTAssertEqual(model.nativeFallbackReason, NativeHLSError.unavailable.rawValue)
+      }
+    }
+  }
+
+  func testOfflineReplyForRemovedFailedItemCannotReplaceNewPlayback() async throws {
+    let gate = OfflineStatusReplyGate()
+    await withModel(loadStreamStatus: { _ in await gate.load() }) { model, view in
+      model.isUserPaused = false
+      view.failNativeHLS(.unavailable)
+      let probe = model.offlineProbeTask
+      for _ in 0..<100 {
+        if await gate.isWaiting { break }
+        try? await Task.sleep(for: .milliseconds(5))
+      }
+      let waiting = await gate.isWaiting
+      XCTAssertTrue(waiting)
+      model.beginPlaybackLoad()
+      let replacement = AVPlayerItem(url: URL(fileURLWithPath: "/nonexistent-offline-retry.m3u8"))
+      view.replacePlaybackItem(with: replacement)
+      model.isLoading = false
+      await gate.reply(.offline)
+      await probe?.value
+      XCTAssertFalse(model.isOffline)
+      XCTAssertNil(model.errorMessage)
+      XCTAssertTrue(model.player.currentItem === replacement)
+    }
   }
 
   func testOriginFailureResolvesFreshNativeSourceWithoutLegacyFallback() async throws {
@@ -400,4 +455,18 @@ final class NativeRecoveryIntegrationTests: XCTestCase {
 
 private final class PausedReadyNativeItem: AVPlayerItem, @unchecked Sendable {
   override var status: AVPlayerItem.Status { .readyToPlay }
+}
+
+private actor OfflineStatusReplyGate {
+  private var continuation: CheckedContinuation<StreamLiveStatus, Never>?
+  var isWaiting: Bool { continuation != nil }
+
+  func load() async -> StreamLiveStatus {
+    await withCheckedContinuation { continuation = $0 }
+  }
+
+  func reply(_ status: StreamLiveStatus) {
+    continuation?.resume(returning: status)
+    continuation = nil
+  }
 }

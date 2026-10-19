@@ -217,7 +217,7 @@ extension PlayerView {
     // Only a successful live-status lookup may label the channel offline.
     let resolvedOffline = (lastError as? PlaybackError) == .offline
     if resolvedOffline || lastError == nil || lastError is LoadTimeoutError {
-      let status = await PlaybackService.streamLiveStatus(for: activeChannel)
+      let status = await model.loadStreamStatus(activeChannel)
       guard !Task.isCancelled, telemetrySessionID == model.playbackTelemetry.sessionID,
         loadingChannel == activeChannel, sourceGeneration == model.altRecovery.generation,
         !isUsingAltSource else { return }
@@ -519,6 +519,7 @@ extension PlayerView {
     player.pause()
     stopLatencyMonitor()
     stopPlaybackWatchdog()
+    probeOfflineIfStreamEnded(allowMissingItem: true)
   }
 
   func recoverNativeHLS(
@@ -1293,15 +1294,16 @@ extension PlayerView {
   /// single-flight so the 2s watchdog (or a play-to-end notification) can call
   /// it freely. Only a definitive `.offline` acts; `.live`/`.unknown` are
   /// ignored so transient network hiccups never surface a false offline screen.
-  func probeOfflineIfStreamEnded() {
+  func probeOfflineIfStreamEnded(allowMissingItem: Bool = false) {
+    let item = player.currentItem
     guard !isLoading, !isOffline, !isVOD, !isUsingAltSource, !isRecoveringPlayback,
-      shouldPlayAltSource, let item = player.currentItem,
+      shouldPlayAltSource, item != nil || allowMissingItem,
       let generation = mon.beginOfflineProbe(at: Date(), cooldown: offlineProbeCooldownSeconds)
     else { return }
     let channel = activeChannel
     let sessionID = model.playbackTelemetry.sessionID
     model.offlineProbeTask = Task { @MainActor in
-      let status = await PlaybackService.streamLiveStatus(for: channel)
+      let status = await model.loadStreamStatus(channel)
       guard !Task.isCancelled, mon.finishOfflineProbe(generation: generation) else { return }
       model.offlineProbeTask = nil
       guard !isLoading, !isOffline, !isVOD, !isUsingAltSource, shouldPlayAltSource,
@@ -1367,7 +1369,7 @@ extension PlayerView {
     // once a broadcast ends), authoritatively check whether the channel is still
     // live. Only act on a definitive `.offline`; `.live`/`.unknown` fall through
     // to the normal reload-based recovery for genuine transient stalls.
-    let liveStatus = await PlaybackService.streamLiveStatus(for: channel)
+    let liveStatus = await model.loadStreamStatus(channel)
     guard !Task.isCancelled, recoverySessionID == model.playbackTelemetry.sessionID,
       generation == mon.healthGeneration, sourceGeneration == model.altRecovery.generation,
       channel == activeChannel, item === player.currentItem,
@@ -1442,7 +1444,7 @@ extension PlayerView {
     isLoading = false
     errorMessage = nil
     isOffline = true
-    focus = .offlineViewChannel
+    if !isMultiviewCompact { focus = .offlineViewChannel }
   }
 
   /// Re-attempts playback from the offline empty state (e.g. the streamer just

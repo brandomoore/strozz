@@ -5,6 +5,30 @@ import XCTest
 
 @MainActor
 final class MultiviewForegroundRecoveryTests: XCTestCase {
+  func testOfflinePaneIsDistinctFromLoadFailureAndRemoteRetryKeepsItsIdentity() {
+    let controller = controller(count: 2)
+    defer { controller.teardown() }
+    let pane = controller.panes[0]
+    pane.model.isLoading = false
+    pane.model.isOffline = true
+    XCTAssertTrue(pane.hasError)
+    XCTAssertEqual(String(localized: pane.accessibilityStatus(isTransitioning: false)), "Offline")
+    XCTAssertEqual(String(localized: pane.accessibilityStatus(isTransitioning: true)), "Offline")
+    let player = pane.player
+    let previous = pane.presentation.reloadID
+    controller.load(pane)
+    XCTAssertNotEqual(pane.presentation.reloadID, previous)
+    XCTAssertTrue(pane.player === player)
+    XCTAssertEqual(pane.channel.displayName, "Fixture 0")
+
+    pane.model.isOffline = false
+    pane.model.errorMessage = "Synthetic native failure"
+    XCTAssertEqual(String(localized: pane.accessibilityStatus(isTransitioning: false)), "Unavailable")
+    pane.model.errorMessage = nil
+    XCTAssertEqual(String(localized: pane.accessibilityStatus(isTransitioning: true)), "Transitioning")
+    XCTAssertEqual(String(localized: pane.accessibilityStatus(isTransitioning: false)), "Live")
+  }
+
   func testHiddenExpandedPeersCannotForceDecodeRecoveryAndBecomeVisibleAgain() {
     let controller = controller(count: 3)
     defer { controller.teardown() }

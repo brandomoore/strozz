@@ -745,6 +745,13 @@ Source-only feed or decode-recovery override can exceed the requested thumbnail
 budget. The selected pane, player item, and AVKit surface are retained; a normal
 layout transition does not create an extra decoder.
 
+An ended multiview stream shows the channel name and **Went offline**, including
+in spotlight thumbnails. Genuine load failures remain distinct. Offline requires
+a definitive live-status response, including after a failed native player item
+has been removed; network errors or an unknown status never imply offline.
+Select on the focused unavailable pane retries it, without a mouse-only "click"
+instruction or moving focus to hidden single-player controls.
+
 The TV latency readout shows numeric seconds behind the available live edge
 (for example, **3.18s**), including the normal playback cushion rather than
 replacing small values with "Live." It shares the viewer-count and uptime font

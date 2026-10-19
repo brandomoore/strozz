@@ -62,6 +62,13 @@ final class MultiviewPane: Identifiable {
   var hasError: Bool { model.errorMessage != nil || model.isOffline }
   var qualityTier: MultiviewQualityTier { presentation.qualityTier }
 
+  func accessibilityStatus(isTransitioning: Bool) -> LocalizedStringResource {
+    if model.isOffline { return "Offline" }
+    if isLoading { return "Loading" }
+    if hasError { return "Unavailable" }
+    return isTransitioning ? "Transitioning" : "Live"
+  }
+
   init(channel: FollowedChannel) {
     id = channel.id
     self.channel = channel
