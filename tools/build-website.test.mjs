@@ -87,7 +87,9 @@ test("the orbital hero uses recognizable chat emotes with restricted delivery an
   assert.ok(embeddedCatalog);
   const families = JSON.parse(embeddedCatalog);
   assert.equal(Object.keys(families).length, 5);
-  assert.equal(Object.values(families).flat().length, 40);
+  assert.ok(Object.values(families).flat().length >= 132);
+  const sources = Object.values(families).flat().map((art) => art.src);
+  assert.equal(new Set(sources).size, sources.length);
   assert.equal(await readFile(join(output, "orbits.js"), "utf8"), await readFile(join(root, "website/orbits.js"), "utf8"));
   const emotes = [...html.matchAll(/<button class="orbit-emote" data-emote="([^"]+)" type="button" aria-label="Pop [^"]+" disabled(?: data-opposite)?><img src="([^"]+)"([^>]*)>/g)];
   assert.equal(emotes.length, 6);
@@ -185,4 +187,17 @@ test("catalog credits escape submitter text instead of inserting active HTML", a
   const credits = await readFile(join(root, "build/website/credits/index.html"), "utf8");
   assert.match(credits, /&lt;script&gt;alert\(&#39;unsafe&#39;\)&lt;\/script&gt;/);
   assert.doesNotMatch(credits, /<script>/);
+});
+
+test("catalogs cannot alias artwork or run out of unique reactions at capacity", async (t) => {
+  const root = await fixture(t, "available");
+  const file = join(root, "website/emote-catalog.json");
+  const catalog = JSON.parse(await readFile(file, "utf8"));
+  const duplicate = structuredClone(catalog);
+  duplicate.happy[1].id = duplicate.happy[0].id;
+  await writeFile(file, JSON.stringify(duplicate));
+  await assert.rejects(execute(process.execPath, [join(root, "tools/build-website.mjs")]), /Duplicate emote artwork/);
+  const small = Object.fromEntries(Object.entries(catalog).map(([family, entries]) => [family, entries.slice(0, 8)]));
+  await writeFile(file, JSON.stringify(small));
+  await assert.rejects(execute(process.execPath, [join(root, "tools/build-website.mjs")]), /120 active reactions/);
 });

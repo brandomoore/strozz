@@ -11,6 +11,13 @@ const families = Object.fromEntries(Object.entries(catalog).map(([family, entrie
 const artByName = new Map(Object.values(families).flat().map((art) => [art.name, art]));
 const initialNames = ["Party Parrot", "peepoHappy", "OMEGALUL", "monkaS", "KEKW", "PepeHands"];
 
+function assertUnique(f) {
+  const sources = f.all().map((button) => button.querySelector("img").src);
+  assert.equal(new Set(sources).size, sources.length, "active and fading artwork must all be unique");
+  const names = f.all().map((button) => button.dataset.emote);
+  assert.equal(new Set(names).size, names.length);
+}
+
 function target(properties = {}) {
   const listeners = new Map();
   return {
@@ -69,7 +76,7 @@ function fixture({ reduced = false, fine = true, paused = false, decodeFailure =
   const animations = new Set();
   const decodes = new Map();
   const pendingLoads = [];
-  const loading = { fail: false, holdFamily: null };
+  const loading = { fail: false, holdFamily: null, holdAll: false };
   const warnings = [];
   const images = [];
   let buttonCount = 0;
@@ -105,7 +112,7 @@ function fixture({ reduced = false, fine = true, paused = false, decodeFailure =
         if ((decodeFailure && initialIndex === 0) || (loading.fail && initialIndex === undefined)) {
           return Promise.reject(new Error("Image failed"));
         }
-        if (initialIndex === undefined && families[loading.holdFamily]?.some((art) => art.src === this.src)) {
+        if (initialIndex === undefined && (loading.holdAll || families[loading.holdFamily]?.some((art) => art.src === this.src))) {
           return new Promise((resolve) => pendingLoads.push(resolve));
         }
         return Promise.resolve();
@@ -198,7 +205,7 @@ function fixture({ reduced = false, fine = true, paused = false, decodeFailure =
       button: 0, detail: 1, clientX, clientY, target: scene, ...extra,
     }),
     finishAnimations: () => [...animations].forEach((animation) => animation.finish()),
-    releaseLoads: () => { loading.holdFamily = null; pendingLoads.splice(0).forEach((resolve) => resolve()); },
+    releaseLoads: () => { loading.holdFamily = null; loading.holdAll = false; pendingLoads.splice(0).forEach((resolve) => resolve()); },
     pop: (anchor) => scene.emit("click", { button: 0, detail: 0, target: anchor }),
     tick: () => {
       const callbacks = [...frames.values()];
@@ -268,6 +275,7 @@ test("pause, lifecycle changes, and input preferences clear active interaction a
   ]) {
     const f = fixture();
     await f.ready();
+    assertUnique(f);
     f.move(370, 270);
     f.tick();
     assert.equal(f.anchors[0].hasAttribute("data-catch-rest"), true);
@@ -391,7 +399,7 @@ test("related choices vary randomly, while decoded artwork is shared between gen
       await f.ready();
     }
     assert.ok([...f.decodes.values()].every((count) => count === 1));
-    assert.ok(f.decodes.size <= 12, "only the initial six and the selected reaction family should load");
+    assert.ok(f.decodes.size <= artByName.size, "shared decoding stays bounded by the catalog");
   }
   assert.ok(new Set(selections).size > 1);
 });
@@ -529,6 +537,7 @@ test("growth recycles the oldest at 120 and also bounds fading nodes and animati
     await f.ready();
     assert.ok(f.active().length <= 120);
     assert.ok(f.all().length <= 126);
+    assertUnique(f);
     assert.ok(f.animations.size <= 132);
   }
   assert.equal(f.active().length, 120);
@@ -561,6 +570,7 @@ test("late image completions cannot resurrect a parent already recycled at capac
   await f.ready();
   f.loading.holdFamily = "party";
   f.pop(f.anchors[0]);
+  f.loading.holdFamily = null;
   for (let index = 0; index < 26; index++) {
     f.pop(f.active().find((a) => a.hasAttribute("data-offspring")) ?? f.anchors[2]);
     await f.ready();
@@ -571,6 +581,83 @@ test("late image completions cannot resurrect a parent already recycled at capac
   f.releaseLoads();
   await f.ready();
   assert.deepEqual(f.active(), survivors);
+});
+
+test("simultaneous catches reserve distinct artwork before any images finish loading", async () => {
+  const f = fixture();
+  await f.ready();
+  f.loading.holdAll = true;
+  f.pop(f.anchors[2]);
+  f.pop(f.anchors[4]);
+  assert.equal(f.decodes.size, 18, "the two laughing parents must reserve twelve different new images");
+  assert.equal(f.active().length, 6);
+  assertUnique(f);
+  f.releaseLoads();
+  await f.ready();
+  assert.equal(f.active().length, 16);
+  assertUnique(f);
+});
+
+test("available related reactions are preferred, then unused reactions from other families fill the burst", async () => {
+  const f = fixture();
+  await f.ready();
+  const family = new Set(families.party.map((art) => art.name));
+  let usedFallback = false;
+  for (let index = 0; index < families.party.length; index++) {
+    const before = f.all().slice();
+    const names = new Set(before.map((button) => button.dataset.emote));
+    const available = [...family].filter((name) => !names.has(name)).length;
+    f.pop(f.active().find((button) => family.has(button.dataset.emote)));
+    await f.ready();
+    const children = f.active().filter((button) => !before.includes(button));
+    assert.equal(children.length, 6);
+    assert.equal(children.filter((button) => family.has(button.dataset.emote)).length, Math.min(6, available));
+    assertUnique(f);
+    if (available < 6) { usedFallback = true; break; }
+  }
+  assert.equal(usedFallback, true);
+});
+
+test("failed image batches release their artwork reservations so retries cannot drain the pool", async () => {
+  const f = fixture();
+  await f.ready();
+  f.loading.fail = true;
+  for (let index = 0; index < Math.ceil(artByName.size / 6) + 2; index++) {
+    f.pop(f.anchors[0]);
+    await f.ready();
+    assert.match(f.status.textContent, /couldn't load/);
+    assert.equal(f.anchors[0].hasAttribute("aria-busy"), false);
+    assert.equal(f.active().length, 6);
+  }
+  f.loading.fail = false;
+  f.pop(f.anchors[0]);
+  await f.ready();
+  assert.equal(f.active().length, 11);
+  assertUnique(f);
+});
+
+test("a temporarily reserved pool preserves unserved parents, explains the wait, and recovers without duplicates", async () => {
+  const f = fixture();
+  await f.ready();
+  while (f.active().length < 120) {
+    f.pop(f.active().at(-1));
+    await f.ready();
+  }
+  f.finishAnimations();
+  const parents = f.active().slice();
+  for (const parent of parents) f.pop(parent);
+  assert.match(f.status.textContent, /More emotes are loading/);
+  assert.ok(parents.some((parent) => !parent.hasAttribute("aria-busy")));
+  await f.ready();
+  assert.equal(f.status.textContent, "");
+  assert.equal(f.active().length, 120);
+  assert.ok(f.all().length <= 126);
+  assertUnique(f);
+  const parent = f.active().at(-1);
+  f.pop(parent);
+  await f.ready();
+  assert.ok(!f.active().includes(parent), "released reservations must allow the next catch");
+  assertUnique(f);
 });
 
 test("new inner-track art never steals pixel hits from an older outer-track emote", async () => {

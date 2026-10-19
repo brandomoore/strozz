@@ -9,9 +9,11 @@
   ).map(([family, entries]) => [family, entries.map((entry) => ({ ...entry, family }))]));
   const catalog = new Map(Object.values(families).flat().map((art) => [art.name, art]));
   const loaded = new Map();
+  const reserved = new Set();
   const retiring = new Set();
   const populationLimit = 120;
   const childrenPerCatch = 6;
+  const loadingMessage = "More emotes are loading. Try again in a moment.";
   let nextOrder = 0;
   const emotes = [...scene.querySelectorAll(".orbit-emote")].map((anchor) =>
     record(anchor, catalog.get(anchor.dataset.emote)));
@@ -148,12 +150,22 @@
   }
 
   function relatedArt(art) {
-    const pool = families[art.family].filter((candidate) => candidate.name !== art.name);
-    for (let index = pool.length - 1; index > 0; index--) {
-      const other = Math.floor(Math.random() * (index + 1));
-      [pool[index], pool[other]] = [pool[other], pool[index]];
+    const unavailable = new Set([...emotes, ...retiring].map((emote) => emote.art.src));
+    for (const src of reserved) unavailable.add(src);
+    const related = [];
+    const other = [];
+    for (const candidate of catalog.values()) {
+      if (!unavailable.has(candidate.src)) {
+        (candidate.family === art.family ? related : other).push(candidate);
+      }
     }
-    return pool.slice(0, childrenPerCatch);
+    for (const pool of [related, other]) {
+      for (let index = pool.length - 1; index > 0; index--) {
+        const next = Math.floor(Math.random() * (index + 1));
+        [pool[index], pool[next]] = [pool[next], pool[index]];
+      }
+    }
+    return [...related, ...other].slice(0, childrenPerCatch);
   }
 
   function addChild(art, asset, trackIndex, phase) {
@@ -180,11 +192,17 @@
   }
 
   async function pop(emote) {
+    const choices = relatedArt(emote.art);
+    if (choices.length < childrenPerCatch) {
+      status.textContent = loadingMessage;
+      return;
+    }
     emote.busy = true;
     emote.anchor.setAttribute("data-caught", "");
     emote.anchor.setAttribute("aria-busy", "true");
     status.textContent = "";
-    const choices = relatedArt(emote.art);
+    // Reserve before awaiting images so simultaneous catches cannot pick duplicates.
+    for (const art of choices) reserved.add(art.src);
     let assets;
     try {
       assets = await Promise.all(choices.map((art) => loadArt(art)));
@@ -197,6 +215,9 @@
         status.textContent = "Emotes couldn't load. Try again.";
       }
       return;
+    } finally {
+      for (const art of choices) reserved.delete(art.src);
+      if (reserved.size === 0 && status.textContent === loadingMessage) status.textContent = "";
     }
     if (!emote.active) return;
     const origin = emote.image.getBoundingClientRect();
