@@ -27,6 +27,31 @@ final class NativePlaybackRecoveryTests: XCTestCase {
       XCTAssertTrue(policy.takeRetry(for: error))
     }
   }
+
+  func testTransientResolutionFailuresShareTheNativeRetryBudget() {
+    let now = Date(timeIntervalSince1970: 100)
+    var policy = NativePlaybackRecovery()
+    XCTAssertTrue(policy.takeRetry(for: .unavailable, at: now))
+    XCTAssertTrue(policy.takeResolutionRetry(
+      for: NSError(domain: NSURLErrorDomain, code: URLError.networkConnectionLost.rawValue), at: now))
+    XCTAssertFalse(policy.takeResolutionRetry(for: URLError(.timedOut), at: now))
+    XCTAssertTrue(policy.takeResolutionRetry(for: URLError(.timedOut), at: now.addingTimeInterval(61)))
+  }
+
+  func testOnlyTransientTransportErrorsCanRetryResolution() {
+    for code in [URLError.networkConnectionLost, .timedOut, .cannotConnectToHost,
+                 .cannotFindHost, .dnsLookupFailed, .notConnectedToInternet] {
+      var policy = NativePlaybackRecovery()
+      XCTAssertTrue(policy.takeResolutionRetry(for: URLError(code)))
+    }
+    let permanent: [Error] = [PlaybackError.http(401), PlaybackError.http(403), PlaybackError.offline,
+      URLError(.serverCertificateUntrusted), URLError(.cancelled), NativeHLSError.partDuration]
+    for error in permanent {
+      var policy = NativePlaybackRecovery()
+      XCTAssertFalse(policy.takeResolutionRetry(for: error))
+      XCTAssertTrue(policy.attempts.isEmpty)
+    }
+  }
 }
 
 @MainActor
@@ -185,6 +210,120 @@ final class NativeRecoveryIntegrationTests: XCTestCase {
       await model.nativeRefreshTask?.value
       XCTAssertTrue(model.player === oldPlayer)
       XCTAssertNil(model.player.currentItem)
+      XCTAssertNil(model.nativeHLS)
+    }
+  }
+
+  func testForegroundRefreshRetriesLostConnectionAndPreservesPausedAudioPreferences() async {
+    await withModel { model, view in
+      let oldPlayer = model.player
+      oldPlayer.volume = 0.35
+      oldPlayer.isMuted = true
+      var resolves = 0
+      let fresh = URL(string: "https://example.invalid/reconnected-master.m3u8")!
+      view.suspendNativePlayback()
+      view.refreshNativeAfterSuspension {
+        resolves += 1
+        if resolves == 1 { throw URLError(.networkConnectionLost) }
+        return StreamPlayback(master: fresh, qualities: [])
+      }
+      await model.nativeRefreshTask?.value
+      XCTAssertEqual(resolves, 2)
+      XCTAssertEqual(model.nativeRecovery.attempts.count, 1)
+      XCTAssertNil(model.errorMessage)
+      XCTAssertFalse(model.nativeNeedsRefresh)
+      XCTAssertEqual(model.nativeHLS?.sourceURL, fresh)
+      XCTAssertTrue(model.isUsingNativeHLS)
+      XCTAssertFalse(model.player === oldPlayer)
+      XCTAssertTrue(model.isUserPaused)
+      XCTAssertEqual(model.player.rate, 0)
+      XCTAssertTrue(model.player.isMuted)
+      XCTAssertEqual(model.player.volume, 0.35, accuracy: 0.001)
+    }
+  }
+
+  func testForegroundConnectionRetriesStopAtTheSharedNativeBudget() async {
+    await withModel { model, view in
+      var resolves = 0
+      let oldPlayer = model.player
+      view.suspendNativePlayback()
+      view.refreshNativeAfterSuspension {
+        resolves += 1
+        throw URLError(.networkConnectionLost)
+      }
+      await model.nativeRefreshTask?.value
+      XCTAssertEqual(resolves, 3)
+      XCTAssertEqual(model.nativeRecovery.attempts.count, 2)
+      XCTAssertNotNil(model.errorMessage)
+      XCTAssertFalse(model.isLoading)
+      XCTAssertTrue(model.nativeNeedsRefresh)
+      XCTAssertTrue(model.player === oldPlayer)
+      XCTAssertNil(model.nativeHLS)
+      XCTAssertTrue(model.isUsingNativeHLS, "Never silently downgrade to the standard player")
+    }
+  }
+
+  func testBackgroundingDuringConnectionRetryCannotRestartPlayback() async throws {
+    try await withModel { model, view in
+      var resolves = 0
+      view.suspendNativePlayback()
+      view.refreshNativeAfterSuspension {
+        resolves += 1
+        throw URLError(.networkConnectionLost)
+      }
+      let refresh = model.nativeRefreshTask
+      for _ in 0..<100 {
+        if model.nativeRecovery.attempts.count == 1 { break }
+        try await Task.sleep(for: .milliseconds(5))
+      }
+      XCTAssertEqual(model.nativeRecovery.attempts.count, 1)
+      view.suspendNativePlayback()
+      await refresh?.value
+      XCTAssertEqual(resolves, 1)
+      XCTAssertNil(model.nativeHLS)
+      XCTAssertNil(model.errorMessage)
+      XCTAssertEqual(model.player.rate, 0)
+    }
+  }
+
+  func testPermanentForegroundResolveErrorsDoNotRetry() async {
+    let errors: [Error] = [PlaybackError.http(401), PlaybackError.offline,
+      URLError(.serverCertificateUntrusted), URLError(.cancelled)]
+    for error in errors {
+      await withModel { model, view in
+        var resolves = 0
+        view.suspendNativePlayback()
+        view.refreshNativeAfterSuspension {
+          resolves += 1
+          throw error
+        }
+        await model.nativeRefreshTask?.value
+        XCTAssertEqual(resolves, 1)
+        XCTAssertTrue(model.nativeRecovery.attempts.isEmpty)
+        XCTAssertNotNil(model.errorMessage)
+        XCTAssertNil(model.nativeHLS)
+      }
+    }
+  }
+
+  func testForegroundFailureForAnOldChannelCannotRetryOrSetTheNewChannelError() async throws {
+    try await withModel { model, view in
+      var continuation: CheckedContinuation<StreamPlayback, Error>?
+      view.suspendNativePlayback()
+      view.refreshNativeAfterSuspension {
+        try await withCheckedThrowingContinuation { continuation = $0 }
+      }
+      let refresh = model.nativeRefreshTask
+      for _ in 0..<100 {
+        if continuation != nil { break }
+        try await Task.sleep(for: .milliseconds(5))
+      }
+      XCTAssertNotNil(continuation)
+      model.activeChannel = "different-channel"
+      continuation?.resume(throwing: URLError(.networkConnectionLost))
+      await refresh?.value
+      XCTAssertTrue(model.nativeRecovery.attempts.isEmpty)
+      XCTAssertNil(model.errorMessage)
       XCTAssertNil(model.nativeHLS)
     }
   }

@@ -106,6 +106,13 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   intentional privacy pause, including during pending loads; expanded-pane sleep
   also owns the hidden panes' pauses. Recheck item/player/generation ownership
   after asynchronous work.
+  TV foreground source resolution must also use this shared retry budget for
+  transient transport loss/timeouts, with a short cancellable delay and at most
+  two retries per refresh. Do not retry authentication, offline, certificate or
+  cancellation errors. Fence every attempt/result against channel, session,
+  generation, background and source changes. `native_hls_resume_retry`,
+  `native_hls_resume_resolved` and `native_hls_resume_failed` distinguish attempts
+  and elapsed resolution time without retaining requests or credentials.
 - **Do not turn background work into a live failure.** Unused-rendition reports
   are optional and must not block active media. Unavailable historical resources
   fail locally rather than killing healthy live production. Keep reader queues,

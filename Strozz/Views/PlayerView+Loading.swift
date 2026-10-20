@@ -605,14 +605,40 @@ extension PlayerView {
       defer {
         if generation == model.nativeGeneration { model.nativeRefreshTask = nil }
       }
+      @MainActor func isCurrentRefresh() -> Bool {
+        !Task.isCancelled && model.nativeNeedsRefresh && generation == model.nativeGeneration
+          && sessionID == model.playbackTelemetry.sessionID && channel == activeChannel
+          && backgroundedAt == nil && !isUsingAltSource && !isVOD && !model.mediaServicesUnavailable
+      }
+      var resolutionAttempt = 0
+      let resolutionStarted = ProcessInfo.processInfo.systemUptime
+      @MainActor func resolveFreshSource() async throws -> StreamPlayback {
+        while true {
+          guard isCurrentRefresh() else { throw CancellationError() }
+          resolutionAttempt += 1
+          do {
+            if let resolve { return try await resolve() }
+            return try await resolvePlaybackWithTimeout()
+          } catch {
+            guard isCurrentRefresh() else { throw CancellationError() }
+            guard resolutionAttempt < 3, model.nativeRecovery.takeResolutionRetry(for: error) else {
+              throw error
+            }
+            recordPlaybackEvent("native_hls_resume_retry", level: .warning,
+              attributes: PlaybackTelemetryRecorder.errorAttributes(error)
+                .merging(["reason": reason]) { _, new in new },
+              counters: ["resolution_attempt": resolutionAttempt,
+                         "attempts_in_window": model.nativeRecovery.attempts.count])
+            try await Task.sleep(for: .milliseconds(500))
+          }
+        }
+      }
       do {
-        let resolved: StreamPlayback
-        if let resolve { resolved = try await resolve() }
-        else { resolved = try await resolvePlaybackWithTimeout() }
-        guard !Task.isCancelled, model.nativeNeedsRefresh, generation == model.nativeGeneration,
-          sessionID == model.playbackTelemetry.sessionID, channel == activeChannel,
-          backgroundedAt == nil, !isUsingAltSource, !isVOD else { return }
-        guard !model.mediaServicesUnavailable else { return }
+        let resolved = try await resolveFreshSource()
+        guard isCurrentRefresh() else { return }
+        recordPlaybackEvent("native_hls_resume_resolved", attributes: ["reason": reason],
+          metrics: ["resolve_duration_seconds": ProcessInfo.processInfo.systemUptime - resolutionStarted],
+          counters: ["resolution_attempt": resolutionAttempt])
         let intent = model.nativePositionIntent
         let position = intent == initialIntent ? initialPosition
           : ((!pinnedToLive || isUserPaused) ? player.currentItem?.currentDate() : nil)
@@ -642,12 +668,13 @@ extension PlayerView {
           startPlaybackWatchdog()
         }
       } catch {
-        guard !Task.isCancelled, generation == model.nativeGeneration,
-          sessionID == model.playbackTelemetry.sessionID else { return }
+        guard isCurrentRefresh() else { return }
         errorMessage = error.localizedDescription
         isLoading = false
         recordPlaybackEvent("native_hls_resume_failed", level: .error,
-          attributes: PlaybackTelemetryRecorder.errorAttributes(error).merging(["reason": reason]) { _, new in new })
+          attributes: PlaybackTelemetryRecorder.errorAttributes(error).merging(["reason": reason]) { _, new in new },
+          metrics: ["resolve_duration_seconds": ProcessInfo.processInfo.systemUptime - resolutionStarted],
+          counters: ["resolution_attempt": resolutionAttempt])
       }
     }
   }

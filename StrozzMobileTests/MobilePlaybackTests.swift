@@ -346,6 +346,57 @@ final class MobilePlaybackTests: XCTestCase {
     gate.finish()
   }
 
+  func testForegroundConnectionLossUsesExistingNativeRecoveryWithoutUserRetry() async {
+    let gate = ResolutionGate()
+    var calls = 0
+    let model = MobilePlaybackModel(muted: true) { _ in
+      calls += 1
+      if calls == 2 { throw URLError(.networkConnectionLost) }
+      return await gate.wait()
+    }
+    model.activateAudioSession = {}
+    model.loadMetadata = { _ in nil }
+    model.start(channel: "fixture")
+    await gate.waitUntilRequested()
+    let oldPlayer = model.player
+    model.suspend()
+    gate.finish()
+    await Task.yield()
+    model.resume()
+    await gate.waitUntilRequested()
+    XCTAssertEqual(calls, 3)
+    XCTAssertFalse(model.player === oldPlayer)
+    XCTAssertEqual(model.selection, .native)
+    XCTAssertNil(model.nativeFailure)
+    XCTAssertNil(model.errorMessage)
+    XCTAssertTrue(model.isLoading)
+    model.stop()
+    gate.finish()
+    await Task.yield()
+    XCTAssertNil(model.player.currentItem)
+  }
+
+  func testPersistentConnectionLossExhaustsMobileNativeRecoveryWithoutStandardFallback() async throws {
+    var calls = 0
+    let model = MobilePlaybackModel(muted: true) { _ in
+      calls += 1
+      throw URLError(.networkConnectionLost)
+    }
+    model.activateAudioSession = {}
+    model.loadMetadata = { _ in nil }
+    model.start(channel: "fixture")
+    defer { model.stop() }
+    for _ in 0..<200 {
+      if model.nativeFailure != nil { break }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertEqual(calls, 3)
+    XCTAssertEqual(model.selection, .native)
+    XCTAssertNotNil(model.nativeFailure)
+    XCTAssertFalse(model.isLoading)
+    XCTAssertNil(model.player.currentItem)
+  }
+
   func testRepeatedMediaResetErrorsSurfaceFailureInsteadOfHangingOrFallingBack() async throws {
     var calls = 0
     let model = MobilePlaybackModel(muted: true) { _ in
