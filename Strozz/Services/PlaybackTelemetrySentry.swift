@@ -162,13 +162,15 @@ enum PlaybackTelemetrySentry {
       SentrySDK.logger.info("Strozz playback health", attributes: attributes)
       return
     }
-    let event = Event(level: record.level == .error ? .error : .warning)
-    event.message = SentryMessage(formatted: "Strozz playback: \(record.name)")
+    let event = Event(level: report.kind == .recovery ? .info : record.level == .error ? .error : .warning)
+    let groupedName = report.originalFingerprint?.dropFirst().first ?? record.name
+    event.message = SentryMessage(formatted: "Strozz playback: \(groupedName)")
     event.timestamp = record.timestamp
-    event.fingerprint = PlaybackTelemetryReportState.fingerprint(record)
+    event.fingerprint = report.originalFingerprint ?? PlaybackTelemetryReportState.fingerprint(record)
     event.tags = ["application": "strozz", "apple_platform": platform,
                   "stream_session_id": record.sessionID, "channel": record.channel,
-                  "playback_mode": record.playbackMode, "playback_event": record.name]
+                  "playback_mode": record.playbackMode, "playback_event": record.name,
+                  "diagnostic_kind": report.kind.rawValue]
     event.context = ["playback": [
       "attributes": record.attributes, "metrics": record.metrics, "counters": record.counters,
       "flags": record.flags, "sequence": record.sequence,

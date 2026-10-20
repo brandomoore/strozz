@@ -940,6 +940,21 @@ of 12 incidents per stream and 120 per app per minute prevent an error loop from
 flooding the service. Coalesced incidents and omitted records are counted rather
 than presented as complete evidence.
 
+Media transfers also record response/first-byte timing, time since the last body
+bytes, delivered byte/chunk counts, HTTP status, connection reuse/protocol and
+DNS/connect/TLS durations when URLSession supplies them. Consumer backpressure
+is counted separately so time spent waiting on Strozz's parser is not mistaken
+for a stalled network. These metadata-only summaries work for both Native
+controlled and passthrough playback in Release builds; URLs, headers and
+network addresses are not included. Missing timing phases stay unknown.
+
+After an incident, the next observed playback progress or session close within
+two minutes can attach a second bounded history checkpoint to the same Sentry
+issue. It includes late transfer details and reconnect/alignment/progress events,
+with an explicit progress-versus-session-ended outcome. Starting a reconnect or
+interrupting a stall record is not itself proof of successful recovery. These
+checkpoints share the existing incident rate limits.
+
 Reports include public channel names, viewing timestamps, app/platform/build,
 quality, buffers, clock/frame progress, structured error codes and recovery
 actions. They never include chat content, viewer identities, account credentials,

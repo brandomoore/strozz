@@ -113,6 +113,10 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   generation, background and source changes. `native_hls_resume_retry`,
   `native_hls_resume_resolved` and `native_hls_resume_failed` distinguish attempts
   and elapsed resolution time without retaining requests or credentials.
+  Remote incidents retain a bounded follow-up checkpoint when progress resumes
+  or the session closes within two minutes, grouped with the originating issue.
+  `diagnostic_kind=recovery` is informational evidence, not a new failure;
+  `outcome=session_ended` must not be interpreted as recovered playback.
 - **Do not turn background work into a live failure.** Unused-rendition reports
   are optional and must not block active media. Unavailable historical resources
   fail locally rather than killing healthy live production. Keep reader queues,

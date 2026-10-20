@@ -978,17 +978,24 @@ actor NativeHLSOrigin {
         }
         sources[index]?.segments.append(Segment(sequence: entry.sequence, url: entry.url, date: date,
           initialization: entry.initialization, discontinuity: period, tags: entry.tags))
-        #if DEBUG
-        let chunks = reader.stream(request(entry.url)) { [weak self] values in
-          Task { await self?.recordConnection(values, index: index, sequence: entry.sequence) }
+        let emitTrace = trace
+        let transfer: @Sendable (NativeHLSPlaybackDiagnostic) -> Void = { detail in
+          emitTrace?(.init(event: detail.event,
+            attributes: detail.attributes.merging(["pipeline": "passthrough"]) { _, new in new },
+            metrics: detail.metrics,
+            counters: detail.counters.merging(["rendition": index, "sequence": entry.sequence]) { _, new in new }))
         }
+        #if DEBUG
+        let chunks = reader.stream(request(entry.url), observeMetrics: { [weak self] values in
+          Task { await self?.recordConnection(values, index: index, sequence: entry.sequence) }
+        }, observeTransfer: transfer)
         let readStarted = Date()
         var readCompleted = false
         defer {
           recordRequest("/upstream/\(index)/\(entry.sequence)", started: readStarted, served: readCompleted)
         }
         #else
-        let chunks = reader.stream(request(entry.url))
+        let chunks = reader.stream(request(entry.url), observeTransfer: transfer)
         #endif
         sources[index]?.indexingPrefetch = entry.duration == nil
           || (!manifest.hasPrefetch && entry.sequence == manifest.entries.last?.sequence)

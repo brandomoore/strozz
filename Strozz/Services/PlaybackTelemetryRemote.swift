@@ -2,12 +2,13 @@ import Foundation
 import OSLog
 
 struct PlaybackTelemetryReport: Sendable {
-  enum Kind: String, Sendable { case incident, health, context }
+  enum Kind: String, Sendable { case incident, recovery, health, context }
   let kind: Kind
   let record: PlaybackTelemetryRecord
   let history: [PlaybackTelemetryRecord]
   let historyRecordsOmitted: Int
   let incidentsCoalesced: Int
+  var originalFingerprint: [String]? = nil
 }
 
 enum PlaybackTelemetryDistribution {
@@ -31,6 +32,7 @@ struct PlaybackTelemetryReportState {
     var lastContext = -Double.infinity
     var fingerprints: [String: Double] = [:]
     var incidents: [Double] = []
+    var pendingIncident: (fingerprint: [String], at: Double)?
   }
 
   private var sessions: [String: Session] = [:]
@@ -95,8 +97,35 @@ struct PlaybackTelemetryReportState {
         session.fingerprints[fingerprint] = now
         session.incidents.append(now)
         incidents.append(now)
+        session.pendingIncident = (Self.fingerprint(record), now)
       } else {
         session.coalesced += 1
+      }
+    }
+    if let incident = session.pendingIncident {
+      let ended = record.name == "session_ended"
+      let recovered = record.name == "first_video_output_frame"
+        || (record.name == "stall_ended" && record.attributes["outcome"] == "recovered")
+        || (record.kind == "sample" && record.attributes["phase"] == "playing"
+          && (record.metrics["clock_delta_seconds"] ?? 0) >= 0.05
+          && record.flags["decode_frozen"] != true && now - incident.at >= 5)
+      if now - incident.at > 120 {
+        session.pendingIncident = nil
+      } else if ended || recovered {
+        if session.incidents.count < 12 && incidents.count < 120 {
+          var checkpoint = record
+          checkpoint.metrics["since_incident_seconds"] = max(0, now - incident.at)
+          checkpoint.attributes["outcome"] = ended ? "session_ended"
+            : record.name == "first_video_output_frame" ? "fresh_frame" : "clock_progress"
+          reports.append(PlaybackTelemetryReport(kind: .recovery, record: checkpoint,
+            history: session.history.map(\.record), historyRecordsOmitted: session.omitted,
+            incidentsCoalesced: session.coalesced, originalFingerprint: incident.fingerprint))
+          session.incidents.append(now)
+          incidents.append(now)
+        } else {
+          session.coalesced += 1
+        }
+        session.pendingIncident = nil
       }
     }
     if ["session_started", "session_ended", "app_backgrounded", "app_foregrounded"].contains(record.name)
@@ -136,6 +165,8 @@ struct PlaybackTelemetryReportState {
       "audio_codec", "native_generation", "counter", "item_id", "host", "asset_host", "stage",
       "audio_category", "audio_mode", "audio_route_reason", "audio_output_ports", "audio_input_ports",
       "route_change_reason", "audio_session_category", "audio_session_mode",
+      "connection_phase", "request_phase", "connection_reused", "network_protocol",
+      "network_expensive", "network_constrained", "network_cellular",
     ]
     var attributes = input.attributes.filter { key, _ in
       allowed.contains(key) || ((key.hasPrefix("from_") || key.hasPrefix("to_"))

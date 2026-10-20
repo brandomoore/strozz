@@ -97,8 +97,57 @@ final class PlaybackTelemetryRemoteTests: XCTestCase {
         level: .error, attributes: ["error_code": "-1005"])).filter { $0.kind == .incident }
     }
     XCTAssertEqual(incidents.count, 1)
-    let health = try XCTUnwrap(state.receive(record("session_ended", time: 21)).first)
+    let health = try XCTUnwrap(state.receive(record("session_ended", time: 21)).first { $0.kind == .health })
     XCTAssertEqual(health.incidentsCoalesced, 19)
+  }
+
+  func testRecoveryCheckpointRetainsLateTransferAndResumeEvidenceInTheSameIssue() throws {
+    var state = PlaybackTelemetryReportState()
+    let failure = record("native_hls_failure", time: 10, level: .error,
+      attributes: ["error_code": "-1001", "operation": "media"])
+    _ = try state.receive(failure)
+    _ = try state.receive(record("native_hls_delivery_timing", time: 11,
+      attributes: ["stage": "media_transfer", "request_phase": "receiving_body",
+                   "network_protocol": "h2", "connection_reused": "true"]))
+    let interrupted = try state.receive(record("stall_ended", time: 12,
+      attributes: ["outcome": "interrupted"]))
+    XCTAssertFalse(interrupted.contains { $0.kind == .recovery },
+      "Entering reconnect is not proof that playback recovered")
+    _ = try state.receive(record("native_hls_resume_resolved", time: 14))
+    let checkpoint = try XCTUnwrap(state.receive(record("first_video_output_frame", time: 20))
+      .first { $0.kind == .recovery })
+    XCTAssertEqual(checkpoint.originalFingerprint, PlaybackTelemetryReportState.fingerprint(failure))
+    XCTAssertTrue(checkpoint.history.contains { $0.attributes["stage"] == "media_transfer" })
+    XCTAssertTrue(checkpoint.history.contains { $0.name == "native_hls_resume_resolved" })
+    XCTAssertEqual(checkpoint.history.last?.name, "first_video_output_frame")
+    XCTAssertEqual(checkpoint.record.metrics["since_incident_seconds"], 10)
+    XCTAssertEqual(checkpoint.record.attributes["outcome"], "fresh_frame")
+    XCTAssertFalse(try state.receive(record("session_ended", time: 21)).contains { $0.kind == .recovery })
+  }
+
+  func testAPlayingStatusWithoutClockProgressCannotProduceARecoveryCheckpoint() throws {
+    var state = PlaybackTelemetryReportState()
+    _ = try state.receive(record("stall_started", time: 1, level: .warning))
+    let waiting = record("playback_sample", time: 10, kind: "sample", attributes: ["phase": "playing"])
+    XCTAssertFalse(try state.receive(waiting).contains { $0.kind == .recovery })
+    var progressed = record("playback_sample", time: 12, kind: "sample", attributes: ["phase": "playing"])
+    progressed.metrics["clock_delta_seconds"] = 2
+    let checkpoint = try XCTUnwrap(state.receive(progressed).first { $0.kind == .recovery })
+    XCTAssertEqual(checkpoint.record.attributes["outcome"], "clock_progress")
+  }
+
+  func testIncidentCheckpointDoesNotTreatAClosedSessionAsSuccessfulPlayback() throws {
+    var state = PlaybackTelemetryReportState()
+    _ = try state.receive(record("load_failed", time: 1, level: .error))
+    let end = try XCTUnwrap(state.receive(record("session_ended", time: 2))
+      .first { $0.kind == .recovery })
+    XCTAssertEqual(end.record.name, "session_ended")
+    XCTAssertEqual(end.record.attributes["outcome"], "session_ended")
+    XCTAssertFalse(end.history.contains { $0.name == "first_video_output_frame" })
+    XCTAssertEqual(state.trackedSessionCount, 0)
+    _ = try state.receive(record("load_failed", session: "new", time: 3, level: .error))
+    XCTAssertFalse(try state.receive(record("first_video_output_frame", session: "new", time: 124))
+      .contains { $0.kind == .recovery }, "Do not attribute unrelated playback hours later to this stall")
   }
 
   func testOneNoisyPaneCannotSpendEveryOtherPanesIncidentBudget() throws {
