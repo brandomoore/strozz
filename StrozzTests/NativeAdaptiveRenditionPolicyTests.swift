@@ -129,6 +129,68 @@ final class NativeAdaptiveRenditionPolicyTests: XCTestCase {
     XCTAssertEqual(lower.variant.id, 3)
   }
 
+  func testReturningVisiblePaneCanUseFreshCapacityWithoutOrdinaryUpgradeVotes() throws {
+    var policy = try NativeAdaptiveRenditionPolicy(variants: variants)
+    try record(20, policy: &policy, at: 0)
+    _ = try policy.select(budget: .init(), buffer: 1.5, deliveryLate: false, at: 0)
+    let hidden = NativeAdaptiveRenditionPolicy.Budget(
+      maximumWidth: 640, maximumHeight: 360, maximumBitrate: 800_000, videoIsHidden: true)
+    XCTAssertEqual(try policy.select(budget: hidden, buffer: 1.5, deliveryLate: false, at: 1).variant.id, 1)
+    try record(20, policy: &policy, at: 2)
+    let returned = try policy.select(budget: .init(), buffer: 1.5, deliveryLate: false, at: 2)
+    XCTAssertEqual(returned.variant.id, 4)
+    XCTAssertEqual(returned.reason, .visibilityRestore)
+    XCTAssertEqual(policy.variants.count, 5)
+  }
+
+  func testVisibilityRestoreWaitsForFreshCapacityAndAdequateBuffer() throws {
+    var policy = try NativeAdaptiveRenditionPolicy(variants: variants)
+    try record(20, policy: &policy, at: 0)
+    _ = try policy.select(budget: .init(), buffer: 1.5, deliveryLate: false, at: 0)
+    let hidden = NativeAdaptiveRenditionPolicy.Budget(
+      maximumWidth: 640, maximumHeight: 360, maximumBitrate: 800_000, videoIsHidden: true)
+    _ = try policy.select(budget: hidden, buffer: 1.5, deliveryLate: false, at: 1)
+    XCTAssertEqual(try policy.select(budget: .init(), buffer: 1.5, deliveryLate: false, at: 20).variant.id, 1)
+    try record(20, policy: &policy, at: 21)
+    XCTAssertEqual(try policy.select(budget: .init(), buffer: 0.1, deliveryLate: false, at: 21).variant.id, 1)
+    try record(20, policy: &policy, at: 22)
+    let restored = try policy.select(budget: .init(), buffer: 0.4, deliveryLate: false, at: 22)
+    XCTAssertEqual(restored.variant.id, 4)
+    XCTAssertEqual(restored.reason, .visibilityRestore)
+  }
+
+  func testVisibilityRestoreStillRespectsMeasuredCapacityAndVisibleThumbnailBudget() throws {
+    let hidden = NativeAdaptiveRenditionPolicy.Budget(
+      maximumWidth: 284, maximumHeight: 160, videoIsHidden: true)
+    var thumbnail = try NativeAdaptiveRenditionPolicy(variants: variants)
+    try record(20, policy: &thumbnail, at: 0)
+    _ = try thumbnail.select(budget: hidden, buffer: 1.5, deliveryLate: false, at: 0)
+    let visible = NativeAdaptiveRenditionPolicy.Budget(
+      maximumWidth: 854, maximumHeight: 480, maximumBitrate: 800_000)
+    XCTAssertEqual(try thumbnail.select(budget: visible, buffer: 1.5, deliveryLate: false, at: 1).variant.id, 1)
+
+    var limited = try NativeAdaptiveRenditionPolicy(variants: variants)
+    try record(20, policy: &limited, at: 0)
+    _ = try limited.select(budget: hidden, buffer: 1.5, deliveryLate: false, at: 0)
+    try record(0.4, policy: &limited, at: 1)
+    XCTAssertEqual(try limited.select(budget: .init(), buffer: 1.5, deliveryLate: false, at: 1).variant.id, 0)
+  }
+
+  func testExpiredVisibilityRestoreCannotBypassLaterNetworkUpgradeHysteresis() throws {
+    var policy = try NativeAdaptiveRenditionPolicy(variants: variants)
+    try record(20, policy: &policy, at: 0)
+    let hidden = NativeAdaptiveRenditionPolicy.Budget(
+      maximumWidth: 640, maximumHeight: 360, maximumBitrate: 800_000, videoIsHidden: true)
+    _ = try policy.select(budget: hidden, buffer: 1.5, deliveryLate: false, at: 0)
+    _ = try policy.select(budget: .init(), buffer: 0.1, deliveryLate: false, at: 1)
+    try record(20, policy: &policy, at: 12)
+    XCTAssertEqual(try policy.select(budget: .init(), buffer: 1.5, deliveryLate: false, at: 12).variant.id, 1)
+    try record(20, policy: &policy, at: 14)
+    let upgraded = try policy.select(budget: .init(), buffer: 1.5, deliveryLate: false, at: 14)
+    XCTAssertEqual(upgraded.variant.id, 4)
+    XCTAssertEqual(upgraded.reason, .measuredCapacity)
+  }
+
   func testLiveBufferOscillationIsNotNetworkFailureAndDoesNotCauseQualityCycling() throws {
     var policy = try NativeAdaptiveRenditionPolicy(variants: variants)
     try record(20, policy: &policy, at: 0)

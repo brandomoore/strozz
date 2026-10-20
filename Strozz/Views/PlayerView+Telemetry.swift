@@ -23,6 +23,7 @@ extension PlayerView {
       case .grid720: "grid_720"
       case .grid1080: "grid_1080"
       case .thumbnail: "thumbnail"
+      case .hidden: "hidden_360"
       }
     } else {
       attributes["presentation"] = "standalone"

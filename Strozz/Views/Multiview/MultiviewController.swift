@@ -10,13 +10,13 @@ enum MultiviewLayout {
 }
 
 enum MultiviewQualityTier {
-  case source, grid, grid720, grid1080, thumbnail
+  case source, grid, grid720, grid1080, thumbnail, hidden
 
   var targetBitrate: Int {
     switch self {
     case .source, .grid720, .grid1080: 0
     case .grid: 3_000_000
-    case .thumbnail: 800_000
+    case .thumbnail, .hidden: 800_000
     }
   }
 
@@ -26,6 +26,7 @@ enum MultiviewQualityTier {
     case .grid, .grid720: CGSize(width: 1280, height: 720)
     case .grid1080: CGSize(width: 1920, height: 1080)
     case .thumbnail: CGSize(width: 854, height: 480)
+    case .hidden: CGSize(width: 640, height: 360)
     }
   }
 }
@@ -222,7 +223,7 @@ final class MultiviewController {
     for pane in panes {
       pane.presentation.videoIsVisible = expandedPaneID == nil || pane.id == expandedPaneID
       if let expandedPaneID {
-        pane.presentation.qualityTier = pane.id == expandedPaneID ? .source : .thumbnail
+        pane.presentation.qualityTier = pane.id == expandedPaneID ? .source : .hidden
       } else if layout == .spotlight {
         pane.presentation.qualityTier = pane.id == primaryPane?.id ? .source : .thumbnail
       } else {

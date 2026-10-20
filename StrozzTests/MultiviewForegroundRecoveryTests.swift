@@ -89,7 +89,7 @@ final class MultiviewForegroundRecoveryTests: XCTestCase {
     }
     controller.expand(controller.panes[0].id)
     XCTAssertEqual(controller.panes[0].qualityTier, .source)
-    XCTAssertTrue(controller.panes.dropFirst().allSatisfy { $0.qualityTier == .thumbnail })
+    XCTAssertTrue(controller.panes.dropFirst().allSatisfy { $0.qualityTier == .hidden })
     controller.collapse()
     XCTAssertTrue(controller.panes.allSatisfy { $0.qualityTier == .grid1080 })
     controller.addPane(FollowedChannel(id: "new", login: "new", displayName: "New",
@@ -118,6 +118,49 @@ final class MultiviewForegroundRecoveryTests: XCTestCase {
     XCTAssertEqual(small.panes.first?.qualityTier, .grid1080)
     XCTAssertEqual(legacy.panes.first?.qualityTier, .grid,
       "An explicit diagnostic opt-out retains the previous resource policy")
+  }
+
+  func testOnlyFullyHiddenPeersUse360pAndReturnRestoresVisibleBudgetsWithoutReloading() {
+    let controller = controller(count: 3, controlledAuto: true)
+    defer { controller.teardown() }
+    let players = controller.panes.map(\.player)
+    let requests = controller.panes.map(\.presentation.reloadID)
+    let items = controller.panes.map { pane in
+      let item = AVPlayerItem(url: URL(fileURLWithPath: "/dev/null"))
+      pane.player.replaceCurrentItem(with: item)
+      return item
+    }
+    let primary = controller.panes[0]
+    let peer = controller.panes[1]
+    let view = PlayerView(channel: peer.channel.login, auth: TwitchAuthSession(), model: peer.model)
+    controller.spotlight(primary.id)
+    XCTAssertEqual(peer.qualityTier, .thumbnail)
+    XCTAssertTrue(peer.model.isVideoPresentationVisible)
+    view.applyMultiviewBudget()
+    XCTAssertEqual(items[1].preferredMaximumResolution.height, 480)
+    controller.expand(primary.id)
+    XCTAssertEqual(primary.qualityTier, .source)
+    XCTAssertEqual(peer.qualityTier, .hidden)
+    XCTAssertFalse(peer.model.isVideoPresentationVisible)
+    view.applyMultiviewBudget()
+    XCTAssertEqual(items[1].preferredMaximumResolution, CGSize(width: 640, height: 360))
+    XCTAssertEqual(items[1].preferredPeakBitRate, 800_000)
+    controller.collapse()
+    XCTAssertEqual(peer.qualityTier, .thumbnail)
+    XCTAssertTrue(peer.model.isVideoPresentationVisible)
+    view.applyMultiviewBudget()
+    XCTAssertEqual(items[1].preferredMaximumResolution.height, 480)
+    controller.toggleLayout()
+    view.applyMultiviewBudget()
+    XCTAssertEqual(peer.qualityTier, .grid1080)
+    XCTAssertEqual(items[1].preferredMaximumResolution.height, 1080)
+    XCTAssertEqual(items[1].preferredPeakBitRate, 0)
+    for (index, pane) in controller.panes.enumerated() {
+      XCTAssertTrue(pane.player === players[index])
+      XCTAssertTrue(pane.player.currentItem === items[index])
+      XCTAssertEqual(pane.presentation.reloadID, requests[index])
+      XCTAssertEqual(pane.presentation.quality, "Auto")
+    }
   }
 
   func testDiagnosticLayerSelectionIsStableAcrossExpansionAndExcludesStandalone() {
@@ -187,7 +230,7 @@ final class MultiviewForegroundRecoveryTests: XCTestCase {
     for (index, pane) in controller.panes.enumerated() {
       XCTAssertTrue(pane.player === players[index])
       XCTAssertTrue(pane.player.currentItem === items[index])
-      XCTAssertEqual(pane.qualityTier, pane === selected ? .source : .thumbnail)
+      XCTAssertEqual(pane.qualityTier, pane === selected ? .source : .hidden)
       XCTAssertEqual(pane.player.isMuted, pane !== selected)
     }
     selected.player.isMuted = true

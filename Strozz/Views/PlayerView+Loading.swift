@@ -435,7 +435,8 @@ extension PlayerView {
         initialBudget: .init(
           maximumWidth: Int(model.multiviewContext?.qualityTier.maximumResolution.width ?? 0),
           maximumHeight: Int(model.multiviewContext?.qualityTier.maximumResolution.height ?? 0),
-          maximumBitrate: model.multiviewContext?.qualityTier.targetBitrate ?? 0),
+          maximumBitrate: model.multiviewContext?.qualityTier.targetBitrate ?? 0,
+          videoIsHidden: model.multiviewContext?.videoIsVisible == false),
         diagnostic: { [weak telemetry] detail in
           let dispatchedAt = ProcessInfo.processInfo.systemUptime
           Task { @MainActor in

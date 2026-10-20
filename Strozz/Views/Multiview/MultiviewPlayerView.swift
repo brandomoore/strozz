@@ -84,7 +84,7 @@ struct MultiviewPlayerView: View {
       // down into the panes — focus stays trapped in the controls until the
       // viewer closes them (Close button or the Menu/Back button).
       MultiviewVideoStage(controller: controller) { pane in
-        paneView(pane, style: pane.qualityTier == .thumbnail ? .compact : .full)
+        paneView(pane, style: pane.qualityTier == .thumbnail || pane.qualityTier == .hidden ? .compact : .full)
       }
       .focusScope(paneFocusScope)
       .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -760,7 +760,8 @@ actor NativeControlledHLSOrigin {
         counters: ["rendition": lowest.id, "height": lowest.height, "bandwidth_bps": lowest.bitrate]))
       lastClampedBudget = budget
     }
-    return .init(maximumWidth: lowest.width, maximumHeight: lowest.height, maximumBitrate: lowest.bitrate)
+    return .init(maximumWidth: lowest.width, maximumHeight: lowest.height, maximumBitrate: lowest.bitrate,
+      videoIsHidden: budget.videoIsHidden)
   }
 
   private func movie(for period: Int) async throws -> Movie {

@@ -740,7 +740,14 @@ with normal chat and controls; Back returns it to the wall without reconnecting.
 Explicit source/quality changes and error recovery remain real playback changes.
 Play/Pause opens wall controls in the grid and controls playback when expanded.
 Other panes remain live and muted while expanded, with a lower bitrate and
-resolution preference. These are adaptive preferences, not re-encoding: a
+resolution preference: fully hidden peers target up to 360p / 800 kbps, while
+visible spotlight thumbnails retain their 480p / 800 kbps preference. Returning
+immediately forwards the visible budget to the native producer. A newly visible
+pane can use fresh measured bandwidth and sufficient buffer without the normal
+upgrade-vote delay; ordinary bandwidth-driven changes keep their hysteresis.
+This does not restart players or seek the playhead. Actual decoded HD can still
+take several seconds to return, so hidden panes are not deliberately forced down
+to 160p. These are adaptive preferences, not re-encoding: a
 Source-only feed or decode-recovery override can exceed the requested thumbnail
 budget. The selected pane, player item, and AVKit surface are retained; a normal
 layout transition does not create an extra decoder.

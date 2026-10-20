@@ -29,22 +29,43 @@ extension PlayerView {
     }
   }
 
-  func updateNativeCatchUp() async {
-    if let item = player.currentItem, let native = model.nativeHLS {
+  func nativeResourceBudget(for item: AVPlayerItem) -> NativeAdaptiveRenditionPolicy.Budget {
+    .init(maximumWidth: Int(item.preferredMaximumResolution.width),
+      maximumHeight: Int(item.preferredMaximumResolution.height),
+      maximumBitrate: Int(item.preferredPeakBitRate),
+      videoIsHidden: model.multiviewContext?.videoIsVisible == false)
+  }
+
+  @discardableResult
+  func updateNativeResourceBudget(item: AVPlayerItem, native: NativeLowLatencyHLS) async -> Bool {
+    let generation = model.nativeGeneration
+    while !Task.isCancelled {
+      guard native === model.nativeHLS, item === player.currentItem,
+        generation == model.nativeGeneration else { return false }
+      let budget = nativeResourceBudget(for: item)
       do {
         let controlled = try await native.origin.updateControlledPlayback(buffer: bufferAheadSeconds(item) ?? 0,
-          budget: .init(maximumWidth: Int(item.preferredMaximumResolution.width),
-            maximumHeight: Int(item.preferredMaximumResolution.height),
-            maximumBitrate: Int(item.preferredPeakBitRate)))
-        guard native === model.nativeHLS, item === player.currentItem else { return }
+          budget: budget)
+        guard native === model.nativeHLS, item === player.currentItem,
+          generation == model.nativeGeneration else { return false }
+        if budget != nativeResourceBudget(for: item) { continue }
         model.nativeControlledAuto = controlled
+        return true
       } catch {
-        guard native === model.nativeHLS, item === player.currentItem, !(error is CancellationError) else { return }
+        guard native === model.nativeHLS, item === player.currentItem,
+          generation == model.nativeGeneration, !(error is CancellationError) else { return false }
         recordPlaybackEvent("native_controlled_feedback_failed", level: .error,
           attributes: PlaybackTelemetryRecorder.errorAttributes(error))
         recoverNativeHLS(NativeHLSError.classify(error))
-        return
+        return false
       }
+    }
+    return false
+  }
+
+  func updateNativeCatchUp() async {
+    if let item = player.currentItem, let native = model.nativeHLS {
+      guard await updateNativeResourceBudget(item: item, native: native) else { return }
     }
     if model.isUsingNativeHLS, model.startupProgress.hasStarted {
       player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false

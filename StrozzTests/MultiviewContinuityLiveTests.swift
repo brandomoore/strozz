@@ -476,7 +476,7 @@ final class MultiviewContinuityLiveTests: XCTestCase {
       XCTAssertGreaterThan(selected.player.currentTime().seconds, startClock + 0.5)
       XCTAssertTrue(surface.isReadyForDisplay)
       XCTAssertGreaterThanOrEqual(expandingFrames, 12, "Video must advance during the zoom, not just retain its owner")
-      XCTAssertTrue(controller.panes.filter { $0 !== selected }.allSatisfy { $0.qualityTier == .thumbnail })
+      XCTAssertTrue(controller.panes.filter { $0 !== selected }.allSatisfy { $0.qualityTier == .hidden })
       attach(host, name: "Expanded normal player \(selected.channel.login)")
       let hiddenClocks = controller.panes.map { $0.player.currentTime().seconds }
       var previousHeight = selected.player.currentItem?.presentationSize.height ?? 0

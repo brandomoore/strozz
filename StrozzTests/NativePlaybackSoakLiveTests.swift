@@ -43,6 +43,7 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     var nativeOnly = true
     var controlledAutoOnly = true
     var decodedSizes: [String: Int] = [:]
+    var settledHiddenDecodedSizes: [String: Int] = [:]
     var errors: [String: Int] = [:]
 
     var completeSampling: Bool {
@@ -173,6 +174,11 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
       } else {
         revealedVideoSeconds = nil
         evidence.hiddenVideoSeconds += interval
+        if evidence.hiddenVideoSeconds >= 8,
+          let size = model.playbackTelemetry.decodedVideoSize,
+          model.playbackTelemetry.videoFrameAge.map({ $0 < 4 }) == true {
+          evidence.settledHiddenDecodedSizes["\(Int(size.width))x\(Int(size.height))", default: 0] += 1
+        }
       }
       previousVideoVisibility = model.isVideoPresentationVisible
       // A sampling gap is missing evidence, not proof the clock froze.
@@ -304,8 +310,13 @@ final class NativePlaybackSoakLiveTests: XCTestCase {
     guard ProcessInfo.processInfo.environment["STROZZ_VISIBILITY_CHECK"] == "1" else {
       throw XCTSkip("Explicit simulator-only visibility regression; not a sustained soak.")
     }
+    let channels = ProcessInfo.processInfo.environment["STROZZ_VISIBILITY_CHANNELS"]
+      .map { $0.split(separator: ",").map(String.init) } ?? ["valkyrae", "gaules", "burn"]
+    guard (2...6).contains(channels.count), Set(channels).count == channels.count,
+      channels.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") } })
+      else { return XCTFail("Choose two to six distinct live ASCII channel logins") }
     var inputs: [Input] = []
-    for channel in ["valkyrae", "gaules", "burn"] { inputs.append(try await Self.describe(channel)) }
+    for channel in channels { inputs.append(try await Self.describe(channel)) }
     let directory = URL.cachesDirectory.appendingPathComponent("PlaybackSoak/\(UUID().uuidString)", isDirectory: true)
     let sink = Sink(directory: directory,
       diagnosticsDirectory: URL.cachesDirectory.appendingPathComponent(PlaybackTelemetryRecorder.directoryName))
