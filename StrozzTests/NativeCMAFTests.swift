@@ -27,6 +27,7 @@ final class NativeCMAFTests: XCTestCase {
     let timing = try NativeCMAF.timing(box("traf", traf), track: track)
     XCTAssertEqual(timing.start, 1)
     XCTAssertEqual(timing.duration, 12000.0 / 90000, accuracy: 0.000001)
+    XCTAssertEqual(timing.durationTicks, 12000)
     XCTAssertTrue(timing.independent)
     let bad = box("traf", box("tfhd", words(1, 1, 0, 500)))
     XCTAssertThrowsError(try NativeCMAF.timing(bad, track: track))
@@ -133,11 +134,26 @@ final class NativeCMAFTests: XCTestCase {
   }
 
   func testPartGroupingFlushesBeforeValidFragmentsOverflowTheTarget() throws {
-    XCTAssertTrue(try NativeCMAF.shouldFlushPart(accumulated: 0.25, next: 0.25))
-    XCTAssertFalse(try NativeCMAF.shouldFlushPart(accumulated: 0, next: 0.25))
-    XCTAssertFalse(try NativeCMAF.shouldFlushPart(accumulated: 0.2, next: 0.2))
-    XCTAssertThrowsError(try NativeCMAF.shouldFlushPart(accumulated: 0, next: 0.6))
-    XCTAssertThrowsError(try NativeCMAF.shouldFlushPart(accumulated: 0.2, next: .nan))
+    XCTAssertTrue(try NativeCMAF.shouldFlushPart(accumulated: 250, next: 250, scale: 1000))
+    XCTAssertFalse(try NativeCMAF.shouldFlushPart(accumulated: 0, next: 250, scale: 1000))
+    XCTAssertFalse(try NativeCMAF.shouldFlushPart(accumulated: 200, next: 200, scale: 1000))
+    XCTAssertFalse(try NativeCMAF.shouldFlushPart(accumulated: 133 + 150, next: 167, scale: 1000))
+    XCTAssertTrue(try NativeCMAF.shouldFlushPart(accumulated: 133 + 150, next: 168, scale: 1000))
+    XCTAssertThrowsError(try NativeCMAF.shouldFlushPart(accumulated: 0, next: 600, scale: 1000))
+    XCTAssertThrowsError(try NativeCMAF.shouldFlushPart(accumulated: 200, next: 0, scale: 1000))
+    XCTAssertThrowsError(try NativeCMAF.shouldFlushPart(accumulated: .max, next: 1, scale: 1000))
+    XCTAssertThrowsError(try NativeCMAF.shouldFlushPart(accumulated: 0, next: 1, scale: 0))
+    XCTAssertThrowsError(try NativeCMAF.shouldFlushPart(accumulated: 0, next: 1, scale: .max))
+  }
+
+  func testPartTickBoundsRoundInwardWithoutChangingTheLatencyContract() throws {
+    for scale in [UInt64(1000), 60_000, 90_000, 1_000_000, UInt64(UInt32.max)] {
+      let bounds = try NativeCMAF.partTickBounds(scale: scale)
+      XCTAssertLessThanOrEqual(bounds.maximum * 100, scale * 45)
+      XCTAssertGreaterThan((bounds.maximum + 1) * 100, scale * 45)
+      XCTAssertGreaterThanOrEqual(bounds.minimum * 2000, scale * 765)
+      XCTAssertLessThan((bounds.minimum - 1) * 2000, scale * 765)
+    }
   }
 
   func testModernAudioOnlyVariantCannotEnterTheVideoIndexer() {

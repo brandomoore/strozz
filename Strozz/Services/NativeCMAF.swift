@@ -29,6 +29,8 @@ enum NativeHLSFailureDetail: Error, Sendable, Equatable {
   case transportFinalization(video: Int, audio: Int)
   case transportRemainder(video: Int, audio: Int)
   case pesLength(actual: Int, expected: Int)
+  case partBoundary(videoTicks: UInt64, maximumTicks: UInt64, firstSampleTicks: UInt64,
+                    scale: UInt64, videoSamples: Int, audioSamples: Int)
 
   var reason: NativeHLSError {
     switch self {
@@ -36,6 +38,7 @@ enum NativeHLSFailureDetail: Error, Sendable, Equatable {
     case .timestampInterval, .transportContinuity, .transportDuration: .transition
     case .isoBox: .unsupported
     case .transportFinalization, .transportRemainder, .pesLength: .invalidMedia
+    case .partBoundary: .partDuration
     }
   }
 
@@ -50,6 +53,7 @@ enum NativeHLSFailureDetail: Error, Sendable, Equatable {
     case .transportFinalization: "transport_final_video_timing"
     case .transportRemainder: "transport_final_unpaired_samples"
     case .pesLength: "transport_incomplete_pes"
+    case .partBoundary: "partial_sample_boundary"
     }
   }
 }
@@ -85,6 +89,13 @@ struct NativeHLSFailureDiagnostic: Sendable {
       case .pesLength(let actual, let expected):
         counters["pes_actual_bytes"] = actual
         counters["pes_expected_bytes"] = expected
+      case .partBoundary(let ticks, let maximum, let first, let scale, let video, let audio):
+        counters["incoming_video_ticks"] = Int(clamping: ticks)
+        counters["maximum_video_ticks"] = Int(clamping: maximum)
+        counters["first_video_sample_ticks"] = Int(clamping: first)
+        counters["video_timescale"] = Int(clamping: scale)
+        counters["incoming_video_samples"] = video
+        counters["incoming_audio_samples"] = audio
       case .transportContinuity: break
       }
     }
@@ -196,6 +207,7 @@ enum NativeCMAF {
   struct Timing: Sendable {
     let start: Double
     let duration: Double
+    let durationTicks: UInt64
     let independent: Bool
   }
 
@@ -208,16 +220,22 @@ enum NativeCMAF {
     let independent: Bool
   }
 
-  static func shouldFlushPart(accumulated: Double, next: Double) throws -> Bool {
-    guard accumulated.isFinite, next.isFinite, accumulated >= 0, next > 0,
-      accumulated <= 0.45, next <= 0.45 else { throw NativeHLSError.partDuration }
-    return accumulated > 0 && accumulated + next > 0.45
+  static func partTickBounds(scale: UInt64) throws -> (minimum: UInt64, maximum: UInt64) {
+    guard scale > 0, scale <= UInt32.max else { throw NativeHLSError.invalidMedia }
+    return ((scale * 765 + 1999) / 2000, scale * 45 / 100)
+  }
+
+  static func shouldFlushPart(accumulated: UInt64, next: UInt64, scale: UInt64) throws -> Bool {
+    let maximum = try partTickBounds(scale: scale).maximum
+    guard accumulated <= maximum, next > 0, next <= maximum else { throw NativeHLSError.partDuration }
+    return accumulated > 0 && next > maximum - accumulated
   }
 
   static func timing(_ moof: Data, track: Track) throws -> Timing {
     let value = try fragmentTiming(moof, track: track)
     return Timing(start: Double(value.decodeTime) / Double(track.scale),
-      duration: Double(value.duration) / Double(track.scale), independent: value.independent)
+      duration: Double(value.duration) / Double(track.scale), durationTicks: value.duration,
+      independent: value.independent)
   }
 
   static func fragmentTiming(_ moof: Data, track: Track) throws -> FragmentTiming {

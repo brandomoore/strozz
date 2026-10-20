@@ -997,6 +997,7 @@ actor NativeHLSOrigin {
         var fragmentOffset = 0
         var timing: NativeCMAF.Timing?
         var partOffset = 0
+        var partTicks: UInt64 = 0
         var partDuration = 0.0
         var cmafStart: Double?
         var independent = false
@@ -1051,11 +1052,13 @@ actor NativeHLSOrigin {
             guard timing == nil else { throw NativeHLSError.invalidMedia }
             guard let track else { throw NativeHLSError.invalidMedia }
             let nextTiming = try NativeCMAF.timing(box.payload, track: track)
-            if try NativeCMAF.shouldFlushPart(accumulated: partDuration, next: nextTiming.duration) {
+            if try NativeCMAF.shouldFlushPart(accumulated: partTicks, next: nextTiming.durationTicks,
+                                            scale: track.scale) {
               try publish(index, Part(offset: partOffset, length: offset - partOffset,
                                       duration: partDuration, independent: independent, media: cmafPending,
                                       timeline: cmafTimeline(start: cmafStart, track: track)))
               cmafPending.removeAll(keepingCapacity: true)
+              partTicks = 0
               partDuration = 0
             }
             timing = nextTiming
@@ -1063,7 +1066,7 @@ actor NativeHLSOrigin {
             cmafPending.append(boxData)
           } else if box.type == "mdat" {
             cmafPending.append(boxData)
-            guard let frame = timing else { throw NativeHLSError.invalidMedia }
+            guard let frame = timing, let track else { throw NativeHLSError.invalidMedia }
             if let endClock, abs(frame.start - endClock) > 0.002 {
               guard partDuration == 0, var source = sources[index], let last = source.segments.indices.last,
                 source.segments[last].parts.isEmpty, frame.independent else { throw NativeHLSError.transition }
@@ -1077,13 +1080,16 @@ actor NativeHLSOrigin {
               independent = frame.independent
               cmafStart = frame.start
             }
-            partDuration += frame.duration
-            guard partDuration <= 0.45 else { throw NativeHLSError.unsupported }
-            if partDuration >= 0.3825 {
+            partTicks += frame.durationTicks
+            partDuration = Double(partTicks) / Double(track.scale)
+            let bounds = try NativeCMAF.partTickBounds(scale: track.scale)
+            guard partTicks <= bounds.maximum else { throw NativeHLSError.unsupported }
+            if partTicks >= bounds.minimum {
               try publish(index, Part(offset: partOffset, length: offset + boxLength - partOffset,
                                       duration: partDuration, independent: independent, media: cmafPending,
                                       timeline: cmafTimeline(start: cmafStart, track: track)))
               cmafPending.removeAll(keepingCapacity: true)
+              partTicks = 0
               partDuration = 0
             }
             timing = nil

@@ -79,6 +79,11 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   video/audio runs at encoded-sample boundaries when needed, preserving sample
   bytes, flags, descriptions and presentation clocks rather than widening the
   target or rejecting a supported rendition. Bound each media entry to ten seconds.
+  Accumulate and split part durations in integer video-clock ticks, rounding the
+  maximum down and the minimum up. Floating-point sums can put a legal
+  133 + 150 + 167-ms group above 450 ms and incorrectly attempt an impossible
+  sample split. Genuine unsplittable cuts report `partial_sample_boundary`
+  with numeric tick, timescale and sample-count evidence, never media or URLs.
 - **Keep normal latency policy.** Incremental-prefetch sources target 1.5-second
   hold-back and a three-second preferred forward buffer. Completed-only sources
   use cadence-aware timing; do not force the incremental constants onto them.
