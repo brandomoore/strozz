@@ -46,7 +46,9 @@ enum PlaybackTelemetrySentry {
     guard let distribution = PlaybackTelemetryDistribution.environment(
       receiptName: Bundle.main.appStoreReceiptURL?.lastPathComponent, debug: debug,
       simulator: simulator, verification: environment["STROZZ_SENTRY_VERIFICATION"] == "1",
-      developmentRequested: environment["STROZZ_SENTRY_DEVELOPMENT"] == "1") else { return }
+      developmentRequested: environment["STROZZ_SENTRY_DEVELOPMENT"] == "1",
+      developmentBuildEnabled: Bundle.main.object(forInfoDictionaryKey: "StrozzDevelopmentDiagnostics")
+        as? String == "YES") else { return }
     started = true
     let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
     let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"

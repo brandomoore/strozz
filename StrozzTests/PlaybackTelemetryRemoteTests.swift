@@ -40,6 +40,20 @@ final class PlaybackTelemetryRemoteTests: XCTestCase {
       debug: true, simulator: true, verification: true, developmentRequested: false), "verification")
   }
 
+  func testOptedInDevelopmentBuildReportsWithoutLaunchEnvironmentButNeverEnablesOtherDistributions() {
+    XCTAssertEqual(PlaybackTelemetryDistribution.environment(receiptName: nil,
+      debug: true, simulator: false, verification: false, developmentRequested: false,
+      developmentBuildEnabled: true), "development")
+    XCTAssertNil(PlaybackTelemetryDistribution.environment(receiptName: nil,
+      debug: true, simulator: true, verification: false, developmentRequested: false,
+      developmentBuildEnabled: true))
+    for receipt in [nil, "receipt"] {
+      XCTAssertNil(PlaybackTelemetryDistribution.environment(receiptName: receipt,
+        debug: false, simulator: false, verification: false, developmentRequested: false,
+        developmentBuildEnabled: true))
+    }
+  }
+
   func testEveryConcurrentPaneRetainsItsOwnIncidentHistory() throws {
     var state = PlaybackTelemetryReportState()
     var incidents: [PlaybackTelemetryReport] = []

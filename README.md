@@ -929,6 +929,11 @@ do not enable remote reporting. Development builds require the explicit launch
 environment `STROZZ_SENTRY_DEVELOPMENT=1`; simulators and ordinary tests do not
 upload. `STROZZ_SENTRY_VERIFICATION=1` is reserved for the explicit synthetic
 delivery check.
+For an explicitly opted-in local device installation, build with
+`STROZZ_DEVELOPMENT_DIAGNOSTICS=YES` to keep development reporting enabled on
+normal launches without passing an environment flag each time. The setting is
+baked into that installed build, defaults to `NO`, and cannot enable uploads in
+App Store builds or ordinary simulators.
 
 Each watched stream, including every multiview pane and mobile playback, has
 its own session ID and bounded recent metadata history. Healthy sessions send

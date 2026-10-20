@@ -16,6 +16,7 @@ settings:
     TARGETED_DEVICE_FAMILY: "3" # Apple TV
     STROZZ_ICLOUD_ENVIRONMENT: Development
     STROZZ_APS_ENVIRONMENT: development
+    STROZZ_DEVELOPMENT_DIAGNOSTICS: "NO"
   configs:
     Release:
       STROZZ_ICLOUD_ENVIRONMENT: Production

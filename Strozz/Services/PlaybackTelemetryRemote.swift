@@ -13,10 +13,11 @@ struct PlaybackTelemetryReport: Sendable {
 
 enum PlaybackTelemetryDistribution {
   static func environment(receiptName: String?, debug: Bool, simulator: Bool,
-                          verification: Bool, developmentRequested: Bool) -> String? {
+                          verification: Bool, developmentRequested: Bool,
+                          developmentBuildEnabled: Bool = false) -> String? {
     if debug && verification { return "verification" }
     guard !simulator else { return nil }
-    if debug { return developmentRequested ? "development" : nil }
+    if debug { return developmentRequested || developmentBuildEnabled ? "development" : nil }
     return receiptName == "sandboxReceipt" ? "testflight" : nil
   }
 }
