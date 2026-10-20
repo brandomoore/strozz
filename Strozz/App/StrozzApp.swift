@@ -10,6 +10,7 @@ struct StrozzApp: App {
   @State private var environment = AppEnvironment()
 
   init() {
+    PlaybackTelemetrySentry.start()
     SDImageCodersManager.shared.addCoder(SDImageWebPCoder.shared)
     ImageCacheConfigurator.configure()
     ChatAppearanceMigration.runIfNeeded()

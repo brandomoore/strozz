@@ -24,6 +24,9 @@ configFiles:
   Debug: Config/Development.xcconfig
   Release: Config/Release.xcconfig
 packages:
+  Sentry:
+    url: https://github.com/getsentry/sentry-cocoa.git
+    exactVersion: 9.30.2
   SDWebImage:
     url: https://github.com/SDWebImage/SDWebImage.git
     from: 5.21.0
@@ -105,6 +108,8 @@ targets:
       - path: Strozz/Views/RichChatLineView.swift
       - path: Strozz/Views/Chat/ChatColor.swift
     dependencies:
+      - package: Sentry
+        product: Sentry
       - package: SDWebImage
         product: SDWebImage
       - package: SDWebImageSwiftUI
@@ -138,6 +143,8 @@ targets:
       - path: StrozzMobileTests
       - path: StrozzTests/PlaybackPresentationStateTests.swift
       - path: StrozzTests/PlaybackTelemetryTests.swift
+      - path: StrozzTests/PlaybackTelemetryRemoteTests.swift
+      - path: StrozzTests/PlaybackTelemetrySentryTests.swift
       - path: StrozzTests/NativeRenditionReportTests.swift
       - path: StrozzTests/NativeTransportStreamTests.swift
       - path: StrozzTests/NativeTransportRemuxTests.swift
@@ -186,6 +193,8 @@ targets:
     sources:
       - path: Strozz
     dependencies:
+      - package: Sentry
+        product: Sentry
       - package: SDWebImage
         product: SDWebImage
       - package: SDWebImageSwiftUI

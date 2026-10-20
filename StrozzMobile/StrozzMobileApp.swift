@@ -11,6 +11,7 @@ struct StrozzMobileApp: App {
   @State private var playback = MobilePlaybackSession()
 
   init() {
+    PlaybackTelemetrySentry.start()
     SDImageCodersManager.shared.addCoder(SDImageWebPCoder.shared)
     ImageCacheConfigurator.configure()
     ChatSyncDefaultsMigration.runIfNeeded()

@@ -416,7 +416,6 @@ extension PlayerView {
       let generation = model.nativeGeneration
       let telemetry = model.playbackTelemetry
       let sessionID = telemetry.sessionID
-      #if DEBUG
       let trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = { [weak telemetry] detail in
         let dispatchedAt = ProcessInfo.processInfo.systemUptime
         Task { @MainActor in
@@ -427,9 +426,6 @@ extension PlayerView {
             counters: detail.counters)
         }
       }
-      #else
-      let trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil
-      #endif
       let native = reuseNative ?? NativeLowLatencyHLS(sourceURL: url, headers: PlaybackService.streamHeaders,
         history: streamRewindEnabled ? rewindWindowSeconds : 12,
         initialBudget: .init(

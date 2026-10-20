@@ -68,6 +68,16 @@ separately, then verify both results:
 5. Confirm shipping behavior is enabled without Debug launch flags. Controlled
    Native Auto is a Release default, not an opt-in experiment. Use the
    [playback runbook](../docs/low-latency.md) for behavioral evidence requirements.
+   TestFlight playback diagnostics upload automatically to Sentry's dedicated
+   `plozz/strozz` project; App Store builds do not enable remote reporting.
+   Upload each actual archive's symbols before distributing its IPA:
+   `tools/upload-sentry-symbols.sh <path-to-Strozz-or-StrozzMobile.xcarchive>`.
+   The `beta` lane does this automatically and stops on upload failure.
+   Authenticate `sentry-cli login --global` outside the repository (or provide
+   `SENTRY_AUTH_TOKEN` through CI secrets). A CI upload credential need not have
+   project-list/event-read access. The helper fixes the project destination,
+   holds the shared build lease, waits for processing, and never includes source
+   bundles. Preserve its output with the matching archive/UUID evidence.
 6. Upload each exported IPA to the new universal app record and retain its source
    SHA, artifact hash and platform-specific receipt. Upload success is not
    TestFlight readiness: wait for each build to be valid and available to the

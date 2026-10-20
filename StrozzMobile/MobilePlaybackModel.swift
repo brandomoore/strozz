@@ -93,10 +93,10 @@ final class MobilePlaybackModel {
   }
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "mobile-playback")
 
-  #if DEBUG
   @ObservationIgnored let diagnostics = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(
     directory: URL.cachesDirectory.appendingPathComponent("MobilePlaybackDiagnostics", isDirectory: true),
     maximumFileBytes: 512 * 1024, maximumFiles: 2, maximumPending: 32, mirrorToSystemLog: false))
+  #if DEBUG
   @ObservationIgnored private var isLayoutFixture = false
 
   func prepareLayoutFixtureMetadata() {
@@ -167,10 +167,8 @@ final class MobilePlaybackModel {
     isActive = true
     nativeFailure = nil
     nativeRecovery = NativePlaybackRecovery()
-    #if DEBUG
     diagnostics.beginSession(channel: channel, playbackMode: "mobile")
     diagnostics.startSchedulerMonitoring()
-    #endif
     refreshStreamMetadata()
     observeAudioSession()
     chat.connect(to: channel)
@@ -275,6 +273,7 @@ final class MobilePlaybackModel {
 
   func suspend() {
     guard isActive, suspendedPosition == nil else { return }
+    diagnostics.recordEvent("app_backgrounded")
     suspendedPosition = position()
     needsFreshPlayer = true
     mediaResetInProgress = false
@@ -285,6 +284,7 @@ final class MobilePlaybackModel {
 
   func resume() {
     guard isActive, let suspended = suspendedPosition else { return }
+    diagnostics.recordEvent("app_foregrounded")
     // Returning is an opportunity to reactivate even if the OS never ended
     // its suspension interruption. Preserve any newer explicit pause intent.
     let position = interruptedPosition ?? suspended
@@ -309,9 +309,7 @@ final class MobilePlaybackModel {
     for observer in audioObservers { NotificationCenter.default.removeObserver(observer) }
     audioObservers.removeAll()
     invalidate()
-    #if DEBUG
     diagnostics.endSession(reason: "stopped")
-    #endif
     chat.disconnect()
     releaseAudioSession()
   }
@@ -346,6 +344,8 @@ final class MobilePlaybackModel {
       audioSessionActive = true
       return true
     } catch {
+      diagnostics.recordEvent("audio_session_activation_failed", level: .error,
+        attributes: PlaybackTelemetryRecorder.errorAttributes(error))
       fail(String(localized: "Couldn't start audio playback. Please try again."))
       Self.logger.error("Could not activate mobile audio: \(error.localizedDescription, privacy: .public)")
       return false
@@ -396,6 +396,11 @@ final class MobilePlaybackModel {
   }
 
   private func handleAudioRouteChange(reason value: UInt?) {
+    if isActive {
+      diagnostics.recordEvent("audio_route_changed",
+        counters: value.map { ["route_change_reason": Int(clamping: $0)] } ?? [:],
+        flags: ["user_paused": isPaused])
+    }
     guard isActive, mode != .chatOnly, let value,
       AVAudioSession.RouteChangeReason(rawValue: value) == .oldDeviceUnavailable else { return }
     isPaused = true
@@ -410,6 +415,7 @@ final class MobilePlaybackModel {
 
   func handleMediaServicesLost() {
     guard isActive else { return }
+    diagnostics.recordEvent("audio_media_services_lost", level: .error)
     if nativeFailure != nil {
       mediaServicesUnavailable = true
       needsFreshPlayer = true
@@ -428,6 +434,7 @@ final class MobilePlaybackModel {
 
   func handleMediaServicesReset() {
     guard isActive, !mediaResetInProgress else { return }
+    diagnostics.recordEvent("audio_media_services_reset", level: .warning)
     let saved = position()
     resetPosition = saved
     mediaServicesUnavailable = false
@@ -454,6 +461,8 @@ final class MobilePlaybackModel {
   private func handleAudioInterruption(type value: UInt?, options: UInt) {
     guard isActive, nativeFailure == nil, let value,
       let type = AVAudioSession.InterruptionType(rawValue: value) else { return }
+    diagnostics.recordEvent("audio_interruption",
+      counters: ["interruption_type": Int(clamping: value), "interruption_options": Int(clamping: options)])
     switch type {
     case .began:
       guard interruptedPosition == nil else { return }
@@ -483,6 +492,8 @@ final class MobilePlaybackModel {
       try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
       audioSessionActive = false
     } catch {
+      diagnostics.recordEvent("audio_session_deactivation_failed", level: .warning,
+        attributes: PlaybackTelemetryRecorder.errorAttributes(error))
       Self.logger.error("Could not deactivate mobile audio: \(error.localizedDescription, privacy: .public)")
     }
   }
@@ -499,9 +510,7 @@ final class MobilePlaybackModel {
     jumpObserver = nil
     player.currentItem?.cancelPendingSeeks()
     player.pause()
-    #if DEBUG
     diagnostics.trackItem(nil)
-    #endif
     player.replaceCurrentItem(with: nil)
     videoOutput = nil
     decodedVideoSize = nil
@@ -546,16 +555,17 @@ final class MobilePlaybackModel {
     loadTask = Task { [weak self] in
       guard let self else { return }
       guard prepareAudioSession() else { return }
+      diagnostics.recordEvent("load_started", flags: ["user_paused": isPaused])
       do {
         let playback = try await resolve(channel)
         guard isCurrent(request) else { return }
+        diagnostics.recordEvent("playback_resolved", counters: ["quality_count": playback.qualities.count])
         qualities = playback.qualities
         guard let url = selection.source(in: playback) else {
           throw selection == .audioOnly ? MobilePlaybackError.audioUnavailable : .qualityUnavailable
         }
         let useNative = requestsNativePlayback
         if useNative {
-          #if DEBUG
           let recorder = diagnostics
           let sessionID = recorder.sessionID
           let trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = { [weak recorder] detail in
@@ -568,11 +578,21 @@ final class MobilePlaybackModel {
                 counters: detail.counters)
             }
           }
-          #else
-          let trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil
-          #endif
           engine = NativeLowLatencyHLS(sourceURL: url, headers: PlaybackService.streamHeaders,
-                                      history: 180, trace: trace) { [weak self] reason in
+            history: 180, diagnostic: { [weak recorder] detail in
+              let dispatchedAt = ProcessInfo.processInfo.systemUptime
+              Task { @MainActor in
+                guard let recorder, recorder.sessionID == sessionID else { return }
+                let retrying = detail.attributes["operation"] == "manifest_retry"
+                let probing = detail.attributes["operation"] == "capacity_probe"
+                recorder.recordEvent(probing ? "native_hls_capacity_probe"
+                  : retrying ? "native_hls_manifest_retry" : "native_hls_failure",
+                  level: retrying || probing ? .warning : .error,
+                  attributes: detail.attributes.merging(["native_generation": request.uuidString]) { _, new in new },
+                  metrics: PlaybackTelemetryRecorder.nativeDeliveryMetrics(detail.metrics, dispatchedAt: dispatchedAt),
+                  counters: detail.counters)
+              }
+            }, trace: trace) { [weak self] reason in
             Task { @MainActor [weak self] in
               guard let self, self.isCurrent(request) else { return }
               self.recoverNative(reason)
@@ -601,9 +621,7 @@ final class MobilePlaybackModel {
           player.replaceCurrentItem(with: item)
         }
         guard player.currentItem === item else { throw MobilePlaybackError.unavailable }
-        #if DEBUG
         diagnostics.trackItem(item, source: useNative ? "native" : isAudioOnly ? "audio" : "standard")
-        #endif
         player.isMuted = isMuted || muteForTesting
         player.allowsExternalPlayback = !useNative
         if position.shouldPlay && !isPaused && position.date == nil { player.play() }
@@ -663,6 +681,8 @@ final class MobilePlaybackModel {
         startMonitor(item: item, request: request)
       } catch {
         guard isCurrent(request) else { return }
+        diagnostics.recordEvent("load_failed", level: .error,
+          attributes: PlaybackTelemetryRecorder.errorAttributes(error))
         if PlaybackAudioSession.isMediaServicesReset(error) {
           if mediaResetInProgress {
             fail(String(localized: "Audio services haven't recovered. Please try again."))
@@ -694,6 +714,8 @@ final class MobilePlaybackModel {
   func recoverNative(_ reason: NativeHLSError, detail: String? = nil, position: Position? = nil) {
     guard isActive, suspendedPosition == nil, interruptedPosition == nil,
       !mediaServicesUnavailable, requestsNativePlayback else { return }
+    diagnostics.recordEvent("native_hls_retry", level: .warning,
+      attributes: ["reason": reason.rawValue], counters: ["attempts_in_window": nativeRecovery.attempts.count])
     guard nativeRecovery.takeRetry(for: reason) else {
       failNative(detail ?? reason.rawValue)
       return
@@ -705,6 +727,7 @@ final class MobilePlaybackModel {
   }
 
   private func fail(_ message: String) {
+    diagnostics.recordEvent("playback_failed", level: .error)
     invalidate()
     recoveryNotice = nil
     mediaResetInProgress = false
@@ -790,6 +813,7 @@ final class MobilePlaybackModel {
       var lastProgress = ProcessInfo.processInfo.systemUptime
       var lastVideoFrame = lastProgress
       var receivedVideoFrame = false
+      var lastDiagnostics = -Double.infinity
       while !Task.isCancelled {
         do { try await Task.sleep(for: .seconds(1)) } catch { return }
         guard let self, isCurrent(request) else { return }
@@ -799,6 +823,8 @@ final class MobilePlaybackModel {
           return
         }
         if player.status == .failed || item.status == .failed {
+          diagnostics.recordEvent("player_item_failed", level: .error,
+            attributes: PlaybackTelemetryRecorder.errorAttributes(item.error ?? player.error))
           if PlaybackAudioSession.isMediaServicesReset(player.error)
             || PlaybackAudioSession.isMediaServicesReset(item.error) {
             handleMediaServicesReset()
@@ -818,6 +844,24 @@ final class MobilePlaybackModel {
         let buffer = item.loadedTimeRanges.map(\.timeRangeValue)
           .filter { $0.start.seconds <= clock && $0.end.seconds >= clock }
           .map { $0.end.seconds - clock }.max() ?? 0
+        if uptime - lastDiagnostics >= 2 {
+          lastDiagnostics = uptime
+          diagnostics.recordItemLogs()
+          diagnostics.recordSnapshot(PlaybackTelemetrySnapshot(
+            attributes: [
+              "time_control_status": playing ? "playing" : paused ? "paused" : "waiting",
+              "item_status": item.status == .readyToPlay ? "ready" : "loading",
+              "source": engine == nil ? "standard" : "native",
+              "playback_profile": requestsNativePlayback ? "nativeLowLatency" : "standard",
+              "quality": qualityLabel, "presentation": "mobile",
+            ],
+            metrics: ["playhead_seconds": clock, "buffer_ahead_seconds": buffer,
+                      "video_frame_age_seconds": uptime - lastVideoFrame],
+            flags: ["user_paused": isPaused, "loading": isLoading, "playback_requested": !isPaused,
+                    "buffer_empty": item.isPlaybackBufferEmpty, "background": false,
+                    "decode_frozen": receivedVideoFrame && uptime - lastVideoFrame > 4
+                      && !isAudioOnly && !isExternalPlayback && !isPaused]))
+        }
         switch bufferedStallRecovery.observe(clock: clock, uptime: uptime, buffer: buffer,
           minimumBuffer: item.preferredForwardBufferDuration,
           waiting: player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
@@ -829,9 +873,7 @@ final class MobilePlaybackModel {
           catchUp.interrupt(at: uptime)
           catchUpRateChange = (uptime, clock, 1)
           Self.logger.warning("Resuming native playback after an unrequested pause")
-          #if DEBUG
           diagnostics.recordEvent("native_unrequested_pause_resume", level: .warning)
-          #endif
           player.play()
           continue
         case .resume:
@@ -849,15 +891,11 @@ final class MobilePlaybackModel {
         case .none:
           break
         }
-        #if DEBUG
         let freshVideoFrame = videoOutput?.hasNewPixelBuffer(forItemTime: item.currentTime()) == true
-        #endif
         if let videoOutput,
            let frame = videoOutput.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) {
           decodedVideoSize = CGSize(width: CVPixelBufferGetWidth(frame), height: CVPixelBufferGetHeight(frame))
-          #if DEBUG
           if freshVideoFrame { diagnostics.videoFrameObserved(size: decodedVideoSize) }
-          #endif
           lastVideoFrame = uptime
           receivedVideoFrame = true
           if engine != nil { item.automaticallyPreservesTimeOffsetFromLive = false }

@@ -866,11 +866,11 @@ not include chat text or chat participants. Watch-rewards diagnostics record
 report acknowledgements and server-returned streak counts, never access tokens
 or activation codes.
 
-Debug native playback also records segment-boundary decode/presentation clocks,
+Native playback also records segment-boundary decode/presentation clocks,
 the first audio clock, packet IDs and codec profile/level when available, plus
 served rendition changes and their program-date mapping. Before changing active
-rendition or stopping an engine, it saves bounded recent rendition state and the
-last 16 resource-request timings. This is metadata only, not a media recording;
+rendition or stopping an engine, it saves bounded recent rendition state; Debug
+builds additionally retain the last 16 resource-request timings. This is metadata only, not a media recording;
 signed URLs, credentials and headers are excluded.
 Native decoded-frame pulls also record paired begin/end events so a media-service
 reset can be correlated with sampling without changing or disabling the sampler.
@@ -919,7 +919,42 @@ prose, or error comments. Failures retain only structured evidence such as
 error domain/code, AVPlayer error-log status code, and an explicit HTTP status
 when AVFoundation includes one. YouTube resolution records the client/version
 and sanitized failure category, never visitor context or response bodies. Public channel names and
-viewing timestamps do appear. The tool reads locally and never uploads logs.
+viewing timestamps do appear. The pull/analyze tool reads locally and never uploads logs.
+
+#### Automatic TestFlight reports
+
+TestFlight builds automatically send playback diagnostics to the dedicated
+`strozz` Sentry project. No opt-in is required for beta builds. App Store builds
+do not enable remote reporting. Development builds require the explicit launch
+environment `STROZZ_SENTRY_DEVELOPMENT=1`; simulators and ordinary tests do not
+upload. `STROZZ_SENTRY_VERIFICATION=1` is reserved for the explicit synthetic
+delivery check.
+
+Each watched stream, including every multiview pane and mobile playback, has
+its own session ID and bounded recent metadata history. Healthy sessions send
+start/end summaries and at most one periodic health log per minute. Errors and
+significant stalls send an incident with up to 128 recent records, bounded to
+64 KiB of encoded history. One noisy pane cannot consume another pane's
+per-stream allowance. Identical incidents are coalesced for 30 seconds; limits
+of 12 incidents per stream and 120 per app per minute prevent an error loop from
+flooding the service. Coalesced incidents and omitted records are counted rather
+than presented as complete evidence.
+
+Reports include public channel names, viewing timestamps, app/platform/build,
+quality, buffers, clock/frame progress, structured error codes and recovery
+actions. They never include chat content, viewer identities, account credentials,
+signed URLs, headers, network addresses, screenshots, video or audio recordings.
+Sentry's automatic network/UI breadcrumbs, HTTP error capture, screenshots,
+view hierarchy and profiling/tracing are disabled. Crash collection remains
+enabled, with sanitized playback context.
+
+Reporting runs on a bounded background queue, independently of the local cache,
+so a reclaimed/full local log does not disable remote incident collection.
+Sentry queues envelopes for offline delivery and retry, retaining at most 128
+cached envelopes. This is not unlimited history: tvOS cache reclamation,
+extended offline use, server filtering or account quotas can still lose data.
+Client discard reports and explicit omission counts must be checked before
+treating an incident as a complete record.
 
 YouTube simulcasts use the native-HLS client shared with YouTube-only playback
 and captions. Startup respects AVPlayer's native buffering wait; a stall
