@@ -23,6 +23,7 @@ final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unche
 
   init(sourceURL: URL, headers: [String: String], history: Double,
        controlledAuto: Bool = NativeLowLatencyHLS.controlledAutoEnabled,
+       fixedRenditionID: String? = nil,
        initialBudget: NativeAdaptiveRenditionPolicy.Budget = .init(),
        loadData: NativeHLSOrigin.DataLoader? = nil,
        diagnostic: @escaping @Sendable (NativeHLSFailureDiagnostic) -> Void = { _ in },
@@ -30,7 +31,7 @@ final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unche
        failure: @escaping @Sendable (NativeHLSError) -> Void) {
     self.sourceURL = sourceURL
     origin = NativeHLSOrigin(root: sourceURL, headers: headers, history: history, loadData: loadData,
-      controlledAuto: controlledAuto, initialBudget: initialBudget,
+      controlledAuto: controlledAuto, fixedRenditionID: fixedRenditionID, initialBudget: initialBudget,
       diagnostic: diagnostic, trace: trace, failure: failure)
     super.init()
   }
@@ -206,6 +207,7 @@ actor NativeHLSOrigin {
   private var reportRefreshSeconds: TimeInterval?
   private var reportRefreshMaxSeconds: TimeInterval?
   private let controlledAuto: Bool
+  private let fixedRenditionID: String?
   private var initialBudget: NativeAdaptiveRenditionPolicy.Budget
   private var controlled: NativeControlledHLSOrigin?
   private var inFlightRequests = 0
@@ -296,12 +298,14 @@ actor NativeHLSOrigin {
   #endif
 
   init(root: URL, headers: [String: String], history: Double, loadData: DataLoader? = nil,
-       controlledAuto: Bool = false, initialBudget: NativeAdaptiveRenditionPolicy.Budget = .init(),
+       controlledAuto: Bool = false, fixedRenditionID: String? = nil,
+       initialBudget: NativeAdaptiveRenditionPolicy.Budget = .init(),
        diagnostic: @escaping @Sendable (NativeHLSFailureDiagnostic) -> Void = { _ in },
        trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil,
        failure: @escaping @Sendable (NativeHLSError) -> Void) {
     self.root = root; self.headers = headers; self.history = max(12, min(history, 1800))
     self.controlledAuto = controlledAuto
+    self.fixedRenditionID = fixedRenditionID
     self.initialBudget = initialBudget
     self.failure = failure
     self.diagnostic = diagnostic
@@ -520,6 +524,7 @@ actor NativeHLSOrigin {
     guard !stopped else { throw CancellationError() }
     guard master == nil else { return }
     if !text.contains("#EXT-X-STREAM-INF:") {
+      guard fixedRenditionID == nil else { throw NativeHLSError.unsupported }
       sources[0] = Rendition(url: root)
       master = ""
       return
@@ -529,6 +534,7 @@ actor NativeHLSOrigin {
     var awaitingVariant = false
     var audioOnly = false
     var variantAttributes: [String: String] = [:]
+    var fixedIndices: [Int] = []
     for line in text.components(separatedBy: .newlines) {
       if line.hasPrefix("#EXT-X-STREAM-INF:") {
         awaitingVariant = true
@@ -555,12 +561,21 @@ actor NativeHLSOrigin {
           prepared[index]?.codecs = variantAttributes["CODECS"]
           prepared[index]?.bandwidth = variantAttributes["BANDWIDTH"].flatMap(Int.init)
           prepared[index]?.resolution = variantAttributes["RESOLUTION"]
+          if NativeCMAF.renditionIdentity(variantAttributes) == fixedRenditionID {
+            fixedIndices.append(index)
+          }
           output.append("media/\(index).m3u8")
         }
         awaitingVariant = false
       } else { output.append(line) }
     }
     guard !prepared.isEmpty else { throw NativeHLSError.unsupported }
+    if fixedRenditionID != nil {
+      // IVS rotates even rendition hosts/paths on consecutive master fetches.
+      guard fixedIndices.count == 1 else { throw NativeHLSError.unsupported }
+      prepared = prepared.filter { $0.key == fixedIndices[0] }
+      guard prepared.count == 1 else { throw NativeHLSError.unsupported }
+    }
     // A multivariant HLS asset must advertise one stable target duration.
     // Discover it before exposing the master, not during an active switch.
     let manifests = try await withThrowingTaskGroup(of: (Int, NativeCMAF.Manifest).self) { group in
@@ -586,7 +601,7 @@ actor NativeHLSOrigin {
     advertisedTargetDuration = manifests.values.map(\.targetDuration).max()
     sources = prepared
     reportsUpdatedAt = Date()
-    if controlledAuto, prepared.count > 1 {
+    if (controlledAuto && prepared.count > 1) || fixedRenditionID != nil {
       let values = try prepared.sorted(by: { $0.key < $1.key }).map { index, source in
         guard let bitrate = source.bandwidth, let manifest = manifests[index] else { throw NativeHLSError.invalidMedia }
         return NativeControlledHLSOrigin.Variant(id: index, url: source.url, bitrate: bitrate, manifest: manifest)

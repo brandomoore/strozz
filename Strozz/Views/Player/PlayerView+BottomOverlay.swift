@@ -144,7 +144,7 @@ extension PlayerView {
               }
             }
           },
-          sourceAvailable: youtubeSourceAvailable,
+          sourceAvailable: !isVOD && !isMultiviewCompact,
           sourceOptions: streamSourceOptions,
           sourceSelectedIndex: selectedStreamSourceIndex,
           onSelectSource: { selectStreamSource(at: $0) },

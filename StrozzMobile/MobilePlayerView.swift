@@ -635,7 +635,7 @@ struct MobileVideoView: View {
       controlsVisible = false
     }
     .sheet(isPresented: $showQuality) {
-      MobileQualitySheet(model: model)
+      MobileQualitySheet(model: model, twitchChannel: channel.login)
         .presentationDetents([.medium, .large])
     }
     .sheet(isPresented: $showShare) {

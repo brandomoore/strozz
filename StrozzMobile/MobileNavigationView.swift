@@ -84,6 +84,9 @@ struct MobileBrowsingSidebar: View {
         MobileSidebarNavigationRow(title: "Browse", glyph: .layoutGrid, selected: selection == 1) { selection = 1 }
         .accessibilityIdentifier("sidebar-browse")
         .accessibilityHidden(!isEnabled)
+        MobileSidebarNavigationRow(title: "Kick", glyph: .brandKick, selected: selection == 3) { selection = 3 }
+        .accessibilityIdentifier("sidebar-kick")
+        .accessibilityHidden(!isEnabled)
         MobileSidebarNavigationRow(title: "Account", glyph: .userCircle, selected: selection == 2) { selection = 2 }
         .accessibilityIdentifier("sidebar-account")
         .accessibilityHidden(!isEnabled)
@@ -270,6 +273,15 @@ struct MobileRootTabs: View {
       }
       .tabItem { Label { Text("Browse") } icon: { Image("tb-layout-grid") } }
       .tag(1)
+
+      MobileAdaptiveNavigation(isTablet: isTablet, isInteractive: isInteractive,
+        visibility: $sidebarVisibility, compactColumn: $compactColumn) {
+        sidebar
+      } detail: {
+        KickDirectoryView().toolbar(showsSidebar ? .hidden : .visible, for: .tabBar)
+      }
+      .tabItem { Label { Text("Kick") } icon: { Image("tb-brand-kick") } }
+      .tag(3)
 
       MobileAdaptiveNavigation(isTablet: isTablet, isInteractive: isInteractive,
         visibility: $sidebarVisibility, compactColumn: $compactColumn) {

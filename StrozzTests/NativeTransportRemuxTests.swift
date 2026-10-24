@@ -399,6 +399,48 @@ final class NativeTransportRemuxTests: XCTestCase {
     XCTAssertThrowsError(try remuxer.append(packets[0]))
   }
 
+  func testExplicitRenditionUsesControlledRemuxWithoutFetchingUnselectedMetadata() async throws {
+    let root = URL(string: "https://fixture.test/master.m3u8")!
+    let master = Data("""
+      #EXTM3U
+      #EXT-X-STREAM-INF:BANDWIDTH=9000000,RESOLUTION=1920x1080,CODECS="avc1.4d401f,mp4a.40.2"
+      high.m3u8
+      #EXT-X-STREAM-INF:BANDWIDTH=230000,RESOLUTION=284x160,CODECS="avc1.4d401f,mp4a.40.2"
+      low.m3u8
+      """.utf8)
+    let manifest = Data("""
+      #EXTM3U
+      #EXT-X-TARGETDURATION:2
+      #EXT-X-MEDIA-SEQUENCE:0
+      #EXT-X-PROGRAM-DATE-TIME:2026-10-24T00:00:00.000Z
+      #EXTINF:2,
+      0.ts
+      #EXT-X-ENDLIST
+      """.utf8)
+    let media = transportFixture(clock: 90_000).reduce(into: Data()) { $0.append($1) }
+    let origin = NativeHLSOrigin(root: root, headers: [:], history: 30, loadData: { request in
+      let url = try XCTUnwrap(request.url)
+      let data: Data
+      switch url.lastPathComponent {
+      case "master.m3u8": data = master
+      case "low.m3u8": data = manifest
+      case "0.ts": data = media
+      default:
+        XCTFail("An explicit quality must not depend on unselected renditions")
+        throw NativeHLSError.unsupported
+      }
+      return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    }, fixedRenditionID: "284x160-0", failure: { _ in })
+    addTeardownBlock { await origin.stop() }
+    guard case .playlist(let bytes) = try await origin.response(
+      URL(string: "strozz-native-ll://fixture/root.m3u8")!) else { return XCTFail("Expected master") }
+    let text = String(decoding: bytes, as: UTF8.self)
+    XCTAssertTrue(text.contains("-controlled"))
+    XCTAssertTrue(text.contains("BANDWIDTH=230000"))
+    let snapshot = await origin.snapshot()
+    XCTAssertEqual(snapshot.renditions, 1)
+  }
+
   private func controlledFixture(slow: Bool, crossesDiscontinuity: Bool = false,
                                  noisyProbe: Bool = false,
                                  advancesTo: Int? = nil,

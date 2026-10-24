@@ -20,7 +20,9 @@ struct StrozzMobileApp: App {
   var body: some Scene {
     WindowGroup {
       #if DEBUG
-      if ProcessInfo.processInfo.environment["STROZZ_FOLLOW_FIXTURE"] == "1" {
+      if ProcessInfo.processInfo.environment["STROZZ_KICK_UI_FIXTURE"] == "1" {
+        KickDirectoryView(initialQuery: "xqc")
+      } else if ProcessInfo.processInfo.environment["STROZZ_FOLLOW_FIXTURE"] == "1" {
         #if targetEnvironment(simulator)
         ChannelFollowFixture()
         #else

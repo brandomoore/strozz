@@ -273,20 +273,40 @@ extension PlayerView {
 
   // MARK: - Stream source selection (quality-menu picker)
 
-  /// Ordered source options for the quality menu's Stream Source submenu. The
-  /// YouTube row is only meaningful when `youtubeSourceAvailable` is true; the
-  /// menu hides the whole submenu otherwise.
-  var streamSourceOptions: [String] { ["Twitch", "YouTube"] }
+  /// YouTube needs a resolved simulcast; Kick also accepts a channel entered in-player.
+  var streamSourceOptions: [String] {
+    ["Twitch"] + (youtubeSourceAvailable || isUsingAltSource ? ["YouTube"] : []) + ["Kick"]
+  }
 
-  /// Picker selection index: 0 = Twitch, 1 = YouTube simulcast.
+  var platformLinkedSources: [PlatformLiveTarget] {
+    var sources = [PlatformLiveTarget(platform: .twitch, channel: activeChannel)]
+    if !youtubeAutoResolvedTarget.isEmpty {
+      sources.append(PlatformLiveTarget(platform: .youtube, channel: youtubeAutoResolvedTarget))
+    }
+    return sources
+  }
+
+  /// Kick has its own presented player, so this player's selection remains Twitch/YouTube.
   var selectedStreamSourceIndex: Int { isUsingAltSource ? 1 : 0 }
 
   /// Applies a Stream Source picker choice, switching the active video source.
   func selectStreamSource(at index: Int) {
+    guard streamSourceOptions.indices.contains(index) else { return }
+    if streamSourceOptions[index] == "Kick" {
+      let requested = chat.kickResolvedSlug ?? kickMergeDefaultTarget
+      guard let slug = try? KickPlaybackService.slug(from: requested) else { return }
+      suspendNativePlayback(reason: "platform_switch")
+      stopRateController()
+      stopPlaybackWatchdog()
+      player.pause()
+      platformPlayback = PlatformLiveTarget(platform: .kick, channel: slug)
+      isQualityMenuPresented = false
+      return
+    }
     // A picker choice is deliberate intent: record it so the "prefer YouTube"
     // auto-default won't later yank the viewer off the source they chose.
     didManuallySelectSource = true
-    let wantYouTube = (index == 1)
+    let wantYouTube = streamSourceOptions[index] == "YouTube"
     if wantYouTube != isUsingAltSource {
       if wantYouTube {
         Task { await switchToAltYouTubeSource() }

@@ -21,7 +21,9 @@ struct StrozzApp: App {
     WindowGroup {
       Group {
         #if DEBUG && targetEnvironment(simulator)
-        if ProcessInfo.processInfo.environment["STROZZ_FOLLOW_FIXTURE"] == "1" {
+        if ProcessInfo.processInfo.environment["STROZZ_KICK_UI_FIXTURE"] == "1" {
+          KickDirectoryView(initialQuery: "xqc")
+        } else if ProcessInfo.processInfo.environment["STROZZ_FOLLOW_FIXTURE"] == "1" {
           ChannelFollowFixture()
         } else if ProcessInfo.processInfo.environment["STROZZ_MULTIVIEW_STATUS_FIXTURE"] == "1" {
           MultiviewStatusFixture()

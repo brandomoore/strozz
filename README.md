@@ -105,6 +105,29 @@ The feature list below describes the Apple TV app. See
   solar or manual schedule.
 - **Tune the grid.** Adjustable stream-card sizes and a stream-language filter.
 
+## Kick playback (in development)
+
+Development builds include a **Kick** tab on Apple TV, iPhone, and iPad. Enter a
+Kick channel name or channel URL, choose **Find channel**, then **Watch live**.
+This works without a Twitch account or a matching Twitch channel, including for
+Kick-exclusive creators. Recently opened Kick channels are kept on this device.
+The initial directory is an exact-channel lookup, not a trending/category feed.
+
+While watching Twitch, choose **Kick** in the TV player's stream-source menu, or
+enter the Kick channel under **Quality > Stream source** on mobile. Verify the
+destination handle: handles can differ across platforms. In the Kick player,
+**Source** switches among Kick, Twitch, and YouTube without returning to browsing;
+known sources remain available for switching back. Switching resolves fresh
+playback and can briefly buffer; it is not a gapless video transition.
+
+Kick video uses Strozz's native incremental low-latency engine, with Auto and
+explicit advertised qualities. The player includes pause, Go live, read-only
+chat, and automatic playback diagnostics. Kick account sign-in/chat sending,
+Kick multiview, and picture-in-picture are not included in this initial player.
+Access restrictions and unavailable streams are shown explicitly; Strozz does
+not bypass provider access controls. These changes are not yet in the published
+TestFlight build.
+
 ## Getting started
 
 Get Strozz through **[TestFlight](https://testflight.apple.com/join/36mzCevV)**,
@@ -187,11 +210,11 @@ emotes. Sign in through **Account > Sign in to Twitch**, open the Twitch link,
 approve the displayed code, then return to Strozz. Browsing, playback, and
 reading chat also work anonymously.
 
-On iPad, a collapsible native sidebar keeps **Home**, **Browse**, **Account**,
+On iPad, a collapsible native sidebar keeps **Home**, **Browse**, **Kick**, **Account**,
 and live followed channels available while browsing. Tap a live channel to open
 the full-width player; the sidebar stays out of playback. Home and the sidebar
 share one followed-channel list, so no extra follow fetch is needed. Narrow iPad
-windows retain compact tab navigation, and iPhone keeps its three-tab layout.
+windows and iPhone retain compact tab navigation.
 The iPad sidebar uses compact rounded navigation rows and three-line channel
 summaries with inline viewer counts. Home's feed tabs share the native toolbar
 instead of stacking duplicate headings above the streams.

@@ -50,6 +50,7 @@ struct PlayerView: View {
   /// the hand-off looks seamless (the channel's frame fills immediately) instead
   /// of flashing a black "Loading…" screen.
   var posterURL: URL? = nil
+  @State var platformPlayback: PlatformLiveTarget?
 
 
 
@@ -918,6 +919,11 @@ struct PlayerView: View {
     return rewardsPresentation(withCaptions)
     .fullScreenCover(isPresented: $showSignInSheet) {
       SignInView(auth: auth)
+    }
+    .fullScreenCover(item: $platformPlayback, onDismiss: {
+      if model.nativeNeedsRefresh { refreshNativeAfterSuspension() }
+    }) { target in
+      PlatformLivePlayerView(target: target, sources: platformLinkedSources)
     }
   }
 

@@ -158,6 +158,7 @@ struct HomeView: View {
     case home = "Home"
     case multiview = "Multiview"
     case browse = "Browse"
+    case kick = "Kick"
     case search = "Search"
     case settings = "Settings"
 
@@ -168,6 +169,7 @@ struct HomeView: View {
       case .home: return .home
       case .multiview: return .borderAll
       case .browse: return .layoutGrid
+      case .kick: return .brandKick
       case .search: return .search
       case .settings: return .settings
       }
@@ -242,6 +244,10 @@ struct HomeView: View {
       .tabItem {
         Label(SidebarTab.search.rawValue, image: SidebarTab.search.tablerImageName)
       }
+
+      tabContainer { KickDirectoryView() }
+        .tag(SidebarTab.kick)
+        .tabItem { Label(SidebarTab.kick.rawValue, image: SidebarTab.kick.tablerImageName) }
 
       tabContainer {
         SettingsView(

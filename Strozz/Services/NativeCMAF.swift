@@ -336,6 +336,11 @@ enum NativeCMAF {
     }
   }
 
+  static func renditionIdentity(_ attributes: [String: String]) -> String {
+    attributes["STABLE-VARIANT-ID"]
+      ?? "\(attributes["RESOLUTION"] ?? "audio")-\(attributes["FRAME-RATE"] ?? "0")"
+  }
+
   static func isAudioOnlyVariant(_ line: String) -> Bool {
     let fields = attributes(String(line.dropFirst("#EXT-X-STREAM-INF:".count)))
     if fields["VIDEO"] == "audio_only" { return true }
@@ -368,7 +373,7 @@ enum NativeCMAF {
         || line.hasPrefix("#EXT-X-KEY:") || line.hasPrefix("#EXT-X-BYTERANGE:") {
         throw NativeHLSError.transition
       }
-      if line == "#EXT-X-DISCONTINUITY" {
+      if line == "#EXT-X-DISCONTINUITY" || line == "#EXT-X-PREFETCH-DISCONTINUITY" {
         discontinuity += 1
         date = nil
         explicitDate = false
@@ -395,7 +400,8 @@ enum NativeCMAF {
       } else if line.hasPrefix("#EXTINF:") {
         duration = value.split(separator: ",").first.flatMap { Double($0) }
         guard let duration, duration.isFinite, duration > 0, duration <= 10 else { throw NativeHLSError.invalidMedia }
-      } else if line.hasPrefix("#EXT-X-TWITCH-PREFETCH:") || (!line.isEmpty && !line.hasPrefix("#")) {
+      } else if line.hasPrefix("#EXT-X-TWITCH-PREFETCH:") || line.hasPrefix("#EXT-X-PREFETCH:")
+        || (!line.isEmpty && !line.hasPrefix("#")) {
         let isPrefetch = line.hasPrefix("#")
         let path = isPrefetch ? value : line
         guard let number = sequence, let media = URL(string: path, relativeTo: url)?.absoluteURL,

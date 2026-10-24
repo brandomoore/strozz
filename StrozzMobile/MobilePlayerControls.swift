@@ -257,11 +257,28 @@ struct MobileMiniPlayerControlScrim: View {
 
 struct MobileQualitySheet: View {
   let model: MobilePlaybackModel
+  var twitchChannel: String? = nil
+  @State private var platformPlayback: PlatformLiveTarget?
+  @State private var kickChannel = ""
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
     NavigationStack {
       List {
+        if let twitchChannel {
+          Section("Stream source") {
+            TextField("Kick channel or URL", text: $kickChannel).autocorrectionDisabled()
+            Button("Watch on Kick") {
+              do {
+                let slug = try KickPlaybackService.slug(from: kickChannel)
+                model.suspend()
+                platformPlayback = PlatformLiveTarget(platform: .kick, channel: slug)
+              } catch { sourceError = error.localizedDescription }
+            }
+            if let sourceError { Text(sourceError).foregroundStyle(.secondary) }
+            Text("Twitch: \(twitchChannel)").font(.caption).foregroundStyle(.secondary)
+          }
+        }
         if !model.isExternalPlayback {
           qualityRow("Auto - Native Low Latency", quality: .native)
         }
@@ -279,7 +296,19 @@ struct MobileQualitySheet: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
     }
+    .onAppear {
+      if kickChannel.isEmpty, let twitchChannel {
+        kickChannel = KickAliasService().kickSlug(forTwitchLogin: twitchChannel) ?? twitchChannel
+      }
+    }
+    .fullScreenCover(item: $platformPlayback, onDismiss: { model.resume() }) { target in
+      PlatformLivePlayerView(target: target, sources: twitchChannel.map {
+        [PlatformLiveTarget(platform: .twitch, channel: $0)]
+      } ?? [])
+    }
   }
+
+  @State private var sourceError: String?
 
   private func qualityRow(_ title: String, quality: MobileQuality) -> some View {
     Button {

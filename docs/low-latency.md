@@ -1,6 +1,6 @@
 # Playback architecture and troubleshooting
 
-Current guidance for local Twitch live playback on Apple TV and iPhone/iPad.
+Current guidance for local live playback on Apple TV and iPhone/iPad.
 Earlier experiments remain in Git history; they are not alternate shipping modes.
 For setup, UI conventions and releases, start with [AGENTS.md](../AGENTS.md).
 
@@ -40,6 +40,50 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
 | Grid/expanded/spotlight budgets and pane ownership | [`MultiviewController.swift`](../Strozz/Views/Multiview/MultiviewController.swift) |
 | Recovery, drift and chat timing policies | `NativePlaybackRecovery.swift`, `NativeLiveCatchUp.swift`, `LiveChatSyncBaseline.swift` in `Strozz/Services/` |
 | Retained evidence and analysis | `PlaybackTelemetry.swift`, `PlaybackTelemetryWriter.swift` in `Strozz/Services/`; [`playback-diagnostics.py`](../tools/playback-diagnostics.py) |
+
+### Kick and cross-platform viewing
+
+`KickPlaybackService` resolves a public Kick channel document and its signed IVS
+HLS master using ordinary HTTPS requests. It distinguishes actual offline state
+(`livestream: null`) from missing channels, malformed responses, and access
+restrictions. Signed playback URLs are not saved in the recent-channel model.
+There is no hidden browser, challenge bypass, or additional player SDK.
+
+`PlatformLivePlayback` and `PlatformLivePlayerView` own the shared TV/mobile
+Kick player and its in-player source editor. Source changes retain the mounted
+AVPlayer, tear down the outgoing producer/chat before resolving, and fence late
+results and diagnostic callbacks by generation. Kick/Twitch video uses
+`NativeLowLatencyHLS`; YouTube uses the existing resolver and ordinary native
+HLS. Only the selected provider's read-only chat is connected. Backgrounding
+releases media resources, returning resolves fresh URLs, and explicit pause
+intent survives switching and foregrounding. Media-services reset is the
+exception that recreates the renderer.
+
+Kick chat negotiates its current anonymous Pusher application through Kick's
+public realtime connection endpoint. Do not bake in an application key:
+retired keys return Pusher error 4001 even when video and channel lookup work.
+Socket errors reconnect with backoff and negotiate again; they do not retry an
+obsolete hardcoded key forever or interrupt video.
+
+IVS `#EXT-X-PREFETCH` and `#EXT-X-PREFETCH-DISCONTINUITY` preserve real source
+sequences, timestamps, and periods. Auto retains all advertised video qualities.
+Explicit Kick qualities use controlled TS-to-CMAF remuxing pinned by stable
+variant identity, not passthrough TS or a bitrate ceiling. IVS can rotate **all**
+variant URLs on consecutive requests for the same master: match stable ID or
+resolution/frame-rate attributes against the fresh master, never URL equality.
+Filter to the explicit rendition before metadata/bootstrap work; do not make a
+fixed quality wait for unselected renditions.
+
+The opt-in `KickPlaybackLiveTests` compare actual decoded video/PDT delay with a
+plain AVPlayer HLS baseline over 90 seconds. Set
+`TEST_RUNNER_STROZZ_KICK_LIVE_TESTS=1` when invoking `tools/xcbuild.sh test`;
+`TEST_RUNNER_STROZZ_KICK_CHANNEL` defaults to `xqc`. A separate handoff test needs
+`TEST_RUNNER_STROZZ_KICK_SWITCH_TWITCH_CHANNEL` naming a currently live Twitch
+channel. It checks fixed quality, restored Auto, decoded Twitch/Kick transitions,
+renderer identity, and paused background/foreground behavior. XCTest retains
+numeric latency evidence. Simulator PDT delay is not hardware glass-to-glass
+latency, a universal latency guarantee, or a comparison with the official IVS
+iOS SDK. Provider availability and stream formats can change.
 
 ## Invariants that fixes must preserve
 

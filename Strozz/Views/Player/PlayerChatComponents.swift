@@ -288,9 +288,7 @@ struct QualityMenu: View, Equatable {
         .onAppear(perform: onMenuPresented)
         .onDisappear(perform: onMenuDismissed)
 
-        // Stream Source: swap the live video between Twitch and the streamer's
-        // YouTube simulcast (lower latency). Only offered when a YouTube
-        // simulcast actually resolved for this channel.
+        // YouTube is offered when resolved; Kick opens the cross-platform player.
         if sourceAvailable {
           Menu {
             Picker("Source", selection: sourceSelection) {

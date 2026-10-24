@@ -24,7 +24,7 @@ enum PlaybackError: LocalizedError, Equatable {
 }
 
 /// One selectable quality from the HLS master playlist (e.g. "1080p60", "720p", "Audio Only").
-struct StreamQuality: Identifiable, Hashable {
+struct StreamQuality: Identifiable, Hashable, Sendable {
     let id: String        // HLS group-id, e.g. "chunked", "720p60", "audio_only"
     let name: String      // display name, e.g. "1080p60 (Source)"
     let url: URL          // direct media-playlist URL for this single quality
@@ -40,7 +40,7 @@ struct StreamQuality: Identifiable, Hashable {
 
 /// Result of resolving a channel: the master (adaptive/"Auto") playlist plus the
 /// individual quality variants parsed from it, ordered best → worst.
-struct StreamPlayback {
+struct StreamPlayback: Sendable {
     let master: URL
     let qualities: [StreamQuality]
 

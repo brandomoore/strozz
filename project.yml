@@ -80,6 +80,9 @@ targets:
           - "CheermoteCatalogService.swift"
           - "WebSocketService.swift"
           - "PlaybackService.swift"
+          - "AltSourceService.swift"
+          - "Kick*.swift"
+          - "PlatformLive*.swift"
           - "Native*.swift"
           - "LowLatencyHLSProxy.swift"
           - "LiveChatSyncBaseline.swift"
@@ -107,6 +110,7 @@ targets:
       - path: Strozz/Views/ChannelFollowFixture.swift
       - path: Strozz/Resources/StreamerAffinity.json
       - path: Strozz/Views/RichChatLineView.swift
+      - path: Strozz/Views/PlatformLivePlayerView.swift
       - path: Strozz/Views/Chat/ChatColor.swift
     dependencies:
       - package: Sentry
@@ -150,6 +154,7 @@ targets:
       - path: StrozzTests/NativeTransportStreamTests.swift
       - path: StrozzTests/NativeTransportRemuxTests.swift
       - path: StrozzTests/NativeCMAFRemuxTests.swift
+      - path: StrozzTests/KickPlaybackTests.swift
       - path: StrozzTests/NativeAdaptiveRenditionPolicyTests.swift
       - path: StrozzTests/NativeBufferedStallRecoveryTests.swift
       - path: StrozzTests/NativeHLSChunkReaderTests.swift
@@ -178,6 +183,7 @@ targets:
     sources:
       - path: StrozzMobileUITests
       - path: StrozzUITests/ChannelFollowUITests.swift
+      - path: StrozzUITests/KickPlaybackUITests.swift
     dependencies:
       - target: StrozzMobile
     settings:
