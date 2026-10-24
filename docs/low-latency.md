@@ -65,6 +65,33 @@ send Twitch chat, or enter Twitch recommendation history under the same text
 handle. Kick's read-only status uses the existing chat UI; unavailable
 provider-specific capabilities must not justify a different player interface.
 
+`CreatorLiveSession` owns one `ChatService`, Hermes listener, linked-account
+graph, and live viewer snapshots for the creator on both platforms. The selected
+video is a separate `PlatformLiveTarget`. A known-peer video switch must not
+change the creator generation, restart chat workers, clear message history,
+discard a draft/reading position, or reset counts. Changing creator or explicitly
+editing the identity graph rotates the generation and fences old async work.
+Suspension prevents late discovery from reconnecting transports.
+
+Automatic identity discovery uses curated aliases and explicit public social
+links. A same-name Twitch account for a Kick creator is only a candidate and
+needs a reciprocal Kick link or matching explicit YouTube identity; ambiguous
+reverse mappings are rejected. Native **Linked creator channels** settings
+provide explicit, validated, device-local persisted links when discovery cannot
+prove the association. Never fall back to guessed handles for merged chat.
+Twitch sending uses the linked Twitch account even when video is Kick/YouTube;
+earning watch rewards and Twitch VOD lookup still require actual Twitch video.
+
+Viewer snapshots refresh separately from chat preferences and video metadata:
+Twitch/Kick every 30 seconds, YouTube no more than every 90 seconds. Authoritative
+offline hides a count; unknown results preserve only a bounded last-known value
+(90 seconds for Twitch/Kick, 120 seconds for YouTube). YouTube's count must come
+from a current-live watch page, never total views. Existing extra-delay chat sync
+still applies when enabled, but received YouTube batches enter the common ingest
+pipeline immediately rather than trickling across another poll interval.
+`CreatorLiveSessionTests` covers video-switch continuity, explicit identity,
+persistence/reverse entry, independent counts, expiry, and stop/suspend fences.
+
 Kick chat negotiates its current anonymous Pusher application through Kick's
 public realtime connection endpoint. Do not bake in an application key:
 retired keys return Pusher error 4001 even when video and channel lookup work.

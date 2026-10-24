@@ -118,12 +118,12 @@ extension PlayerView {
     currentSourceURL = nil
     playback = nil
     activeChannel = login
-    chat.disconnect()
-    // Restart the outgoing-raid listener for the new channel so a stale
-    // subscription from the previous channel never lingers.
+    model.primaryPlatform = .twitch
+    model.livePlatform = .twitch
+    model.twitchPlaybackTarget = login
+    model.creatorSession.start(.init(platform: .twitch, channel: login))
     eventSub.stop()
-    eventSub.start(forChannel: login, auth: auth)
-    hermes.start(forChannel: login)
+    model.eventSubChannel = nil
     resetDiagnostics()
     isLoading = true
     errorMessage = nil
@@ -136,7 +136,7 @@ extension PlayerView {
     isRecoveringPlayback = false
     altResolveInFlight = false
     beginPlaybackTelemetry()
-    chat.connect(to: login)
+    connectCurrentLiveChat()
     Task {
       async let metadataTask: Void = refreshChannelMetadata()
       await loadInitialSource(reason: "raid follow")

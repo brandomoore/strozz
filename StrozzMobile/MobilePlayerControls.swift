@@ -75,7 +75,7 @@ struct MobilePlayerControls: View {
         if model.presentationState == .ready {
           HStack(spacing: 8) {
             MobileStreamReadouts(state: model.liveStatus, startedAt: model.streamStartedAt,
-              viewerCount: viewerCount, showDuration: showStreamDuration) {
+            viewerCount: viewerCount, showDuration: showStreamDuration, viewerCounts: model.viewerCounts) {
                 onInteraction()
                 model.goLive()
               }
@@ -260,12 +260,14 @@ struct MobileQualitySheet: View {
   @State private var draftPlatform = LivePlatform.kick
   @State private var draftChannel = ""
   @State private var sourceError: String?
+  @State private var showCreatorChannels = false
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
     NavigationStack {
       List {
         Section("Stream source") {
+          Button("Linked creator channels") { showCreatorChannels = true }
           ForEach(model.sources) { source in
             Button("\(source.platform.title): \(source.channel)") {
               model.switchSource(source)
@@ -308,6 +310,9 @@ struct MobileQualitySheet: View {
     .onAppear {
       draftPlatform = model.source.platform
       draftChannel = model.source.channel
+    }
+    .sheet(isPresented: $showCreatorChannels) {
+      CreatorChannelsView(session: model.creatorSession)
     }
     .onChange(of: draftPlatform) { _, platform in
       if let previous = model.sources.first(where: { $0.platform == platform }) { draftChannel = previous.channel }

@@ -6,7 +6,7 @@ import UIKit
 
 extension PlayerView {
   func submitChatMessage() {
-    guard model.livePlatform == .twitch else {
+    guard let twitch = model.creatorSession.twitchChannel else {
       chatSendError = String(localized: "Kick chat is read-only.")
       return
     }
@@ -19,7 +19,7 @@ extension PlayerView {
     chatSendError = nil
     Task {
       do {
-        try await auth.sendChatMessage(text, toChannel: activeChannel)
+        try await auth.sendChatMessage(text, toChannel: twitch)
         chatDraft = ""
         beginChatSyncSendIndicatorIfNeeded()
       } catch {
@@ -71,46 +71,34 @@ extension PlayerView {
 
   /// The effective YouTube merge target shown in the settings input: the manual
   /// entry when present, otherwise the resolved default handle for the channel.
-  var youtubeMergeDisplayText: String {    let manual = experimentalYouTubeMergeChannelOrURL.trimmingCharacters(
+  var youtubeMergeDisplayText: String {
+    let manual = experimentalYouTubeMergeChannelOrURL.trimmingCharacters(
       in: .whitespacesAndNewlines)
     if !manual.isEmpty { return manual }
     return youtubeMergeDefaultTarget.isEmpty
       ? "YouTube handle or channel URL" : youtubeMergeDefaultTarget
   }
 
-  /// The handle the merge falls back to when no manual value is entered. Prefers
-  /// the YouTube channel discovered from the Twitch channel's social links /
-  /// description, and only guesses `@<twitch-login>` when nothing better exists.
   var youtubeMergeDefaultTarget: String {
-    let auto = youtubeAutoResolvedTarget.trimmingCharacters(in: .whitespacesAndNewlines)
-    if !auto.isEmpty { return auto }
-    let base = activeChannel.isEmpty ? channel : activeChannel
-    return base.isEmpty ? "" : "@\(base)"
+    model.creatorSession.sources?.youtube ?? ""
   }
 
   func applyExperimentalYouTubeSettings() {
-    if model.livePlatform == .kick {
-      chat.configureExperimentalYouTubeMerge(enabled: false, channelOrURL: "")
-      return
-    }
-    let manual = experimentalYouTubeMergeChannelOrURL.trimmingCharacters(
-      in: .whitespacesAndNewlines)
-    let resolvedTarget = manual.isEmpty ? youtubeMergeDefaultTarget : manual
+    model.creatorSession.configureChat(kickEnabled: experimentalKickMergeEnabled,
+      youtubeEnabled: experimentalYouTubeMergeEnabled)
+  }
 
-    chat.configureExperimentalYouTubeMerge(
-      enabled: experimentalYouTubeMergeEnabled,
-      channelOrURL: resolvedTarget
-    )
+  func commitYouTubeCreatorTarget() {
+    let target = experimentalYouTubeMergeChannelOrURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !target.isEmpty else { return }
+    model.creatorSession.updateLinkedTarget(.init(platform: .youtube, channel: target))
+    if model.creatorSession.identityError == nil { experimentalYouTubeMergeChannelOrURL = "" }
   }
 
   /// Resolves the best YouTube target for the active channel and pushes it to the
   /// chat service. Runs whenever the active channel changes.
   func refreshYouTubeAutoTarget() async {
-    let login = activeChannel
-    guard !login.isEmpty else { return }
-    let resolved = await Self.resolveYouTubeTarget(forTwitchLogin: login)
-    guard login == activeChannel else { return }
-    youtubeAutoResolvedTarget = resolved
+    synchronizeCreatorServices()
     applyExperimentalYouTubeSettings()
   }
 
@@ -249,28 +237,20 @@ extension PlayerView {
       ? "Kick handle or channel URL" : kickMergeDefaultTarget
   }
 
-  /// The slug the merge falls back to when no manual value is entered. Prefers
-  /// the Kick channel discovered from the Twitch channel's social links /
-  /// description, and only guesses `<twitch-login>` when nothing better exists.
   var kickMergeDefaultTarget: String {
-    let auto = kickAutoResolvedTarget.trimmingCharacters(in: .whitespacesAndNewlines)
-    if !auto.isEmpty { return auto }
-    let base = activeChannel.isEmpty ? channel : activeChannel
-    return base.isEmpty ? "" : base
+    model.creatorSession.sources?.kick ?? ""
   }
 
   func applyExperimentalKickSettings() {
-    if model.livePlatform == .kick {
-      chat.configureExperimentalKickMerge(enabled: true, channelOrURL: model.kickPlaybackTarget)
-      return
-    }
-    let manual = experimentalKickMergeChannelOrURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    let resolvedTarget = manual.isEmpty ? kickMergeDefaultTarget : manual
+    model.creatorSession.configureChat(kickEnabled: experimentalKickMergeEnabled,
+      youtubeEnabled: experimentalYouTubeMergeEnabled)
+  }
 
-    chat.configureExperimentalKickMerge(
-      enabled: experimentalKickMergeEnabled,
-      channelOrURL: resolvedTarget
-    )
+  func commitKickCreatorTarget() {
+    let target = experimentalKickMergeChannelOrURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !target.isEmpty else { return }
+    model.creatorSession.updateLinkedTarget(.init(platform: .kick, channel: target))
+    if model.creatorSession.identityError == nil { experimentalKickMergeChannelOrURL = "" }
   }
 
   /// Resolves the best Kick target for the active channel and pushes it to the
@@ -288,13 +268,7 @@ extension PlayerView {
       return
     }
     #endif
-    let login = activeChannel
-    guard !login.isEmpty else { return }
-    await kickAliases.refreshIfNeeded()
-    let alias = kickAliases.kickSlug(forTwitchLogin: login)
-    let resolved = await Self.resolveKickTarget(forTwitchLogin: login, aliasSlug: alias)
-    guard login == activeChannel else { return }
-    kickAutoResolvedTarget = resolved
+    synchronizeCreatorServices()
     applyExperimentalKickSettings()
   }
 

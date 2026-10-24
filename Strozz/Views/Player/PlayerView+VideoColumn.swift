@@ -122,7 +122,8 @@ extension PlayerView {
               showSubheader: !isVOD,
               showLatency: showLatencyBadge,
               showViewerCount: showViewerCount,
-              streamStartedAt: showStreamDuration && !isUsingAltSource ? model.channelStreamStartedAt : nil
+              streamStartedAt: showStreamDuration && !isUsingAltSource ? model.channelStreamStartedAt : nil,
+              creatorViewerCounts: model.creatorSession.viewerCounts
             )
             Spacer(minLength: 24)
             if let remaining = sleepRemainingSeconds {
@@ -195,6 +196,12 @@ extension PlayerView {
             }
             .focused($focus, equals: .nativeRetry)
             .accessibilityIdentifier("native-playback-retry")
+          } else if isUsingAltSource {
+            Button("Try Again") {
+              self.errorMessage = nil
+              Task { await switchToAltYouTubeSource() }
+            }
+            .focused($focus, equals: .nativeRetry)
           }
           Button("Back") { closePlayer() }
             .focused($focus, equals: .errorBack)
@@ -206,7 +213,7 @@ extension PlayerView {
           else { RoundedRectangle(cornerRadius: 24).fill(.regularMaterial) }
         }
         .defaultFocus($focus, model.audioInterrupted ? .audioResume
-          : (isNativeLiveVideo ? .nativeRetry : .errorBack))
+          : (isNativeLiveVideo || isUsingAltSource ? .nativeRetry : .errorBack))
       } else if showControls && !isMultiviewCompact {
         bottomOverlay
       }

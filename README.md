@@ -74,9 +74,11 @@ The feature list below describes the Apple TV app. See
 - **Live moments surfaced.** Polls, predictions, hype trains, creator goals, and
   incoming/outgoing raids appear as calm, display-only overlays.
 - **Simulcast chat merge (experimental).** When a streamer you're watching is
-  also live on YouTube or Kick, their chats can be merged into a single pane.
-  When YouTube chat connects, the player can show its live viewer count even
-  if the streamer is not in the shared YouTube alias catalog.
+  also on YouTube or Kick, their linked chats share one pane and live viewer
+  counts stay visible independently of the selected video platform. Switching
+  between that creator's video sources does not clear or reconnect their chats.
+  Twitch and Kick use push delivery; YouTube uses polling without an additional
+  per-message delay after each received batch.
 
 ### Discover
 
@@ -125,12 +127,22 @@ explicit advertised qualities. Kick uses the same TV player controls, chat
 layout/settings, quality menu, and rewind interface as Twitch. On mobile it uses
 the same player, chat layout, playback settings, mini-player, and background PiP
 lifecycle. Only provider capabilities differ: Kick chat is read-only, and Twitch
-rewards, channel profiles, and past-broadcast handoff are not used for Kick
-streams. Kick account sign-in/chat sending and Kick multiview discovery are not
+watch rewards and past-broadcast handoff require Twitch video. If the creator has
+a linked Twitch account, sending still goes to that Twitch channel while watching
+Kick or YouTube. A Kick-only creator is never treated as a same-named Twitch
+account. Kick account sign-in/chat sending and Kick multiview discovery are not
 included. Automatic playback diagnostics remain enabled through the shared players.
 Access restrictions and unavailable streams are shown explicitly; Strozz does
 not bypass provider access controls. These changes are not yet in the published
 TestFlight build.
+
+Use **Linked creator channels** in TV chat settings or mobile playback/chat
+settings to add or correct this creator's Twitch, Kick, and YouTube accounts.
+Links are saved on this device and restored when opening a linked account.
+Automatic discovery uses curated mappings or explicit public profile links,
+not an assumption that matching handles identify the same person. Keep the
+primary account and currently playing account linked; switch video before
+removing a playing peer. Unknown or ambiguous accounts need an explicit link.
 
 ## Getting started
 
@@ -357,10 +369,11 @@ Chat settings are also available from **Account** and when reading anonymously.
 Adjust mobile size presets, fonts, spacing, emote sizing and animation, badges,
 mention/reply/keyword highlights, and extra-delay chat sync. Existing mobile
 sizes remain the defaults; resetting appearance preserves saved keywords.
-Optional incoming YouTube and Kick chat are off until enabled. While watching
-a stream, edit its other channel handles or URLs and tap **Apply channel
-targets**; defaults use the Twitch handle, not automatic cross-platform account
-matching. Targets belong to the active stream session. Sending remains Twitch-only.
+Incoming YouTube and Kick chat use this creator's linked accounts, with separate
+feed toggles. New preferences enable both; existing saved choices are respected.
+While watching, use **Linked creator channels** to edit and save the creator's
+accounts. Feed toggles do not disable live viewer statistics. Sending remains
+Twitch-only, targeting the linked Twitch account rather than the selected video.
 
 Twitch live video uses the native engine for both Auto and fixed resolutions on
 TV and mobile. The older Auto Low Latency/High Quality choices are removed, and
@@ -482,11 +495,12 @@ keeps counting while playback is paused, and is omitted when the start time is
 unknown. Mobile fetches this optional metadata separately so it cannot delay
 playback startup.
 
-This is not full TV feature parity: VOD chat replay, clips, multiview, YouTube/Kick playback
-and chat merging, interactive reward redemption/polls, and advanced TV settings are not included. Playback
-stops in the background; Picture in Picture/background audio are not yet
-supported. Returning resolves fresh stream URLs instead of reviving an expired
-native engine. Paused/rewound positions are preserved when still available; an
+This is not full TV feature parity: VOD chat replay, clips, multiview,
+interactive reward redemption/polls, and advanced TV settings are not included.
+Mobile supports background Picture in Picture and preserves the previous
+expanded or in-app mini-player layout on return. A suspended native session
+resolves fresh stream URLs instead of reviving an expired engine.
+Paused/rewound positions are preserved when still available; an
 expired position shows an error rather than silently jumping to live.
 Like TV, mobile recreates both its player and AVKit rendering owner on foreground
 return and media-service reset, preserving mute, volume, quality, and pause/DVR

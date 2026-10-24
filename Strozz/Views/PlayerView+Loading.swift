@@ -17,29 +17,34 @@ extension PlayerView {
       await load(reason: reason)
       return
     }
-    let login = activeChannel
+    let login = currentLiveTarget.channel
     let sessionID = model.playbackTelemetry.sessionID
     let generation = model.altRecovery.generation
+    let creatorGeneration = model.creatorSession.generation
     if model.multiviewContext == nil, preferYouTubeSource,
-      livePlaybackProfile != .nativeLowLatency, !didManuallySelectSource {
+      livePlaybackProfile != .nativeLowLatency, !didManuallySelectSource,
+      let target = model.creatorSession.sources?.youtube {
       do {
         let source = try await LivePlaybackStartup.resolveYouTube {
-          let target = await Self.resolveYouTubeTarget(forTwitchLogin: login)
           try Task.checkCancellation()
           return LivePlaybackStartup.YouTubeSource(
-            target: target, live: try await AltSourceService.youtubeLive(forTarget: target))
+            target: target, live: try await model.resolveYouTubeLive(target))
         }
-        guard !Task.isCancelled, login == activeChannel,
+        guard !Task.isCancelled, login == currentLiveTarget.channel,
+          creatorGeneration == model.creatorSession.generation,
+          target == model.creatorSession.sources?.youtube,
           sessionID == model.playbackTelemetry.sessionID,
           generation == model.altRecovery.generation, !didManuallySelectSource else { return }
         youtubeAutoResolvedTarget = source.target
         applyExperimentalYouTubeSettings()
         youtubeSourceAvailable = true
         recordPlaybackEvent("initial_source_selected", attributes: ["source": "youtube"])
-        await switchToAltYouTubeSource(resolved: source.live)
+        await switchToAltYouTubeSource(resolved: source.live, resolvedTarget: source.target)
         return
       } catch {
-        guard !Task.isCancelled, login == activeChannel,
+        guard !Task.isCancelled, login == currentLiveTarget.channel,
+          creatorGeneration == model.creatorSession.generation,
+          target == model.creatorSession.sources?.youtube,
           sessionID == model.playbackTelemetry.sessionID,
           generation == model.altRecovery.generation, !didManuallySelectSource else { return }
         recordPlaybackEvent(
@@ -1770,9 +1775,9 @@ extension PlayerView {
   }
 
   func refreshChannelMetadata() async {
-    let login = activeChannel
     let sessionID = model.playbackTelemetry.sessionID
     let target = currentLiveTarget
+    let creatorGeneration = model.creatorSession.generation
     if target.platform == .kick {
       do {
         let channel = try await KickPlaybackService.channel(target.channel)
@@ -1789,8 +1794,9 @@ extension PlayerView {
       }
       return
     }
-    let metadata = await PlaybackService.channelMetadata(for: login)
-    guard !Task.isCancelled, login == activeChannel,
+    guard let login = target.platform == .youtube ? model.creatorSession.twitchChannel : target.channel else { return }
+    let metadata = await model.loadChannelMetadata(login)
+    guard !Task.isCancelled, creatorGeneration == model.creatorSession.generation,
       sessionID == model.playbackTelemetry.sessionID, target == currentLiveTarget else { return }
     guard let metadata else {
       recordPlaybackEvent("channel_metadata_unavailable", level: .warning)
@@ -1808,7 +1814,7 @@ extension PlayerView {
       streamTitle = metadata.title
       // Seed the live viewer badge so a number shows immediately; Hermes pubsub
       // takes over with live updates and ignores this seed once it arrives.
-      hermes.seedViewerCount(metadata.viewersCount)
+      if model.creatorSession.twitchChannel == login { hermes.seedViewerCount(metadata.viewersCount) }
     }
   }
 

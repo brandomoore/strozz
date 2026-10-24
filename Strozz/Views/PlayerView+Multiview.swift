@@ -71,9 +71,9 @@ extension PlayerView {
       hideTask = nil
       model.watchTracker.stop()
       trackpad.stop()
-      chat.disconnect()
+      model.creatorSession.suspend()
       eventSub.stop()
-      hermes.stop()
+      model.eventSubChannel = nil
       captionController.stop()
       showControls = false
       showChatSettings = false

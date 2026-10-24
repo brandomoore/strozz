@@ -61,7 +61,7 @@ extension PlayerView {
       return
     }
     let playback = TwitchWatchPlayback(
-      target: .init(channel: activeChannel, userID: userID, itemID: ObjectIdentifier(item)),
+      target: .init(channel: currentLiveTarget.channel, userID: userID, itemID: ObjectIdentifier(item)),
       uptime: ProcessInfo.processInfo.systemUptime,
       playhead: item.currentTime().seconds,
       rate: Double(player.rate),

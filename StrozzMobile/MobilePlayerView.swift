@@ -239,7 +239,9 @@ struct MobilePlayerView: View {
             .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
           }
           // One timeline/composer moves between positions without remounting.
-          MobileChatView(service: model.chat, channel: model.source.channel, platform: model.source.platform,
+          MobileChatView(service: model.chat, channel: model.creatorSession.twitchChannel ?? model.source.channel,
+            platform: model.creatorSession.chatPlatform,
+            creatorSession: model.creatorSession,
             composer: chatComposer, scroll: chatScroll, rewards: MobileChatRewardsSummary.snapshot(of: session.watchTracker),
             isActive: chatIsVisible, isManipulating: collapseProgress > 0 || chatWidthDrag.initialWidth != nil)
             .equatable()
@@ -339,7 +341,7 @@ struct MobilePlayerView: View {
       .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: streamDetailsVisible)
       .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.9), value: session.isExpanded)
       .onChange(of: session.isExpanded) { _, _ in collapseProgress = 0 }
-      .onChange(of: model.source.id) { _, _ in
+      .onChange(of: model.creatorSession.generation) { _, _ in
         chatComposer = MobileChatComposerState()
         chatScroll = MobileChatScrollState()
       }
@@ -593,7 +595,8 @@ struct MobileVideoView: View {
         }
       } else if !isMinimized && showsControls {
         MobilePlayerControls(
-          model: model, viewerCount: channel.viewerCount, hideChat: $hideChat, isFullscreen: isFullscreen,
+          model: model, viewerCount: model.creatorSession.sources == nil ? channel.viewerCount : nil,
+          hideChat: $hideChat, isFullscreen: isFullscreen,
           onCollapse: onCollapse,
           onClose: onClose,
           onFullscreen: { interaction += 1; onFullscreen() },

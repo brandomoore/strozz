@@ -225,7 +225,10 @@ final class PlayerChatInputTests: XCTestCase {
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     let window = try XCTUnwrap(scene.keyWindow)
     let previous = window.rootViewController
-    let model = PlayerModel()
+    let creator = CreatorLiveSession(resolve: { CreatorLiveSources(root: $0) },
+      loadTwitch: { _ in .unknown }, defaults: nil)
+    let model = PlayerModel(creatorSession: creator)
+    if !isVOD { creator.start(.init(platform: .twitch, channel: "fixture")) }
     let item = InputTrackingItem(url: URL(fileURLWithPath: "/nonexistent-input-fixture"))
     model.player.replaceCurrentItem(with: item)
     model.isLoading = false
@@ -271,6 +274,7 @@ final class PlayerChatInputTests: XCTestCase {
     window.rootViewController = host
     host.view.layoutIfNeeded()
     defer {
+      creator.stop()
       probe.view?.stopScrubInput()
       probe.view?.hideTask?.cancel()
       probe.view?.focusRecoveryTask?.cancel()

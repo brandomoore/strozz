@@ -10,6 +10,7 @@ struct KickChannel: Identifiable, Codable, Equatable, Sendable {
   let chatroomID: Int?
   let imageURL: URL?
   var startedAt: Date? = nil
+  var youtubeTarget: String? = nil
   var id: String { slug }
 
   var followedChannel: FollowedChannel {
@@ -205,6 +206,7 @@ enum KickPlaybackService {
       struct User: Decodable {
         let username: String?
         let profile_pic: URL?
+        let youtube: String?
       }
       struct Live: Decodable {
         struct Category: Decodable { let name: String? }
@@ -249,6 +251,7 @@ enum KickPlaybackService {
       let formatter = ISO8601DateFormatter()
       channel.startedAt = formatter.date(from: raw.contains("T") ? raw : raw.replacingOccurrences(of: " ", with: "T") + "Z")
     }
+    channel.youtubeTarget = payload.user?.youtube.flatMap(CreatorSourceResolver.youtubeTarget)
     return Document(channel: channel, playbackURL: playbackURL)
   }
 

@@ -52,6 +52,7 @@ struct PlayerView: View {
   var posterURL: URL? = nil
   var initialPlatform: LivePlatform = .twitch
   @State var showKickChannelInfo = false
+  @State var showCreatorChannels = false
 
 
 
@@ -632,6 +633,7 @@ struct PlayerView: View {
     // will bounce off the control. See that function's doc comment.
     case chatPresetOption(Int)
     case chatAdvancedButton
+    case chatCreatorChannels
     case chatWidthOption(Int)
     case chatLayoutOption(Int)
     case chatCaptionsToggle
@@ -926,6 +928,9 @@ struct PlayerView: View {
       Button("Done", role: .cancel) {}
     } message: {
       Text("\(channelDisplayName)\n\(streamTitle)\nKick: \(model.kickPlaybackTarget)")
+    }
+    .sheet(isPresented: $showCreatorChannels) {
+      CreatorChannelsView(session: model.creatorSession).environment(\.themePalette, palette)
     }
   }
 

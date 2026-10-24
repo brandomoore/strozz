@@ -270,8 +270,11 @@ final class ChatService {
   private let staleAfterBackgroundSeconds: Double = 1.5
 
   func configureExperimentalYouTubeMerge(enabled: Bool, channelOrURL: String) {
+    let target = channelOrURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard enabled != youtubeMergeEnabled || target != youtubeChannelOrURL
+      || (enabled && youtubeReceiveTask == nil) else { return }
     youtubeMergeEnabled = enabled
-    youtubeChannelOrURL = channelOrURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    youtubeChannelOrURL = target
     restartYouTubeLoopIfNeeded()
   }
 
@@ -304,8 +307,11 @@ final class ChatService {
   }
 
   func configureExperimentalKickMerge(enabled: Bool, channelOrURL: String) {
+    let target = channelOrURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard enabled != kickMergeEnabled || target != kickChannelOrURL
+      || (enabled && kickReceiveTask == nil) else { return }
     kickMergeEnabled = enabled
-    kickChannelOrURL = channelOrURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    kickChannelOrURL = target
     restartKickLoopIfNeeded()
   }
 
@@ -344,6 +350,22 @@ final class ChatService {
   /// Connect and join `channel` (case-insensitive). Replaces any existing connection.
   func connect(to channel: String) {
     disconnect()
+    startTwitchTransport(to: channel)
+    restartYouTubeLoopIfNeeded()
+    restartKickLoopIfNeeded()
+  }
+
+  func configureCreator(twitch: String?, kick: String?, youtube: String?,
+                        kickEnabled: Bool = true, youtubeEnabled: Bool = true) {
+    let twitch = twitch?.lowercased()
+    if channel != nil, channel != twitch { disconnect() }
+    if let twitch, channel != twitch { startTwitchTransport(to: twitch) }
+    installLifecycleObservers()
+    configureExperimentalKickMerge(enabled: kickEnabled && kick != nil, channelOrURL: kick ?? "")
+    configureExperimentalYouTubeMerge(enabled: youtubeEnabled && youtube != nil, channelOrURL: youtube ?? "")
+  }
+
+  private func startTwitchTransport(to channel: String) {
     let normalized = channel.lowercased()
     self.channel = normalized
     hasSentJoin = false
@@ -351,12 +373,6 @@ final class ChatService {
     emoteURLs = [:]
     badgeURLs = [:]
     cheermotes = []
-    youtubeSeenMessageIDs.removeAll()
-    youtubeSeenMessageOrder.removeAll()
-    youtubeStatusMessage = nil
-    kickSeenMessageIDs.removeAll()
-    kickSeenMessageOrder.removeAll()
-    kickStatusMessage = nil
     connection.resetBackoff()
     ircReconnectCount = 0
     ircLastRecoveryReason = nil
@@ -390,8 +406,6 @@ final class ChatService {
     }
 
     receiveTask = Task { [weak self] in await self?.receiveLoop() }
-    restartYouTubeLoopIfNeeded()
-    restartKickLoopIfNeeded()
   }
 
   /// Tear down the connection and clear the buffer.
@@ -486,7 +500,7 @@ final class ChatService {
   /// trip away: a fresh anonymous IRC connect costs about a second and is the
   /// only way to be sure a zombie socket can't strand us.
   private func handleWillEnterForeground() {
-    guard channel != nil, let leftAt = backgroundedAt else { return }
+    guard let leftAt = backgroundedAt else { return }
     backgroundedAt = nil
     restartSyncDrain()
     guard Date().timeIntervalSince(leftAt) >= staleAfterBackgroundSeconds else {
@@ -501,15 +515,17 @@ final class ChatService {
   /// seen-ID sets (so a re-bootstrapped YouTube/Kick feed doesn't re-deliver
   /// lines that are already on screen).
   private func reconnectTransports() {
-    receiveTask?.cancel()
-    receiveTask = nil
-    connection.cancel()
-    connection.resetBackoff()
-    isConnected = false
-    ircReconnectCount += 1
-    ircLastRecoveryReason = "foreground"
-    openIRCConnection()
-    receiveTask = Task { [weak self] in await self?.receiveLoop() }
+    if channel != nil {
+      receiveTask?.cancel()
+      receiveTask = nil
+      connection.cancel()
+      connection.resetBackoff()
+      isConnected = false
+      ircReconnectCount += 1
+      ircLastRecoveryReason = "foreground"
+      openIRCConnection()
+      receiveTask = Task { [weak self] in await self?.receiveLoop() }
+    }
 
     // The merge paths ride their own transports (Kick's Pusher socket, YouTube's
     // poll loop) and are just as dead after a suspend, so restart them too.

@@ -12,7 +12,7 @@ enum LivePlatform: String, CaseIterable, Codable, Sendable {
   }
 }
 
-struct PlatformLiveTarget: Identifiable, Equatable, Sendable {
+struct PlatformLiveTarget: Identifiable, Equatable, Codable, Sendable {
   enum Failure: LocalizedError {
     case invalidChannel(LivePlatform)
     var errorDescription: String? {

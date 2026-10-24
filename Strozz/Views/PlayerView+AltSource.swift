@@ -38,14 +38,14 @@ extension PlayerView {
   /// Twitch-only control loops (edge-chasing rate controller + stall watchdog,
   /// whose recovery would reload the Twitch source) while active; the read-only
   /// latency monitor keeps running so the Diagnostics readout still measures.
-  func switchToAltYouTubeSource(resolved: AltSourceService.YouTubeLive? = nil) async {
+  func switchToAltYouTubeSource(resolved: AltSourceService.YouTubeLive? = nil, resolvedTarget: String? = nil) async {
     guard !isVOD else { return }
-    if model.livePlatform == .kick {
-      model.livePlatform = .twitch
-      connectCurrentLiveChat()
-      model.channelMetadataTask?.cancel()
-      model.channelMetadataTask = Task { await refreshChannelMetadata() }
+    guard let target = model.creatorSession.sources?.youtube,
+      resolvedTarget == nil || resolvedTarget == target else {
+      errorMessage = String(localized: "No YouTube channel is linked to this creator.")
+      return
     }
+    let creatorGeneration = model.creatorSession.generation
     resetAltSourceWork()
     recordPlaybackEvent("source_switch_started", attributes: ["to_source": "youtube"])
     isUsingAltSource = true
@@ -57,11 +57,12 @@ extension PlayerView {
     let generation = model.altRecovery.generation
     if let resolved {
       lastAltResolveAt = Date()
-      installAltSource(resolved, resolveStartedAt: ProcessInfo.processInfo.systemUptime)
+      installAltSource(resolved, target: target, creatorGeneration: creatorGeneration,
+        resolveStartedAt: ProcessInfo.processInfo.systemUptime)
       return
     }
     if !(await resolveAndPlayAltSource(reason: "enable")),
-      generation == model.altRecovery.generation
+      generation == model.altRecovery.generation, creatorGeneration == model.creatorSession.generation
     {
       recoverAltSourceIfNeeded(reason: "resolution_failed")
     }
@@ -93,6 +94,7 @@ extension PlayerView {
     lastAltResolveAt = Date()
     let telemetrySessionID = model.playbackTelemetry.sessionID
     let generation = model.altRecovery.generation
+    let creatorGeneration = model.creatorSession.generation
     defer {
       if generation == model.altRecovery.generation { altResolveInFlight = false }
     }
@@ -107,10 +109,7 @@ extension PlayerView {
     let login = activeChannel
     altSourceStatus = "Resolving YouTube simulcast…"
 
-    var target = youtubeAutoResolvedTarget.trimmingCharacters(in: .whitespacesAndNewlines)
-    if target.isEmpty {
-      target = await Self.resolveYouTubeTarget(forTwitchLogin: login)
-    }
+    let target = model.creatorSession.sources?.youtube ?? ""
     guard login == activeChannel, isUsingAltSource,
       telemetrySessionID == model.playbackTelemetry.sessionID,
       generation == model.altRecovery.generation, !Task.isCancelled else { return false }
@@ -128,9 +127,11 @@ extension PlayerView {
 
     let resolved: AltSourceService.YouTubeLive
     do {
-      resolved = try await AltSourceService.youtubeLive(forTarget: target)
+      resolved = try await model.resolveYouTubeLive(target)
     } catch {
       guard login == activeChannel, isUsingAltSource,
+        creatorGeneration == model.creatorSession.generation,
+        model.creatorSession.sources?.youtube == target,
         telemetrySessionID == model.playbackTelemetry.sessionID,
         generation == model.altRecovery.generation, !Task.isCancelled else { return false }
       altSourceStatus = error.localizedDescription
@@ -144,13 +145,19 @@ extension PlayerView {
       return false
     }
     guard login == activeChannel, isUsingAltSource,
+      creatorGeneration == model.creatorSession.generation,
+      model.creatorSession.sources?.youtube == target,
       telemetrySessionID == model.playbackTelemetry.sessionID,
       generation == model.altRecovery.generation, !Task.isCancelled else { return false }
-    installAltSource(resolved, resolveStartedAt: resolveStartedAt)
+    installAltSource(resolved, target: target, creatorGeneration: creatorGeneration, resolveStartedAt: resolveStartedAt)
     return true
   }
 
-  private func installAltSource(_ resolved: AltSourceService.YouTubeLive, resolveStartedAt: TimeInterval) {
+  private func installAltSource(_ resolved: AltSourceService.YouTubeLive, target: String,
+    creatorGeneration: UUID, resolveStartedAt: TimeInterval) {
+    guard creatorGeneration == model.creatorSession.generation,
+      model.creatorSession.sources?.youtube == target else { return }
+    model.creatorSession.selectVideo(.init(platform: .youtube, channel: target))
     youtubeViewerCount = resolved.concurrentViewers
     let master = resolved.hlsMaster
 
@@ -173,6 +180,13 @@ extension PlayerView {
 
   /// Restores the proxied Twitch source and its control loops.
   func switchToTwitchSource(refresh: Bool = false) {
+    guard let twitch = model.creatorSession.twitchChannel
+      ?? (model.primaryPlatform == .twitch ? activeChannel : nil) else {
+      errorMessage = String(localized: "No Twitch channel is linked to this creator.")
+      return
+    }
+    model.twitchPlaybackTarget = twitch
+    model.creatorSession.selectVideo(.init(platform: .twitch, channel: twitch))
     let wasKick = model.livePlatform == .kick
     resetAltSourceWork()
     model.livePlatform = .twitch
@@ -193,7 +207,7 @@ extension PlayerView {
       currentSourceURL = nil
       configurePlayerForLive()
       beginPlaybackTelemetry()
-      connectCurrentLiveChat()
+      synchronizeCreatorServices()
       model.channelMetadataTask = Task { await refreshChannelMetadata() }
     }
     recordPlaybackEvent("source_switch_started", attributes: ["to_source": "twitch"])
@@ -237,6 +251,13 @@ extension PlayerView {
     guard isUsingAltSource, !isVOD, shouldPlayAltSource,
       !altResolveInFlight, model.altRecoveryTask == nil else { return }
     guard model.altRecovery.canRetry else {
+      guard model.creatorSession.twitchChannel != nil else {
+        errorMessage = String(localized: "YouTube playback is unavailable. Try Again to reconnect.")
+        altSourceStatus = errorMessage
+        isLoading = false
+        player.pause()
+        return
+      }
       recordPlaybackEvent(
         "alternate_source_fallback", level: .warning,
         attributes: ["reason": reason, "to_source": "twitch"],
@@ -303,7 +324,8 @@ extension PlayerView {
 
   /// YouTube needs a resolved simulcast; Kick also accepts a channel entered in-player.
   var streamSourceOptions: [String] {
-    (model.primaryPlatform == .twitch ? ["Twitch"] : [])
+    (model.creatorSession.twitchChannel != nil
+      || (model.creatorSession.sources == nil && initialPlatform == .twitch) ? ["Twitch"] : [])
       + (youtubeSourceAvailable || isUsingAltSource ? ["YouTube"] : []) + ["Kick"]
   }
 
@@ -339,22 +361,14 @@ extension PlayerView {
   /// and read-only; a failure just leaves the source unavailable.
   func refreshYouTubeSourceAvailability() async {
     youtubeSourceAvailable = false
-    guard !isVOD, model.primaryPlatform == .twitch else { return }
-    let login = activeChannel
-    guard !login.isEmpty else { return }
-
-    var target = youtubeAutoResolvedTarget.trimmingCharacters(in: .whitespacesAndNewlines)
-    if target.isEmpty {
-      target = await Self.resolveYouTubeTarget(forTwitchLogin: login)
-    }
-    guard login == activeChannel, !target.isEmpty else { return }
-
-    let sessionID = model.playbackTelemetry.sessionID
+    guard !isVOD, let target = model.creatorSession.sources?.youtube else { return }
+    let creatorGeneration = model.creatorSession.generation
     let resolved: AltSourceService.YouTubeLive
     do {
-      resolved = try await AltSourceService.youtubeLive(forTarget: target)
+      resolved = try await model.resolveYouTubeLive(target)
     } catch {
-      guard login == activeChannel, sessionID == model.playbackTelemetry.sessionID,
+      guard creatorGeneration == model.creatorSession.generation,
+        model.creatorSession.sources?.youtube == target,
         !Task.isCancelled else { return }
       recordPlaybackEvent(
         "alternate_availability_failed", level: .warning,
@@ -362,7 +376,8 @@ extension PlayerView {
       )
       return
     }
-    guard login == activeChannel, sessionID == model.playbackTelemetry.sessionID,
+    guard creatorGeneration == model.creatorSession.generation,
+      model.creatorSession.sources?.youtube == target,
       !Task.isCancelled else { return }
     youtubeSourceAvailable = true
     youtubeViewerCount = resolved.concurrentViewers

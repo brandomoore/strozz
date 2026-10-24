@@ -175,6 +175,7 @@ struct PlayerTitleHeader: View {
   let showLatency: Bool
   let showViewerCount: Bool
   let streamStartedAt: Date?
+  var creatorViewerCounts: [PlatformViewerCount]? = nil
 
   /// Title/subheader foreground. The header sits on the always-dark top scrim
   /// (matching the bottom scrim), so white reads in every theme.
@@ -188,6 +189,7 @@ struct PlayerTitleHeader: View {
   /// platform is only included when it's live and its count is known.
   private var platformViewerCounts: [PlatformViewerCount] {
     guard showViewerCount else { return [] }
+    if let creatorViewerCounts { return creatorViewerCounts }
     var counts: [PlatformViewerCount] = []
     if let twitchViewers = hermes.viewerCount {
       counts.append(PlatformViewerCount(platform: .twitch, count: twitchViewers))

@@ -529,8 +529,8 @@ extension PlayerView {
     }
     player.pause()
     channelPageTarget = ChannelPageTarget(
-      login: activeChannel,
-      displayName: channelDisplayName.isEmpty ? activeChannel : channelDisplayName,
+      login: model.creatorSession.twitchChannel ?? currentLiveTarget.channel,
+      displayName: channelDisplayName.isEmpty ? currentLiveTarget.channel : channelDisplayName,
       profileImageURL: channelAvatarURL
     )
   }
@@ -615,6 +615,7 @@ extension PlayerView {
     case .chatSettingsButton,
       .chatPresetOption,
       .chatAdvancedButton,
+      .chatCreatorChannels,
       .chatWidthOption,
       .chatLayoutOption,
       .chatSyncToggle,

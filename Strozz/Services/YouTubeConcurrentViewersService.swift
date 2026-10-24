@@ -33,7 +33,7 @@ final class YouTubeConcurrentViewersService {
   private static let maxConcurrency = 6
   /// Don't re-scrape the same video more often than this.
   private static let minRefreshInterval: TimeInterval = 90
-  private static let userAgent =
+  private nonisolated static let userAgent =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
   /// When each video's count was last fetched, to honor `minRefreshInterval`.
@@ -101,7 +101,7 @@ final class YouTubeConcurrentViewersService {
   /// Fetches the public watch page for `videoID` and returns its concurrent
   /// viewer count, but only when the page reports the broadcast is live now —
   /// otherwise `originalViewCount` would be a *total* view count, not viewers.
-  private static func fetchConcurrentViewers(videoID: String) async -> Int? {
+  nonisolated static func fetchConcurrentViewers(videoID: String) async -> Int? {
     guard let url = URL(string: "https://www.youtube.com/watch?v=\(videoID)") else { return nil }
     var request = URLRequest(url: url)
     request.timeoutInterval = 12

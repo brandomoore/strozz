@@ -224,9 +224,8 @@ private final class ExistingKickPlayer {
       model.nativeHLS?.stop()
       model.player.pause()
       model.player.replaceCurrentItem(with: nil)
-      model.chat.disconnect()
+      model.creatorSession.stop()
       model.eventSub.stop()
-      model.hermes.stop()
       if let savedQuality {
         UserDefaults.standard.set(savedQuality, forKey: PersistenceKey.preferredQuality)
       } else {

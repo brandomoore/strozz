@@ -8,7 +8,8 @@ extension PlayerView {
     }
     return PlatformLiveTarget(
       platform: model.livePlatform,
-      channel: model.livePlatform == .kick ? model.kickPlaybackTarget : activeChannel)
+      channel: model.livePlatform == .kick ? model.kickPlaybackTarget
+        : model.twitchPlaybackTarget.isEmpty ? activeChannel : model.twitchPlaybackTarget)
   }
 
   var livePlaybackHeaders: [String: String] { currentLiveTarget.headers }
@@ -19,23 +20,34 @@ extension PlayerView {
     model.primaryPlatform = initialPlatform
     model.livePlatform = initialPlatform
     if initialPlatform == .kick { model.kickPlaybackTarget = channel }
+    if initialPlatform == .twitch { model.twitchPlaybackTarget = channel }
   }
 
   func connectCurrentLiveChat() {
-    chat.disconnect()
-    if model.livePlatform == .kick {
-      eventSub.stop()
-      hermes.stop()
-      model.watchTracker.stop()
-      chat.youtubeMergeEnabled = false
-      chat.configureExperimentalKickMerge(enabled: true, channelOrURL: model.kickPlaybackTarget)
-    } else {
-      applyExperimentalYouTubeSettings()
-      applyExperimentalKickSettings()
-      chat.connect(to: activeChannel)
-      eventSub.start(forChannel: activeChannel, auth: auth)
-      hermes.start(forChannel: activeChannel)
+    let creator = model.creatorSession
+    if creator.sources == nil {
+      creator.start(.init(platform: initialPlatform, channel: activeChannel.isEmpty ? channel : activeChannel))
     }
+    creator.resume()
+    creator.selectVideo(currentLiveTarget)
+    applyExperimentalYouTubeSettings()
+    applyExperimentalKickSettings()
+    synchronizeCreatorServices()
+  }
+
+  func synchronizeCreatorServices() {
+    kickAutoResolvedTarget = model.creatorSession.sources?.kick ?? ""
+    youtubeAutoResolvedTarget = model.creatorSession.sources?.youtube ?? ""
+    if youtubeAutoResolvedTarget.isEmpty {
+      youtubeSourceAvailable = false
+      youtubeViewerCount = nil
+    }
+    let twitch = model.creatorSession.isActive && !isMultiviewCompact && !isVOD
+      ? model.creatorSession.twitchChannel : nil
+    guard model.eventSubChannel != twitch else { return }
+    eventSub.stop()
+    model.eventSubChannel = twitch
+    if let twitch { eventSub.start(forChannel: twitch, auth: auth) }
   }
 
   func switchToKickSource(channel: String? = nil) {
@@ -52,6 +64,7 @@ extension PlayerView {
     guard model.livePlatform != .kick || model.kickPlaybackTarget != slug || isUsingAltSource else {
       return
     }
+    model.creatorSession.selectVideo(.init(platform: .kick, channel: slug))
     recordPlaybackEvent("source_switch_started", attributes: ["to_source": "kick"])
     resetAltSourceWork()
     cancelNativeStartup()
@@ -94,8 +107,9 @@ extension PlayerView {
   }
 
   func loadCurrentStreamStatus(_ channel: String) async -> StreamLiveStatus {
-    guard model.livePlatform == .kick else { return await model.loadStreamStatus(channel) }
     let target = currentLiveTarget
+    if target.platform == .twitch { return await model.loadStreamStatus(target.channel) }
+    guard target.platform == .kick else { return .unknown }
     do {
       return try await KickPlaybackService.channel(target.channel).isLive ? .live : .offline
     } catch {

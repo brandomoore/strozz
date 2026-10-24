@@ -13,6 +13,26 @@ final class MobileChatSettingsTests: XCTestCase {
     XCTAssertNil(MobileChatAppearance.preset(text: 16, line: -1, spacing: 8, autoEmotes: false))
   }
 
+  func testThreePlatformViewerReadoutsFitNarrowAndLargeTextLayouts() {
+    let counts: [PlatformViewerCount] = [.init(platform: .twitch, count: 12345),
+      .init(platform: .kick, count: 6789), .init(platform: .youtube, count: 2345)]
+    for width in [280.0, 390, 700] {
+      for size in [DynamicTypeSize.large, .accessibility3] {
+        for theme in AppTheme.allCases {
+          let palette = theme.palette(systemColorScheme: .light)
+          let host = UIHostingController(rootView: MobileStreamReadouts(state: .paused,
+            startedAt: nil, viewerCount: nil, showDuration: false, viewerCounts: counts, onGoLive: {})
+            .environment(\.themePalette, palette)
+            .environment(\.dynamicTypeSize, size))
+          let actual = host.sizeThatFits(in: CGSize(width: width, height: 1000))
+          XCTAssertLessThanOrEqual(actual.width, width + 1)
+          XCTAssertGreaterThan(actual.height, 20)
+          XCTAssertLessThan(actual.height, 260)
+        }
+      }
+    }
+  }
+
   func testHighlightRulesMatchMentionsRepliesAndNormalizedKeywords() {
     func message(_ text: String) -> ChatMessage {
       ChatMessage(username: "Other", colorHex: nil, badgeKeys: [], text: text, twitchEmoteURLs: [:])
@@ -27,51 +47,54 @@ final class MobileChatSettingsTests: XCTestCase {
     XCTAssertTrue(ChatHighlightRules.matches(reply, viewerLogin: "SAM", viewerDisplayName: nil, keywords: []))
   }
 
-  func testSourcePreferencesAreOptInAndDoNotRestartOrReplaceManualTargets() throws {
+  func testSourcePreferencesNeverGuessAccountsAndPreserveLinkedTargets() throws {
     let suite = "MobileChatSources.\(UUID())"
     let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-    let chat = ChatService()
-    chat.channel = "example"
-    defer { chat.disconnect(); defaults.removePersistentDomain(forName: suite) }
-    MobileChatSourcePreferences.apply(to: chat, channel: "example", defaults: defaults)
+    let creator = CreatorLiveSession(resolve: { CreatorLiveSources(root: $0) },
+      loadTwitch: { _ in .unknown }, defaults: nil)
+    let chat = creator.chat
+    defer { creator.stop(); defaults.removePersistentDomain(forName: suite) }
+    creator.start(.init(platform: .twitch, channel: "example"))
+    MobileChatSourcePreferences.apply(to: creator, defaults: defaults)
     XCTAssertFalse(chat.youtubeMergeEnabled)
     XCTAssertFalse(chat.kickMergeEnabled)
     XCTAssertNil(chat.youtubeReceiveTask)
     XCTAssertNil(chat.kickReceiveTask)
     defaults.set(true, forKey: PersistenceKey.experimentalYouTubeMergeEnabled)
     defaults.set(true, forKey: PersistenceKey.experimentalKickMergeEnabled)
-    MobileChatSourcePreferences.apply(to: chat, channel: "example", defaults: defaults)
-    XCTAssertEqual(chat.youtubeChannelOrURL, "@example")
-    XCTAssertEqual(chat.kickChannelOrURL, "example")
-    chat.youtubeChannelOrURL = "@manual"
-    chat.kickChannelOrURL = "manual"
+    MobileChatSourcePreferences.apply(to: creator, defaults: defaults)
+    XCTAssertFalse(chat.youtubeMergeEnabled)
+    XCTAssertFalse(chat.kickMergeEnabled)
+    XCTAssertEqual(chat.youtubeChannelOrURL, "")
+    XCTAssertEqual(chat.kickChannelOrURL, "")
+    creator.updateLinks([.init(platform: .twitch, channel: "example"),
+      .init(platform: .youtube, channel: "@manual"), .init(platform: .kick, channel: "manual")])
     chat.youtubeStatusMessage = "Unchanged"
-    MobileChatSourcePreferences.apply(to: chat, channel: "example", defaults: defaults)
+    MobileChatSourcePreferences.apply(to: creator, defaults: defaults)
     XCTAssertEqual(chat.youtubeChannelOrURL, "@manual")
     XCTAssertEqual(chat.kickChannelOrURL, "manual")
     XCTAssertEqual(chat.youtubeStatusMessage, "Unchanged")
-    chat.configureExperimentalYouTubeMerge(enabled: true, channelOrURL: "")
-    MobileChatSourcePreferences.apply(to: chat, channel: "example", defaults: defaults)
-    XCTAssertEqual(chat.youtubeChannelOrURL, "")
-    XCTAssertEqual(chat.youtubeStatusMessage, "Enter a YouTube handle, URL, or video ID.")
-    XCTAssertNil(chat.youtubeReceiveTask, "An empty manual target must not be silently replaced or repeatedly restarted")
+    creator.selectVideo(.init(platform: .kick, channel: "manual"))
+    MobileChatSourcePreferences.apply(to: creator, defaults: defaults)
+    XCTAssertEqual(chat.channel, "example")
+    XCTAssertEqual(chat.youtubeStatusMessage, "Unchanged")
     defaults.set(false, forKey: PersistenceKey.experimentalYouTubeMergeEnabled)
     defaults.set(false, forKey: PersistenceKey.experimentalKickMergeEnabled)
-    MobileChatSourcePreferences.apply(to: chat, channel: "example", defaults: defaults)
+    MobileChatSourcePreferences.apply(to: creator, defaults: defaults)
     XCTAssertNil(chat.youtubeReceiveTask)
     XCTAssertNil(chat.kickReceiveTask)
   }
 
-  func testSourcePreferencesIgnoreInactiveChannels() throws {
+  func testSourcePreferencesCannotStartAnInactiveCreator() throws {
     let suite = "MobileChatSources.\(UUID())"
     let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
     defaults.set(true, forKey: PersistenceKey.experimentalYouTubeMergeEnabled)
-    let chat = ChatService()
-    chat.channel = "another"
-    MobileChatSourcePreferences.apply(to: chat, channel: "example", defaults: defaults)
-    XCTAssertFalse(chat.youtubeMergeEnabled)
-    XCTAssertNil(chat.youtubeReceiveTask)
+    let creator = CreatorLiveSession(defaults: nil)
+    defer { creator.stop() }
+    MobileChatSourcePreferences.apply(to: creator, defaults: defaults)
+    XCTAssertFalse(creator.chat.youtubeMergeEnabled)
+    XCTAssertNil(creator.chat.youtubeReceiveTask)
   }
 
   func testRoundedComposerFitsPhoneTabletAndDynamicType() {

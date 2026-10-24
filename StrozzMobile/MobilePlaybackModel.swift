@@ -34,7 +34,8 @@ enum MobileQuality: Hashable {
 @Observable
 final class MobilePlaybackModel {
   private(set) var player = AVPlayer()
-  let chat = ChatService()
+  let creatorSession: CreatorLiveSession
+  var chat: ChatService { creatorSession.chat }
   private(set) var qualities: [StreamQuality] = []
   private(set) var selection: MobileQuality = .native
   private(set) var mode: MobilePlaybackMode = .video {
@@ -57,7 +58,8 @@ final class MobilePlaybackModel {
   private(set) var livePosition = LivePlaybackPosition()
   private(set) var streamStartedAt: Date?
   private(set) var source = PlatformLiveTarget(platform: .twitch, channel: "")
-  private(set) var sources: [PlatformLiveTarget] = []
+  var sources: [PlatformLiveTarget] { creatorSession.targets.isEmpty ? [source] : creatorSession.targets }
+  var viewerCounts: [PlatformViewerCount] { creatorSession.viewerCounts }
   private(set) var kickChannel: KickChannel?
   private var twitchMetadata: ChannelMetadata?
 
@@ -128,7 +130,6 @@ final class MobilePlaybackModel {
   func prepareLayoutFixtureMetadata(channel: FollowedChannel? = nil) {
     if let channel {
       source = .init(platform: channel.platform, channel: channel.login)
-      sources = [source]
     }
     isLayoutFixture = true
     isActive = true
@@ -144,7 +145,9 @@ final class MobilePlaybackModel {
 
   init(muted: Bool = false,
        resolve: @escaping (String) async throws -> StreamPlayback = { try await PlaybackService.resolve(for: $0) },
-       resolveKick: @escaping (String) async throws -> KickPlaybackService.Resolved = { try await KickPlaybackService.resolve($0) }) {
+       resolveKick: @escaping (String) async throws -> KickPlaybackService.Resolved = { try await KickPlaybackService.resolve($0) },
+       creatorSession: CreatorLiveSession? = nil) {
+    self.creatorSession = creatorSession ?? CreatorLiveSession()
     #if targetEnvironment(simulator)
     muteForTesting = ProcessInfo.processInfo.environment["STROZZ_MUTE_PLAYBACK"] == "1"
     #else
@@ -196,7 +199,7 @@ final class MobilePlaybackModel {
   func start(channel: String, platform: LivePlatform = .twitch) {
     guard !isActive else { return }
     source = PlatformLiveTarget(platform: platform, channel: channel)
-    sources = [source]
+    creatorSession.start(source)
     kickChannel = nil
     twitchMetadata = nil
     streamStartedAt = nil
@@ -220,11 +223,9 @@ final class MobilePlaybackModel {
     if resetPosition != nil { resetPosition = nextPosition }
     invalidate()
     metadataTask?.cancel()
-    chat.disconnect()
+    creatorSession.selectVideo(target)
     source = target
     onSourceChanged?(target)
-    sources.removeAll { $0.platform == target.platform }
-    sources.append(target)
     kickChannel = nil
     twitchMetadata = nil
     streamStartedAt = nil
@@ -243,18 +244,12 @@ final class MobilePlaybackModel {
   }
 
   private func connectChat() {
-    chat.disconnect()
-    chat.youtubeMergeEnabled = false
-    chat.kickMergeEnabled = false
-    switch source.platform {
-    case .twitch:
-      chat.connect(to: source.channel)
-      MobileChatSourcePreferences.apply(to: chat, channel: source.channel)
-    case .kick:
-      chat.configureExperimentalKickMerge(enabled: true, channelOrURL: source.channel)
-    case .youtube:
-      chat.configureExperimentalYouTubeMerge(enabled: true, channelOrURL: source.channel)
-    }
+    if creatorSession.sources == nil { creatorSession.start(source) }
+    creatorSession.resume()
+    let defaults = UserDefaults.standard
+    creatorSession.configureChat(
+      kickEnabled: defaults.object(forKey: PersistenceKey.experimentalKickMergeEnabled) as? Bool ?? true,
+      youtubeEnabled: defaults.object(forKey: PersistenceKey.experimentalYouTubeMergeEnabled) as? Bool ?? true)
   }
 
   func select(_ quality: MobileQuality) {
@@ -359,7 +354,7 @@ final class MobilePlaybackModel {
     needsFreshPlayer = true
     mediaResetInProgress = false
     invalidate()
-    chat.disconnect()
+    creatorSession.suspend()
     releaseAudioSession()
   }
 
@@ -390,7 +385,7 @@ final class MobilePlaybackModel {
     audioObservers.removeAll()
     invalidate()
     diagnostics.endSession(reason: "stopped")
-    chat.disconnect()
+    creatorSession.stop()
     releaseAudioSession()
   }
 
@@ -931,7 +926,7 @@ final class MobilePlaybackModel {
       while !Task.isCancelled {
         do { try await Task.sleep(for: .seconds(1)) } catch { return }
         guard let self, isCurrent(request) else { return }
-        MobileChatSourcePreferences.apply(to: chat, channel: channel)
+        MobileChatSourcePreferences.apply(to: creatorSession)
         guard player.currentItem === item else {
           fail(MobilePlaybackError.unavailable.localizedDescription)
           return
