@@ -32,6 +32,7 @@ extension ChatService {
   }
 
   func stopKickLoop(clearStatus: Bool) {
+    kickIsConnected = false
     kickReceiveTask?.cancel()
     kickReceiveTask = nil
     kickConnection.cancel()
@@ -77,12 +78,14 @@ extension ChatService {
         let socketURL = try await KickPlaybackService.chatURL()
         guard !Task.isCancelled else { return }
         kickConnection.connect(to: socketURL)
+        kickIsConnected = false
         kickSubscribedChannel = nil
 
         try await runKickReceive(chatroomID: chatroomID)
       } catch {
         if Task.isCancelled { break }
         kickStatusMessage = "Kick chat unavailable right now."
+        kickIsConnected = false
         kickConnection.cancel()
         kickSubscribedChannel = nil
 
@@ -133,6 +136,7 @@ extension ChatService {
     case "pusher:ping":
       kickConnection.send(.string("{\"event\":\"pusher:pong\",\"data\":{}}"))
     case "pusher_internal:subscription_succeeded":
+      kickIsConnected = true
       kickStatusMessage = kickConnectedStatus()
     case let event where event.contains("ChatMessageEvent"):
       // Pusher nests the event payload as a JSON-encoded string in `data`.

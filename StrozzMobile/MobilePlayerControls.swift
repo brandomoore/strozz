@@ -152,10 +152,10 @@ struct MobilePlayerButtonSurface: ViewModifier {
 
   func body(content: Content) -> some View {
     content
-      .foregroundStyle(palette.chromeOnOpaque)
+      .foregroundStyle(reduceTransparency ? palette.chromeOnOpaque : palette.videoControlForeground)
       .contentShape(Capsule())
       .modifier(MobilePlayerButtonAppearance(palette: palette, opaque: reduceTransparency))
-      .environment(\.colorScheme, palette.chromeColorScheme)
+      .environment(\.colorScheme, reduceTransparency ? palette.chromeColorScheme : .dark)
   }
 }
 
@@ -165,10 +165,10 @@ struct MobilePlayerGroupSurface: ViewModifier {
 
   func body(content: Content) -> some View {
     content
-      .foregroundStyle(palette.chromeOnOpaque)
+      .foregroundStyle(reduceTransparency ? palette.chromeOnOpaque : palette.videoControlForeground)
       // Keep individual button hit shapes; a group contentShape also expands VoiceOver frames.
       .modifier(MobilePlayerButtonAppearance(palette: palette, opaque: reduceTransparency))
-      .environment(\.colorScheme, palette.chromeColorScheme)
+      .environment(\.colorScheme, reduceTransparency ? palette.chromeColorScheme : .dark)
   }
 }
 
@@ -182,7 +182,7 @@ struct MobilePlayerButtonAppearance: ViewModifier {
         .background(palette.chromeOpaqueSurface, in: Capsule())
         .overlay { Capsule().strokeBorder(palette.chromeOpaqueBorder, lineWidth: 0.5).allowsHitTesting(false) }
     } else if #available(iOS 26.0, *) {
-      content.glassEffect(.regular.interactive(), in: Capsule())
+      content.glassEffect(.regular.tint(palette.videoControlScrim.opacity(0.55)).interactive(), in: Capsule())
     } else {
       content.background(.regularMaterial, in: Capsule())
     }
@@ -257,30 +257,39 @@ struct MobileMiniPlayerControlScrim: View {
 
 struct MobileQualitySheet: View {
   let model: MobilePlaybackModel
-  var twitchChannel: String? = nil
-  @State private var platformPlayback: PlatformLiveTarget?
-  @State private var kickChannel = ""
+  @State private var draftPlatform = LivePlatform.kick
+  @State private var draftChannel = ""
+  @State private var sourceError: String?
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
     NavigationStack {
       List {
-        if let twitchChannel {
-          Section("Stream source") {
-            TextField("Kick channel or URL", text: $kickChannel).autocorrectionDisabled()
-            Button("Watch on Kick") {
-              do {
-                let slug = try KickPlaybackService.slug(from: kickChannel)
-                model.suspend()
-                platformPlayback = PlatformLiveTarget(platform: .kick, channel: slug)
-              } catch { sourceError = error.localizedDescription }
+        Section("Stream source") {
+          ForEach(model.sources) { source in
+            Button("\(source.platform.title): \(source.channel)") {
+              model.switchSource(source)
+              dismiss()
             }
-            if let sourceError { Text(sourceError).foregroundStyle(.secondary) }
-            Text("Twitch: \(twitchChannel)").font(.caption).foregroundStyle(.secondary)
           }
+          Picker("Platform", selection: $draftPlatform) {
+            ForEach(LivePlatform.allCases, id: \.self) { Text($0.title).tag($0) }
+          }
+          .accessibilityIdentifier("player-source-platform")
+          TextField("Channel name or URL", text: $draftChannel).autocorrectionDisabled()
+            .accessibilityIdentifier("player-source-target")
+          Button("Switch source") {
+            do {
+              let target = try PlatformLiveTarget.validated(platform: draftPlatform, input: draftChannel)
+              model.switchSource(target)
+              dismiss()
+            } catch { sourceError = error.localizedDescription }
+          }
+          .accessibilityIdentifier("player-source-switch")
+          if let sourceError { Text(sourceError).foregroundStyle(.secondary) }
         }
         if !model.isExternalPlayback {
-          qualityRow("Auto - Native Low Latency", quality: .native)
+          qualityRow(model.source.platform == .youtube ? "Auto" : "Auto - Native Low Latency", quality: .native)
         }
         ForEach(model.qualities) { quality in
           qualityRow(quality.name, quality: quality.isAudioOnly ? .audioOnly : .fixed(quality.id))
@@ -297,18 +306,16 @@ struct MobileQualitySheet: View {
       .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
     }
     .onAppear {
-      if kickChannel.isEmpty, let twitchChannel {
-        kickChannel = KickAliasService().kickSlug(forTwitchLogin: twitchChannel) ?? twitchChannel
+      draftPlatform = model.source.platform
+      draftChannel = model.source.channel
+    }
+    .onChange(of: draftPlatform) { _, platform in
+      if let previous = model.sources.first(where: { $0.platform == platform }) { draftChannel = previous.channel }
+      else if platform == .kick, model.source.platform == .twitch {
+        draftChannel = KickAliasService().kickSlug(forTwitchLogin: model.source.channel) ?? model.source.channel
       }
     }
-    .fullScreenCover(item: $platformPlayback, onDismiss: { model.resume() }) { target in
-      PlatformLivePlayerView(target: target, sources: twitchChannel.map {
-        [PlatformLiveTarget(platform: .twitch, channel: $0)]
-      } ?? [])
-    }
   }
-
-  @State private var sourceError: String?
 
   private func qualityRow(_ title: String, quality: MobileQuality) -> some View {
     Button {
@@ -328,6 +335,11 @@ struct MobileQualitySheet: View {
 struct MobileAirPlayPicker: UIViewRepresentable {
   let onPresentation: (Bool) -> Void
   @Environment(\.themePalette) private var palette
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+  private var foreground: UIColor {
+    UIColor(reduceTransparency ? palette.chromeOnOpaque : palette.videoControlForeground)
+  }
 
   func makeCoordinator() -> Coordinator { Coordinator(onPresentation: onPresentation) }
 
@@ -336,14 +348,14 @@ struct MobileAirPlayPicker: UIViewRepresentable {
     view.prioritizesVideoDevices = true
     view.delegate = context.coordinator
     view.accessibilityLabel = "AirPlay"
-    view.tintColor = UIColor(palette.chromeOnOpaque)
-    view.activeTintColor = UIColor(palette.chromeOnOpaque)
+    view.tintColor = foreground
+    view.activeTintColor = foreground
     return view
   }
 
   func updateUIView(_ view: AVRoutePickerView, context: Context) {
-    view.tintColor = UIColor(palette.chromeOnOpaque)
-    view.activeTintColor = UIColor(palette.chromeOnOpaque)
+    view.tintColor = foreground
+    view.activeTintColor = foreground
     context.coordinator.onPresentation = onPresentation
   }
 

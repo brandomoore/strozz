@@ -49,15 +49,21 @@ HLS master using ordinary HTTPS requests. It distinguishes actual offline state
 restrictions. Signed playback URLs are not saved in the recent-channel model.
 There is no hidden browser, challenge bypass, or additional player SDK.
 
-`PlatformLivePlayback` and `PlatformLivePlayerView` own the shared TV/mobile
-Kick player and its in-player source editor. Source changes retain the mounted
-AVPlayer, tear down the outgoing producer/chat before resolving, and fence late
-results and diagnostic callbacks by generation. Kick/Twitch video uses
-`NativeLowLatencyHLS`; YouTube uses the existing resolver and ordinary native
-HLS. Only the selected provider's read-only chat is connected. Backgrounding
-releases media resources, returning resolves fresh URLs, and explicit pause
-intent survives switching and foregrounding. Media-services reset is the
-exception that recreates the renderer.
+Kick has no separate player UI or playback model. TV uses `PlayerView` and
+`PlayerModel`; mobile uses `MobilePlayerView`, `MobilePlaybackModel`, and the
+existing `MobilePlaybackSession` video/PiP owner. `LiveStreamSource` supplies typed
+provider identity and validation. Source changes use these existing models,
+retain their mounted AVPlayer, resolve fresh playback, and fence late results
+by the normal load/session generations. Native recovery, buffering, catch-up,
+rewind, chat rendering/settings, diagnostics, gestures, and layout remain owned
+by the same player code as Twitch. Mobile mini-player/PiP ownership is not
+replaced during a source change.
+
+Keep provider identity separate from a channel handle. A Kick-only channel must
+not open Twitch IRC, request Twitch metadata/profiles/VODs, earn Twitch rewards,
+send Twitch chat, or enter Twitch recommendation history under the same text
+handle. Kick's read-only status uses the existing chat UI; unavailable
+provider-specific capabilities must not justify a different player interface.
 
 Kick chat negotiates its current anonymous Pusher application through Kick's
 public realtime connection endpoint. Do not bake in an application key:
@@ -74,13 +80,16 @@ resolution/frame-rate attributes against the fresh master, never URL equality.
 Filter to the explicit rendition before metadata/bootstrap work; do not make a
 fixed quality wait for unselected renditions.
 
-The opt-in `KickPlaybackLiveTests` compare actual decoded video/PDT delay with a
+The opt-in `KickSharedPlayerLiveTests` exercise these actual existing player
+models, including standalone Kick, explicit qualities, and Twitch/Kick switches.
+They compare actual decoded video/PDT delay with a
 plain AVPlayer HLS baseline over 90 seconds. Set
 `TEST_RUNNER_STROZZ_KICK_LIVE_TESTS=1` when invoking `tools/xcbuild.sh test`;
 `TEST_RUNNER_STROZZ_KICK_CHANNEL` defaults to `xqc`. A separate handoff test needs
 `TEST_RUNNER_STROZZ_KICK_SWITCH_TWITCH_CHANNEL` naming a currently live Twitch
-channel. It checks fixed quality, restored Auto, decoded Twitch/Kick transitions,
-renderer identity, and paused background/foreground behavior. XCTest retains
+channel. They check fixed quality, restored Auto, decoded Twitch/Kick transitions,
+and renderer identity. Existing audio/background/PiP regression suites continue
+to cover the same owners used by Kick. XCTest retains
 numeric latency evidence. Simulator PDT delay is not hardware glass-to-glass
 latency, a universal latency guarantee, or a comparison with the official IVS
 iOS SDK. Provider availability and stream formats can change.

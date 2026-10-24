@@ -44,7 +44,7 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
     session.model.activateAudioSession = {}
     session.model.player.replaceCurrentItem(with: AVPlayerItem(asset: AVMutableComposition()))
     session.model.displayReady(true, for: session.model.player)
-    session.model.prepareLayoutFixtureMetadata()
+    session.model.prepareLayoutFixtureMetadata(channel: channel)
     session.videoController.player = session.model.player
     return session
   }
@@ -124,6 +124,7 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
     }
     videoController.onAppear = { [weak self] in self?.playerDidAppear() }
     model.onPlayerChanged = { [weak videoController] player in videoController?.player = player }
+    model.onSourceChanged = { [weak self] _ in self?.watchTracker.stop() }
     model.onModeChanged = { [weak self] mode in
       self?.pictureInPicture?.canStartPictureInPictureAutomaticallyFromInline = mode == .video
       if mode != .video { self?.returnFromNativePictureInPicture() }
@@ -132,7 +133,7 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
     pictureInPicture?.delegate = self
     pictureInPicture?.canStartPictureInPictureAutomaticallyFromInline = model.mode == .video
     isExpanded = true
-    model.start(channel: channel.login)
+    model.start(channel: channel.login, platform: channel.platform)
   }
 
   func collapse() {
@@ -207,13 +208,14 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
   }
 
   func trackWatch(auth: TwitchAuthSession, rewards: TwitchWatchRewardsSession) async {
-    while !Task.isCancelled, let channel {
+    while !Task.isCancelled, channel != nil {
       #if DEBUG
       recordVideoDiagnostics()
       #endif
-      if auth.isAuthenticated, let userID = auth.userID, let item = model.player.currentItem {
+      if model.source.platform == .twitch, auth.isAuthenticated,
+        let userID = auth.userID, let item = model.player.currentItem {
         watchTracker.update(.init(
-          target: .init(channel: channel.login, userID: userID, itemID: ObjectIdentifier(item)),
+          target: .init(channel: model.source.channel, userID: userID, itemID: ObjectIdentifier(item)),
           uptime: ProcessInfo.processInfo.systemUptime, playhead: item.currentTime().seconds,
           rate: Double(model.player.rate),
           ready: item.status == .readyToPlay && !model.isLoading && model.errorMessage == nil,

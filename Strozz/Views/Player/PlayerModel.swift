@@ -40,6 +40,11 @@ final class PlayerModel {
   // MARK: Playback
 
   var player = AVPlayer()
+  var livePlatform = LivePlatform.twitch
+  var primaryPlatform = LivePlatform.twitch
+  var kickPlaybackTarget = ""
+  var sourceQuality = "Auto"
+  @ObservationIgnored var didInitializeLiveSource = false
   @ObservationIgnored var multiviewContext: MultiviewPlaybackContext?
   var isVideoPresentationVisible: Bool { multiviewContext?.videoIsVisible ?? true }
   @ObservationIgnored var activateAudioSession: @MainActor () throws -> Void = PlaybackAudioSession.activate
@@ -98,11 +103,14 @@ final class PlayerModel {
   /// persists a bounded JSONL session for agent-driven postmortem analysis.
   let playbackTelemetry: PlaybackTelemetryRecorder
   @ObservationIgnored let loadStreamStatus: @Sendable (String) async -> StreamLiveStatus
+  @ObservationIgnored let resolveLivePlayback: @Sendable (PlatformLiveTarget) async throws -> StreamPlayback
 
   init(playbackTelemetry: PlaybackTelemetryRecorder = PlaybackTelemetryRecorder(),
-       loadStreamStatus: @escaping @Sendable (String) async -> StreamLiveStatus = PlaybackService.streamLiveStatus(for:)) {
+       loadStreamStatus: @escaping @Sendable (String) async -> StreamLiveStatus = PlaybackService.streamLiveStatus(for:),
+       resolveLivePlayback: @escaping @Sendable (PlatformLiveTarget) async throws -> StreamPlayback = { try await $0.resolvePlayback() }) {
     self.playbackTelemetry = playbackTelemetry
     self.loadStreamStatus = loadStreamStatus
+    self.resolveLivePlayback = resolveLivePlayback
   }
   @ObservationIgnored var startupProgress = LivePlaybackStartup.Progress()
   @ObservationIgnored var chatSyncBaseline = LiveChatSyncBaseline()

@@ -9,7 +9,16 @@ struct KickChannel: Identifiable, Codable, Equatable, Sendable {
   let isLive: Bool
   let chatroomID: Int?
   let imageURL: URL?
+  var startedAt: Date? = nil
   var id: String { slug }
+
+  var followedChannel: FollowedChannel {
+    var channel = FollowedChannel(id: "kick:\(slug)", login: slug, displayName: displayName,
+      title: title, gameName: category, viewerCount: viewerCount, thumbnailURL: nil,
+      profileImageURL: imageURL, isLive: isLive)
+    channel.platform = .kick
+    return channel
+  }
 }
 
 enum KickPlaybackService {
@@ -202,6 +211,7 @@ enum KickPlaybackService {
         let session_title: String?
         let viewer_count: Int?
         let viewers: Int?
+        let created_at: String?
         let categories: [Category]?
       }
       struct Chatroom: Decodable { let id: Int }
@@ -228,15 +238,18 @@ enum KickPlaybackService {
     guard try slug(from: payload.slug) == requestedSlug else { throw Failure.invalidResponse }
     let playbackURL = payload.playback_url.flatMap(URL.init(string:))
     if let playbackURL, !validMediaURL(playbackURL) { throw Failure.unsupportedMedia }
-    return Document(
-      channel: KickChannel(
+    var channel = KickChannel(
         slug: requestedSlug, displayName: payload.user?.username ?? requestedSlug,
         title: payload.livestream?.session_title ?? "",
         category: payload.livestream?.categories?.first?.name ?? "",
         viewerCount: payload.livestream?.viewer_count ?? payload.livestream?.viewers,
         isLive: payload.livestream != nil,
-        chatroomID: payload.chatroom?.id, imageURL: payload.user?.profile_pic),
-      playbackURL: playbackURL)
+        chatroomID: payload.chatroom?.id, imageURL: payload.user?.profile_pic)
+    if let raw = payload.livestream?.created_at {
+      let formatter = ISO8601DateFormatter()
+      channel.startedAt = formatter.date(from: raw.contains("T") ? raw : raw.replacingOccurrences(of: " ", with: "T") + "Z")
+    }
+    return Document(channel: channel, playbackURL: playbackURL)
   }
 
   private static func response(_ url: URL, accept: String, load: Loader) async throws -> Data {

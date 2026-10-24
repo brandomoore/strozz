@@ -86,16 +86,16 @@ extension PlayerView {
     } else {
       goLive?.suppressedLogin = activeChannel
       trackpad.start()
-      chat.connect(to: activeChannel)
-      eventSub.start(forChannel: activeChannel, auth: auth)
-      hermes.start(forChannel: activeChannel)
+      connectCurrentLiveChat()
       model.channelMetadataTask?.cancel()
       model.channelMetadataTask = Task {
         await refreshChannelMetadata()
         if streamRewindEnabled { await resolveBroadcastVODIfNeeded() }
-        await refreshYouTubeAutoTarget()
-        await refreshYouTubeSourceAvailability()
-        await refreshKickAutoTarget()
+        if model.primaryPlatform == .twitch {
+          await refreshYouTubeAutoTarget()
+          await refreshYouTubeSourceAvailability()
+          await refreshKickAutoTarget()
+        }
       }
       syncCaptions()
       showControls = false

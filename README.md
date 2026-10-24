@@ -115,15 +115,19 @@ The initial directory is an exact-channel lookup, not a trending/category feed.
 
 While watching Twitch, choose **Kick** in the TV player's stream-source menu, or
 enter the Kick channel under **Quality > Stream source** on mobile. Verify the
-destination handle: handles can differ across platforms. In the Kick player,
-**Source** switches among Kick, Twitch, and YouTube without returning to browsing;
-known sources remain available for switching back. Switching resolves fresh
-playback and can briefly buffer; it is not a gapless video transition.
+destination handle: handles can differ across platforms. Source switching happens
+inside the existing player without returning to browsing or opening another
+player. Switching resolves fresh playback and can briefly buffer; it is not a
+gapless video transition.
 
 Kick video uses Strozz's native incremental low-latency engine, with Auto and
-explicit advertised qualities. The player includes pause, Go live, read-only
-chat, and automatic playback diagnostics. Kick account sign-in/chat sending,
-Kick multiview, and picture-in-picture are not included in this initial player.
+explicit advertised qualities. Kick uses the same TV player controls, chat
+layout/settings, quality menu, and rewind interface as Twitch. On mobile it uses
+the same player, chat layout, playback settings, mini-player, and background PiP
+lifecycle. Only provider capabilities differ: Kick chat is read-only, and Twitch
+rewards, channel profiles, and past-broadcast handoff are not used for Kick
+streams. Kick account sign-in/chat sending and Kick multiview discovery are not
+included. Automatic playback diagnostics remain enabled through the shared players.
 Access restrictions and unavailable streams are shown explicitly; Strozz does
 not bypass provider access controls. These changes are not yet in the published
 TestFlight build.

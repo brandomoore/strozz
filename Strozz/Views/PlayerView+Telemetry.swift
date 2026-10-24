@@ -6,7 +6,7 @@ extension PlayerView {
     if isUsingAltSource { return "youtube" }
     if liveVODHandoff?.isActive == true { return "twitch_vod_handoff" }
     if isVOD { return "vod" }
-    return "twitch"
+    return model.livePlatform.rawValue
   }
 
   private var playbackTelemetryContext: [String: String] {
@@ -40,7 +40,7 @@ extension PlayerView {
   func beginPlaybackTelemetry() {
     lowLatencyProxy.resetTelemetry()
     model.playbackTelemetry.beginSession(
-      channel: activeChannel,
+      channel: model.livePlatform == .kick ? model.kickPlaybackTarget : activeChannel,
       playbackMode: vod == nil ? "live" : "vod",
       attributes: playbackTelemetryContext,
       flags: [

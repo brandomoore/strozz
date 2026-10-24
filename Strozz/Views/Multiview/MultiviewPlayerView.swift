@@ -319,7 +319,7 @@ struct MultiviewPlayerView: View {
 
   private func paneView(_ pane: MultiviewPane, style: MultiviewPaneTile.Style) -> some View {
     PlayerView(channel: pane.channel.login, auth: auth, goLive: goLive,
-      posterURL: pane.channel.thumbnailURL, model: pane.model)
+      posterURL: pane.channel.thumbnailURL, initialPlatform: pane.channel.platform, model: pane.model)
     .accessibilityElement(children: .contain)
     .accessibilityIdentifier(pane.presentation.isExpanded ? "expanded-stream-\(pane.id)" : "")
     .accessibilityValue(Text(pane.accessibilityStatus(isTransitioning: controller.isTransitioning)))

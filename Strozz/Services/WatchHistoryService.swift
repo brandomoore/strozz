@@ -52,7 +52,7 @@ final class WatchHistoryService {
   /// Records a watch of `channel`. No-op when personalization is disabled or the
   /// channel has no login. Existing channels are bumped to most-recent.
   func record(_ channel: FollowedChannel) {
-    guard isEnabled else { return }
+    guard isEnabled, channel.platform == .twitch else { return }
     let login = channel.login.lowercased()
     guard !login.isEmpty else { return }
 

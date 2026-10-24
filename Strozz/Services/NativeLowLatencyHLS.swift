@@ -7,6 +7,7 @@ final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unche
   static let scheme = "strozz-native-ll"
   let id = UUID()
   let sourceURL: URL
+  let fixedRenditionID: String?
   let origin: NativeHLSOrigin
   private let lock = NSLock()
   private var tasks: [ObjectIdentifier: Task<Void, Never>] = [:]
@@ -30,6 +31,7 @@ final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unche
        trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil,
        failure: @escaping @Sendable (NativeHLSError) -> Void) {
     self.sourceURL = sourceURL
+    self.fixedRenditionID = fixedRenditionID
     origin = NativeHLSOrigin(root: sourceURL, headers: headers, history: history, loadData: loadData,
       controlledAuto: controlledAuto, fixedRenditionID: fixedRenditionID, initialBudget: initialBudget,
       diagnostic: diagnostic, trace: trace, failure: failure)

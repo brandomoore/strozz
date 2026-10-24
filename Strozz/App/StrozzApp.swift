@@ -22,7 +22,7 @@ struct StrozzApp: App {
       Group {
         #if DEBUG && targetEnvironment(simulator)
         if ProcessInfo.processInfo.environment["STROZZ_KICK_UI_FIXTURE"] == "1" {
-          KickDirectoryView(initialQuery: "xqc")
+          KickDirectoryView(initialQuery: ProcessInfo.processInfo.environment["STROZZ_KICK_CHANNEL"] ?? "xqc")
         } else if ProcessInfo.processInfo.environment["STROZZ_FOLLOW_FIXTURE"] == "1" {
           ChannelFollowFixture()
         } else if ProcessInfo.processInfo.environment["STROZZ_MULTIVIEW_STATUS_FIXTURE"] == "1" {

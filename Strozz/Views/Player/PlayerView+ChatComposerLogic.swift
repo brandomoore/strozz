@@ -6,6 +6,10 @@ import UIKit
 
 extension PlayerView {
   func submitChatMessage() {
+    guard model.livePlatform == .twitch else {
+      chatSendError = String(localized: "Kick chat is read-only.")
+      return
+    }
     let text = chatDraft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty, !isSendingChat else { return }
     // Dismiss the tvOS keyboard overlay before sending.
@@ -85,6 +89,10 @@ extension PlayerView {
   }
 
   func applyExperimentalYouTubeSettings() {
+    if model.livePlatform == .kick {
+      chat.configureExperimentalYouTubeMerge(enabled: false, channelOrURL: "")
+      return
+    }
     let manual = experimentalYouTubeMergeChannelOrURL.trimmingCharacters(
       in: .whitespacesAndNewlines)
     let resolvedTarget = manual.isEmpty ? youtubeMergeDefaultTarget : manual
@@ -252,6 +260,10 @@ extension PlayerView {
   }
 
   func applyExperimentalKickSettings() {
+    if model.livePlatform == .kick {
+      chat.configureExperimentalKickMerge(enabled: true, channelOrURL: model.kickPlaybackTarget)
+      return
+    }
     let manual = experimentalKickMergeChannelOrURL.trimmingCharacters(in: .whitespacesAndNewlines)
     let resolvedTarget = manual.isEmpty ? kickMergeDefaultTarget : manual
 
@@ -264,6 +276,18 @@ extension PlayerView {
   /// Resolves the best Kick target for the active channel and pushes it to the
   /// chat service. Runs whenever the active channel changes.
   func refreshKickAutoTarget() async {
+    #if DEBUG && targetEnvironment(simulator)
+    if let input = ProcessInfo.processInfo.environment["STROZZ_PLAYER_UI_KICK_TARGET"] {
+      do {
+        kickAutoResolvedTarget = try KickPlaybackService.slug(from: input)
+        applyExperimentalKickSettings()
+      } catch {
+        recordPlaybackEvent("kick_target_invalid", level: .warning,
+          attributes: PlaybackTelemetryRecorder.errorAttributes(error))
+      }
+      return
+    }
+    #endif
     let login = activeChannel
     guard !login.isEmpty else { return }
     await kickAliases.refreshIfNeeded()

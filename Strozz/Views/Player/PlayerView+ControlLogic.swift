@@ -61,7 +61,11 @@ extension PlayerView {
 
   /// Control-row buttons in left-to-right visual order. Drives the row-membership
   /// check below.
-  var controlOrder: [Focusable] { [.streamInfo, .quality, .rewards, .chatSettingsButton, .chatToggle] }
+  var controlOrder: [Focusable] {
+    [.streamInfo, .quality]
+      + (!isVOD && !isUsingAltSource && model.livePlatform == .twitch ? [.rewards] : [])
+      + [.chatSettingsButton, .chatToggle]
+  }
 
   func isControlRowButton(_ f: Focusable?) -> Bool {
     guard let f else { return false }

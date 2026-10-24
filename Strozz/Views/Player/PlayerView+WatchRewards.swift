@@ -41,7 +41,7 @@ extension PlayerView {
 
   func closeRewards() {
     showRewards = false
-    focus = isUsingAltSource || isVOD ? .quality : .rewards
+    focus = isUsingAltSource || isVOD || model.livePlatform != .twitch ? .quality : .rewards
     scheduleHide()
   }
 
@@ -55,7 +55,8 @@ extension PlayerView {
   }
 
   func updateWatchRewards() {
-    guard !isMultiviewCompact, auth.isAuthenticated, let userID = auth.userID, let item = player.currentItem else {
+    guard model.livePlatform == .twitch, !isMultiviewCompact, auth.isAuthenticated,
+      let userID = auth.userID, let item = player.currentItem else {
       model.watchTracker.stop()
       return
     }
