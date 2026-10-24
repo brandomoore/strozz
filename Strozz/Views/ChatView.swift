@@ -36,6 +36,7 @@ struct ChatView: View {
   var highlightKeywords: [String] = []
   var isConnected: Bool = false
   var isReconnecting: Bool = false
+  var connectionPlatform: LivePlatform = .twitch
   var connectionError: String? = nil
   var emoteURLs: [String: URL] = [:]
   var badgeURLs: [String: URL] = [:]
@@ -228,7 +229,7 @@ struct ChatView: View {
             .background(palette.chromeOpaqueSurface, in: Capsule())
             .padding(8)
         } else if isReconnecting, !messages.isEmpty {
-          Text("Reconnecting Twitch chat…")
+          Text("Reconnecting \(connectionPlatform.title) chat…")
             .font(.caption)
             .foregroundStyle(.secondary)
             .padding(8)

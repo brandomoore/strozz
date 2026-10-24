@@ -1,9 +1,22 @@
 import Foundation
 
-/// The same rolling budget covers origin failures, startup failures, and stalls.
+/// The same rolling budget covers source renewal, origin failures, startup failures, and stalls.
 /// Brief network/timeline failures get fresh native attempts, not an immediate downgrade.
 struct NativePlaybackRecovery {
   private(set) var attempts: [Date] = []
+
+  mutating func takeResolutionRetry(for error: Error, at now: Date = Date()) -> Bool {
+    guard let error = error as? URLError else { return false }
+    switch error.code {
+    case .timedOut:
+      return takeRetry(for: .timeout, at: now)
+    case .networkConnectionLost, .cannotConnectToHost, .cannotFindHost,
+      .dnsLookupFailed, .notConnectedToInternet:
+      return takeRetry(for: .unavailable, at: now)
+    default:
+      return false
+    }
+  }
 
   mutating func takeRetry(for error: NativeHLSError, at now: Date = Date()) -> Bool {
     switch error {

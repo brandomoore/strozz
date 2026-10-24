@@ -50,6 +50,8 @@ struct PlayerView: View {
   /// the hand-off looks seamless (the channel's frame fills immediately) instead
   /// of flashing a black "Loading…" screen.
   var posterURL: URL? = nil
+  var initialPlatform: LivePlatform = .twitch
+  @State var showKickChannelInfo = false
 
 
 
@@ -69,11 +71,12 @@ struct PlayerView: View {
   var preferredQuality: String {
     get {
       playback?.qualities.first(where: { $0.id == model.decodeRecoveryQualityID })?.name
-        ?? model.multiviewContext?.quality ?? storedPreferredQuality
+        ?? (model.livePlatform == .kick ? model.sourceQuality : model.multiviewContext?.quality ?? storedPreferredQuality)
     }
     nonmutating set {
       model.decodeRecoveryQualityID = nil
-      if let context = model.multiviewContext { context.quality = newValue }
+      if model.livePlatform == .kick { model.sourceQuality = newValue }
+      else if let context = model.multiviewContext { context.quality = newValue }
       else { storedPreferredQuality = newValue }
     }
   }
@@ -919,6 +922,11 @@ struct PlayerView: View {
     .fullScreenCover(isPresented: $showSignInSheet) {
       SignInView(auth: auth)
     }
+    .alert("Channel info", isPresented: $showKickChannelInfo) {
+      Button("Done", role: .cancel) {}
+    } message: {
+      Text("\(channelDisplayName)\n\(streamTitle)\nKick: \(model.kickPlaybackTarget)")
+    }
   }
 
   // MARK: - Video + controls
@@ -966,7 +974,7 @@ struct PlayerView: View {
   /// browser User-Agent (googlevideo blocks the default UA), Twitch needs its
   /// player Referer/Origin.
   var captionAudioSourceHeaders: [String: String] {
-    isUsingAltSource ? Self.altSourceHTTPHeaders : PlaybackService.streamHeaders
+    livePlaybackHeaders
   }
 
   /// Reconcile the on-device caption engine with current playback state. Cheap

@@ -684,16 +684,11 @@ actor NativeControlledHLSOrigin {
                   "ingress_chunks": timing.chunks, "ingress_bytes": timing.bytes]))
             }
           }
-          for try await chunk in reader.stream(request, observeMetrics: { values in
-            var metrics: [String: Double] = [:]
-            for key in ["connect_seconds", "tls_seconds", "first_byte_seconds"] {
-              metrics[key] = values[key].flatMap(Double.init)
-            }
-            emitTrace?(.init(event: .delivery,
-              attributes: ["pipeline": "controlled_cmaf", "stage": "network_transaction",
-                "connection_reused": values["reused"] ?? "unknown",
-                "network_protocol": values["protocol"] ?? "unknown"],
-              metrics: metrics, counters: ["rendition": variant.id, "sequence": sequence]))
+          for try await chunk in reader.stream(request, observeTransfer: { detail in
+            emitTrace?(.init(event: detail.event,
+              attributes: detail.attributes.merging(["pipeline": "controlled_cmaf"]) { _, new in new },
+              metrics: detail.metrics,
+              counters: detail.counters.merging(["rendition": variant.id, "sequence": sequence]) { _, new in new }))
           }) {
             let consumedAt = ProcessInfo.processInfo.systemUptime
             defer {
@@ -760,7 +755,8 @@ actor NativeControlledHLSOrigin {
         counters: ["rendition": lowest.id, "height": lowest.height, "bandwidth_bps": lowest.bitrate]))
       lastClampedBudget = budget
     }
-    return .init(maximumWidth: lowest.width, maximumHeight: lowest.height, maximumBitrate: lowest.bitrate)
+    return .init(maximumWidth: lowest.width, maximumHeight: lowest.height, maximumBitrate: lowest.bitrate,
+      videoIsHidden: budget.videoIsHidden)
   }
 
   private func movie(for period: Int) async throws -> Movie {

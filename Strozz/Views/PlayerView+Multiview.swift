@@ -48,6 +48,16 @@ extension PlayerView {
       "preferred_maximum_height": item.preferredMaximumResolution.height,
       "preferred_peak_bitrate_bps": item.preferredPeakBitRate,
     ], flags: ["expanded": context.isExpanded])
+    // Layout feedback should not wait for the periodic native catch-up tick.
+    if let native = model.nativeHLS {
+      let generation = model.nativeGeneration
+      let tier = context.qualityTier
+      Task { @MainActor in
+        guard generation == model.nativeGeneration, context.qualityTier == tier,
+          native === model.nativeHLS, item === player.currentItem else { return }
+        await updateNativeResourceBudget(item: item, native: native)
+      }
+    }
   }
 
   func updateMultiviewPresentation() {
@@ -76,16 +86,16 @@ extension PlayerView {
     } else {
       goLive?.suppressedLogin = activeChannel
       trackpad.start()
-      chat.connect(to: activeChannel)
-      eventSub.start(forChannel: activeChannel, auth: auth)
-      hermes.start(forChannel: activeChannel)
+      connectCurrentLiveChat()
       model.channelMetadataTask?.cancel()
       model.channelMetadataTask = Task {
         await refreshChannelMetadata()
         if streamRewindEnabled { await resolveBroadcastVODIfNeeded() }
-        await refreshYouTubeAutoTarget()
-        await refreshYouTubeSourceAvailability()
-        await refreshKickAutoTarget()
+        if model.primaryPlatform == .twitch {
+          await refreshYouTubeAutoTarget()
+          await refreshYouTubeSourceAvailability()
+          await refreshKickAutoTarget()
+        }
       }
       syncCaptions()
       showControls = false

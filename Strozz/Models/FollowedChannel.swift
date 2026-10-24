@@ -12,6 +12,7 @@ struct FollowedChannel: Identifiable, Hashable {
     let profileImageURL: URL?
     let isLive: Bool
     let isMature: Bool
+    var platform: LivePlatform = .twitch
 
     /// The same streamer's live YouTube presence, when they're a dual-platform
     /// streamer who is currently also live on YouTube. `nil` means "no known
@@ -55,20 +56,22 @@ extension FollowedChannel {
     /// only value that identifies them as one, so anything deduping or
     /// preventing duplicates across pools must key on this.
     var channelKey: String {
-        login.isEmpty ? id : login.lowercased()
+        let key = login.isEmpty ? id : login.lowercased()
+        return platform == .twitch ? key : "\(platform.rawValue):\(key)"
     }
 
-    /// Per-platform viewer counts for the platforms this channel is *currently
-    /// live on*: Twitch when `isLive`, YouTube when its presence reports `isLive`.
-    /// Kick is not part of the Home follow-cards data today, so it never appears
-    /// here — a count is only included when that platform is live and known, so a
-    /// card can never show viewers for a platform the creator isn't live on.
+    /// Count the primary provider and any independently confirmed YouTube presence.
     var livePlatformViewerCounts: [PlatformViewerCount] {
         var counts: [PlatformViewerCount] = []
         if isLive, let viewerCount {
-            counts.append(PlatformViewerCount(platform: .twitch, count: viewerCount))
+            let provider: PlatformViewerCount.Platform = switch platform {
+            case .twitch: .twitch
+            case .kick: .kick
+            case .youtube: .youtube
+            }
+            counts.append(PlatformViewerCount(platform: provider, count: viewerCount))
         }
-        if let youtube, youtube.isLive, let youtubeViewers = youtube.viewerCount {
+        if platform != .youtube, let youtube, youtube.isLive, let youtubeViewers = youtube.viewerCount {
             counts.append(PlatformViewerCount(platform: .youtube, count: youtubeViewers))
         }
         return counts

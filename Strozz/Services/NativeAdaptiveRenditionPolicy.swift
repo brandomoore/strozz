@@ -12,6 +12,7 @@ struct NativeAdaptiveRenditionPolicy: Sendable {
     var maximumWidth = 0
     var maximumHeight = 0
     var maximumBitrate = 0
+    var videoIsHidden = false
 
     func allows(_ variant: Variant) -> Bool {
       (maximumWidth == 0 || variant.width <= maximumWidth)
@@ -21,7 +22,7 @@ struct NativeAdaptiveRenditionPolicy: Sendable {
   }
 
   enum Reason: String, Sendable {
-    case startup, measuredCapacity, budget, lateDelivery, retained
+    case startup, measuredCapacity, budget, visibilityRestore, lateDelivery, retained
   }
 
   struct Selection: Sendable {
@@ -44,6 +45,7 @@ struct NativeAdaptiveRenditionPolicy: Sendable {
   private var usedMeasuredCapacity = false
   private var upgradeCandidate: Int?
   private var upgradeVotes = 0
+  private var visibilityRestoreUntil: TimeInterval?
 
   init(variants: [Variant]) throws {
     guard !variants.isEmpty, Set(variants.map(\.id)).count == variants.count,
@@ -106,6 +108,13 @@ struct NativeAdaptiveRenditionPolicy: Sendable {
     } ?? lowest
     let previousBudget = lastBudget
     lastBudget = budget
+    if budget.videoIsHidden {
+      visibilityRestoreUntil = nil
+    } else if previousBudget.videoIsHidden {
+      visibilityRestoreUntil = now + 10
+    } else if visibilityRestoreUntil.map({ now > $0 }) == true {
+      visibilityRestoreUntil = nil
+    }
 
     func selection(_ variant: Variant, _ reason: Reason, changed: Bool) -> Selection {
       Selection(variant: variant, changed: changed, reason: reason)
@@ -119,6 +128,8 @@ struct NativeAdaptiveRenditionPolicy: Sendable {
     }
     var next = selected
     var reason = Reason.retained
+    let hasHeadroom = buffer >= 1 || (buffer >= 0.35 && (freshCapacity ?? 0) >= Double(proposed.bitrate) * 1.5)
+    if freshCapacity != nil, proposed.bitrate <= selected.bitrate { visibilityRestoreUntil = nil }
     if !budget.allows(selected) {
       next = freshCapacity == nil ? (eligible.last ?? lowest) : proposed
       reason = .budget
@@ -132,13 +143,17 @@ struct NativeAdaptiveRenditionPolicy: Sendable {
         : (proposed.bitrate < selected.bitrate ? proposed
            : eligible.last(where: { $0.bitrate < selected.bitrate }) ?? lowest)
       reason = .lateDelivery
+    } else if visibilityRestoreUntil != nil, !deliveryLate,
+      freshCapacity != nil, proposed.bitrate > selected.bitrate, hasHeadroom {
+      // A pane becoming visible is new demand, not ordinary bandwidth oscillation.
+      next = proposed
+      reason = .visibilityRestore
     } else if proposed.bitrate > selected.bitrate, freshCapacity != nil {
       if previousBudget != budget { upgradeCandidate = nil; upgradeVotes = 0 }
       if freshSample {
         if upgradeCandidate == proposed.id { upgradeVotes += 1 }
         else { upgradeCandidate = proposed.id; upgradeVotes = 1 }
       }
-      let hasHeadroom = buffer >= 1 || (buffer >= 0.35 && (freshCapacity ?? 0) >= Double(proposed.bitrate) * 1.5)
       if upgradeVotes >= 2, hasHeadroom, now - (lastSelectionAt ?? now) >= 5 {
         next = proposed
         reason = .measuredCapacity
@@ -155,6 +170,7 @@ struct NativeAdaptiveRenditionPolicy: Sendable {
       lastSelectionAt = now
       upgradeCandidate = nil
       upgradeVotes = 0
+      visibilityRestoreUntil = nil
       return selection(next, reason, changed: true)
     }
     return selection(selected, .retained, changed: false)

@@ -41,6 +41,7 @@ final class MobilePlaybackModel {
     didSet { if mode != oldValue { onModeChanged?(mode) } }
   }
   @ObservationIgnored var onModeChanged: ((MobilePlaybackMode) -> Void)?
+  @ObservationIgnored var onSourceChanged: ((PlatformLiveTarget) -> Void)?
   @ObservationIgnored private var lastVideoSelection: MobileQuality = .native
   private(set) var prefersNativePlayback = true
   private(set) var nativeFailure: String?
@@ -55,8 +56,29 @@ final class MobilePlaybackModel {
   private(set) var isExternalPlayback = false
   private(set) var livePosition = LivePlaybackPosition()
   private(set) var streamStartedAt: Date?
+  private(set) var source = PlatformLiveTarget(platform: .twitch, channel: "")
+  private(set) var sources: [PlatformLiveTarget] = []
+  private(set) var kickChannel: KickChannel?
+  private var twitchMetadata: ChannelMetadata?
 
-  @ObservationIgnored private var channel = ""
+  func presentationChannel(fallback: FollowedChannel) -> FollowedChannel {
+    if source.channel.isEmpty { return fallback }
+    if source.platform == .kick, let kickChannel { return kickChannel.followedChannel }
+    let matches = source.platform == fallback.platform && source.channel == fallback.login
+    if source.platform == .twitch, let twitchMetadata {
+      return FollowedChannel(id: source.id, login: source.channel, displayName: twitchMetadata.displayName,
+        title: twitchMetadata.title, gameName: matches ? fallback.gameName : "",
+        viewerCount: twitchMetadata.viewersCount, thumbnailURL: matches ? fallback.thumbnailURL : nil,
+        profileImageURL: twitchMetadata.profileImageURL, isLive: true)
+    }
+    if matches { return fallback }
+    var channel = FollowedChannel(id: source.id, login: source.channel, displayName: source.channel,
+      title: "", gameName: "", viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true)
+    channel.platform = source.platform
+    return channel
+  }
+
+  private var channel: String { source.channel }
   @ObservationIgnored private var generation = UUID()
   @ObservationIgnored private var engine: NativeLowLatencyHLS?
   @ObservationIgnored private var videoOutput: AVPlayerItemVideoOutput?
@@ -88,18 +110,26 @@ final class MobilePlaybackModel {
   @ObservationIgnored private var nativeRecovery = NativePlaybackRecovery()
   @ObservationIgnored private let muteForTesting: Bool
   @ObservationIgnored private let resolve: (String) async throws -> StreamPlayback
+  @ObservationIgnored private let resolveKick: (String) async throws -> KickPlaybackService.Resolved
   @ObservationIgnored var loadMetadata: (String) async -> ChannelMetadata? = {
     await PlaybackService.channelMetadata(for: $0)
   }
+  @ObservationIgnored var loadKickMetadata: (String) async throws -> KickChannel = {
+    try await KickPlaybackService.channel($0)
+  }
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "mobile-playback")
 
-  #if DEBUG
   @ObservationIgnored let diagnostics = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(
     directory: URL.cachesDirectory.appendingPathComponent("MobilePlaybackDiagnostics", isDirectory: true),
     maximumFileBytes: 512 * 1024, maximumFiles: 2, maximumPending: 32, mirrorToSystemLog: false))
+  #if DEBUG
   @ObservationIgnored private var isLayoutFixture = false
 
-  func prepareLayoutFixtureMetadata() {
+  func prepareLayoutFixtureMetadata(channel: FollowedChannel? = nil) {
+    if let channel {
+      source = .init(platform: channel.platform, channel: channel.login)
+      sources = [source]
+    }
     isLayoutFixture = true
     isActive = true
     streamStartedAt = Date().addingTimeInterval(-4 * 3600 - 37 * 60)
@@ -113,7 +143,8 @@ final class MobilePlaybackModel {
   }
 
   init(muted: Bool = false,
-       resolve: @escaping (String) async throws -> StreamPlayback = { try await PlaybackService.resolve(for: $0) }) {
+       resolve: @escaping (String) async throws -> StreamPlayback = { try await PlaybackService.resolve(for: $0) },
+       resolveKick: @escaping (String) async throws -> KickPlaybackService.Resolved = { try await KickPlaybackService.resolve($0) }) {
     #if targetEnvironment(simulator)
     muteForTesting = ProcessInfo.processInfo.environment["STROZZ_MUTE_PLAYBACK"] == "1"
     #else
@@ -121,12 +152,13 @@ final class MobilePlaybackModel {
     #endif
     isMuted = muted || muteForTesting
     self.resolve = resolve
+    self.resolveKick = resolveKick
     player.isMuted = isMuted
   }
 
   var qualityLabel: String {
     switch selection {
-    case .native: return "Auto - Native Low Latency"
+    case .native: return source.platform == .youtube ? "Auto" : "Auto - Native Low Latency"
     case .receiver: return "AirPlay"
     case .audioOnly: return String(localized: "Audio only")
     case .fixed(let id): return qualities.first { $0.id == id }?.name ?? "Selected quality"
@@ -140,7 +172,7 @@ final class MobilePlaybackModel {
   }
 
   var requestsNativePlayback: Bool {
-    mode == .video && prefersNativePlayback && !isAudioOnly && !isExternalPlayback
+    mode == .video && prefersNativePlayback && !isAudioOnly && !isExternalPlayback && source.platform != .youtube
   }
 
   var presentationState: PlaybackPresentationState {
@@ -161,21 +193,68 @@ final class MobilePlaybackModel {
     if ready, engine != nil { player.currentItem?.automaticallyPreservesTimeOffsetFromLive = false }
   }
 
-  func start(channel: String) {
+  func start(channel: String, platform: LivePlatform = .twitch) {
     guard !isActive else { return }
-    self.channel = channel
+    source = PlatformLiveTarget(platform: platform, channel: channel)
+    sources = [source]
+    kickChannel = nil
+    twitchMetadata = nil
+    streamStartedAt = nil
     isActive = true
     nativeFailure = nil
     nativeRecovery = NativePlaybackRecovery()
-    #if DEBUG
-    diagnostics.beginSession(channel: channel, playbackMode: "mobile")
+    diagnostics.beginSession(channel: channel, playbackMode: "mobile", attributes: ["source": platform.rawValue])
     diagnostics.startSchedulerMonitoring()
-    #endif
     refreshStreamMetadata()
     observeAudioSession()
-    chat.connect(to: channel)
-    MobileChatSourcePreferences.apply(to: chat, channel: channel)
+    connectChat()
     load(position: Position(shouldPlay: true, date: nil))
+  }
+
+  func switchSource(_ target: PlatformLiveTarget) {
+    guard target != source, isActive else { return }
+    let shouldPlay = !isPaused
+    let nextPosition = Position(shouldPlay: shouldPlay, date: nil)
+    if suspendedPosition != nil { suspendedPosition = nextPosition }
+    if interruptedPosition != nil { interruptedPosition = nextPosition }
+    if resetPosition != nil { resetPosition = nextPosition }
+    invalidate()
+    metadataTask?.cancel()
+    chat.disconnect()
+    source = target
+    onSourceChanged?(target)
+    sources.removeAll { $0.platform == target.platform }
+    sources.append(target)
+    kickChannel = nil
+    twitchMetadata = nil
+    streamStartedAt = nil
+    nativeFailure = nil
+    nativeRecovery = NativePlaybackRecovery()
+    triedDecodeRecovery = false
+    recoveryNotice = nil
+    selection = mode == .audioOnly ? .audioOnly : .native
+    lastVideoSelection = .native
+    diagnostics.beginSession(channel: target.channel, playbackMode: "mobile",
+      attributes: ["source": target.platform.rawValue])
+    diagnostics.startSchedulerMonitoring()
+    connectChat()
+    refreshStreamMetadata()
+    if mode != .chatOnly { load(position: nextPosition) }
+  }
+
+  private func connectChat() {
+    chat.disconnect()
+    chat.youtubeMergeEnabled = false
+    chat.kickMergeEnabled = false
+    switch source.platform {
+    case .twitch:
+      chat.connect(to: source.channel)
+      MobileChatSourcePreferences.apply(to: chat, channel: source.channel)
+    case .kick:
+      chat.configureExperimentalKickMerge(enabled: true, channelOrURL: source.channel)
+    case .youtube:
+      chat.configureExperimentalYouTubeMerge(enabled: true, channelOrURL: source.channel)
+    }
   }
 
   func select(_ quality: MobileQuality) {
@@ -275,6 +354,7 @@ final class MobilePlaybackModel {
 
   func suspend() {
     guard isActive, suspendedPosition == nil else { return }
+    diagnostics.recordEvent("app_backgrounded")
     suspendedPosition = position()
     needsFreshPlayer = true
     mediaResetInProgress = false
@@ -285,13 +365,13 @@ final class MobilePlaybackModel {
 
   func resume() {
     guard isActive, let suspended = suspendedPosition else { return }
+    diagnostics.recordEvent("app_foregrounded")
     // Returning is an opportunity to reactivate even if the OS never ended
     // its suspension interruption. Preserve any newer explicit pause intent.
     let position = interruptedPosition ?? suspended
     suspendedPosition = nil
     interruptedPosition = nil
-    chat.connect(to: channel)
-    MobileChatSourcePreferences.apply(to: chat, channel: channel)
+    connectChat()
     refreshStreamMetadata()
     if nativeFailure == nil { load(position: position) }
   }
@@ -309,9 +389,7 @@ final class MobilePlaybackModel {
     for observer in audioObservers { NotificationCenter.default.removeObserver(observer) }
     audioObservers.removeAll()
     invalidate()
-    #if DEBUG
     diagnostics.endSession(reason: "stopped")
-    #endif
     chat.disconnect()
     releaseAudioSession()
   }
@@ -329,11 +407,29 @@ final class MobilePlaybackModel {
     guard isActive else { return }
     metadataTask?.cancel()
     let login = channel
+    let target = source
     let loadMetadata = loadMetadata
+    let loadKickMetadata = loadKickMetadata
     metadataTask = Task { [weak self] in
+      if target.platform != .twitch {
+        if target.platform == .kick {
+          do {
+            let channel = try await loadKickMetadata(target.channel)
+            guard let self, self.isActive, self.source == target, !Task.isCancelled else { return }
+            self.kickChannel = channel
+            self.streamStartedAt = channel.startedAt
+          } catch {
+            guard let self, self.source == target, !Task.isCancelled else { return }
+            self.diagnostics.recordEvent("channel_metadata_unavailable", level: .warning,
+              attributes: PlaybackTelemetryRecorder.errorAttributes(error))
+          }
+        }
+        return
+      }
       let metadata = await loadMetadata(login)
-      guard let self, self.isActive, self.channel == login, !Task.isCancelled else { return }
+      guard let self, self.isActive, self.source == target, !Task.isCancelled else { return }
       self.streamStartedAt = metadata?.streamStartedAt
+      self.twitchMetadata = metadata
       if metadata == nil { Self.logger.warning("Mobile stream metadata unavailable") }
     }
   }
@@ -346,6 +442,8 @@ final class MobilePlaybackModel {
       audioSessionActive = true
       return true
     } catch {
+      diagnostics.recordEvent("audio_session_activation_failed", level: .error,
+        attributes: PlaybackTelemetryRecorder.errorAttributes(error))
       fail(String(localized: "Couldn't start audio playback. Please try again."))
       Self.logger.error("Could not activate mobile audio: \(error.localizedDescription, privacy: .public)")
       return false
@@ -396,6 +494,11 @@ final class MobilePlaybackModel {
   }
 
   private func handleAudioRouteChange(reason value: UInt?) {
+    if isActive {
+      diagnostics.recordEvent("audio_route_changed",
+        counters: value.map { ["route_change_reason": Int(clamping: $0)] } ?? [:],
+        flags: ["user_paused": isPaused])
+    }
     guard isActive, mode != .chatOnly, let value,
       AVAudioSession.RouteChangeReason(rawValue: value) == .oldDeviceUnavailable else { return }
     isPaused = true
@@ -410,6 +513,7 @@ final class MobilePlaybackModel {
 
   func handleMediaServicesLost() {
     guard isActive else { return }
+    diagnostics.recordEvent("audio_media_services_lost", level: .error)
     if nativeFailure != nil {
       mediaServicesUnavailable = true
       needsFreshPlayer = true
@@ -428,6 +532,7 @@ final class MobilePlaybackModel {
 
   func handleMediaServicesReset() {
     guard isActive, !mediaResetInProgress else { return }
+    diagnostics.recordEvent("audio_media_services_reset", level: .warning)
     let saved = position()
     resetPosition = saved
     mediaServicesUnavailable = false
@@ -454,6 +559,8 @@ final class MobilePlaybackModel {
   private func handleAudioInterruption(type value: UInt?, options: UInt) {
     guard isActive, nativeFailure == nil, let value,
       let type = AVAudioSession.InterruptionType(rawValue: value) else { return }
+    diagnostics.recordEvent("audio_interruption",
+      counters: ["interruption_type": Int(clamping: value), "interruption_options": Int(clamping: options)])
     switch type {
     case .began:
       guard interruptedPosition == nil else { return }
@@ -483,6 +590,8 @@ final class MobilePlaybackModel {
       try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
       audioSessionActive = false
     } catch {
+      diagnostics.recordEvent("audio_session_deactivation_failed", level: .warning,
+        attributes: PlaybackTelemetryRecorder.errorAttributes(error))
       Self.logger.error("Could not deactivate mobile audio: \(error.localizedDescription, privacy: .public)")
     }
   }
@@ -499,9 +608,7 @@ final class MobilePlaybackModel {
     jumpObserver = nil
     player.currentItem?.cancelPendingSeeks()
     player.pause()
-    #if DEBUG
     diagnostics.trackItem(nil)
-    #endif
     player.replaceCurrentItem(with: nil)
     videoOutput = nil
     decodedVideoSize = nil
@@ -538,6 +645,7 @@ final class MobilePlaybackModel {
     }
     let request = generation
     let selection = selection
+    let target = source
     isLoading = true
     loadingPosition = position
     isPaused = !position.shouldPlay
@@ -546,16 +654,29 @@ final class MobilePlaybackModel {
     loadTask = Task { [weak self] in
       guard let self else { return }
       guard prepareAudioSession() else { return }
+      diagnostics.recordEvent("load_started", flags: ["user_paused": isPaused])
       do {
-        let playback = try await resolve(channel)
+        let playback: StreamPlayback
+        switch target.platform {
+        case .twitch: playback = try await resolve(target.channel)
+        case .kick:
+          let resolved = try await resolveKick(target.channel)
+          guard isCurrent(request) else { return }
+          kickChannel = resolved.channel
+          streamStartedAt = resolved.channel.startedAt
+          playback = resolved.playback
+        case .youtube:
+          playback = try await target.resolvePlayback()
+        }
         guard isCurrent(request) else { return }
+        diagnostics.recordEvent("playback_resolved", counters: ["quality_count": playback.qualities.count])
         qualities = playback.qualities
-        guard let url = selection.source(in: playback) else {
+        guard let url = selection.source(in: playback)
+          ?? (target.platform == .kick && selection == .audioOnly ? playback.master : nil) else {
           throw selection == .audioOnly ? MobilePlaybackError.audioUnavailable : .qualityUnavailable
         }
         let useNative = requestsNativePlayback
         if useNative {
-          #if DEBUG
           let recorder = diagnostics
           let sessionID = recorder.sessionID
           let trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = { [weak recorder] detail in
@@ -568,11 +689,24 @@ final class MobilePlaybackModel {
                 counters: detail.counters)
             }
           }
-          #else
-          let trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil
-          #endif
-          engine = NativeLowLatencyHLS(sourceURL: url, headers: PlaybackService.streamHeaders,
-                                      history: 180, trace: trace) { [weak self] reason in
+          let fixedID: String?
+          if target.platform == .kick, case .fixed(let id) = selection { fixedID = id }
+          else { fixedID = nil }
+          engine = NativeLowLatencyHLS(sourceURL: target.platform == .kick ? playback.master : url, headers: target.headers,
+            history: 180, fixedRenditionID: fixedID, diagnostic: { [weak recorder] detail in
+              let dispatchedAt = ProcessInfo.processInfo.systemUptime
+              Task { @MainActor in
+                guard let recorder, recorder.sessionID == sessionID else { return }
+                let retrying = detail.attributes["operation"] == "manifest_retry"
+                let probing = detail.attributes["operation"] == "capacity_probe"
+                recorder.recordEvent(probing ? "native_hls_capacity_probe"
+                  : retrying ? "native_hls_manifest_retry" : "native_hls_failure",
+                  level: retrying || probing ? .warning : .error,
+                  attributes: detail.attributes.merging(["native_generation": request.uuidString]) { _, new in new },
+                  metrics: PlaybackTelemetryRecorder.nativeDeliveryMetrics(detail.metrics, dispatchedAt: dispatchedAt),
+                  counters: detail.counters)
+              }
+            }, trace: trace) { [weak self] reason in
             Task { @MainActor [weak self] in
               guard let self, self.isCurrent(request) else { return }
               self.recoverNative(reason)
@@ -580,7 +714,7 @@ final class MobilePlaybackModel {
           }
         }
         let asset = AVURLAsset(url: engine?.assetURL ?? url,
-                               options: ["AVURLAssetHTTPHeaderFieldsKey": PlaybackService.streamHeaders])
+                               options: ["AVURLAssetHTTPHeaderFieldsKey": target.headers])
         if let engine { asset.resourceLoader.setDelegate(engine, queue: engine.queue) }
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = useNative ? 3 : 8
@@ -601,9 +735,7 @@ final class MobilePlaybackModel {
           player.replaceCurrentItem(with: item)
         }
         guard player.currentItem === item else { throw MobilePlaybackError.unavailable }
-        #if DEBUG
-        diagnostics.trackItem(item, source: useNative ? "native" : isAudioOnly ? "audio" : "standard")
-        #endif
+        diagnostics.trackItem(item, source: target.platform.rawValue)
         player.isMuted = isMuted || muteForTesting
         player.allowsExternalPlayback = !useNative
         if position.shouldPlay && !isPaused && position.date == nil { player.play() }
@@ -663,6 +795,8 @@ final class MobilePlaybackModel {
         startMonitor(item: item, request: request)
       } catch {
         guard isCurrent(request) else { return }
+        diagnostics.recordEvent("load_failed", level: .error,
+          attributes: PlaybackTelemetryRecorder.errorAttributes(error))
         if PlaybackAudioSession.isMediaServicesReset(error) {
           if mediaResetInProgress {
             fail(String(localized: "Audio services haven't recovered. Please try again."))
@@ -694,6 +828,8 @@ final class MobilePlaybackModel {
   func recoverNative(_ reason: NativeHLSError, detail: String? = nil, position: Position? = nil) {
     guard isActive, suspendedPosition == nil, interruptedPosition == nil,
       !mediaServicesUnavailable, requestsNativePlayback else { return }
+    diagnostics.recordEvent("native_hls_retry", level: .warning,
+      attributes: ["reason": reason.rawValue], counters: ["attempts_in_window": nativeRecovery.attempts.count])
     guard nativeRecovery.takeRetry(for: reason) else {
       failNative(detail ?? reason.rawValue)
       return
@@ -705,6 +841,7 @@ final class MobilePlaybackModel {
   }
 
   private func fail(_ message: String) {
+    diagnostics.recordEvent("playback_failed", level: .error)
     invalidate()
     recoveryNotice = nil
     mediaResetInProgress = false
@@ -790,6 +927,7 @@ final class MobilePlaybackModel {
       var lastProgress = ProcessInfo.processInfo.systemUptime
       var lastVideoFrame = lastProgress
       var receivedVideoFrame = false
+      var lastDiagnostics = -Double.infinity
       while !Task.isCancelled {
         do { try await Task.sleep(for: .seconds(1)) } catch { return }
         guard let self, isCurrent(request) else { return }
@@ -799,6 +937,8 @@ final class MobilePlaybackModel {
           return
         }
         if player.status == .failed || item.status == .failed {
+          diagnostics.recordEvent("player_item_failed", level: .error,
+            attributes: PlaybackTelemetryRecorder.errorAttributes(item.error ?? player.error))
           if PlaybackAudioSession.isMediaServicesReset(player.error)
             || PlaybackAudioSession.isMediaServicesReset(item.error) {
             handleMediaServicesReset()
@@ -818,6 +958,24 @@ final class MobilePlaybackModel {
         let buffer = item.loadedTimeRanges.map(\.timeRangeValue)
           .filter { $0.start.seconds <= clock && $0.end.seconds >= clock }
           .map { $0.end.seconds - clock }.max() ?? 0
+        if uptime - lastDiagnostics >= 2 {
+          lastDiagnostics = uptime
+          diagnostics.recordItemLogs()
+          diagnostics.recordSnapshot(PlaybackTelemetrySnapshot(
+            attributes: [
+              "time_control_status": playing ? "playing" : paused ? "paused" : "waiting",
+              "item_status": item.status == .readyToPlay ? "ready" : "loading",
+              "source": engine == nil ? "standard" : "native",
+              "playback_profile": requestsNativePlayback ? "nativeLowLatency" : "standard",
+              "quality": qualityLabel, "presentation": "mobile",
+            ],
+            metrics: ["playhead_seconds": clock, "buffer_ahead_seconds": buffer,
+                      "video_frame_age_seconds": uptime - lastVideoFrame],
+            flags: ["user_paused": isPaused, "loading": isLoading, "playback_requested": !isPaused,
+                    "buffer_empty": item.isPlaybackBufferEmpty, "background": false,
+                    "decode_frozen": receivedVideoFrame && uptime - lastVideoFrame > 4
+                      && !isAudioOnly && !isExternalPlayback && !isPaused]))
+        }
         switch bufferedStallRecovery.observe(clock: clock, uptime: uptime, buffer: buffer,
           minimumBuffer: item.preferredForwardBufferDuration,
           waiting: player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
@@ -829,9 +987,7 @@ final class MobilePlaybackModel {
           catchUp.interrupt(at: uptime)
           catchUpRateChange = (uptime, clock, 1)
           Self.logger.warning("Resuming native playback after an unrequested pause")
-          #if DEBUG
           diagnostics.recordEvent("native_unrequested_pause_resume", level: .warning)
-          #endif
           player.play()
           continue
         case .resume:
@@ -849,15 +1005,11 @@ final class MobilePlaybackModel {
         case .none:
           break
         }
-        #if DEBUG
         let freshVideoFrame = videoOutput?.hasNewPixelBuffer(forItemTime: item.currentTime()) == true
-        #endif
         if let videoOutput,
            let frame = videoOutput.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) {
           decodedVideoSize = CGSize(width: CVPixelBufferGetWidth(frame), height: CVPixelBufferGetHeight(frame))
-          #if DEBUG
           if freshVideoFrame { diagnostics.videoFrameObserved(size: decodedVideoSize) }
-          #endif
           lastVideoFrame = uptime
           receivedVideoFrame = true
           if engine != nil { item.automaticallyPreservesTimeOffsetFromLive = false }

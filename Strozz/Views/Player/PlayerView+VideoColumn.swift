@@ -17,7 +17,7 @@ extension PlayerView {
   /// alias snapshot, the merged live chat can supply the count from its already
   /// fetched watch page. Only live sources contribute a count.
   var youtubeViewerCountForCurrentStream: Int? {
-    guard !isVOD else { return nil }
+    guard !isVOD, model.primaryPlatform == .twitch else { return nil }
     if let live = youtubeViewerCount { return live }
     if let merged = chat.youtubeConcurrentViewers { return merged }
 
@@ -55,6 +55,7 @@ extension PlayerView {
       playerVideoSurface
         .id(ObjectIdentifier(player))
         .accessibilityIdentifier("player-video-surface")
+        .accessibilityLabel(isVOD ? "Recorded video" : "\(currentLiveTarget.platform.title) stream")
         .accessibilityValue(isLoading ? "Loading" : "Ready")
         // Shared loading surface: the stream's frame behind the channel's
         // avatar, name, and a native spinner. Anchored as an overlay on the
@@ -64,7 +65,7 @@ extension PlayerView {
         // starts; fading this cover would hide video that's already audible.
         .overlay {
           StreamLoadingView(
-            posterURL: posterURL,
+            posterURL: model.livePlatform == .kick ? nil : posterURL,
             avatarURL: channelAvatarURL,
             title: isVOD ? activeVOD?.title : offlineDisplayName,
             isLoading: isLoading
@@ -86,7 +87,7 @@ extension PlayerView {
         .onAppear {
           audioLevelMonitor.start(
             audioPlaylistURL: audioOnlyPlaylistURL,
-            headers: PlaybackService.streamHeaders,
+            headers: livePlaybackHeaders,
             currentDate: { [weak model] in model?.player.currentItem?.currentDate() }
           )
         }

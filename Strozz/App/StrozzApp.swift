@@ -10,6 +10,7 @@ struct StrozzApp: App {
   @State private var environment = AppEnvironment()
 
   init() {
+    PlaybackTelemetrySentry.start()
     SDImageCodersManager.shared.addCoder(SDImageWebPCoder.shared)
     ImageCacheConfigurator.configure()
     ChatAppearanceMigration.runIfNeeded()
@@ -20,8 +21,12 @@ struct StrozzApp: App {
     WindowGroup {
       Group {
         #if DEBUG && targetEnvironment(simulator)
-        if ProcessInfo.processInfo.environment["STROZZ_FOLLOW_FIXTURE"] == "1" {
+        if ProcessInfo.processInfo.environment["STROZZ_KICK_UI_FIXTURE"] == "1" {
+          KickDirectoryView(initialQuery: ProcessInfo.processInfo.environment["STROZZ_KICK_CHANNEL"] ?? "xqc")
+        } else if ProcessInfo.processInfo.environment["STROZZ_FOLLOW_FIXTURE"] == "1" {
           ChannelFollowFixture()
+        } else if ProcessInfo.processInfo.environment["STROZZ_MULTIVIEW_STATUS_FIXTURE"] == "1" {
+          MultiviewStatusFixture()
         } else if ProcessInfo.processInfo.environment["STROZZ_SIGN_IN_FIXTURE"] == "1" {
           TwitchSignInFixture()
         } else if ProcessInfo.processInfo.environment["STROZZ_HOME_ERROR_FIXTURE"] == "1" {

@@ -7,6 +7,7 @@ final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unche
   static let scheme = "strozz-native-ll"
   let id = UUID()
   let sourceURL: URL
+  let fixedRenditionID: String?
   let origin: NativeHLSOrigin
   private let lock = NSLock()
   private var tasks: [ObjectIdentifier: Task<Void, Never>] = [:]
@@ -23,14 +24,16 @@ final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unche
 
   init(sourceURL: URL, headers: [String: String], history: Double,
        controlledAuto: Bool = NativeLowLatencyHLS.controlledAutoEnabled,
+       fixedRenditionID: String? = nil,
        initialBudget: NativeAdaptiveRenditionPolicy.Budget = .init(),
        loadData: NativeHLSOrigin.DataLoader? = nil,
        diagnostic: @escaping @Sendable (NativeHLSFailureDiagnostic) -> Void = { _ in },
        trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil,
        failure: @escaping @Sendable (NativeHLSError) -> Void) {
     self.sourceURL = sourceURL
+    self.fixedRenditionID = fixedRenditionID
     origin = NativeHLSOrigin(root: sourceURL, headers: headers, history: history, loadData: loadData,
-      controlledAuto: controlledAuto, initialBudget: initialBudget,
+      controlledAuto: controlledAuto, fixedRenditionID: fixedRenditionID, initialBudget: initialBudget,
       diagnostic: diagnostic, trace: trace, failure: failure)
     super.init()
   }
@@ -206,6 +209,7 @@ actor NativeHLSOrigin {
   private var reportRefreshSeconds: TimeInterval?
   private var reportRefreshMaxSeconds: TimeInterval?
   private let controlledAuto: Bool
+  private let fixedRenditionID: String?
   private var initialBudget: NativeAdaptiveRenditionPolicy.Budget
   private var controlled: NativeControlledHLSOrigin?
   private var inFlightRequests = 0
@@ -296,12 +300,14 @@ actor NativeHLSOrigin {
   #endif
 
   init(root: URL, headers: [String: String], history: Double, loadData: DataLoader? = nil,
-       controlledAuto: Bool = false, initialBudget: NativeAdaptiveRenditionPolicy.Budget = .init(),
+       controlledAuto: Bool = false, fixedRenditionID: String? = nil,
+       initialBudget: NativeAdaptiveRenditionPolicy.Budget = .init(),
        diagnostic: @escaping @Sendable (NativeHLSFailureDiagnostic) -> Void = { _ in },
        trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil,
        failure: @escaping @Sendable (NativeHLSError) -> Void) {
     self.root = root; self.headers = headers; self.history = max(12, min(history, 1800))
     self.controlledAuto = controlledAuto
+    self.fixedRenditionID = fixedRenditionID
     self.initialBudget = initialBudget
     self.failure = failure
     self.diagnostic = diagnostic
@@ -520,6 +526,7 @@ actor NativeHLSOrigin {
     guard !stopped else { throw CancellationError() }
     guard master == nil else { return }
     if !text.contains("#EXT-X-STREAM-INF:") {
+      guard fixedRenditionID == nil else { throw NativeHLSError.unsupported }
       sources[0] = Rendition(url: root)
       master = ""
       return
@@ -529,6 +536,7 @@ actor NativeHLSOrigin {
     var awaitingVariant = false
     var audioOnly = false
     var variantAttributes: [String: String] = [:]
+    var fixedIndices: [Int] = []
     for line in text.components(separatedBy: .newlines) {
       if line.hasPrefix("#EXT-X-STREAM-INF:") {
         awaitingVariant = true
@@ -555,12 +563,21 @@ actor NativeHLSOrigin {
           prepared[index]?.codecs = variantAttributes["CODECS"]
           prepared[index]?.bandwidth = variantAttributes["BANDWIDTH"].flatMap(Int.init)
           prepared[index]?.resolution = variantAttributes["RESOLUTION"]
+          if NativeCMAF.renditionIdentity(variantAttributes) == fixedRenditionID {
+            fixedIndices.append(index)
+          }
           output.append("media/\(index).m3u8")
         }
         awaitingVariant = false
       } else { output.append(line) }
     }
     guard !prepared.isEmpty else { throw NativeHLSError.unsupported }
+    if fixedRenditionID != nil {
+      // IVS rotates even rendition hosts/paths on consecutive master fetches.
+      guard fixedIndices.count == 1 else { throw NativeHLSError.unsupported }
+      prepared = prepared.filter { $0.key == fixedIndices[0] }
+      guard prepared.count == 1 else { throw NativeHLSError.unsupported }
+    }
     // A multivariant HLS asset must advertise one stable target duration.
     // Discover it before exposing the master, not during an active switch.
     let manifests = try await withThrowingTaskGroup(of: (Int, NativeCMAF.Manifest).self) { group in
@@ -586,7 +603,7 @@ actor NativeHLSOrigin {
     advertisedTargetDuration = manifests.values.map(\.targetDuration).max()
     sources = prepared
     reportsUpdatedAt = Date()
-    if controlledAuto, prepared.count > 1 {
+    if (controlledAuto && prepared.count > 1) || fixedRenditionID != nil {
       let values = try prepared.sorted(by: { $0.key < $1.key }).map { index, source in
         guard let bitrate = source.bandwidth, let manifest = manifests[index] else { throw NativeHLSError.invalidMedia }
         return NativeControlledHLSOrigin.Variant(id: index, url: source.url, bitrate: bitrate, manifest: manifest)
@@ -978,17 +995,24 @@ actor NativeHLSOrigin {
         }
         sources[index]?.segments.append(Segment(sequence: entry.sequence, url: entry.url, date: date,
           initialization: entry.initialization, discontinuity: period, tags: entry.tags))
-        #if DEBUG
-        let chunks = reader.stream(request(entry.url)) { [weak self] values in
-          Task { await self?.recordConnection(values, index: index, sequence: entry.sequence) }
+        let emitTrace = trace
+        let transfer: @Sendable (NativeHLSPlaybackDiagnostic) -> Void = { detail in
+          emitTrace?(.init(event: detail.event,
+            attributes: detail.attributes.merging(["pipeline": "passthrough"]) { _, new in new },
+            metrics: detail.metrics,
+            counters: detail.counters.merging(["rendition": index, "sequence": entry.sequence]) { _, new in new }))
         }
+        #if DEBUG
+        let chunks = reader.stream(request(entry.url), observeMetrics: { [weak self] values in
+          Task { await self?.recordConnection(values, index: index, sequence: entry.sequence) }
+        }, observeTransfer: transfer)
         let readStarted = Date()
         var readCompleted = false
         defer {
           recordRequest("/upstream/\(index)/\(entry.sequence)", started: readStarted, served: readCompleted)
         }
         #else
-        let chunks = reader.stream(request(entry.url))
+        let chunks = reader.stream(request(entry.url), observeTransfer: transfer)
         #endif
         sources[index]?.indexingPrefetch = entry.duration == nil
           || (!manifest.hasPrefetch && entry.sequence == manifest.entries.last?.sequence)
@@ -997,6 +1021,7 @@ actor NativeHLSOrigin {
         var fragmentOffset = 0
         var timing: NativeCMAF.Timing?
         var partOffset = 0
+        var partTicks: UInt64 = 0
         var partDuration = 0.0
         var cmafStart: Double?
         var independent = false
@@ -1051,11 +1076,13 @@ actor NativeHLSOrigin {
             guard timing == nil else { throw NativeHLSError.invalidMedia }
             guard let track else { throw NativeHLSError.invalidMedia }
             let nextTiming = try NativeCMAF.timing(box.payload, track: track)
-            if try NativeCMAF.shouldFlushPart(accumulated: partDuration, next: nextTiming.duration) {
+            if try NativeCMAF.shouldFlushPart(accumulated: partTicks, next: nextTiming.durationTicks,
+                                            scale: track.scale) {
               try publish(index, Part(offset: partOffset, length: offset - partOffset,
                                       duration: partDuration, independent: independent, media: cmafPending,
                                       timeline: cmafTimeline(start: cmafStart, track: track)))
               cmafPending.removeAll(keepingCapacity: true)
+              partTicks = 0
               partDuration = 0
             }
             timing = nextTiming
@@ -1063,7 +1090,7 @@ actor NativeHLSOrigin {
             cmafPending.append(boxData)
           } else if box.type == "mdat" {
             cmafPending.append(boxData)
-            guard let frame = timing else { throw NativeHLSError.invalidMedia }
+            guard let frame = timing, let track else { throw NativeHLSError.invalidMedia }
             if let endClock, abs(frame.start - endClock) > 0.002 {
               guard partDuration == 0, var source = sources[index], let last = source.segments.indices.last,
                 source.segments[last].parts.isEmpty, frame.independent else { throw NativeHLSError.transition }
@@ -1077,13 +1104,16 @@ actor NativeHLSOrigin {
               independent = frame.independent
               cmafStart = frame.start
             }
-            partDuration += frame.duration
-            guard partDuration <= 0.45 else { throw NativeHLSError.unsupported }
-            if partDuration >= 0.3825 {
+            partTicks += frame.durationTicks
+            partDuration = Double(partTicks) / Double(track.scale)
+            let bounds = try NativeCMAF.partTickBounds(scale: track.scale)
+            guard partTicks <= bounds.maximum else { throw NativeHLSError.unsupported }
+            if partTicks >= bounds.minimum {
               try publish(index, Part(offset: partOffset, length: offset + boxLength - partOffset,
                                       duration: partDuration, independent: independent, media: cmafPending,
                                       timeline: cmafTimeline(start: cmafStart, track: track)))
               cmafPending.removeAll(keepingCapacity: true)
+              partTicks = 0
               partDuration = 0
             }
             timing = nil

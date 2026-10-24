@@ -40,6 +40,12 @@ extension PlayerView {
   /// latency monitor keeps running so the Diagnostics readout still measures.
   func switchToAltYouTubeSource(resolved: AltSourceService.YouTubeLive? = nil) async {
     guard !isVOD else { return }
+    if model.livePlatform == .kick {
+      model.livePlatform = .twitch
+      connectCurrentLiveChat()
+      model.channelMetadataTask?.cancel()
+      model.channelMetadataTask = Task { await refreshChannelMetadata() }
+    }
     resetAltSourceWork()
     recordPlaybackEvent("source_switch_started", attributes: ["to_source": "youtube"])
     isUsingAltSource = true
@@ -167,7 +173,29 @@ extension PlayerView {
 
   /// Restores the proxied Twitch source and its control loops.
   func switchToTwitchSource(refresh: Bool = false) {
+    let wasKick = model.livePlatform == .kick
     resetAltSourceWork()
+    model.livePlatform = .twitch
+    if wasKick {
+      pinnedToLive = true
+      isScrubbing = false
+      channelDisplayName = activeChannel
+      channelAvatarURL = nil
+      streamTitle = ""
+      model.channelStreamStartedAt = nil
+      model.channelMetadataTask?.cancel()
+      model.nativeHLS?.stop()
+      model.nativeHLS = nil
+      cancelNativeStartup()
+      player.pause()
+      replacePlaybackItem(with: nil)
+      playback = nil
+      currentSourceURL = nil
+      configurePlayerForLive()
+      beginPlaybackTelemetry()
+      connectCurrentLiveChat()
+      model.channelMetadataTask = Task { await refreshChannelMetadata() }
+    }
     recordPlaybackEvent("source_switch_started", attributes: ["to_source": "twitch"])
     isUsingAltSource = false
     altSourceStatus = nil
@@ -273,21 +301,28 @@ extension PlayerView {
 
   // MARK: - Stream source selection (quality-menu picker)
 
-  /// Ordered source options for the quality menu's Stream Source submenu. The
-  /// YouTube row is only meaningful when `youtubeSourceAvailable` is true; the
-  /// menu hides the whole submenu otherwise.
-  var streamSourceOptions: [String] { ["Twitch", "YouTube"] }
+  /// YouTube needs a resolved simulcast; Kick also accepts a channel entered in-player.
+  var streamSourceOptions: [String] {
+    (model.primaryPlatform == .twitch ? ["Twitch"] : [])
+      + (youtubeSourceAvailable || isUsingAltSource ? ["YouTube"] : []) + ["Kick"]
+  }
 
-  /// Picker selection index: 0 = Twitch, 1 = YouTube simulcast.
-  var selectedStreamSourceIndex: Int { isUsingAltSource ? 1 : 0 }
+  var selectedStreamSourceIndex: Int {
+    streamSourceOptions.firstIndex(of: currentLiveTarget.platform.title) ?? 0
+  }
 
   /// Applies a Stream Source picker choice, switching the active video source.
   func selectStreamSource(at index: Int) {
-    // A picker choice is deliberate intent: record it so the "prefer YouTube"
-    // auto-default won't later yank the viewer off the source they chose.
+    guard streamSourceOptions.indices.contains(index) else { return }
     didManuallySelectSource = true
-    let wantYouTube = (index == 1)
-    if wantYouTube != isUsingAltSource {
+    if streamSourceOptions[index] == "Kick" {
+      switchToKickSource()
+      focus = .quality
+      scheduleHide()
+      return
+    }
+    let wantYouTube = streamSourceOptions[index] == "YouTube"
+    if wantYouTube != isUsingAltSource || model.livePlatform == .kick {
       if wantYouTube {
         Task { await switchToAltYouTubeSource() }
       } else {
@@ -304,7 +339,7 @@ extension PlayerView {
   /// and read-only; a failure just leaves the source unavailable.
   func refreshYouTubeSourceAvailability() async {
     youtubeSourceAvailable = false
-    guard !isVOD else { return }
+    guard !isVOD, model.primaryPlatform == .twitch else { return }
     let login = activeChannel
     guard !login.isEmpty else { return }
 

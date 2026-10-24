@@ -84,7 +84,7 @@ struct MultiviewPlayerView: View {
       // down into the panes — focus stays trapped in the controls until the
       // viewer closes them (Close button or the Menu/Back button).
       MultiviewVideoStage(controller: controller) { pane in
-        paneView(pane, style: pane.qualityTier == .thumbnail ? .compact : .full)
+        paneView(pane, style: pane.qualityTier == .thumbnail || pane.qualityTier == .hidden ? .compact : .full)
       }
       .focusScope(paneFocusScope)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -319,10 +319,10 @@ struct MultiviewPlayerView: View {
 
   private func paneView(_ pane: MultiviewPane, style: MultiviewPaneTile.Style) -> some View {
     PlayerView(channel: pane.channel.login, auth: auth, goLive: goLive,
-      posterURL: pane.channel.thumbnailURL, model: pane.model)
+      posterURL: pane.channel.thumbnailURL, initialPlatform: pane.channel.platform, model: pane.model)
     .accessibilityElement(children: .contain)
     .accessibilityIdentifier(pane.presentation.isExpanded ? "expanded-stream-\(pane.id)" : "")
-    .accessibilityValue(controller.isTransitioning ? "Transitioning" : "Live")
+    .accessibilityValue(Text(pane.accessibilityStatus(isTransitioning: controller.isTransitioning)))
     .overlay {
       ZStack {
         MultiviewPaneTile(
@@ -332,8 +332,7 @@ struct MultiviewPlayerView: View {
           showsMetadata: chromeVisible && focusedPaneID == pane.id,
           style: style,
           palette: palette,
-          glassDisabled: glassDisabled,
-          onRetry: { controller.load(pane) }
+          glassDisabled: glassDisabled
         )
         .opacity(pane.presentation.isExpanded ? 0 : 1)
         .allowsHitTesting(false)
@@ -348,8 +347,7 @@ struct MultiviewPlayerView: View {
           .contextMenu { paneMenu(pane) }
           .accessibilityIdentifier("multiview-pane-\(pane.id)")
           .accessibilityLabel(pane.channel.displayName)
-          .accessibilityValue(pane.isLoading ? "Loading"
-            : (pane.hasError ? "Unavailable" : (controller.isTransitioning ? "Transitioning" : "Live")))
+          .accessibilityValue(Text(pane.accessibilityStatus(isTransitioning: controller.isTransitioning)))
         }
       }
     }
@@ -494,7 +492,7 @@ struct MultiviewPaneButton: View {
 
 /// A single video tile with focus highlight, status overlays, an auto-hiding
 /// focused metadata pill, and a prominent audio cue on the audible pane.
-private struct MultiviewPaneTile: View {
+struct MultiviewPaneTile: View {
   enum Style {
     /// A primary / grid quadrant.
     case full
@@ -509,7 +507,6 @@ private struct MultiviewPaneTile: View {
   let style: Style
   let palette: ThemePalette
   let glassDisabled: Bool
-  var onRetry: () -> Void
 
   private var cornerRadius: CGFloat { style == .compact ? 12 : 16 }
 
@@ -519,14 +516,16 @@ private struct MultiviewPaneTile: View {
         statusOverlay {
           Text(pane.channel.displayName)
             .font(style == .compact ? .subheadline : .headline)
-            .foregroundStyle(.white)
-          if style == .full {
-            Text("Couldn't load — click to retry")
-              .font(.subheadline)
-              .foregroundStyle(.secondary)
+          if pane.model.isOffline {
+            Text("Went offline")
+              .font(style == .compact ? .caption : .subheadline)
+              .foregroundStyle(palette.videoControlForeground.opacity(0.75))
+          } else {
+            Text("Couldn't load this stream")
+              .font(style == .compact ? .caption : .subheadline)
+              .foregroundStyle(palette.videoControlForeground.opacity(0.75))
           }
         }
-        .onTapGesture(perform: onRetry)
       }
 
       overlays
@@ -558,8 +557,11 @@ private struct MultiviewPaneTile: View {
   @ViewBuilder
   private func statusOverlay<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
     VStack(spacing: 12) { content() }
+      .multilineTextAlignment(.center)
+      .foregroundStyle(palette.videoControlForeground)
+      .padding(style == .compact ? 8 : 20)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(Color.black.opacity(0.45))
+      .background(palette.videoControlScrim.opacity(glassDisabled ? 1 : 0.45))
   }
 
   /// Auto-hiding metadata (focused pane only) plus the persistent audio cue.

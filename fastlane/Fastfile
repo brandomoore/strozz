@@ -83,6 +83,9 @@ lane :beta do
   AppleBuildLease.with_shared("strozz/fastlane/beta") do
     api_key = asc_api_key
     build
+    archive = lane_context[SharedValues::XCODEBUILD_ARCHIVE]
+    UI.user_error!("Missing archive path for Sentry symbol upload") if archive.to_s.empty?
+    sh(File.expand_path("../tools/upload-sentry-symbols.sh", __dir__), archive)
     upload_to_testflight(
       api_key: api_key,
       app_identifier: APP_IDENTIFIER,

@@ -144,7 +144,7 @@ extension PlayerView {
               }
             }
           },
-          sourceAvailable: youtubeSourceAvailable,
+          sourceAvailable: !isVOD && !isMultiviewCompact,
           sourceOptions: streamSourceOptions,
           sourceSelectedIndex: selectedStreamSourceIndex,
           onSelectSource: { selectStreamSource(at: $0) },
@@ -190,7 +190,7 @@ extension PlayerView {
           if direction == .up { requestSeekBarFocus() }
         }
 
-        if !isUsingAltSource {
+        if !isUsingAltSource, model.livePlatform == .twitch {
           Button {
             hideTask?.cancel()
             focusRecoveryTask?.cancel()
@@ -516,6 +516,10 @@ extension PlayerView {
   /// is paused while the page is up, and its latency monitor + watchdog are
   /// suspended so the non-advancing playhead isn't mistaken for a stall.
   func presentChannelPage() {
+    if model.livePlatform == .kick {
+      showKickChannelInfo = true
+      return
+    }
     model.beginPlaybackAbsence(.channelPage, isVOD: isVOD)
     hideTask?.cancel()
     focusRecoveryTask?.cancel()

@@ -1,6 +1,6 @@
 # Playback architecture and troubleshooting
 
-Current guidance for local Twitch live playback on Apple TV and iPhone/iPad.
+Current guidance for local live playback on Apple TV and iPhone/iPad.
 Earlier experiments remain in Git history; they are not alternate shipping modes.
 For setup, UI conventions and releases, start with [AGENTS.md](../AGENTS.md).
 
@@ -41,6 +41,59 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
 | Recovery, drift and chat timing policies | `NativePlaybackRecovery.swift`, `NativeLiveCatchUp.swift`, `LiveChatSyncBaseline.swift` in `Strozz/Services/` |
 | Retained evidence and analysis | `PlaybackTelemetry.swift`, `PlaybackTelemetryWriter.swift` in `Strozz/Services/`; [`playback-diagnostics.py`](../tools/playback-diagnostics.py) |
 
+### Kick and cross-platform viewing
+
+`KickPlaybackService` resolves a public Kick channel document and its signed IVS
+HLS master using ordinary HTTPS requests. It distinguishes actual offline state
+(`livestream: null`) from missing channels, malformed responses, and access
+restrictions. Signed playback URLs are not saved in the recent-channel model.
+There is no hidden browser, challenge bypass, or additional player SDK.
+
+Kick has no separate player UI or playback model. TV uses `PlayerView` and
+`PlayerModel`; mobile uses `MobilePlayerView`, `MobilePlaybackModel`, and the
+existing `MobilePlaybackSession` video/PiP owner. `LiveStreamSource` supplies typed
+provider identity and validation. Source changes use these existing models,
+retain their mounted AVPlayer, resolve fresh playback, and fence late results
+by the normal load/session generations. Native recovery, buffering, catch-up,
+rewind, chat rendering/settings, diagnostics, gestures, and layout remain owned
+by the same player code as Twitch. Mobile mini-player/PiP ownership is not
+replaced during a source change.
+
+Keep provider identity separate from a channel handle. A Kick-only channel must
+not open Twitch IRC, request Twitch metadata/profiles/VODs, earn Twitch rewards,
+send Twitch chat, or enter Twitch recommendation history under the same text
+handle. Kick's read-only status uses the existing chat UI; unavailable
+provider-specific capabilities must not justify a different player interface.
+
+Kick chat negotiates its current anonymous Pusher application through Kick's
+public realtime connection endpoint. Do not bake in an application key:
+retired keys return Pusher error 4001 even when video and channel lookup work.
+Socket errors reconnect with backoff and negotiate again; they do not retry an
+obsolete hardcoded key forever or interrupt video.
+
+IVS `#EXT-X-PREFETCH` and `#EXT-X-PREFETCH-DISCONTINUITY` preserve real source
+sequences, timestamps, and periods. Auto retains all advertised video qualities.
+Explicit Kick qualities use controlled TS-to-CMAF remuxing pinned by stable
+variant identity, not passthrough TS or a bitrate ceiling. IVS can rotate **all**
+variant URLs on consecutive requests for the same master: match stable ID or
+resolution/frame-rate attributes against the fresh master, never URL equality.
+Filter to the explicit rendition before metadata/bootstrap work; do not make a
+fixed quality wait for unselected renditions.
+
+The opt-in `KickSharedPlayerLiveTests` exercise these actual existing player
+models, including standalone Kick, explicit qualities, and Twitch/Kick switches.
+They compare actual decoded video/PDT delay with a
+plain AVPlayer HLS baseline over 90 seconds. Set
+`TEST_RUNNER_STROZZ_KICK_LIVE_TESTS=1` when invoking `tools/xcbuild.sh test`;
+`TEST_RUNNER_STROZZ_KICK_CHANNEL` defaults to `xqc`. A separate handoff test needs
+`TEST_RUNNER_STROZZ_KICK_SWITCH_TWITCH_CHANNEL` naming a currently live Twitch
+channel. They check fixed quality, restored Auto, decoded Twitch/Kick transitions,
+and renderer identity. Existing audio/background/PiP regression suites continue
+to cover the same owners used by Kick. XCTest retains
+numeric latency evidence. Simulator PDT delay is not hardware glass-to-glass
+latency, a universal latency guarantee, or a comparison with the official IVS
+iOS SDK. Provider availability and stream formats can change.
+
 ## Invariants that fixes must preserve
 
 - **Auto is genuinely adaptive.** Do not pin Source, remove supported qualities,
@@ -79,6 +132,11 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   video/audio runs at encoded-sample boundaries when needed, preserving sample
   bytes, flags, descriptions and presentation clocks rather than widening the
   target or rejecting a supported rendition. Bound each media entry to ten seconds.
+  Accumulate and split part durations in integer video-clock ticks, rounding the
+  maximum down and the minimum up. Floating-point sums can put a legal
+  133 + 150 + 167-ms group above 450 ms and incorrectly attempt an impossible
+  sample split. Genuine unsplittable cuts report `partial_sample_boundary`
+  with numeric tick, timescale and sample-count evidence, never media or URLs.
 - **Keep normal latency policy.** Incremental-prefetch sources target 1.5-second
   hold-back and a three-second preferred forward buffer. Completed-only sources
   use cadence-aware timing; do not force the incremental constants onto them.
@@ -101,6 +159,17 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   intentional privacy pause, including during pending loads; expanded-pane sleep
   also owns the hidden panes' pauses. Recheck item/player/generation ownership
   after asynchronous work.
+  TV foreground source resolution must also use this shared retry budget for
+  transient transport loss/timeouts, with a short cancellable delay and at most
+  two retries per refresh. Do not retry authentication, offline, certificate or
+  cancellation errors. Fence every attempt/result against channel, session,
+  generation, background and source changes. `native_hls_resume_retry`,
+  `native_hls_resume_resolved` and `native_hls_resume_failed` distinguish attempts
+  and elapsed resolution time without retaining requests or credentials.
+  Remote incidents retain a bounded follow-up checkpoint when progress resumes
+  or the session closes within two minutes, grouped with the originating issue.
+  `diagnostic_kind=recovery` is informational evidence, not a new failure;
+  `outcome=session_ended` must not be interpreted as recovered playback.
 - **Do not turn background work into a live failure.** Unused-rendition reports
   are optional and must not block active media. Unavailable historical resources
   fail locally rather than killing healthy live production. Keep reader queues,

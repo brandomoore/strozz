@@ -91,6 +91,7 @@ extension PlayerView {
     }
     .task(id: model.multiviewContext?.reloadID) {
       if activeChannel.isEmpty { activeChannel = channel }
+      initializeLiveSource()
       if model.multiviewContext == nil {
         migrateNativeLiveProfile()
         UserDefaults.standard.set(true, forKey: PersistenceKey.nativePlaybackDefaultApplied)
@@ -104,16 +105,12 @@ extension PlayerView {
         resetDiagnostics()
         beginPlaybackTelemetry()
         configurePlayerForLive()
-        applyExperimentalYouTubeSettings()
-        applyExperimentalKickSettings()
         if !isMultiviewCompact {
-          chat.connect(to: activeChannel)
-          eventSub.start(forChannel: activeChannel, auth: auth)
-          hermes.start(forChannel: activeChannel)
+          connectCurrentLiveChat()
         }
-        async let metadataTask: Void = refreshChannelMetadata()
+        model.channelMetadataTask?.cancel()
+        model.channelMetadataTask = Task { await refreshChannelMetadata() }
         await loadInitialSource()
-        _ = await metadataTask
       }
       if !isMultiviewCompact { focus = .video }
     }
@@ -641,7 +638,7 @@ extension PlayerView {
       goLive?.suppressedLogin = activeChannel
     }
     .task(id: activeChannel) {
-      guard !isMultiviewCompact else { return }
+      guard !isMultiviewCompact, initialPlatform == .twitch else { return }
       await refreshYouTubeAutoTarget()
     }
     .task(id: isLoading) {
@@ -651,7 +648,7 @@ extension PlayerView {
       await refreshYouTubeSourceAvailability()
     }
     .task(id: activeChannel) {
-      guard !isMultiviewCompact else { return }
+      guard !isMultiviewCompact, initialPlatform == .twitch else { return }
       await refreshKickAutoTarget()
     }
   }

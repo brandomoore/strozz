@@ -103,6 +103,7 @@ final class ChatService {
   /// Concurrent viewers from the merged chat's live watch page, when known.
   var youtubeConcurrentViewers: Int?
   var kickStatusMessage: String?
+  var kickIsConnected = false
   /// Set when a raid USERNOTICE arrives. Cleared by the consumer after handling.
   var pendingRaid: RaidEvent?
 

@@ -11,6 +11,7 @@ struct StrozzMobileApp: App {
   @State private var playback = MobilePlaybackSession()
 
   init() {
+    PlaybackTelemetrySentry.start()
     SDImageCodersManager.shared.addCoder(SDImageWebPCoder.shared)
     ImageCacheConfigurator.configure()
     ChatSyncDefaultsMigration.runIfNeeded()
@@ -47,7 +48,8 @@ struct StrozzMobileApp: App {
   }
 
   private var appContent: some View {
-    MobileRootView(accountID: auth.userID ?? "anonymous")
+    MobileRootView(accountID: auth.userID ?? "anonymous",
+      initialTab: initialTab)
       .id(auth.userID ?? "anonymous")
       .environment(auth)
       .environment(theme)
@@ -65,6 +67,14 @@ struct StrozzMobileApp: App {
       #if DEBUG
       .task { await TwitchCloudProbe.runIfRequested() }
       #endif
+  }
+
+  private var initialTab: Int {
+    #if DEBUG
+    ProcessInfo.processInfo.environment["STROZZ_KICK_UI_FIXTURE"] == "1" ? 3 : 0
+    #else
+    0
+    #endif
   }
 }
 
@@ -96,7 +106,8 @@ struct MobileRootView: View {
     playback.channel == nil ? .closed : (playback.isExpanded ? .expanded : .miniPlayer)
   }
 
-  init(accountID: String = "anonymous") {
+  init(accountID: String = "anonymous", initialTab: Int = 0) {
+    _tab = State(initialValue: initialTab)
     _history = State(initialValue: WatchHistoryService(storageKey: PersistenceKey.mobileWatchHistory(accountID: accountID)))
     _vodProgress = State(initialValue: MobileVODProgressStore(accountID: accountID))
   }

@@ -191,7 +191,8 @@ struct NativeCMAFRemuxer {
   private var audioEnd: UInt64?
   private var compositionShift: Int64?
   private var pending = Data()
-  private var partDuration = 0.0
+  private var partVideoTicks: UInt64 = 0
+  private var partDuration: Double { Double(partVideoTicks) / Double(format.video.scale) }
   private var totalVideoTicks: UInt64 = 0
   private var totalDuration: Double { Double(totalVideoTicks) / Double(format.video.scale) }
   private var partVideoStart: UInt64 = 0
@@ -307,23 +308,23 @@ struct NativeCMAFRemuxer {
     let moof = try NativeCMAF.child(data, "moof")
     let video = try NativeCMAF.fragmentTiming(moof, track: format.video)
     let audio = try NativeCMAF.fragmentTiming(moof, track: format.audio)
-    let duration = Double(video.duration) / Double(format.video.scale)
     var output: [NativeTransportRemuxer.Part] = []
-    if partDuration + duration > 0.45 {
-      if partDuration >= 0.3825 {
+    let (minimumPartTicks, maximumPartTicks) = try NativeCMAF.partTickBounds(scale: format.video.scale)
+    if video.duration > maximumPartTicks || partVideoTicks > maximumPartTicks - video.duration {
+      if partVideoTicks >= minimumPartTicks {
         output.append(flush())
         output += try appendNormalized(data)
         return output
       } else {
         let pieces = try NativeFragmentedMP4.splitControlledFragment(data,
-          video: format.video, audio: format.audio, maximumDuration: 0.45 - partDuration,
+          video: format.video, audio: format.audio, maximumVideoTicks: maximumPartTicks - partVideoTicks,
           sequence: nextSequence)
         output += try appendNormalized(pieces.0)
         output += try appendNormalized(pieces.1)
         return output
       }
     }
-    if partDuration == 0 {
+    if partVideoTicks == 0 {
       partVideoStart = video.decodeTime
       partPresentationStart = Int64(video.decodeTime) + video.firstComposition
       partAudioStart = audio.decodeTime
@@ -332,10 +333,10 @@ struct NativeCMAFRemuxer {
     guard nextSequence < UInt32.max else { throw NativeHLSError.invalidMedia }
     pending += try NativeFragmentedMP4.resequencedFragment(data, sequence: nextSequence)
     nextSequence += 1
-    partDuration += duration
+    partVideoTicks += video.duration
     videoSamples += video.samples
     audioSamples += audio.samples
-    if partDuration >= 0.3825 { output.append(flush()) }
+    if partVideoTicks >= minimumPartTicks { output.append(flush()) }
     return output
   }
 
@@ -344,7 +345,7 @@ struct NativeCMAFRemuxer {
       independent: partIndependent, decodeTime: partVideoStart, presentationTime: partPresentationStart,
       audioDecodeTime: partAudioStart, videoSamples: videoSamples, audioSamples: audioSamples)
     pending = Data()
-    partDuration = 0
+    partVideoTicks = 0
     videoSamples = 0
     audioSamples = 0
     return result
