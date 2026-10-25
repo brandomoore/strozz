@@ -319,6 +319,23 @@ are inactive for background/idle playback; absence of a delay event is not proof
 of healthy playback. `playback_main_operation_slow` names slow synchronous
 snapshot, audio-track, access-log or error-log reads.
 
+In Debug builds, scheduler reports also carry background-only process resource
+samples; these additional measurements are not collected in Release. CPU
+`process_cpu_core_equivalents` is CPU seconds divided by the recorded sampling
+interval: 1.0 means one fully occupied core, not the whole device. Pending main
+callbacks retain peak sampled CPU, resident memory and physical footprint
+without queuing more callbacks. These are whole-process measurements shared by
+all panes, not per-stream costs; never sum the panes' resource values.
+Compare `resource_sample_uptime_seconds` with the event time, since the latest
+background sample can precede main-queue delivery. The first sample after
+monitoring resumes has no CPU delta. `volume_free_bytes`/`volume_total_bytes`
+describe the filesystem, not an app cache quota, and refresh at most every 15
+seconds (`disk_sample_uptime_seconds`). Resource errors have explicit numeric
+codes rather than fabricated zero usage/free space. Sample duration and its
+pending-callback peak expose the probe's own overhead. These measurements help
+attribute pressure; they do not prove which function stalled or why a cache
+file disappeared.
+
 For lost sound after a stall, treat reconnecting the output as a workaround,
 not evidence against an app bug. `audio_playback_state` records route port types,
 mute/volume, playback intent, enabled audio tracks and restart serial around
