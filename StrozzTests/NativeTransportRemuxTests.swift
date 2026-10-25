@@ -197,6 +197,62 @@ final class NativeTransportRemuxTests: XCTestCase {
     XCTAssertEqual(demuxer.audioConfiguration?.bytes, Data([0x11, 0x90]))
   }
 
+  func testLargeVideoPESPreservesPayloadAndClocksWithInterleavedAudio() throws {
+    let idr = Data([0x65, 0x80]) + Data(repeating: 0x88, count: 512 * 1024)
+    let aac = Data(repeating: 0x21, count: 500)
+    var videoCounter = 0
+    var audioCounter = 0
+    let videoPackets = packets(pes(nal(sps) + nal(pps) + nal(idr),
+      pts: 93_000, dts: 90_000), pid: 257, counter: &videoCounter)
+    let audioPackets = packets(pes(adts(aac) + adts(aac), audio: true, pts: 90_000),
+      pid: 256, counter: &audioCounter)
+    var demuxer = NativeTransportDemuxer()
+    var units: [NativeTransportDemuxer.Unit] = []
+    for index in 0..<max(videoPackets.count, audioPackets.count) {
+      if index < videoPackets.count {
+        units += try demuxer.append(videoPackets[index], videoPID: 257, audioPID: 256)
+      }
+      if index < audioPackets.count {
+        units += try demuxer.append(audioPackets[index], videoPID: 257, audioPID: 256)
+      }
+    }
+    units += try demuxer.finishSegment()
+    let video = try XCTUnwrap(videoUnits(units).first)
+    XCTAssertEqual(videoUnits(units).count, 1)
+    XCTAssertEqual(try avcNALs(video.bytes), [idr])
+    XCTAssertEqual(video.decodeTime, 90_000)
+    XCTAssertEqual(video.presentationTime, 93_000)
+    XCTAssertTrue(video.independent)
+    let audio = units.compactMap { if case .audio(let value) = $0 { value } else { nil } }
+    XCTAssertEqual(audio.map(\.bytes), [aac, aac])
+    XCTAssertEqual(audio.map(\.decodeTime), [48_000, 49_024])
+    XCTAssertEqual(audio.map(\.duration), [1024, 1024])
+  }
+
+  func testCopyingDemuxerKeepsPendingPESIndependent() throws {
+    let idr = Data([0x65, 0x80]) + Data(repeating: 0x88, count: 128 * 1024)
+    var counter = 0
+    let values = packets(pes(nal(sps) + nal(pps) + nal(idr), pts: 90_000),
+      pid: 257, counter: &counter)
+    let split = values.count / 2
+    var original = NativeTransportDemuxer()
+    for packet in values.prefix(split) {
+      XCTAssertTrue(try original.append(packet, videoPID: 257, audioPID: 256).isEmpty)
+    }
+    var copy = original
+    for packet in values.dropFirst(split) {
+      XCTAssertTrue(try original.append(packet, videoPID: 257, audioPID: 256).isEmpty)
+    }
+    let originalVideo = try XCTUnwrap(videoUnits(original.finishSegment()).first)
+    for packet in values.dropFirst(split) {
+      XCTAssertTrue(try copy.append(packet, videoPID: 257, audioPID: 256).isEmpty)
+    }
+    let copyVideo = try XCTUnwrap(videoUnits(copy.finishSegment()).first)
+    XCTAssertEqual(try avcNALs(originalVideo.bytes), [idr])
+    XCTAssertEqual(copyVideo.bytes, originalVideo.bytes)
+    XCTAssertEqual(copyVideo.decodeTime, originalVideo.decodeTime)
+  }
+
   func testMissingAudioPacketAndTruncatedPESFailExplicitly() throws {
     let payload = adts(Data(repeating: 0x21, count: 500))
     var counter = 0

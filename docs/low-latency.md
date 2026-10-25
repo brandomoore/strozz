@@ -148,6 +148,12 @@ iOS SDK. Provider availability and stream formats can change.
   `NativeTransportDemuxer.removingTransportTimingSEI` and its regressions.
   Adaptive decode checks must feed `updateControlledPlayback` and inspect actual
   CVPixelBuffer dimensions; AVPlayer preferences alone do not drive this engine.
+- **Keep PES assembly linear.** Remove a pending PES from its dictionary before
+  appending the next transport packet, then restore it if incomplete. Retaining
+  the dictionary's copy makes each small append copy the accumulated payload,
+  including expensive virtual-memory copies for large keyframes. Preserve
+  independent state when a demuxer is copied, and keep A/V payloads and clocks
+  unchanged.
 - **Respect format and part contracts.** Source-CMAF requires muxed AVC/AAC-LC,
   compatible track IDs/timebases and audio configuration within a period, and no
   edit lists. Unsupported media fails explicitly, not by silently hiding a
