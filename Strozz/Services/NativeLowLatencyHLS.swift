@@ -1117,6 +1117,8 @@ actor NativeHLSOrigin {
               partDuration = 0
             }
             timing = nil
+          } else if box.type == "skip" {
+            guard timing == nil else { throw NativeHLSError.unsupported }
           } else if !["emsg", "styp", "sidx", "free", "prft"].contains(box.type) { throw NativeHLSError.unsupported }
           offset += boxLength
           }

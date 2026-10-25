@@ -236,7 +236,7 @@ struct NativeCMAFRemuxer {
         guard let movie = pendingMovie else { throw NativeHLSError.invalidMedia }
         output += try consume(movie + bytes)
         pendingMovie = nil
-      case "emsg", "styp", "sidx", "free", "prft":
+      case "emsg", "styp", "sidx", "free", "skip", "prft":
         guard pendingMovie == nil else { throw NativeHLSError.unsupported }
       default:
         throw NativeHLSFailureDetail.isoBox(type: try NativeCMAF.integer(bytes, 4), bytes: size)

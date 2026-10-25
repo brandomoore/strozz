@@ -158,6 +158,10 @@ iOS SDK. Provider availability and stream formats can change.
   compatible track IDs/timebases and audio configuration within a period, and no
   edit lists. Unsupported media fails explicitly, not by silently hiding a
   quality. Compatible initialization-URL rotations are not new periods.
+  CMAF `skip` boxes designate unused space, just like `free` boxes; accept them
+  before, between and after complete `moof`/`mdat` pairs without changing media
+  or clocks. Keep size/truncation checks; `skip` between `moof` and `mdat` remains
+  unsupported because discarding it would invalidate the source sample offsets.
   Nonterminal parts must meet the 85% minimum of the 450-ms target (382.5 ms);
   cutting at 380 ms has produced invalid 50-fps playlists.
   Upstream CMAF fragment boundaries are not necessarily valid part boundaries:

@@ -243,6 +243,61 @@ final class NativeCMAFRemuxTests: XCTestCase {
       video: videoTrack, audio: audioTrack, maximumVideoTicks: 40_500, sequence: 7))
   }
 
+  func testFreeSpaceBoxesPreserveRemuxedMediaAcrossChunkBoundaries() throws {
+    let format = try NativeCMAFRemuxer.Format(initialization())
+    let source = segment(videoClock: 19_000_000, audioClock: 912_000)
+    var original = try NativeCMAFRemuxer(format: format, videoDescriptionIndex: 3,
+      firstSequence: 70, presentationReference: nil)
+    let expected = try original.append(source) + original.finish(expectedDuration: 2)
+    for type in ["free", "skip"] {
+      for padding in [box(type, Data()), box(type, Data([1, 2, 3])),
+        word(1) + Data(type.utf8) + word(0) + word(16)] {
+        var padded = padding
+        for item in try NativeCMAF.boxes(source) {
+          padded += box(item.type, item.payload)
+          if item.type == "mdat" { padded += padding }
+        }
+        for chunkSize in [1, 7, 37, padded.count] {
+          var converter = try NativeCMAFRemuxer(format: format, videoDescriptionIndex: 3,
+            firstSequence: 70, presentationReference: nil)
+          var parts: [NativeTransportRemuxer.Part] = []
+          for offset in stride(from: 0, to: padded.count, by: chunkSize) {
+            parts += try converter.append(padded.subdata(in: offset..<min(offset + chunkSize, padded.count)))
+          }
+          parts += try converter.finish(expectedDuration: 2)
+          XCTAssertEqual(parts.map(\.bytes), expected.map(\.bytes),
+            "\(type) padding must not change samples, clocks, offsets or part boundaries")
+          XCTAssertEqual(parts.map(\.duration), expected.map(\.duration))
+          XCTAssertEqual(parts.map(\.independent), expected.map(\.independent))
+          XCTAssertEqual(converter.nextSequence, original.nextSequence)
+        }
+      }
+    }
+  }
+
+  func testFreeSpaceBoxesStillRejectInvalidSizesTruncationAndEmbeddedOffsets() throws {
+    let format = try NativeCMAFRemuxer.Format(initialization())
+    let source = fragment(videoClock: 1_000_000, audioClock: 48_000, audioCount: 5,
+      sequence: 1, independent: true)
+    for type in ["free", "skip"] {
+      for padding in [word(7) + Data(type.utf8), word(33 * 1024 * 1024) + Data(type.utf8),
+        Data(box(type, Data([1])).dropLast())] {
+        var converter = try NativeCMAFRemuxer(format: format, videoDescriptionIndex: 1,
+          firstSequence: 1, presentationReference: nil)
+        XCTAssertThrowsError(try converter.append(source + padding) + converter.finish(expectedDuration: 0.1)) {
+          XCTAssertEqual(NativeHLSError.classify($0), .invalidMedia)
+        }
+      }
+      var converter = try NativeCMAFRemuxer(format: format, videoDescriptionIndex: 1,
+        firstSequence: 1, presentationReference: nil)
+      let movie = try box("moof", NativeCMAF.child(source, "moof"))
+      XCTAssertThrowsError(try converter.append(movie + box(type, Data()))) {
+        XCTAssertEqual(NativeHLSError.classify($0), .unsupported,
+          "Do not discard bytes between moof and mdat without adjusting their offsets")
+      }
+    }
+  }
+
   func testUnknownEightByteMediaBoxReportsOnlyItsStructuralIdentity() throws {
     let format = try NativeCMAFRemuxer.Format(initialization())
     var converter = try NativeCMAFRemuxer(format: format, videoDescriptionIndex: 1,
