@@ -1,6 +1,6 @@
 name: Strozz
 options:
-  # New app identity; the legacy Twozz app remains a separate installation.
+  # New app identity; the legacy Strozz Old app remains a separate installation.
   bundleIdPrefix: com.thatcube.Strozz
   deploymentTarget:
     tvOS: "18.0"
