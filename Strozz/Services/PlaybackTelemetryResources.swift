@@ -29,7 +29,6 @@ struct PlaybackResourceSampler {
   init(directory: URL = .cachesDirectory) {
     self.directory = directory
   }
-  #endif
 
   mutating func sample(at now: Double = ProcessInfo.processInfo.systemUptime) -> PlaybackResourceSample {
     let started = ProcessInfo.processInfo.systemUptime
@@ -75,3 +74,4 @@ struct PlaybackResourceSampler {
     return result
   }
 }
+#endif
