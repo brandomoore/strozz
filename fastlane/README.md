@@ -142,7 +142,10 @@ the same private schema that TestFlight will use.
 
 Validate/import `Config/StrozzAccounts.ckdb` into Development with `cktool`,
 then use CloudKit Console's **Deploy Schema Changes** to promote it. Export and
-verify Production before uploading. Store management tokens with
+verify Production before uploading, including the `KickFollowing` record type
+with its encrypted `payload` field for shared Kick follow metadata. Do not ship
+the Kick setup flow against a Production schema that only contains
+`TwitchAccount`. Store management tokens with
 `xcrun cktool save-token --type management --method keychain`, never in the
 repository or shell command arguments.
 

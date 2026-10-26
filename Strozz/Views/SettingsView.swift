@@ -94,7 +94,7 @@ private enum SettingsPane: String, CaseIterable, Hashable, Identifiable {
     case .goLiveAlerts:
       "Choose when Strozz alerts you that a followed channel is live."
     case .accounts:
-      "Manage your Twitch and YouTube connections."
+      "Manage your Twitch, YouTube and Kick connections."
     case .about:
       nil
     }
@@ -261,6 +261,7 @@ private struct SettingsPaneDetail: View {
             onAccountChanged: onAccountChanged
           )
           TwitchWatchRewardsSection()
+          SettingsKickAccountSection()
           SettingsYouTubeAccountSection(
             onRequestYouTubeSignIn: onRequestYouTubeSignIn,
             onAccountChanged: onAccountChanged

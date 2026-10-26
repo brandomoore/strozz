@@ -15,3 +15,7 @@ DEFINE SCHEMA
     RECORD TYPE TwitchAccount (
         payload ENCRYPTED BYTES
     );
+
+    RECORD TYPE KickFollowing (
+        payload ENCRYPTED BYTES
+    );

@@ -84,6 +84,18 @@ final class KickPlaybackTests: XCTestCase {
         bytes, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
       )
     }
+
+    func testKickPreviewsUseKickVariantsForInitialPlaybackAndRecovery() async throws {
+      for original in [false, true] {
+        let url = try await KickPlaybackService.previewHLSURL(for: "fixture", original: original) { request in
+          let url = try XCTUnwrap(request.url)
+          XCTAssertTrue(url.host == "kick.com" || url.host == "edge.live-video.net")
+          let data = url.host == "kick.com" ? Self.channelJSON : Data(Self.master.utf8)
+          return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        XCTAssertEqual(url.lastPathComponent, original ? "source.m3u8" : "low.m3u8")
+      }
+    }
     XCTAssertEqual(resolved.playback.master, Self.masterURL)
     XCTAssertEqual(resolved.playback.qualities.count, 2)
     XCTAssertEqual(resolved.channel.slug, "fixture")

@@ -204,7 +204,10 @@ struct StreamChannelCard: View {
       .clipShape(Circle())
 
       VStack(alignment: .leading, spacing: CardMetrics.captionLineSpacing) {
-        Text(channel.displayName)
+        HStack(spacing: 6) {
+          ChannelPlatformIcons(channel: channel, size: 16)
+          Text(channel.displayName).lineLimit(1, reservesSpace: true)
+        }
           .font(.subheadline.weight(.semibold))
           .foregroundStyle(usesLiftFocusedText ? palette.liftPrimaryText : Color.primary)
           .lineLimit(1, reservesSpace: true)
@@ -235,6 +238,8 @@ struct StreamChannelCard: View {
   /// sentence instead of disconnected avatar/name/title fragments.
   private var accessibilityLabel: Text {
     var parts: [String] = [channel.displayName]
+    parts.append(channel.platform.title)
+    if channel.platform != .kick, channel.kick != nil { parts.append("Kick") }
     parts.append(channel.isLive ? "Live" : "Offline")
     if !channel.title.isEmpty {
       parts.append(channel.title)
@@ -389,6 +394,7 @@ struct StreamChannelCard: View {
     if let cachedURL {
       return cachedURL
     }
+    if channel.platform == .kick { return try await KickPlaybackService.previewHLSURL(for: login) }
     return try await PlaybackService.previewHLSURL(for: login)
   }
 
@@ -397,8 +403,12 @@ struct StreamChannelCard: View {
     cachedPreviewURL = sourceURL
     if previewSourceURL != sourceURL {
       let login = channel.login
+      let platform = channel.platform
       nativePreview.start(url: sourceURL) { original in
-        try await PlaybackService.pinnedHLSURL(for: login,
+        if platform == .kick {
+          return try await KickPlaybackService.previewHLSURL(for: login, original: original)
+        }
+        return try await PlaybackService.pinnedHLSURL(for: login,
           targetBitrate: original ? 0 : 1_500_000, forceRefresh: true)
       }
       previewSourceURL = sourceURL

@@ -23,7 +23,7 @@
     <main id="main" class="prose wrap">
       <p class="eyebrow">Strozz for Apple TV, iPhone, and iPad</p>
       <h1>Privacy.</h1>
-      <p class="updated">Last updated October 20, 2026</p>
+      <p class="updated">Last updated October 26, 2026</p>
       <p>This policy describes the Strozz app and strozz.brando.page.
         Strozz connects to streaming services to play the content you choose.
         You can browse public Twitch streams and read chat without signing in.</p>
@@ -45,6 +45,18 @@
       <p>Sign out disconnects the current device. Sign out everywhere signs out
         Strozz's synced Twitch connections on your other devices when they connect.
         You can also revoke Strozz's authorization through the streaming service.</p>
+      <p>Connecting Kick opens Kick's website in a separate browser profile inside
+        Strozz on iPhone or iPad. Kick handles the login; its website session stays
+        in that device's WebKit storage, separate from the Keychain-based Twitch
+        connection. Strozz imports your Kick account identifier, username, followed
+        channels, and their public stream metadata. This list is cached locally
+        and shared through encrypted records in your private iCloud database.
+        Kick website cookies and passwords are not shared with Apple TV, iCloud,
+        or a Strozz server. Follow imports refresh while the connected mobile app
+        is open. Disconnect Kick removes the shared Strozz connection and the
+        local website session on the mobile device performing the disconnect;
+        other devices stop importing when they receive the disconnection. It does
+        not unfollow channels or sign you out of other Kick apps or browsers.</p>
 
       <h2>Streaming and other services</h2>
       <p>Strozz requests video, chat, account information, artwork, and emotes from

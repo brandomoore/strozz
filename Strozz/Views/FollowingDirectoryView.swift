@@ -17,6 +17,14 @@ struct FollowingDirectoryView: View {
   @Environment(PlaybackReturnRefreshCoordinator.self) private var playbackReturnRefresh
   private var follows: FollowedChannelsService { environment.follows }
   private var auth: TwitchAuthSession { environment.auth }
+  private var channels: [FollowedChannel] {
+    environment.kickDiscovery.mergedFollowing(follows.directory)
+  }
+  private var errorMessage: String? {
+    (auth.isAuthenticated ? follows.directoryErrorMessage : nil)
+      ?? environment.kickDiscovery.errorMessage
+      ?? (environment.kickFollows.isConnected ? environment.kickFollows.errorMessage : nil)
+  }
   @Binding var selectedChannel: FollowedChannel?
   @Binding var channelPageTarget: ChannelPageTarget?
 
@@ -30,7 +38,7 @@ struct FollowingDirectoryView: View {
   private let gridBottomInset: CGFloat = 12
 
   private var liveCount: Int {
-    follows.directory.reduce(into: 0) { $0 += $1.isLive ? 1 : 0 }
+    channels.reduce(into: 0) { $0 += $1.isLive ? 1 : 0 }
   }
 
   /// The directory filtered by the search query (display name or login,
@@ -38,8 +46,8 @@ struct FollowingDirectoryView: View {
   /// filtering preserves that order.
   private var filteredChannels: [FollowedChannel] {
     let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !query.isEmpty else { return follows.directory }
-    return follows.directory.filter { channel in
+    guard !query.isEmpty else { return channels }
+    return channels.filter { channel in
       channel.displayName.localizedCaseInsensitiveContains(query)
         || channel.login.localizedCaseInsensitiveContains(query)
     }
@@ -58,7 +66,8 @@ struct FollowingDirectoryView: View {
 
   private func preparePlaybackReturn() {
     playbackReturnRefresh.prepareOrigin {
-      await follows.loadDirectory(using: auth, force: true)
+      if auth.isAuthenticated { await follows.loadDirectory(using: auth, force: true) }
+      await environment.kickDiscovery.refresh(twitch: follows.directory, force: true, preservingRecommendations: true)
     }
   }
 
@@ -69,14 +78,14 @@ struct FollowingDirectoryView: View {
           VStack(alignment: .leading, spacing: 2) {
             Text("Following")
               .font(.title.weight(.bold))
-            if !follows.directory.isEmpty {
-              Text("\(liveCount) live • \(follows.directory.count) total")
+            if !channels.isEmpty {
+              Text("\(liveCount) live • \(channels.count) total")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             }
           }
 
-          if follows.isLoadingDirectory && follows.directory.isEmpty {
+          if follows.isLoadingDirectory && channels.isEmpty {
             ProgressView().scaleEffect(0.85)
           }
 
@@ -84,14 +93,14 @@ struct FollowingDirectoryView: View {
         }
         .focusSection()
 
-        if let err = follows.directoryErrorMessage {
+        if let err = errorMessage {
           Text(err)
             .font(.footnote)
             .foregroundStyle(.orange)
         }
 
-        if !follows.isLoadingDirectory && follows.directory.isEmpty
-          && follows.directoryErrorMessage == nil
+        if !follows.isLoadingDirectory && channels.isEmpty
+          && errorMessage == nil
         {
           Text("You don't follow any channels yet.")
             .foregroundStyle(.secondary)
@@ -142,9 +151,11 @@ struct FollowingDirectoryView: View {
     .navigationBarHidden(true)
     .toolbar(.hidden, for: .tabBar)
     .task {
-      await follows.loadDirectory(using: auth, force: true)
+      if auth.isAuthenticated { await follows.loadDirectory(using: auth, force: true) }
+      await environment.kickFollows.synchronize()
+      await environment.kickDiscovery.refresh(twitch: follows.directory, force: true, preservingRecommendations: true)
     }
-    .onChange(of: follows.directory) { previous, _ in
+    .onChange(of: channels) { previous, _ in
       if previous.isEmpty, focusedID == nil, let first = filteredChannels.first {
         Task {
           try? await Task.sleep(for: .milliseconds(150))

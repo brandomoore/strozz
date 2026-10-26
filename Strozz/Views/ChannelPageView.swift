@@ -98,6 +98,15 @@ struct ChannelPageView: View {
   }
 
   var body: some View {
+    if target.platform == .kick {
+      KickChannelDetailsView(slug: target.login) { onWatchChannel?($0) }
+        .onExitCommand { dismiss() }
+    } else {
+      twitchContent
+    }
+  }
+
+  private var twitchContent: some View {
     GeometryReader { geo in
       let safeTop = geo.safeAreaInsets.top
       // Full screen height, including the overscan-safe insets that tvOS adds.

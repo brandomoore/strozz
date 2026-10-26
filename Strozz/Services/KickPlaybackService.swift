@@ -1,6 +1,6 @@
 import Foundation
 
-struct KickChannel: Identifiable, Codable, Equatable, Sendable {
+struct KickChannel: Identifiable, Codable, Hashable, Sendable {
   let slug: String
   let displayName: String
   let title: String
@@ -11,11 +11,12 @@ struct KickChannel: Identifiable, Codable, Equatable, Sendable {
   let imageURL: URL?
   var startedAt: Date? = nil
   var youtubeTarget: String? = nil
+  var thumbnailURL: URL? = nil
   var id: String { slug }
 
   var followedChannel: FollowedChannel {
     var channel = FollowedChannel(id: "kick:\(slug)", login: slug, displayName: displayName,
-      title: title, gameName: category, viewerCount: viewerCount, thumbnailURL: nil,
+      title: title, gameName: category, viewerCount: viewerCount, thumbnailURL: thumbnailURL,
       profileImageURL: imageURL, isLive: isLive)
     channel.platform = .kick
     return channel
@@ -85,6 +86,13 @@ enum KickPlaybackService {
       master: master,
       qualities: try qualities(in: String(decoding: data, as: UTF8.self), base: master))
     return Resolved(channel: document.channel, playback: playback)
+  }
+
+  static func previewHLSURL(for slug: String, original: Bool = false, load: Loader = defaultLoader) async throws -> URL {
+    let resolved = try await resolve(slug, load: load)
+    let video = resolved.playback.qualities.filter { !$0.isAudioOnly }
+    guard let quality = original ? video.first : video.last else { throw Failure.unsupportedMedia }
+    return quality.url
   }
 
   static func qualities(in text: String, base: URL) throws -> [StreamQuality] {
@@ -210,11 +218,13 @@ enum KickPlaybackService {
       }
       struct Live: Decodable {
         struct Category: Decodable { let name: String? }
+        struct Thumbnail: Decodable { let url: URL? }
         let session_title: String?
         let viewer_count: Int?
         let viewers: Int?
         let created_at: String?
         let categories: [Category]?
+        let thumbnail: Thumbnail?
       }
       struct Chatroom: Decodable { let id: Int }
       let slug: String
@@ -252,6 +262,7 @@ enum KickPlaybackService {
       channel.startedAt = formatter.date(from: raw.contains("T") ? raw : raw.replacingOccurrences(of: " ", with: "T") + "Z")
     }
     channel.youtubeTarget = payload.user?.youtube.flatMap(CreatorSourceResolver.youtubeTarget)
+    channel.thumbnailURL = payload.livestream?.thumbnail?.url
     return Document(channel: channel, playbackURL: playbackURL)
   }
 

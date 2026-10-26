@@ -218,6 +218,7 @@ struct MultiviewPlayerView: View {
     guard scenePhase == .active, controller.expandedPaneID == nil, !showingAddPicker,
       auth.isAuthenticated, let userID = auth.userID,
       let pane = controller.panes.first(where: { $0.id == controller.audiblePaneID }),
+      pane.isTwitchLive,
       let item = pane.player.currentItem else {
       watchTracker.stop()
       return
@@ -352,12 +353,7 @@ struct MultiviewPlayerView: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .onChange(of: pane.model.activeChannel) { _, login in
-      guard !login.isEmpty, login != pane.channel.login else { return }
-      pane.channel = FollowedChannel(id: pane.id, login: login,
-        displayName: pane.model.channelDisplayName, title: pane.model.streamTitle, gameName: "",
-        viewerCount: nil, thumbnailURL: nil, profileImageURL: pane.model.channelAvatarURL, isLive: true)
-    }
+    .onChange(of: pane.playbackTarget) { _, _ in pane.synchronizeChannel() }
   }
 
   @ViewBuilder

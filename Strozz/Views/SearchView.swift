@@ -158,7 +158,8 @@ private struct SearchResultsView: View {
           .focusEffectDisabled()
           .onTapGesture {
             preparePlaybackReturn()
-            onSelectChannel(channel)
+            if channel.platform == .kick, channel.isLive { onWatchChannel(channel) }
+            else { onSelectChannel(channel) }
           }
           .zIndex(isFocused ? 2 : 0)
         }

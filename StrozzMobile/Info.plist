@@ -26,6 +26,15 @@
     <string>$(STROZZ_DEVELOPMENT_DIAGNOSTICS)</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.thatcube.Strozz.connect</string>
+            <key>CFBundleURLSchemes</key>
+            <array><string>strozz</string></array>
+        </dict>
+    </array>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsLocalNetworking</key>

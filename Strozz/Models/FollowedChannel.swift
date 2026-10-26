@@ -13,6 +13,7 @@ struct FollowedChannel: Identifiable, Hashable {
     let isLive: Bool
     let isMature: Bool
     var platform: LivePlatform = .twitch
+    var kick: KickChannel?
 
     /// The same streamer's live YouTube presence, when they're a dual-platform
     /// streamer who is currently also live on YouTube. `nil` means "no known
@@ -73,6 +74,9 @@ extension FollowedChannel {
         }
         if platform != .youtube, let youtube, youtube.isLive, let youtubeViewers = youtube.viewerCount {
             counts.append(PlatformViewerCount(platform: .youtube, count: youtubeViewers))
+        }
+        if platform != .kick, let kick, kick.isLive, let count = kick.viewerCount {
+            counts.append(PlatformViewerCount(platform: .kick, count: count))
         }
         return counts
     }

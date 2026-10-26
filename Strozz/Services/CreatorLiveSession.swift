@@ -228,7 +228,7 @@ final class CreatorLiveSession {
   func start(_ root: PlatformLiveTarget) {
     if sources?.contains(root) == true { return }
     stop()
-    let saved = savedSources(for: root)
+    let saved = Self.savedSources(for: root, defaults: defaults)
     sources = saved ?? CreatorLiveSources(root: root)
     videoTarget = root
     suspended = false
@@ -487,7 +487,7 @@ final class CreatorLiveSession {
     return .unknown
   }
 
-  private func savedSources(for root: PlatformLiveTarget) -> CreatorLiveSources? {
+  static func savedSources(for root: PlatformLiveTarget, defaults: UserDefaults? = .standard) -> CreatorLiveSources? {
     guard let data = defaults?.data(forKey: Self.savedLinksKey) else { return nil }
     do {
       let saved = try JSONDecoder().decode([CreatorLiveSources].self, from: data)

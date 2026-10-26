@@ -9,27 +9,54 @@ final class KickPlaybackUITests: XCTestCase {
   }
   #if os(iOS)
     @MainActor
-    func testKickDirectoryKeepsRootNavigationAvailable() {
+    func testKickConnectionSheetCanBeCancelledWithoutLeavingAccount() {
+      let app = XCUIApplication()
+      app.launchEnvironment["STROZZ_UI_INITIAL_TAB"] = "2"
+      app.launch()
+      defer { app.terminate() }
+      let connect = app.buttons["account-connect-kick"]
+      XCTAssertTrue(connect.waitForExistence(timeout: 10))
+      if !connect.isHittable { app.swipeUp() }
+      connect.tap()
+      let importButton = app.buttons["kick-import-follows"]
+      XCTAssertTrue(importButton.waitForExistence(timeout: 10))
+      screenshot("Kick website sign-in sheet", app: app)
+      app.navigationBars["Connect Kick"].buttons["Cancel"].tap()
+      let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"),
+                                                object: importButton)
+      XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
+      XCTAssertTrue(connect.exists)
+      connect.tap()
+      XCTAssertTrue(importButton.waitForExistence(timeout: 10), "Connect must reopen after Cancel")
+      app.navigationBars["Connect Kick"].buttons["Cancel"].tap()
+    }
+
+    @MainActor
+    func testKickConnectUsesAccountInsteadOfAnotherTab() {
       let app = XCUIApplication()
       app.launch()
       defer { app.terminate() }
-      let sidebar = app.buttons["sidebar-kick"]
+      let sidebar = app.buttons["sidebar-account"]
       if sidebar.waitForExistence(timeout: 5) {
         sidebar.tap()
-        XCTAssertTrue(app.buttons["kick-find-channel"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["sidebar-kick"].exists)
+        app.swipeUp()
+        XCTAssertTrue(app.buttons["account-connect-kick"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["sidebar-home"].exists)
-        screenshot("Kick with tablet navigation", app: app)
+        screenshot("Kick setup in tablet Account", app: app)
         app.buttons["sidebar-home"].tap()
       } else {
-        let kick = app.tabBars.buttons["Kick"]
-        XCTAssertTrue(kick.waitForExistence(timeout: 10))
-        kick.tap()
-        XCTAssertTrue(app.buttons["kick-find-channel"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.tabBars.buttons["Kick"].exists)
+        let account = app.tabBars.buttons["Account"]
+        XCTAssertTrue(account.waitForExistence(timeout: 10))
+        account.tap()
+        app.swipeUp()
+        XCTAssertTrue(app.buttons["account-connect-kick"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.tabBars.buttons["Home"].exists)
-        screenshot("Kick with compact navigation", app: app)
+        screenshot("Kick setup in compact Account", app: app)
         app.tabBars.buttons["Home"].tap()
       }
-      XCTAssertFalse(app.buttons["kick-find-channel"].isHittable)
+      XCTAssertFalse(app.buttons["account-connect-kick"].isHittable)
     }
   #endif
 

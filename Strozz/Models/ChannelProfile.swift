@@ -16,8 +16,9 @@ struct ChannelPageTarget: Identifiable, Hashable {
   let login: String
   let displayName: String?
   let profileImageURL: URL?
+  var platform: LivePlatform = .twitch
 
-  var id: String { login.lowercased() }
+  var id: String { platform == .twitch ? login.lowercased() : "\(platform.rawValue):\(login.lowercased())" }
 
   init(login: String, displayName: String? = nil, profileImageURL: URL? = nil) {
     self.login = login
@@ -29,6 +30,7 @@ struct ChannelPageTarget: Identifiable, Hashable {
     self.login = channel.login
     self.displayName = channel.displayName
     self.profileImageURL = channel.profileImageURL
+    self.platform = channel.platform
   }
 }
 

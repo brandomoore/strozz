@@ -54,7 +54,7 @@ final class RecommendationFeedbackService {
   /// Marks `channel` as "Not interested": blocklists its login and learns the
   /// distinctive words from its title as a soft negative signal.
   func markNotInterested(_ channel: FollowedChannel) {
-    let login = channel.login.lowercased()
+    let login = channel.channelKey
     guard !login.isEmpty else { return }
 
     blockedLogins.insert(login)

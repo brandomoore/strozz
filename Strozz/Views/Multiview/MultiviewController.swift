@@ -62,6 +62,24 @@ final class MultiviewPane: Identifiable {
   var isLoading: Bool { model.isLoading }
   var hasError: Bool { model.errorMessage != nil || model.isOffline }
   var qualityTier: MultiviewQualityTier { presentation.qualityTier }
+  var isTwitchLive: Bool {
+    channel.platform == .twitch && model.livePlatform == .twitch
+      && !model.isUsingAltSource && model.liveVODHandoff?.isActive != true
+  }
+  var playbackTarget: PlatformLiveTarget {
+    .init(platform: model.livePlatform,
+      channel: model.livePlatform == .kick ? model.kickPlaybackTarget : model.activeChannel)
+  }
+
+  func synchronizeChannel() {
+    let target = playbackTarget
+    guard !target.channel.isEmpty,
+      target.channel != channel.login || target.platform != channel.platform else { return }
+    channel = FollowedChannel(id: id, login: target.channel, displayName: model.channelDisplayName,
+      title: model.streamTitle, gameName: "", viewerCount: nil, thumbnailURL: nil,
+      profileImageURL: model.channelAvatarURL, isLive: true)
+    channel.platform = target.platform
+  }
 
   func accessibilityStatus(isTransitioning: Bool) -> LocalizedStringResource {
     if model.isOffline { return "Offline" }

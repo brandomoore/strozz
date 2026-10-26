@@ -1,4 +1,5 @@
 import SwiftUI
+import CloudKit
 
 struct HomeView: View {
   let deepLinkRouter: DeepLinkRouter
@@ -29,6 +30,7 @@ struct HomeView: View {
   private var auth: TwitchAuthSession { environment.auth }
   private var follows: FollowedChannelsService { environment.follows }
   private var recommendations: RecommendationsService { environment.recommendations }
+  private var kick: KickDiscoveryService { environment.kickDiscovery }
   private var personalized: PersonalizedRecommendationsService { environment.personalized }
   private var watchHistory: WatchHistoryService { environment.watchHistory }
   private var feedback: RecommendationFeedbackService { environment.feedback }
@@ -76,6 +78,7 @@ struct HomeView: View {
   /// reference so tracking the in-flight chain never invalidates the view.
   @State private var homeRefresh = HomeRefreshCoordinator()
   @State private var playbackReturnRefresh = PlaybackReturnRefreshCoordinator()
+  @State private var kickRefreshRevision = 0
   /// Mirrors `scenePhase` into `@State` so the long-lived idle watchdog reads a
   /// current value: its captured view copy can hold a stale `@Environment`.
   @State private var isForeground = true
@@ -112,7 +115,8 @@ struct HomeView: View {
 
   /// Followed channels that are live right now — the pool multiview draws from.
   private func recomputeLiveFollowed() {
-    liveFollowedChannels = follows.channels.filter(\.isLive)
+    liveFollowedChannels = kick.mergedFollowing(
+      follows.isUsingDemoData && environment.kickFollows.isConnected ? [] : follows.channels, liveOnly: true)
   }
 
   /// Discovery sections for the multiview setup picker: Following first (the
@@ -122,13 +126,14 @@ struct HomeView: View {
     var sections: [MultiviewChannelSection] = [
       MultiviewChannelSection(
         id: "following",
-        title: follows.isUsingDemoData ? "Trending" : "Following",
+        title: follows.isUsingDemoData && !environment.kickFollows.isConnected ? "Trending" : "Following",
         channels: liveFollowedChannels
       )
     ]
     if personalizedEnabled, !personalized.channels.isEmpty {
       sections.append(
-        MultiviewChannelSection(id: "recommended", title: "Recommended for you", channels: personalized.channels)
+        MultiviewChannelSection(id: "recommended", title: "Recommended for you",
+          channels: kick.mergedRecommendations(personalized.channels, blocked: feedback.blockedLogins))
       )
     }
     if !topStreams.isEmpty {
@@ -158,7 +163,6 @@ struct HomeView: View {
     case home = "Home"
     case multiview = "Multiview"
     case browse = "Browse"
-    case kick = "Kick"
     case search = "Search"
     case settings = "Settings"
 
@@ -169,7 +173,6 @@ struct HomeView: View {
       case .home: return .home
       case .multiview: return .borderAll
       case .browse: return .layoutGrid
-      case .kick: return .brandKick
       case .search: return .search
       case .settings: return .settings
       }
@@ -181,6 +184,35 @@ struct HomeView: View {
   }
 
   var body: some View {
+    homeContent
+      .task(id: KickRefreshSignature(
+        isBrowsing: isForeground && !isPresentingPlayer, revision: kickRefreshRevision
+      )) {
+        guard isForeground, !isPresentingPlayer else { return }
+        var force = true
+        while !Task.isCancelled {
+          await environment.kickFollows.synchronize()
+          guard !Task.isCancelled else { return }
+          kick.applyRoster()
+          if force || kick.lastUpdatedAt == nil || canIdleAutoRefresh {
+            await kick.refresh(twitch: follows.channels + recommendations.channels, force: force)
+          }
+          force = false
+          do { try await Task.sleep(for: .seconds(30)) } catch { return }
+        }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in
+        environment.kickFollows.accountChanged()
+        kick.accountChanged()
+        Task { await environment.kickFollows.synchronize() }
+      }
+      .onChange(of: environment.kickFollows.document) { _, _ in kick.applyRoster() }
+      .onChange(of: kick.directory) { _, _ in recomputeLiveFollowed(); recomputeTopStreams() }
+      .onChange(of: kick.links) { _, _ in recomputeLiveFollowed(); recomputeTopStreams() }
+      .onChange(of: kick.recommended) { _, _ in recomputeTopStreams() }
+  }
+
+  private var homeContent: some View {
     TabView(selection: $selectedSidebarTab) {
       tabContainer {
         NavigationStack(path: $homePath) {
@@ -244,10 +276,6 @@ struct HomeView: View {
       .tabItem {
         Label(SidebarTab.search.rawValue, image: SidebarTab.search.tablerImageName)
       }
-
-      tabContainer { KickDirectoryView() }
-        .tag(SidebarTab.kick)
-        .tabItem { Label(SidebarTab.kick.rawValue, image: SidebarTab.kick.tablerImageName) }
 
       tabContainer {
         SettingsView(
@@ -432,7 +460,8 @@ struct HomeView: View {
       }
     }
     .fullScreenCover(item: $selectedChannel, onDismiss: { handlePlayerDismissal() }) { channel in
-      PlayerView(channel: channel.login, auth: auth, goLive: goLive, posterURL: channel.thumbnailURL)
+      PlayerView(channel: channel.login, auth: auth, goLive: goLive, posterURL: channel.thumbnailURL,
+        initialPlatform: channel.platform)
         .environment(\.themePalette, resolvedPalette)
     }
     .fullScreenCover(item: $channelPageTarget, onDismiss: {
@@ -527,11 +556,11 @@ struct HomeView: View {
             channels: followingRowChannels,
             rail: rail,
             style: railStyle,
-            isLoading: follows.isLoading || environment.accountSync.isRestoringAccount
-              || (follows.lastUpdatedAt == nil && follows.errorMessage == nil),
-            isRestoringAccount: environment.accountSync.isRestoringAccount,
-            isUsingDemoData: follows.isUsingDemoData,
-            errorMessage: follows.errorMessage,
+            isLoading: !environment.kickFollows.isConnected && (follows.isLoading || environment.accountSync.isRestoringAccount
+              || (follows.lastUpdatedAt == nil && follows.errorMessage == nil)),
+            isRestoringAccount: environment.accountSync.isRestoringAccount && !environment.kickFollows.isConnected,
+            isUsingDemoData: follows.isUsingDemoData && !environment.kickFollows.isConnected,
+            errorMessage: auth.isAuthenticated || !environment.kickFollows.isConnected ? follows.errorMessage : nil,
             onSignIn: environment.accountSync.needsRenewalSignIn ? { showSignIn = true } : nil,
             showingFollowingDirectory: $showingFollowingDirectory,
             onRefresh: { performManualRefresh() },
@@ -545,6 +574,10 @@ struct HomeView: View {
             },
             focusedItemID: $focusedItemID
           )
+          if let error = kick.errorMessage ?? environment.kickFollows.errorMessage,
+            environment.kickFollows.isConnected {
+            Text(error).font(.callout).foregroundStyle(.secondary)
+          }
           HomeRecommendedForYouSection(
             personalizedEnabled: personalizedEnabled,
             rail: rail,
@@ -648,7 +681,9 @@ struct HomeView: View {
   /// The single Following rail: Twitch follows plus the deduped, currently-live
   /// YouTube-only subscriptions.
   private var followingRowChannels: [FollowedChannel] {
-    follows.channels + liveYouTubeSubscriptionCards
+    kick.mergedFollowing(
+      follows.isUsingDemoData && environment.kickFollows.isConnected ? [] : follows.channels, liveOnly: true)
+      + liveYouTubeSubscriptionCards
   }
 
   /// A merged card that should play via YouTube (no Twitch equivalent).
@@ -680,9 +715,7 @@ struct HomeView: View {
 
   private func recomputeTopStreams() {
     let blocked = feedback.blockedLogins
-    topStreams = recommendations.channels.filter {
-      !blocked.contains($0.login.lowercased())
-    }
+    topStreams = kick.mergedRecommendations(recommendations.channels, blocked: blocked)
   }
 
   private func channelRailMetrics(for availableWidth: CGFloat, trailingSafeArea: CGFloat = 0) -> ChannelRailMetrics {
@@ -718,7 +751,7 @@ struct HomeView: View {
   }
 
   private func requestFocusIfPossible(force: Bool) {
-    guard follows.errorMessage == nil, let first = follows.channels.first else { return }
+    guard let first = followingRowChannels.first else { return }
     if !force && (firstFocusRequested || focusedItemID != nil) { return }
 
     firstFocusRequested = true
@@ -761,6 +794,11 @@ struct HomeView: View {
 
   private var isPresentingPlayer: Bool {
     selectedChannel != nil || multiviewLaunch != nil || youtubePlayback != nil
+  }
+
+  private struct KickRefreshSignature: Equatable {
+    let isBrowsing: Bool
+    let revision: Int
   }
 
   /// True while any full-screen cover is up (player, channel page, multiview,
@@ -840,6 +878,8 @@ struct HomeView: View {
     await followedDone
     recomputeLiveFollowed()
     await recommendationsDone
+    // Creator discovery must not hold up Twitch recommendations or initial focus.
+    kickRefreshRevision &+= 1
     await refreshPersonalizedIfNeeded(force: force)
   }
 
@@ -910,7 +950,7 @@ struct HomeView: View {
   /// signal so look-alikes stop resurfacing.
   private func markNotInterested(_ channel: FollowedChannel) {
     feedback.markNotInterested(channel)
-    personalized.remove(login: channel.login)
+    if channel.platform == .twitch { personalized.remove(login: channel.login) }
     recomputeTopStreams()
   }
 

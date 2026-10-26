@@ -109,11 +109,32 @@ The feature list below describes the Apple TV app. See
 
 ## Kick playback (in development)
 
-Development builds include a **Kick** tab on Apple TV, iPhone, and iPad. Enter a
-Kick channel name or channel URL, choose **Find channel**, then **Watch live**.
-This works without a Twitch account or a matching Twitch channel, including for
-Kick-exclusive creators. Recently opened Kick channels are kept on this device.
-The initial directory is an exact-channel lookup, not a trending/category feed.
+Kick is part of the existing **Following**, recommendations, search, and Apple TV
+multiview picker, not a separate tab. Search for an exact Kick channel name or
+`kick.com` channel URL to open a live stream, including Kick-exclusive creators.
+Playback does not require a Twitch or Kick account.
+
+To bring in your real Kick follows, open **Account > Connect Kick** in Strozz on
+iPhone or iPad. Sign in on the Kick website shown inside the app; the complete
+follow list then syncs through private iCloud records to Strozz on devices using
+the same Apple Account. Apple TV's **Settings > Accounts > Kick** includes a code
+that opens this setup in the installed mobile app. Website cookies stay in that
+mobile device's separate WebKit profile; they are not sent to Apple TV or a Strozz
+server. Connecting another mobile device uses its own website session.
+
+Follow membership refreshes while the connected mobile app is open. Open it after
+following or unfollowing someone on Kick; Apple TV can refresh stream availability
+independently. **Sync Kick follows** retries an import, and **Disconnect Kick from
+Strozz** removes the shared connection without unfollowing anyone on Kick.
+Failed or incomplete imports preserve the previous list and show an error.
+This integration uses Kick's undocumented website follow endpoint, not an
+official OAuth follow scope; provider changes or access restrictions can require
+reconnecting or an app update.
+
+Confirmed Twitch/Kick creator links are merged into one card, with combined
+viewer counts when both streams are live. Matching usernames alone never merge
+accounts. Kick recommendation candidates come from confirmed links to creators
+in the existing discovery pools, not a new global Kick trending directory.
 
 While watching Twitch, choose **Kick** in the TV player's stream-source menu, or
 enter the Kick channel under **Quality > Stream source** on mobile. Verify the
@@ -130,8 +151,8 @@ lifecycle. Only provider capabilities differ: Kick chat is read-only, and Twitch
 watch rewards and past-broadcast handoff require Twitch video. If the creator has
 a linked Twitch account, sending still goes to that Twitch channel while watching
 Kick or YouTube. A Kick-only creator is never treated as a same-named Twitch
-account. Kick account sign-in/chat sending and Kick multiview discovery are not
-included. Automatic playback diagnostics remain enabled through the shared players.
+account. Kick chat sending is not included. Automatic playback diagnostics remain
+enabled through the shared players.
 Access restrictions and unavailable streams are shown explicitly; Strozz does
 not bypass provider access controls. These changes are not yet in the published
 TestFlight build.
@@ -226,7 +247,7 @@ emotes. Sign in through **Account > Sign in to Twitch**, open the Twitch link,
 approve the displayed code, then return to Strozz. Browsing, playback, and
 reading chat also work anonymously.
 
-On iPad, a collapsible native sidebar keeps **Home**, **Browse**, **Kick**, **Account**,
+On iPad, a collapsible native sidebar keeps **Home**, **Browse**, **Account**,
 and live followed channels available while browsing. Tap a live channel to open
 the full-width player; the sidebar stays out of playback. Home and the sidebar
 share one followed-channel list, so no extra follow fetch is needed. Narrow iPad

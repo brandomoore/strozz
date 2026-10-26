@@ -1,6 +1,7 @@
 import SDWebImage
 import SDWebImageWebPCoder
 import SwiftUI
+import CloudKit
 
 @main
 struct StrozzMobileApp: App {
@@ -9,8 +10,14 @@ struct StrozzMobileApp: App {
   @State private var rewards = TwitchWatchRewardsSession()
   @State private var accountSync = TwitchAccountSync()
   @State private var playback = MobilePlaybackSession()
+  @State private var kickFollows: KickFollowingStore
+  @State private var kickDiscovery: KickDiscoveryService
+  @State private var kickSignIn = MobileKickSignIn()
 
   init() {
+    let kickFollows = KickFollowingStore()
+    _kickFollows = State(initialValue: kickFollows)
+    _kickDiscovery = State(initialValue: KickDiscoveryService(follows: kickFollows))
     PlaybackTelemetrySentry.start()
     SDImageCodersManager.shared.addCoder(SDImageWebPCoder.shared)
     ImageCacheConfigurator.configure()
@@ -48,7 +55,8 @@ struct StrozzMobileApp: App {
   }
 
   private var appContent: some View {
-    MobileRootView(accountID: auth.userID ?? "anonymous",
+    @Bindable var signIn = kickSignIn
+    return MobileRootView(accountID: auth.userID ?? "anonymous",
       initialTab: initialTab)
       .id(auth.userID ?? "anonymous")
       .environment(auth)
@@ -56,6 +64,20 @@ struct StrozzMobileApp: App {
       .environment(rewards)
       .environment(accountSync)
       .environment(playback)
+      .environment(kickFollows)
+      .environment(kickDiscovery)
+      .environment(kickSignIn)
+      .onOpenURL { url in
+        if url.scheme == "strozz", url.host == "connect", url.path == "/kick" {
+          kickSignIn.connect(using: kickFollows)
+        }
+      }
+      .sheet(isPresented: $signIn.isPresented) { MobileKickSignInSheet(signIn: signIn) }
+      .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in
+        kickFollows.accountChanged()
+        kickDiscovery.accountChanged()
+        Task { await kickSignIn.clearWebsiteSession(); await kickFollows.synchronize() }
+      }
       .preferredColorScheme(theme.theme.preferredColorScheme)
       .task {
         await accountSync.start(auth: auth, rewards: rewards)
@@ -71,7 +93,8 @@ struct StrozzMobileApp: App {
 
   private var initialTab: Int {
     #if DEBUG
-    ProcessInfo.processInfo.environment["STROZZ_KICK_UI_FIXTURE"] == "1" ? 3 : 0
+    let tab = Int(ProcessInfo.processInfo.environment["STROZZ_UI_INITIAL_TAB"] ?? "") ?? 0
+    return (0...2).contains(tab) ? tab : 0
     #else
     0
     #endif
@@ -87,6 +110,9 @@ struct MobileRootView: View {
   @Environment(TwitchAuthSession.self) private var auth
   @Environment(TwitchAccountSync.self) private var accountSync
   @Environment(TwitchWatchRewardsSession.self) private var rewards
+  @Environment(KickFollowingStore.self) private var kickFollows
+  @Environment(KickDiscoveryService.self) private var kick
+  @Environment(MobileKickSignIn.self) private var kickSignIn
   @State private var preview = MobileHomePreview()
   @State private var tab = 0
   @State private var history: WatchHistoryService
@@ -117,10 +143,7 @@ struct MobileRootView: View {
     let previewsEnabled = tab == 0 && playback.channel == nil && scenePhase == .active
     let isTablet = UIDevice.current.userInterfaceIdiom == .pad
     let showsSidebar = isTablet && horizontalSizeClass == .regular && sidebarVisibility != .detailOnly
-    MobileRootTabs(selection: $tab, homeProfile: $homeProfile, browseProfile: $browseProfile,
-      sidebarVisibility: $sidebarVisibility, compactColumn: $compactColumn,
-      preview: preview, previewsEnabled: previewsEnabled, history: history, follows: follows,
-      isTablet: isTablet, showsSidebar: showsSidebar, isInteractive: !playback.isExpanded, onSelect: select)
+    browsingContent(previewsEnabled: previewsEnabled, isTablet: isTablet, showsSidebar: showsSidebar)
     .allowsHitTesting(!playback.isExpanded)
     .accessibilityHidden(playback.isExpanded)
     .overlay {
@@ -134,6 +157,16 @@ struct MobileRootView: View {
     .environment(vodProgress)
     .environment(follows)
     .environment(returnRefresh)
+    .task(id: scenePhase == .active && playback.channel == nil) {
+      guard scenePhase == .active, playback.channel == nil else { return }
+      while !Task.isCancelled {
+        await kickFollows.synchronize()
+        await kickSignIn.refreshIfNeeded(using: kickFollows)
+        kick.applyRoster()
+        do { try await Task.sleep(for: .seconds(30)) } catch { return }
+      }
+    }
+    .onChange(of: kickFollows.document) { _, _ in kick.applyRoster() }
     .onChange(of: playerVisibility) { previous, current in
       if previous == .expanded && current != .expanded
         || previous == .miniPlayer && current == .closed {
@@ -171,6 +204,26 @@ struct MobileRootView: View {
       }
     }
     .task(id: playback.channel?.channelKey) { await playback.trackWatch(auth: auth, rewards: rewards) }
+  }
+
+  @ViewBuilder
+  private func browsingContent(previewsEnabled: Bool, isTablet: Bool, showsSidebar: Bool) -> some View {
+    #if DEBUG
+    if ProcessInfo.processInfo.environment["STROZZ_KICK_UI_FIXTURE"] == "1" {
+      KickDirectoryView(initialQuery: ProcessInfo.processInfo.environment["STROZZ_KICK_CHANNEL"] ?? "xqc")
+    } else {
+      rootTabs(previewsEnabled: previewsEnabled, isTablet: isTablet, showsSidebar: showsSidebar)
+    }
+    #else
+    rootTabs(previewsEnabled: previewsEnabled, isTablet: isTablet, showsSidebar: showsSidebar)
+    #endif
+  }
+
+  private func rootTabs(previewsEnabled: Bool, isTablet: Bool, showsSidebar: Bool) -> some View {
+    MobileRootTabs(selection: $tab, homeProfile: $homeProfile, browseProfile: $browseProfile,
+      sidebarVisibility: $sidebarVisibility, compactColumn: $compactColumn,
+      preview: preview, previewsEnabled: previewsEnabled, history: history, follows: follows,
+      isTablet: isTablet, showsSidebar: showsSidebar, isInteractive: !playback.isExpanded, onSelect: select)
   }
 
   private func select(_ channel: FollowedChannel) {

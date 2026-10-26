@@ -47,7 +47,47 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
 HLS master using ordinary HTTPS requests. It distinguishes actual offline state
 (`livestream: null`) from missing channels, malformed responses, and access
 restrictions. Signed playback URLs are not saved in the recent-channel model.
-There is no hidden browser, challenge bypass, or additional player SDK.
+Playback has no hidden browser, challenge bypass, or additional player SDK.
+
+Discovery shares the existing Following, recommendation, search and multiview
+surfaces. `KickFollowingStore` owns a complete real-account follow snapshot;
+`KickDiscoveryService` independently refreshes public channel status and merges
+only creator identities confirmed by saved links or `CreatorSourceResolver`.
+Equal names alone remain separate provider-qualified identities. Recommendation
+candidates are linked creators from existing pools, not a global Kick directory.
+The multiview pane's playback target includes the provider and actual Kick slug;
+metadata synchronization must retain its pane ID and existing `PlayerModel`.
+Both TV focus previews and mobile feed previews resolve Kick media as Kick, never
+as a same-named Twitch stream.
+
+Mobile setup is a visible Kick login website in an isolated persistent WebKit
+profile. Same-origin reads import `/api/v1/user` and every page of
+`/api/v2/channels/followed`, then verify the account again. Failed, malformed,
+incomplete or account-switched reads cannot replace the last saved roster.
+This undocumented endpoint has no stability guarantee. There is no client
+secret, cookie-paste workflow, session relay or bot-challenge bypass.
+Sign-in preparation is time-bounded; reloading an already-prepared website
+retries navigation without restarting account synchronization or clearing cookies.
+
+Only account identity and public follow metadata enter the encrypted
+`KickFollowing.payload` record in the private `StrozzAccounts` CloudKit zone.
+Website sessions stay on the importing mobile device. Conditional writes and
+connection-scoped importer bindings fence stale writes and disconnect tombstones.
+Apple-account changes invalidate local state; a website profile from another
+owner is cleared before reuse. Deploy the versioned schema before distributing
+this feature.
+
+Imports refresh at most every five minutes while the importing mobile app is
+foreground and not playing, or through an explicit sync. Failure attempts also
+observe this interval. Website content is unloaded after import/dismissal;
+opening Strozz without a Kick connection must not create a browser/player for
+Kick. Public live status refresh is separate, bounded to four requests in flight, with followed
+channels published before slower identity discovery. Identity lookups also have
+four-request concurrency and bounded retry intervals. TV discovery runs outside
+the Home startup chain so it cannot delay Twitch recommendations or initial focus.
+After the initial/account refresh, TV status polling respects Home's idle gate
+rather than reordering rails under active navigation. Discovery loops pause during
+playback; imports are not continuous TV-side OAuth follow synchronization.
 
 Kick has no separate player UI or playback model. TV uses `PlayerView` and
 `PlayerModel`; mobile uses `MobilePlayerView`, `MobilePlaybackModel`, and the
