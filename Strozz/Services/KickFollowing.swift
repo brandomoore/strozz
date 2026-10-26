@@ -75,14 +75,8 @@ struct KickFollowImport: Equatable, Sendable {
         let viewer_count: Int?
       }
       let channels: [Row]
+      // The website ends pagination with either a null or absent cursor.
       let nextCursor: Int?
-      enum CodingKeys: String, CodingKey { case channels, nextCursor }
-      init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        guard values.contains(.nextCursor) else { throw KickFollowingError.incomplete }
-        channels = try values.decode([Row].self, forKey: .channels)
-        nextCursor = try values.decodeIfPresent(Int.self, forKey: .nextCursor)
-      }
     }
     guard data.count <= 4_000_000 else { throw KickFollowingError.invalidResponse }
     do {

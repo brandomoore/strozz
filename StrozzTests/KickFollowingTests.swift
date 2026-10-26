@@ -28,13 +28,29 @@ final class KickFollowingTests: XCTestCase {
 
   func testOnlyExplicitEmptyListIsAValidEmptyImport() throws {
     XCTAssertTrue(try KickFollowImport.decodePage(Data(#"{"channels":[],"nextCursor":null}"#.utf8)).follows.isEmpty)
+    XCTAssertTrue(try KickFollowImport.decodePage(Data(#"{"channels":[]}"#.utf8)).follows.isEmpty)
     for json in ["{}", #"{"message":"blocked"}"#, #"{"channels":null}"#,
-      #"{"channels":[]}"#, #"{"channels":[{"channel_slug":"valid","is_live":true}]}"#,
       #"{"channels":[{"channel_slug":"valid"}]}"#,
+      #"{"channels":[],"nextCursor":"invalid"}"#,
       #"{"channels":[{"channel_slug":"../bad","is_live":true}],"nextCursor":null}"#] {
       XCTAssertThrowsError(try KickFollowImport.decodePage(Data(json.utf8)), json)
     }
     XCTAssertThrowsError(try KickFollowImport.decodeAccount(Data("{}".utf8)))
+  }
+
+  func testFinalPageMayOmitNextCursorWithoutDroppingFollows() async throws {
+    var paths: [String] = []
+    let imported = try await KickFollowImport.read { path in
+      paths.append(path)
+      if path == "/api/v1/user" { return self.account }
+      if path.hasSuffix("cursor=0") {
+        return Data(#"{"channels":[{"channel_slug":"first","is_live":true}],"nextCursor":7}"#.utf8)
+      }
+      return Data(#"{"channels":[{"channel_slug":"second","is_live":false}]}"#.utf8)
+    }
+    XCTAssertEqual(imported.follows.map(\.slug), ["first", "second"])
+    XCTAssertEqual(paths, ["/api/v1/user", "/api/v2/channels/followed?cursor=0",
+      "/api/v2/channels/followed?cursor=7", "/api/v1/user"])
   }
 
   func testPaginationFailureCannotReturnPartialSuccess() async {

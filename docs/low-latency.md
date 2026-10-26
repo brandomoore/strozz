@@ -64,6 +64,9 @@ Mobile setup is a visible Kick login website in an isolated persistent WebKit
 profile. Same-origin reads import `/api/v1/user` and every page of
 `/api/v2/channels/followed`, then verify the account again. Failed, malformed,
 incomplete or account-switched reads cannot replace the last saved roster.
+Terminal pages may omit `nextCursor` or set it to `null`; the `channels` array
+remains required, and malformed cursors, repeated cursors, and failed later pages
+must still reject the import rather than save a partial roster.
 This undocumented endpoint has no stability guarantee. There is no client
 secret, cookie-paste workflow, session relay or bot-challenge bypass.
 Sign-in preparation is time-bounded; reloading an already-prepared website
