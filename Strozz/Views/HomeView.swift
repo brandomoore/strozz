@@ -186,7 +186,8 @@ struct HomeView: View {
   var body: some View {
     homeContent
       .task(id: KickRefreshSignature(
-        isBrowsing: isForeground && !isPresentingPlayer, revision: kickRefreshRevision
+        isBrowsing: isForeground && !isPresentingPlayer, revision: kickRefreshRevision,
+        importedAt: environment.kickFollows.document?.importedAt
       )) {
         guard isForeground, !isPresentingPlayer else { return }
         var force = true
@@ -799,6 +800,7 @@ struct HomeView: View {
   private struct KickRefreshSignature: Equatable {
     let isBrowsing: Bool
     let revision: Int
+    let importedAt: Date?
   }
 
   /// True while any full-screen cover is up (player, channel page, multiview,

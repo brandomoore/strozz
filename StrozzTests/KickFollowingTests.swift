@@ -223,6 +223,75 @@ final class KickFollowingTests: XCTestCase {
     XCTAssertEqual(rows.map(\.channelKey), ["first", "kick:first"])
   }
 
+  func testCuratedAliasesAcceptConfirmedSameNameIdentities() throws {
+    let aliases = try XCTUnwrap(KickAliasService.decode(
+      Data(#"{"map":{"XQC":"xQc","Zackrawrr":"Asmongold"}}"#.utf8)))
+    XCTAssertEqual(aliases, ["xqc": "xqc", "zackrawrr": "asmongold"])
+    let bundled = try Data(contentsOf: XCTUnwrap(Bundle.main.url(forResource: "KickAliases", withExtension: "json")))
+    XCTAssertEqual(KickAliasService.decode(bundled)?["xqc"], "xqc")
+    XCTAssertEqual(KickAliasService().kickSlug(forTwitchLogin: "XQC"), "xqc")
+  }
+
+  func testConfirmedSameNameCreatorMergesImmediatelyAndRetainsLiveArtwork() async throws {
+    let store = KickFollowingStore(database: KickFollowingTestDatabase(), defaults: defaults())
+    var followed = follow("xqc")
+    followed.isLive = true
+    try await store.publish(.init(account: imported().account, follows: [followed]), interactive: true)
+    let discovery = KickDiscoveryService(follows: store, load: { slug in
+      var channel = KickChannel(slug: slug, displayName: "xQc", title: "", category: "",
+        viewerCount: 20, isLive: true, chatroomID: nil, imageURL: nil)
+      channel.thumbnailURL = URL(string: "https://images.kick.com/video_thumbnails/fixture/720.webp")
+      return channel
+    }, resolve: { root in
+      XCTFail("A confirmed alias must not wait for unrelated profile discovery")
+      return CreatorLiveSources(root: root)
+    })
+    discovery.applyRoster()
+    XCTAssertEqual(discovery.mergedFollowing([twitch("xqc")]).count, 1)
+
+    await discovery.refresh(twitch: [twitch("xqc")])
+    let rows = discovery.mergedFollowing([twitch("xqc")])
+    XCTAssertEqual(rows.count, 1)
+    XCTAssertEqual(rows.first?.channelKey, "xqc")
+    XCTAssertEqual(rows.first?.combinedViewerCount, 30)
+    XCTAssertNotNil(rows.first?.kick?.thumbnailURL)
+    let promoted = discovery.mergedFollowing([twitch("xqc", live: false)])
+    XCTAssertEqual(promoted.count, 1)
+    XCTAssertEqual(promoted.first?.platform, .kick)
+    XCTAssertEqual(promoted.first?.thumbnailURL, rows.first?.kick?.thumbnailURL)
+
+    let suggested = KickDiscoveryService(follows: KickFollowingStore(
+      database: KickFollowingTestDatabase(), defaults: defaults()),
+      load: { slug in
+        KickChannel(slug: slug, displayName: slug, title: "", category: "", viewerCount: 20,
+          isLive: true, chatroomID: nil, imageURL: nil)
+      }, resolve: { root in
+        XCTFail("Known recommendation links should be immediate too")
+        return CreatorLiveSources(root: root)
+      })
+    await suggested.refresh(twitch: [twitch("xqc")])
+    XCTAssertEqual(suggested.mergedRecommendations([twitch("xqc")]).count, 1)
+    XCTAssertEqual(suggested.mergedRecommendations([twitch("xqc")]).first?.combinedViewerCount, 30)
+  }
+
+  func testIdentityDiscoveryPrioritizesFollowCandidatesWithoutAssumingIdentity() async throws {
+    let store = KickFollowingStore(database: KickFollowingTestDatabase(), defaults: defaults())
+    try await store.publish(.init(account: imported().account, follows: [follow("candidate")]), interactive: true)
+    var resolved: [String] = []
+    let discovery = KickDiscoveryService(follows: store, load: { slug in
+      KickChannel(slug: slug, displayName: slug, title: "", category: "", viewerCount: 20,
+        isLive: true, chatroomID: nil, imageURL: nil)
+    }, resolve: { root in
+      resolved.append(root.channel)
+      return CreatorLiveSources(root: root)
+    }, knownLinks: [:])
+    await discovery.refresh(twitch: (0..<30).map { twitch("unrelated\($0)") } + [twitch("candidate")])
+    XCTAssertEqual(resolved.count, 24)
+    XCTAssertTrue(resolved.contains("candidate"))
+    XCTAssertNil(discovery.links["candidate"])
+    XCTAssertEqual(discovery.mergedFollowing([twitch("candidate")]).count, 2)
+  }
+
   func testVerifiedSimulcastMergesCountsWithoutChangingTwitchIdentity() {
     let rows = KickUnifiedFeed.merge(twitch: [twitch("first")], kick: [kick("second")], links: ["first": "second"])
     XCTAssertEqual(rows.count, 1)
@@ -299,7 +368,7 @@ final class KickFollowingTests: XCTestCase {
       throw URLError(.cancelled)
     }, resolve: { _ in
       await withCheckedContinuation { continuation = $0; entered.fulfill() }
-    })
+    }, knownLinks: [:])
     let refresh = Task { await discovery.refresh(twitch: [twitch("creator")]) }
     await fulfillment(of: [entered], timeout: 2)
     discovery.accountChanged()

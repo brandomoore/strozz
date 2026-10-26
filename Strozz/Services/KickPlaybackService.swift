@@ -74,7 +74,12 @@ enum KickPlaybackService {
   }
 
   static func channel(_ input: String, load: Loader = defaultLoader) async throws -> KickChannel {
-    try await channelDocument(input, load: load).channel
+    // The v1 document includes live artwork; v2 can return thumbnail: null.
+    // Playback resolution deliberately continues using v2's signed media URL.
+    let slug = try slug(from: input)
+    let url = URL(string: "https://kick.com/api/v1/channels/\(slug)")!
+    return try decodeChannel(
+      await response(url, accept: "application/json", load: load), requestedSlug: slug).channel
   }
 
   static func resolve(_ input: String, load: Loader = defaultLoader) async throws -> Resolved {

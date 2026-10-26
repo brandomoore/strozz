@@ -111,6 +111,7 @@ targets:
       - path: Strozz/Views/ChannelFollowButton.swift
       - path: Strozz/Views/ChannelFollowFixture.swift
       - path: Strozz/Resources/StreamerAffinity.json
+      - path: Strozz/Resources/KickAliases.json
       - path: Strozz/Views/RichChatLineView.swift
       - path: Strozz/Views/KickDirectoryView.swift
       - path: Strozz/Views/KickChannelDetailsView.swift

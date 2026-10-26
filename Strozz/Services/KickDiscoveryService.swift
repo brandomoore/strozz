@@ -53,16 +53,20 @@ final class KickDiscoveryService {
   private var loadedConnection: UUID?
   private var loadedRoster: [KickFollow] = []
   private var nextLinkAttempt: [String: Date] = [:]
+  private let knownLinks: [String: String]
   private let load: @Sendable (String) async throws -> KickChannel
   private let resolve: @MainActor @Sendable (PlatformLiveTarget) async throws -> CreatorLiveSources
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "kick-discovery")
 
   init(follows: KickFollowingStore,
        load: @escaping @Sendable (String) async throws -> KickChannel = { try await KickPlaybackService.channel($0) },
-       resolve: @escaping @MainActor @Sendable (PlatformLiveTarget) async throws -> CreatorLiveSources = CreatorSourceResolver.resolve) {
+       resolve: @escaping @MainActor @Sendable (PlatformLiveTarget) async throws -> CreatorLiveSources = CreatorSourceResolver.resolve,
+       knownLinks: [String: String]? = nil) {
     self.follows = follows
     self.load = load
     self.resolve = resolve
+    self.knownLinks = knownLinks ?? KickAliasService().aliases
+    resetLinks()
   }
 
   func accountChanged() {
@@ -71,11 +75,19 @@ final class KickDiscoveryService {
     loadedRoster = []
     directory = []
     recommended = []
-    links = [:]
+    resetLinks()
     nextLinkAttempt = [:]
     errorMessage = nil
     lastUpdatedAt = nil
     isRefreshing = false
+  }
+
+  private func resetLinks() {
+    links = knownLinks
+    for login in knownLinks.keys {
+      let root = PlatformLiveTarget(platform: .twitch, channel: login)
+      if let saved = CreatorLiveSession.savedSources(for: root) { links[login] = saved.kick }
+    }
   }
 
   func applyRoster() {
@@ -132,6 +144,9 @@ final class KickDiscoveryService {
       if let saved = CreatorLiveSession.savedSources(for: root) {
         links[channel.login.lowercased()] = saved.kick
         nextLinkAttempt[channel.login.lowercased()] = .distantFuture
+      } else if let known = knownLinks[channel.login.lowercased()] {
+        links[channel.login.lowercased()] = known
+        nextLinkAttempt[channel.login.lowercased()] = .distantFuture
       }
     }
     let loaded = await Self.loadChannels(roster.map(\.slug), load: load) {
@@ -146,6 +161,10 @@ final class KickDiscoveryService {
     // Follow liveness is visible before slower creator-profile discovery.
     let missing = candidates.filter {
       Date() >= (nextLinkAttempt[$0.login.lowercased()] ?? .distantPast)
+    }.sorted {
+      let first = rosterSlugs.contains($0.login.lowercased())
+      let second = rosterSlugs.contains($1.login.lowercased())
+      return first && !second
     }.prefix(24)
     let resolve = self.resolve
     let logger = Self.logger

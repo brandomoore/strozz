@@ -48,11 +48,17 @@ HLS master using ordinary HTTPS requests. It distinguishes actual offline state
 (`livestream: null`) from missing channels, malformed responses, and access
 restrictions. Signed playback URLs are not saved in the recent-channel model.
 Playback has no hidden browser, challenge bypass, or additional player SDK.
+Public discovery uses `/api/v1/channels/{slug}` for live artwork because the v2
+document may return `thumbnail: null`. Playback and previews still resolve their
+signed media through v2; artwork lookup does not sit on the playback path.
 
 Discovery shares the existing Following, recommendation, search and multiview
 surfaces. `KickFollowingStore` owns a complete real-account follow snapshot;
 `KickDiscoveryService` independently refreshes public channel status and merges
-only creator identities confirmed by saved links or `CreatorSourceResolver`.
+only creator identities confirmed by saved links, curated aliases or
+`CreatorSourceResolver`. Curated aliases are bundled on both platforms, including
+confirmed same-name pairs, and are not lost when a downloaded table omits them.
+Known links merge immediately without waiting for background profile discovery.
 Equal names alone remain separate provider-qualified identities. Recommendation
 candidates are linked creators from existing pools, not a global Kick directory.
 The multiview pane's playback target includes the provider and actual Kick slug;
@@ -86,7 +92,9 @@ observe this interval. Website content is unloaded after import/dismissal;
 opening Strozz without a Kick connection must not create a browser/player for
 Kick. Public live status refresh is separate, bounded to four requests in flight, with followed
 channels published before slower identity discovery. Identity lookups also have
-four-request concurrency and bounded retry intervals. TV discovery runs outside
+four-request concurrency and bounded retry intervals. Same-name followed accounts
+are prioritized for identity verification, never accepted on name alone. New
+imports restart discovery promptly on both platforms. TV discovery runs outside
 the Home startup chain so it cannot delay Twitch recommendations or initial focus.
 After the initial/account refresh, TV status polling respects Home's idle gate
 rather than reordering rails under active navigation. Discovery loops pause during

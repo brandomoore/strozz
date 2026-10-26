@@ -61,6 +61,25 @@ final class KickPlaybackTests: XCTestCase {
     XCTAssertNil(channel.playbackURL)
   }
 
+  func testDiscoveryUsesArtworkBearingChannelDocument() async throws {
+    let channel = try await KickPlaybackService.channel("fixture") { request in
+      XCTAssertEqual(request.url?.absoluteString, "https://kick.com/api/v1/channels/fixture")
+      let data = Data(
+        #"""
+        {"slug":"fixture","user":{"username":"Fixture"},"chatroom":{"id":123},
+        "livestream":{"session_title":"Live","viewers":12,"categories":[{"name":"Just Chatting"}],
+        "thumbnail":{"url":"https://images.kick.com/video_thumbnails/fixture/720.webp"}}}
+        """#.utf8)
+      return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    }
+    XCTAssertEqual(channel.thumbnailURL?.absoluteString, "https://images.kick.com/video_thumbnails/fixture/720.webp")
+    XCTAssertEqual(channel.followedChannel.thumbnailURL, channel.thumbnailURL)
+    XCTAssertEqual(channel.viewerCount, 12)
+    XCTAssertEqual(channel.category, "Just Chatting")
+    XCTAssertEqual(channel.chatroomID, 123)
+    XCTAssertTrue(channel.isLive)
+  }
+
   func testAllAdvertisedQualitiesRemainSelectableWithDistinctIDsAndAbsoluteURLs() throws {
     let qualities = try KickPlaybackService.qualities(in: Self.master, base: Self.masterURL)
     XCTAssertEqual(qualities.map(\.name), ["1080p60", "480p"])
@@ -79,26 +98,29 @@ final class KickPlaybackTests: XCTestCase {
   func testResolutionUsesFreshChannelURLsAndRetainsTheFullMaster() async throws {
     let resolved = try await KickPlaybackService.resolve("fixture") { request in
       let url = try XCTUnwrap(request.url)
+      if url.host == "kick.com" { XCTAssertEqual(url.path, "/api/v2/channels/fixture") }
       let bytes = url.host == "kick.com" ? Self.channelJSON : Data(Self.master.utf8)
       return (
         bytes, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
       )
     }
 
-    func testKickPreviewsUseKickVariantsForInitialPlaybackAndRecovery() async throws {
-      for original in [false, true] {
-        let url = try await KickPlaybackService.previewHLSURL(for: "fixture", original: original) { request in
-          let url = try XCTUnwrap(request.url)
-          XCTAssertTrue(url.host == "kick.com" || url.host == "edge.live-video.net")
-          let data = url.host == "kick.com" ? Self.channelJSON : Data(Self.master.utf8)
-          return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-        }
-        XCTAssertEqual(url.lastPathComponent, original ? "source.m3u8" : "low.m3u8")
-      }
-    }
     XCTAssertEqual(resolved.playback.master, Self.masterURL)
     XCTAssertEqual(resolved.playback.qualities.count, 2)
     XCTAssertEqual(resolved.channel.slug, "fixture")
+  }
+
+  func testKickPreviewsUseKickVariantsForInitialPlaybackAndRecovery() async throws {
+    for original in [false, true] {
+      let url = try await KickPlaybackService.previewHLSURL(for: "fixture", original: original) { request in
+        let url = try XCTUnwrap(request.url)
+        XCTAssertTrue(url.host == "kick.com" || url.host == "edge.live-video.net")
+        if url.host == "kick.com" { XCTAssertEqual(url.path, "/api/v2/channels/fixture") }
+        let data = url.host == "kick.com" ? Self.channelJSON : Data(Self.master.utf8)
+        return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+      }
+      XCTAssertEqual(url.lastPathComponent, original ? "source.m3u8" : "low.m3u8")
+    }
   }
 
   func testRenditionSelectionSurvivesRotatedHostsPathsAndBitrates() throws {

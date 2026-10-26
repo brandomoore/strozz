@@ -127,6 +127,11 @@ struct MobileHomeView: View {
     }
   }
 
+  private struct KickRefreshIdentity: Equatable {
+    let isActive: Bool
+    let importedAt: Date?
+  }
+
   var body: some View {
     let shortcutChannels = visibleFollows
     let shortcutRows = MobileFollowedShortcutCount.rows(
@@ -277,7 +282,7 @@ struct MobileHomeView: View {
       followedSkeletonCount = count
     }
     .task { if recommendations.lastUpdatedAt == nil { await recommendations.refresh() } }
-    .task(id: previewsEnabled) {
+    .task(id: KickRefreshIdentity(isActive: previewsEnabled, importedAt: kick.follows.document?.importedAt)) {
       guard previewsEnabled else { return }
       while !Task.isCancelled {
         await kick.refresh(twitch: follows.channels + recommendations.channels)

@@ -1,10 +1,9 @@
 import Foundation
 import Observation
 
-/// Maps a Twitch login to the same streamer's Kick channel slug for cases where
-/// the two names differ and nothing in the Twitch profile links them (e.g.
-/// Twitch `zackrawrr` → Kick `asmongold`). These can't be derived from profile
-/// data, so they come from a curated/CI-generated alias table.
+/// Maps confirmed Twitch/Kick creator identities, including same-name pairs.
+/// A matching handle alone is not evidence; each entry is an explicit link.
+/// Examples include Twitch `zackrawrr` → Kick `asmongold` and `xqc` → `xqc`.
 ///
 /// Mirrors `StreamerAffinityService`: a monthly GitHub Action regenerates the
 /// table from the current top streamers (model-suggested, validated against
@@ -12,8 +11,8 @@ import Observation
 /// **downloads a public static file** — it never uploads what the viewer is
 /// watching — preserving the "Data Not Collected" privacy posture.
 ///
-/// Resolution order: freshly-fetched remote (cached on disk) → last cached →
-/// the curated copy bundled with the app. So it always has something offline.
+/// Downloaded entries override matching bundled entries without discarding
+/// curated identities absent from the downloaded table.
 @MainActor
 @Observable
 final class KickAliasService {
@@ -32,11 +31,10 @@ final class KickAliasService {
   private(set) var aliases: [String: String]
 
   init() {
-    aliases = Self.loadCached() ?? Self.loadBundled() ?? [:]
+    aliases = (Self.loadBundled() ?? [:]).merging(Self.loadCached() ?? [:]) { _, cached in cached }
   }
 
-  /// The Kick slug a streamer uses when it differs from their Twitch login,
-  /// or nil when there's no known alias (the caller then resolves normally).
+  /// The Kick slug for a confirmed creator link, or nil when no link is known.
   func kickSlug(forTwitchLogin login: String) -> String? {
     let slug = aliases[login.lowercased()]
     return (slug?.isEmpty == false) ? slug : nil
@@ -71,7 +69,7 @@ final class KickAliasService {
     if let etag = http.value(forHTTPHeaderField: "ETag") {
       defaults.set(etag, forKey: Self.etagDefaultsKey)
     }
-    aliases = decoded
+    aliases = (Self.loadBundled() ?? [:]).merging(decoded) { _, remote in remote }
   }
 
   // MARK: - Loading
@@ -80,13 +78,13 @@ final class KickAliasService {
     let map: [String: String]
   }
 
-  private static func decode(_ data: Data) -> [String: String]? {
+  static func decode(_ data: Data) -> [String: String]? {
     guard let document = try? TwitchAPIClient.sharedDecoder.decode(Document.self, from: data) else { return nil }
     var result: [String: String] = [:]
     for (rawKey, rawValue) in document.map {
       let key = rawKey.lowercased()
       let value = rawValue.lowercased()
-      guard !key.isEmpty, !value.isEmpty, key != value else { continue }
+      guard !key.isEmpty, !value.isEmpty else { continue }
       result[key] = value
     }
     return result.isEmpty ? nil : result
