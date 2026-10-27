@@ -296,6 +296,7 @@ restore the prior audio owner and mute choice when dismissed.
 
 Focus outlines, the audio badge and focused metadata hide after ten idle
 seconds and return on remote interaction without changing audio ownership.
+The outline switches instantly between panes; other chrome animations are unchanged.
 Outlines occupy reserved gutters outside video pixels, including at the screen
 edges; the gutter is stable while chrome hides. Expanded playback remains
 edge-to-edge with the same retained player.

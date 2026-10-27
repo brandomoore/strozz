@@ -94,6 +94,59 @@ final class MultiviewFocusRenderingTests: XCTestCase {
     }
   }
 
+  func testFocusOutlineReachesFinalPixelsOnFirstUpdate() async throws {
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    defer { window.rootViewController = previous }
+    let pane = MultiviewPane(channel: .init(id: "snap", login: "snap", displayName: "Snap",
+      title: "", gameName: "", viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true))
+    pane.model.isLoading = false
+    defer { pane.stop() }
+
+    func tile(focused: Bool, visible: Bool = true, onUpdate: @escaping () -> Void = {}) -> some View {
+      Color.red.frame(width: 600, height: 360)
+        .overlay {
+          MultiviewPaneTile(pane: pane, isFocused: focused, isPrimary: false,
+            showsMetadata: focused && visible, showsChrome: visible,
+            style: .full, palette: .dark, glassDisabled: true)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .onChange(of: [focused, pane.isAudible, visible], initial: true) { _, _ in onUpdate() }
+    }
+
+    let host = UIHostingController(rootView: tile(focused: false))
+    window.rootViewController = host
+    host.view.layoutIfNeeded()
+    try await Task.sleep(for: .milliseconds(300))
+    for (focused, audible, visible) in [
+      (true, true, true), (false, true, true), (false, false, true),
+      (true, false, true), (false, false, false), (true, true, true),
+    ] {
+      let updated = expectation(description: "Focus \(focused), audio \(audible) rendered")
+      pane.isAudible = audible
+      host.rootView = tile(focused: focused, visible: visible, onUpdate: { updated.fulfill() })
+      host.view.setNeedsLayout()
+      host.view.layoutIfNeeded()
+      await fulfillment(of: [updated], timeout: 2)
+      await NextDisplayFrame().wait()
+      let image = UIGraphicsImageRenderer(bounds: host.view.bounds).image { _ in
+        host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+      }
+      let center = CGPoint(x: host.view.bounds.midX, y: host.view.bounds.midY)
+      XCTAssertEqual(try pixel(image, at: .init(x: center.x - 304, y: center.y)),
+        focused && visible ? [255, 255, 255] : [0, 0, 0],
+        "Outline must reach its final width on update: focus=\(focused), audio=\(audible)")
+      let inner = try pixel(image, at: .init(x: center.x - 302, y: center.y))
+      if visible && (focused || audible) {
+        XCTAssertGreaterThan(inner.min() ?? 0, 80)
+      } else {
+        XCTAssertEqual(inner, [0, 0, 0], "The previous audio outline must not linger")
+      }
+    }
+  }
+
   private func pixel(_ image: UIImage, at point: CGPoint) throws -> [Int] {
     let cropped = try XCTUnwrap(image.cgImage?.cropping(to: CGRect(
       x: point.x * image.scale, y: point.y * image.scale, width: 1, height: 1)))
@@ -200,6 +253,25 @@ final class MultiviewFocusRenderingTests: XCTestCase {
 @MainActor
 private final class FocusObservation {
   var isFocused = false
+}
+
+@MainActor
+private final class NextDisplayFrame: NSObject {
+  private var continuation: CheckedContinuation<Void, Never>?
+
+  func wait() async {
+    await withCheckedContinuation { continuation in
+      self.continuation = continuation
+      CADisplayLink(target: self, selector: #selector(frame(_:)))
+        .add(to: .main, forMode: .common)
+    }
+  }
+
+  @objc private func frame(_ link: CADisplayLink) {
+    link.invalidate()
+    continuation?.resume()
+    continuation = nil
+  }
 }
 
 private struct FocusFixture: View {

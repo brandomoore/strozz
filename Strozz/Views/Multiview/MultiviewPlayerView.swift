@@ -644,6 +644,9 @@ struct MultiviewPaneTile: View {
         .strokeBorder(borderColor, lineWidth: borderWidth)
         .padding(-borderWidth)
         .opacity(showsChrome ? 1 : 0)
+        // Snap the outline without changing other chrome animations or its idle fade.
+        .animation(nil, value: isFocused)
+        .animation(nil, value: pane.isAudible)
     }
     .animation(.easeOut(duration: 0.18), value: isFocused)
     .animation(.easeOut(duration: 0.2), value: pane.isAudible)
