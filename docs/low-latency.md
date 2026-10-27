@@ -282,6 +282,24 @@ iOS SDK. Provider availability and stream formats can change.
   cushion; synchronization adds only excess delay, not total encoder/live-edge
   latency. Rewind uses retained chat/replay behavior, not a second live delay.
 
+### Multiview selection and chrome
+
+Selection uses provider-qualified channel keys, not pool-specific stream/user
+IDs. A selected channel leaving the live pool remains visible as Offline for ten
+seconds, then fades away. It stops counting toward the limit and launch roster
+immediately; returning live during the grace period preserves its selection.
+An active player pane does not auto-remove: its offline notice remains, with
+native View channel and Remove actions. These controls use the dark video
+surface's appearance even in Light theme. Removing the last pane exits multiview.
+Channel pages temporarily suspend wall audio without replacing players, then
+restore the prior audio owner and mute choice when dismissed.
+
+Focus outlines, the audio badge and focused metadata hide after ten idle
+seconds and return on remote interaction without changing audio ownership.
+Outlines occupy reserved gutters outside video pixels, including at the screen
+edges; the gutter is stable while chrome hides. Expanded playback remains
+edge-to-edge with the same retained player.
+
 ### Multiview ceilings
 
 Normal controlled grids permit up to 1920x1080 with one through four panes and

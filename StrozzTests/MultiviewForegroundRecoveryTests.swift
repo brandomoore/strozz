@@ -5,6 +5,24 @@ import XCTest
 
 @MainActor
 final class MultiviewForegroundRecoveryTests: XCTestCase {
+  func testProfileAudioSuspensionPreservesPlayersAndPriorMuteChoice() {
+    let controller = controller(count: 2)
+    defer { controller.teardown() }
+    let pane = controller.panes[0]
+    let player = pane.player
+    controller.setAudiblePane(pane.id)
+    for muted in [false, true] {
+      pane.player.isMuted = muted
+      let state = controller.suspendAudio()
+      XCTAssertNil(controller.audiblePaneID)
+      XCTAssertTrue(controller.panes.allSatisfy { $0.player.isMuted })
+      controller.restoreAudio(state)
+      XCTAssertEqual(controller.audiblePaneID, pane.id)
+      XCTAssertEqual(pane.player.isMuted, muted)
+      XCTAssertTrue(pane.player === player)
+    }
+  }
+
   func testOfflinePaneIsDistinctFromLoadFailureAndRemoteRetryKeepsItsIdentity() {
     let controller = controller(count: 2)
     defer { controller.teardown() }
@@ -305,10 +323,11 @@ final class MultiviewForegroundRecoveryTests: XCTestCase {
         for frame in frames.values {
           XCTAssertGreaterThan(frame.width, 0)
           XCTAssertGreaterThan(frame.height, 0)
-          XCTAssertGreaterThanOrEqual(frame.minX, 0)
-          XCTAssertGreaterThanOrEqual(frame.minY, 0)
-          XCTAssertLessThanOrEqual(frame.maxX, size.width + 0.001)
-          XCTAssertLessThanOrEqual(frame.maxY, size.height + 0.001)
+          let outlined = frame.insetBy(dx: -5, dy: -5)
+          XCTAssertGreaterThanOrEqual(outlined.minX, 0)
+          XCTAssertGreaterThanOrEqual(outlined.minY, 0)
+          XCTAssertLessThanOrEqual(outlined.maxX, size.width + 0.001)
+          XCTAssertLessThanOrEqual(outlined.maxY, size.height + 0.001)
         }
         let expanded = MultiviewGeometry.frames(ids: ids, size: size, layout: layout,
           primary: ids.last, expanded: ids[0])

@@ -46,6 +46,8 @@ final class MultiviewPlaybackContext {
   var playPauseRequests = 0
   var moveRequests = 0
   var moveDirection = MoveCommandDirection.up
+  var watchRequests = 0
+  var requestedChannel: FollowedChannel?
   @ObservationIgnored var onClose: (() -> Void)?
 }
 
@@ -260,6 +262,23 @@ final class MultiviewController {
     }
   }
 
+  struct AudioState {
+    let paneID: String?
+    let wasMuted: Bool
+  }
+
+  func suspendAudio() -> AudioState {
+    let state = AudioState(paneID: audiblePaneID,
+      wasMuted: panes.first(where: { $0.id == audiblePaneID })?.player.isMuted ?? true)
+    setAudiblePane(nil)
+    return state
+  }
+
+  func restoreAudio(_ state: AudioState) {
+    setAudiblePane(state.paneID)
+    if state.wasMuted { panes.first(where: { $0.id == state.paneID })?.player.isMuted = true }
+  }
+
   func synchronizeExpandedSleep() {
     if expandedPane?.model.isSleeping == true {
       for pane in panes where pane.id != expandedPaneID && !pane.model.isUserPaused && !pane.model.isSleeping {
@@ -287,6 +306,8 @@ final class MultiviewController {
 }
 
 enum MultiviewGeometry {
+  static let videoInset: CGFloat = 6
+
   static func frames(ids: [String], size: CGSize, layout: MultiviewLayout,
                      primary: String?, expanded: String?) -> [String: CGRect] {
     guard !ids.isEmpty, size.width > 0, size.height > 0 else { return [:] }
@@ -324,6 +345,9 @@ enum MultiviewGeometry {
           y: CGFloat(index / columns) * (height + gap), width: width, height: height)
       }
     }
+    // Reserve room for an outside outline even on the screen's outer edges.
+    // This inset never changes with focus/chrome visibility.
+    frames = frames.mapValues { $0.insetBy(dx: videoInset, dy: videoInset) }
     if let expanded, ids.contains(expanded) { frames[expanded] = CGRect(origin: .zero, size: size) }
     return frames
   }

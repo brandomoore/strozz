@@ -393,6 +393,20 @@ extension PlayerView {
       guard let direction = model.multiviewContext?.moveDirection else { return }
       handlePlayerMoveCommand(direction)
     }
+    .onChange(of: model.multiviewContext?.watchRequests) { _, _ in
+      guard let channel = model.multiviewContext?.requestedChannel else { return }
+      switch channel.platform {
+      case .twitch: followRaid(channel.login)
+      case .kick:
+        if currentLiveTarget == PlatformLiveTarget(platform: .kick, channel: channel.login) {
+          model.multiviewContext?.reloadID = UUID()
+        } else {
+          switchToKickSource(channel: channel.login)
+        }
+      case .youtube:
+        Task { await switchToAltYouTubeSource(resolvedTarget: channel.login) }
+      }
+    }
   }
 
   func handlePlayerMoveCommand(_ direction: MoveCommandDirection) {

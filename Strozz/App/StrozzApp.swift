@@ -27,6 +27,8 @@ struct StrozzApp: App {
           ChannelFollowFixture()
         } else if ProcessInfo.processInfo.environment["STROZZ_MULTIVIEW_STATUS_FIXTURE"] == "1" {
           MultiviewStatusFixture()
+        } else if ProcessInfo.processInfo.environment["STROZZ_MULTIVIEW_SELECTION_FIXTURE"] == "1" {
+          MultiviewSelectionFixture()
         } else if ProcessInfo.processInfo.environment["STROZZ_SIGN_IN_FIXTURE"] == "1" {
           TwitchSignInFixture()
         } else if ProcessInfo.processInfo.environment["STROZZ_HOME_ERROR_FIXTURE"] == "1" {

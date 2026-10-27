@@ -1,5 +1,42 @@
 import AVFoundation
+import Observation
 import SwiftUI
+
+@MainActor
+@Observable
+final class MultiviewChrome {
+  static let idleDelay: Duration = .seconds(10)
+  private(set) var isVisible = true
+  private let delay: Duration
+  private let sleep: @MainActor (Duration) async throws -> Void
+  @ObservationIgnored private var hideTask: Task<Void, Never>?
+
+  init(delay: Duration = idleDelay,
+       sleep: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
+    self.delay = delay
+    self.sleep = sleep
+  }
+
+  func reveal() {
+    hideTask?.cancel()
+    isVisible = true
+    let delay = delay
+    let sleep = sleep
+    hideTask = Task { [weak self] in
+      do {
+        try await sleep(delay)
+        try Task.checkCancellation()
+      } catch { return }
+      guard let self else { return }
+      withAnimation(.easeOut(duration: 0.4)) { self.isVisible = false }
+    }
+  }
+
+  func cancel() {
+    hideTask?.cancel()
+    hideTask = nil
+  }
+}
 
 /// Plays up to six live channels at once. The tvOS focus engine selects one
 /// pane as "active": that pane is unmuted and highlighted while every other pane
@@ -32,9 +69,11 @@ struct MultiviewPlayerView: View {
   @Namespace private var paneFocusScope
   /// Drives the auto-hiding focused-pane metadata: true right after any focus
   /// change or remote interaction, then fades out so the video wall stays clean.
-  @State private var chromeVisible = true
-  @State private var chromeHideTask: Task<Void, Never>?
+  @State private var chrome = MultiviewChrome()
   @State private var showingAddPicker = false
+  @State private var profilePane: MultiviewPane?
+  @State private var profileAudioState: MultiviewController.AudioState?
+  @State private var profileWatchRequest: (pane: MultiviewPane, channel: FollowedChannel)?
   /// The reveal-on-up controls HUD. The wall is full-screen by default; pressing
   /// up from the top pane row (a focus move the engine can't satisfy) surfaces
   /// the control bar and hands focus to it. Pressing down / Menu hides it again.
@@ -63,8 +102,10 @@ struct MultiviewPlayerView: View {
   }
 
   private var focusedPaneID: String? {
-    if case let .pane(id) = focus { return id }
-    return nil
+    switch focus {
+    case .pane(let id), .profile(let id), .remove(let id): return id
+    default: return nil
+    }
   }
 
   private var addableChannels: [FollowedChannel] {
@@ -77,9 +118,9 @@ struct MultiviewPlayerView: View {
 
   var body: some View {
     ZStack(alignment: .top) {
-      palette.playerBackdrop.ignoresSafeArea()
+      palette.videoControlScrim.ignoresSafeArea()
 
-      // The video wall fills the entire screen edge-to-edge — no outer margins.
+      // The stage fills the screen and reserves stable gutters for outside outlines.
       // While the HUD is open it's disabled so the focus engine can't escape
       // down into the panes — focus stays trapped in the controls until the
       // viewer closes them (Close button or the Menu/Back button).
@@ -127,7 +168,7 @@ struct MultiviewPlayerView: View {
       showHintBriefly()
     }
     .onChange(of: focus) { _, newValue in
-      guard !controller.isTransitioning else { return }
+      guard !controller.isTransitioning, profileAudioState == nil else { return }
       if case let .pane(id) = newValue {
         if controller.audiblePaneID != id { watchTracker.stop() }
         lastPaneID = id
@@ -151,13 +192,13 @@ struct MultiviewPlayerView: View {
       }
     }
     .onMoveCommand { direction in
-      guard let expanded = controller.expandedPane else { return }
+      guard let expanded = controller.expandedPane else { bumpChrome(); return }
       expanded.presentation.moveDirection = direction
       expanded.presentation.moveRequests &+= 1
     }
     .onDisappear {
       watchTracker.stop()
-      chromeHideTask?.cancel()
+      chrome.cancel()
       hintHideTask?.cancel()
       controller.teardown()
       UIApplication.shared.isIdleTimerDisabled = false
@@ -193,6 +234,7 @@ struct MultiviewPlayerView: View {
     .onChange(of: showingAddPicker) { _, _ in
       watchTracker.stop()
     }
+    .onChange(of: profilePane?.id) { _, _ in watchTracker.stop() }
     .onExitCommand {
       if let expanded = controller.expandedPane {
         expanded.model.playbackTelemetry.recordEvent("multiview_exit_received")
@@ -210,12 +252,19 @@ struct MultiviewPlayerView: View {
         onCancel: { showingAddPicker = false }
       )
     }
+    .sheet(item: $profilePane, onDismiss: finishProfile) { pane in
+      ChannelPageView(target: ChannelPageTarget(channel: pane.channel)) { channel in
+        profileWatchRequest = (pane, channel)
+        profilePane = nil
+      }
+      .environment(\.themePalette, palette)
+    }
   }
 
   // MARK: Controls
 
   private func updateWatchRewards() {
-    guard scenePhase == .active, controller.expandedPaneID == nil, !showingAddPicker,
+    guard scenePhase == .active, controller.expandedPaneID == nil, !showingAddPicker, profilePane == nil,
       auth.isAuthenticated, let userID = auth.userID,
       let pane = controller.panes.first(where: { $0.id == controller.audiblePaneID }),
       pane.isTwitchLive,
@@ -330,7 +379,8 @@ struct MultiviewPlayerView: View {
           pane: pane,
           isFocused: focusedPaneID == pane.id,
           isPrimary: controller.layout == .spotlight && controller.primaryPane?.id == pane.id,
-          showsMetadata: chromeVisible && focusedPaneID == pane.id,
+          showsMetadata: chrome.isVisible && focusedPaneID == pane.id,
+          showsChrome: chrome.isVisible,
           style: style,
           palette: palette,
           glassDisabled: glassDisabled
@@ -340,8 +390,10 @@ struct MultiviewPlayerView: View {
         .accessibilityHidden(true)
         if controller.expandedPaneID == nil {
           MultiviewPaneButton {
+            bumpChrome()
             if pane.hasError { controller.load(pane) } else { escalate(pane) }
           }
+          .padding(.bottom, pane.model.isOffline ? MultiviewOfflineActions.reservedHeight(for: style) : 0)
           .focused($focus, equals: .pane(pane.id))
           // Tile buttons re-enter focus before the collapse animation completes.
           .prefersDefaultFocus(pane.id == (lastPaneID ?? controller.panes.first?.id), in: paneFocusScope)
@@ -349,6 +401,13 @@ struct MultiviewPlayerView: View {
           .accessibilityIdentifier("multiview-pane-\(pane.id)")
           .accessibilityLabel(pane.channel.displayName)
           .accessibilityValue(Text(pane.accessibilityStatus(isTransitioning: controller.isTransitioning)))
+          if pane.model.isOffline {
+            MultiviewOfflineActions(style: style,
+              onProfile: { openProfile(pane) }, onRemove: { remove(pane) },
+              profileFocus: $focus, paneID: pane.id)
+              .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+              .padding(style == .compact ? 8 : 20)
+          }
         }
       }
     }
@@ -403,6 +462,25 @@ struct MultiviewPlayerView: View {
 
   // MARK: Actions
 
+  private func openProfile(_ pane: MultiviewPane) {
+    profileAudioState = controller.suspendAudio()
+    profilePane = pane
+  }
+
+  private func finishProfile() {
+    if let state = profileAudioState { controller.restoreAudio(state) }
+    profileAudioState = nil
+    if let request = profileWatchRequest,
+      controller.panes.contains(where: { $0 === request.pane }) {
+      request.pane.presentation.requestedChannel = request.channel
+      request.pane.presentation.watchRequests &+= 1
+      controller.setAudiblePane(request.pane.id)
+      focus = .pane(request.pane.id)
+    }
+    profileWatchRequest = nil
+    bumpChrome()
+  }
+
   /// Expand the already-playing pane; no new player or modal cover is created.
   private func escalate(_ pane: MultiviewPane) {
     onWatch(pane.channel)
@@ -417,6 +495,7 @@ struct MultiviewPlayerView: View {
   }
 
   private func remove(_ pane: MultiviewPane) {
+    guard controller.panes.count > 1 else { dismiss(); return }
     let wasFocused = focusedPaneID == pane.id
     controller.removePane(pane.id)
     if wasFocused {
@@ -426,15 +505,7 @@ struct MultiviewPlayerView: View {
   }
 
   private func bumpChrome() {
-    chromeVisible = true
-    chromeHideTask?.cancel()
-    chromeHideTask = Task {
-      try? await Task.sleep(for: .seconds(3.5))
-      guard !Task.isCancelled else { return }
-      withAnimation(.easeOut(duration: 0.4)) {
-        chromeVisible = false
-      }
-    }
+    chrome.reveal()
   }
 
   private func revealControls() {
@@ -463,11 +534,53 @@ struct MultiviewPlayerView: View {
 }
 
 /// Focus targets in the multiview screen: each pane plus the two control chips.
-private enum MultiviewFocusTarget: Hashable {
+enum MultiviewFocusTarget: Hashable {
   case pane(String)
+  case profile(String)
+  case remove(String)
   case layoutButton
   case addButton
   case closeButton
+}
+
+struct MultiviewOfflineActions: View {
+  let style: MultiviewPaneTile.Style
+  let onProfile: () -> Void
+  let onRemove: () -> Void
+  var profileFocus: FocusState<MultiviewFocusTarget?>.Binding
+  let paneID: String
+
+  // Keep the pane's retry focus target above, not overlapping, these controls.
+  static func reservedHeight(for style: MultiviewPaneTile.Style) -> CGFloat {
+    style == .compact ? 82 : 106
+  }
+
+  var body: some View {
+    HStack(spacing: style == .compact ? 12 : 20) {
+      Button(action: onProfile) {
+        HStack {
+          Icon(glyph: .user, size: style == .compact ? 18 : 22)
+          if style == .full { Text("View channel") }
+        }
+      }
+      .focused(profileFocus, equals: .profile(paneID))
+      .accessibilityLabel("View channel")
+      .accessibilityIdentifier("multiview-profile-\(paneID)")
+      Button(action: onRemove) {
+        HStack {
+          Icon(glyph: .trash, size: style == .compact ? 18 : 22)
+          if style == .full { Text("Remove") }
+        }
+      }
+      .focused(profileFocus, equals: .remove(paneID))
+      .accessibilityLabel("Remove")
+      .accessibilityIdentifier("multiview-remove-\(paneID)")
+    }
+    .font(style == .compact ? .caption : .subheadline)
+    .buttonStyle(.bordered)
+    // The video surface stays dark even when the surrounding app uses Light.
+    .environment(\.colorScheme, .dark)
+  }
 }
 
 struct MultiviewPaneButton: View {
@@ -500,11 +613,10 @@ struct MultiviewPaneTile: View {
   let isFocused: Bool
   let isPrimary: Bool
   let showsMetadata: Bool
+  var showsChrome = true
   let style: Style
   let palette: ThemePalette
   let glassDisabled: Bool
-
-  private var cornerRadius: CGFloat { style == .compact ? 12 : 16 }
 
   var body: some View {
     ZStack {
@@ -512,8 +624,9 @@ struct MultiviewPaneTile: View {
         statusOverlay {
           Text(pane.channel.displayName)
             .font(style == .compact ? .subheadline : .headline)
+            .lineLimit(style == .compact ? 1 : 2)
           if pane.model.isOffline {
-            Text("Went offline")
+            Text("Channel offline")
               .font(style == .compact ? .caption : .subheadline)
               .foregroundStyle(palette.videoControlForeground.opacity(0.75))
           } else {
@@ -527,21 +640,22 @@ struct MultiviewPaneTile: View {
       overlays
     }
     .overlay {
-      RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+      Rectangle()
         .strokeBorder(borderColor, lineWidth: borderWidth)
+        .padding(-borderWidth)
+        .opacity(showsChrome ? 1 : 0)
     }
     .animation(.easeOut(duration: 0.18), value: isFocused)
     .animation(.easeOut(duration: 0.2), value: pane.isAudible)
-    .shadow(color: .black.opacity(isFocused ? 0.5 : 0), radius: 18, y: 8)
   }
 
   private var borderColor: Color {
     // The multiview wall is always a black video surface, so the native tvOS
     // focus treatment here is a white border (as on any dark screen). The
     // audible-but-unfocused pane keeps a lighter white hairline as a quiet cue.
-    if isFocused { return .white }
-    if pane.isAudible { return Color.white.opacity(0.5) }
-    return Color.white.opacity(0.12)
+    if isFocused { return palette.videoControlForeground }
+    if pane.isAudible { return palette.videoControlForeground.opacity(0.5) }
+    return palette.videoControlForeground.opacity(0.12)
   }
 
   private var borderWidth: CGFloat {
@@ -552,20 +666,19 @@ struct MultiviewPaneTile: View {
 
   @ViewBuilder
   private func statusOverlay<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-    VStack(spacing: 12) { content() }
+    VStack(spacing: style == .compact ? 6 : 12) { content() }
       .multilineTextAlignment(.center)
       .foregroundStyle(palette.videoControlForeground)
       .padding(style == .compact ? 8 : 20)
+      .padding(.bottom, pane.model.isOffline ? MultiviewOfflineActions.reservedHeight(for: style) : 0)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .background(palette.videoControlScrim.opacity(glassDisabled ? 1 : 0.45))
   }
 
-  /// Auto-hiding metadata (focused pane only) plus the persistent audio cue.
+  /// Focus metadata and audio ownership share the idle timeout.
   private var overlays: some View {
     ZStack(alignment: .topTrailing) {
-      // Audio cue: a bold, always-on badge on whichever pane owns sound, so the
-      // active channel is obvious even after the metadata fades.
-      if pane.isAudible {
+      if pane.isAudible && showsChrome {
         audioCue
           .padding(style == .compact ? 8 : 12)
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
@@ -589,10 +702,10 @@ struct MultiviewPaneTile: View {
           .font(.subheadline.weight(.semibold))
       }
     }
-    .foregroundStyle(.black)
+    .foregroundStyle(palette.videoControlScrim)
     .padding(.horizontal, style == .compact ? 9 : 12)
     .padding(.vertical, style == .compact ? 7 : 8)
-    .background(Color.white, in: Capsule())
+    .background(palette.videoControlForeground, in: Capsule())
     .shadow(color: .black.opacity(0.4), radius: 6, y: 2)
   }
 
