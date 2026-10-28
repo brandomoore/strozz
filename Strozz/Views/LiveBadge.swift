@@ -16,6 +16,7 @@ struct LiveBadge: View {
   /// Larger type + weight for the focused multiview pane, where the badge reads
   /// from across the room; the default matches the compact card treatment.
   var prominent: Bool = false
+  var foreground: Color = ThemePalette.dark.videoControlForeground
 
   private var dotSize: CGFloat { prominent ? 10 : 8 }
   private var labelFont: Font { prominent ? .subheadline.weight(.bold) : .caption2.weight(.bold) }
@@ -30,20 +31,20 @@ struct LiveBadge: View {
       if isLive {
         Text("LIVE")
           .font(labelFont)
-          .foregroundStyle(Color.white)
+          .foregroundStyle(foreground)
           .lineLimit(1)
       }
 
       if let viewerCount {
         Text("\(viewerCount) watching")
           .font(countFont)
-          .foregroundStyle(Color.white.opacity(0.92))
+          .foregroundStyle(foreground.opacity(0.92))
           .lineLimit(1)
           .minimumScaleFactor(0.7)
       } else if !isLive {
         Text("Offline")
           .font(countFont)
-          .foregroundStyle(Color.white.opacity(0.92))
+          .foregroundStyle(foreground.opacity(0.92))
           .lineLimit(1)
       }
     }

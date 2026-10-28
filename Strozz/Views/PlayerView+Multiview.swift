@@ -1,7 +1,60 @@
 import AVFoundation
 import SwiftUI
 
+struct MultiviewLoadRequest: Equatable {
+  let reloadID: UUID?
+  let browsing: Bool
+}
+
 extension PlayerView {
+  var isMultiviewBrowsing: Bool { model.multiviewContext?.isBrowsing == true }
+
+  var multiviewChannel: FollowedChannel {
+    let target = currentLiveTarget
+    var value = FollowedChannel(id: target.channel, login: target.channel,
+      displayName: channelDisplayName.isEmpty ? target.channel : channelDisplayName,
+      title: streamTitle, gameName: "", viewerCount: nil, thumbnailURL: posterURL,
+      profileImageURL: channelAvatarURL, isLive: !isOffline)
+    value.platform = target.platform
+    return value
+  }
+
+  func suspendMultiviewForBrowsing() {
+    model.multiviewContext?.needsBrowsingResume = true
+    model.audioTakeoverTask?.cancel()
+    model.channelMetadataTask?.cancel()
+    model.watchTracker.stop()
+    hideTask?.cancel()
+    focusRecoveryTask?.cancel()
+    multiviewFocusTask?.cancel()
+    focus = nil
+    trackpad.stop()
+    model.creatorSession.suspend()
+    eventSub.stop()
+    model.eventSubChannel = nil
+    captionController.stop()
+    stopPlaybackWatchdog()
+    stopLatencyMonitor(clearPlaybackIntent: false)
+    resetAltSourceWork()
+    suspendNativePlayback(reason: "multiview_browsing")
+    player.pause()
+  }
+
+  func resumeMultiviewAfterBrowsingIfNeeded() -> Bool {
+    guard let context = model.multiviewContext, context.needsBrowsingResume else { return false }
+    context.needsBrowsingResume = false
+    guard model.nativeNeedsRefresh || (isUsingAltSource && player.currentItem != nil) else { return false }
+    if !isMultiviewCompact { connectCurrentLiveChat() }
+    model.channelMetadataTask?.cancel()
+    model.channelMetadataTask = Task { await refreshChannelMetadata() }
+    resumePlaybackAfterAbsence(restoreLive: true)
+    if !isMultiviewCompact {
+      syncCaptions()
+      focus = .video
+    }
+    return true
+  }
+
   func usesDirectMultiviewVideoLayer(
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) -> Bool {
@@ -48,6 +101,16 @@ extension PlayerView {
       "preferred_maximum_height": item.preferredMaximumResolution.height,
       "preferred_peak_bitrate_bps": item.preferredPeakBitRate,
     ], flags: ["expanded": context.isExpanded])
+    // Layout feedback should not wait for the periodic native catch-up tick.
+    if let native = model.nativeHLS {
+      let generation = model.nativeGeneration
+      let tier = context.qualityTier
+      Task { @MainActor in
+        guard generation == model.nativeGeneration, context.qualityTier == tier,
+          native === model.nativeHLS, item === player.currentItem else { return }
+        await updateNativeResourceBudget(item: item, native: native)
+      }
+    }
   }
 
   func updateMultiviewPresentation() {
@@ -61,9 +124,9 @@ extension PlayerView {
       hideTask = nil
       model.watchTracker.stop()
       trackpad.stop()
-      chat.disconnect()
+      model.creatorSession.suspend()
       eventSub.stop()
-      hermes.stop()
+      model.eventSubChannel = nil
       captionController.stop()
       showControls = false
       showChatSettings = false
@@ -76,16 +139,16 @@ extension PlayerView {
     } else {
       goLive?.suppressedLogin = activeChannel
       trackpad.start()
-      chat.connect(to: activeChannel)
-      eventSub.start(forChannel: activeChannel, auth: auth)
-      hermes.start(forChannel: activeChannel)
+      connectCurrentLiveChat()
       model.channelMetadataTask?.cancel()
       model.channelMetadataTask = Task {
         await refreshChannelMetadata()
         if streamRewindEnabled { await resolveBroadcastVODIfNeeded() }
-        await refreshYouTubeAutoTarget()
-        await refreshYouTubeSourceAvailability()
-        await refreshKickAutoTarget()
+        if model.primaryPlatform == .twitch {
+          await refreshYouTubeAutoTarget()
+          await refreshYouTubeSourceAvailability()
+          await refreshKickAutoTarget()
+        }
       }
       syncCaptions()
       showControls = false

@@ -38,7 +38,7 @@ extension PlayerView {
   @discardableResult
   func preparePlaybackAudio(reason: String) -> Bool {
     guard !model.audioInterrupted, !model.mediaServicesUnavailable, !model.multiviewSleepSuspended,
-      backgroundedAt == nil else { return false }
+      backgroundedAt == nil, !isMultiviewBrowsing else { return false }
     recordAudioPlaybackState(reason: "before_audio_activation:\(reason)")
     do {
       try model.activateAudioSession()
@@ -183,7 +183,7 @@ extension PlayerView {
   ) {
     guard model.mediaServicesResetPending, !model.mediaServicesUnavailable,
       !model.audioInterrupted, !isOffline, !isSleeping, backgroundedAt == nil,
-      channelPageTarget == nil, !model.livePlaybackReturn.isAway else { return }
+      channelPageTarget == nil, !model.livePlaybackReturn.isAway, !isMultiviewBrowsing else { return }
     if model.isUsingNativeHLS {
       // A source retry already in flight will also replace its orphaned player.
       guard model.nativeRefreshTask == nil else { return }

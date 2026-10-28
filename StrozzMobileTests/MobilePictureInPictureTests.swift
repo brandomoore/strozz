@@ -554,7 +554,10 @@ final class MobilePictureInPictureTests: XCTestCase {
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     let window = try XCTUnwrap(scene.keyWindow)
     let previous = window.rootViewController
+    let kickFollows = KickFollowingStore()
     let root = UIHostingController(rootView: MobileRootView()
+      .environment(kickFollows).environment(KickDiscoveryService(follows: kickFollows))
+      .environment(MobileKickSignIn())
       .environment(session).environment(ThemeManager())
       .environment(TwitchAuthSession()).environment(TwitchWatchRewardsSession())
       .environment(TwitchAccountSync()).environment(\.scenePhase, .active))

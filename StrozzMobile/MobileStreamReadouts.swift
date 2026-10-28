@@ -5,12 +5,37 @@ struct MobileStreamReadouts: View {
   let startedAt: Date?
   let viewerCount: Int?
   let showDuration: Bool
+  var viewerCounts: [PlatformViewerCount] = []
   let onGoLive: () -> Void
   @Environment(\.themePalette) private var palette
 
   var body: some View {
-    HStack(spacing: 14) {
-      if let viewerCount {
+    ViewThatFits(in: .horizontal) {
+      HStack(spacing: 14) { viewerReadout; liveReadout }
+      VStack(alignment: .leading, spacing: 6) { viewerReadout; liveReadout }
+    }
+    .font(.subheadline)
+    .monospacedDigit()
+    .lineLimit(1)
+    .minimumScaleFactor(0.75)
+    .foregroundStyle(palette.videoControlForeground)
+  }
+
+  private var liveReadout: some View {
+    MobileLiveReadout(state: state, startedAt: showDuration ? startedAt : nil, onGoLive: onGoLive)
+      .fixedSize(horizontal: true, vertical: false)
+  }
+
+  @ViewBuilder
+  private var viewerReadout: some View {
+      if !viewerCounts.isEmpty {
+        ViewThatFits(in: .horizontal) {
+          HStack(spacing: 8) { platformBadges }.fixedSize(horizontal: true, vertical: false)
+          VStack(alignment: .leading, spacing: 4) { platformBadges }
+        }
+        .font(.caption)
+        .accessibilityIdentifier("mobile-viewer-readout")
+      } else if let viewerCount {
         HStack(spacing: 4) {
           Icon(glyph: .user, size: 18).accessibilityHidden(true)
           Text(viewerCount, format: .number.notation(.compactName))
@@ -20,13 +45,25 @@ struct MobileStreamReadouts: View {
         .accessibilityLabel(Text("\(viewerCount, format: .number) viewers"))
         .accessibilityIdentifier("mobile-viewer-readout")
       }
-      MobileLiveReadout(state: state, startedAt: showDuration ? startedAt : nil, onGoLive: onGoLive)
+  }
+
+  private var platformBadges: some View {
+    ForEach(viewerCounts) { value in
+      HStack(spacing: 3) {
+        Icon(glyph: glyph(value.platform), size: 16).accessibilityHidden(true)
+        Text(value.count, format: .number.notation(.compactName))
+      }
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("\(value.platform.rawValue) \(value.count) viewers")
     }
-    .font(.subheadline)
-    .monospacedDigit()
-    .lineLimit(1)
-    .minimumScaleFactor(0.75)
-    .foregroundStyle(palette.videoControlForeground)
+  }
+
+  private func glyph(_ platform: PlatformViewerCount.Platform) -> Glyph {
+    switch platform {
+    case .twitch: .brandTwitch
+    case .kick: .brandKick
+    case .youtube: .brandYoutube
+    }
   }
 }
 

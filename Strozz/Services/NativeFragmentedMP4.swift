@@ -332,7 +332,7 @@ enum NativeFragmentedMP4 {
   /// Split an already-normalized fragment at sample boundaries, retaining
   /// compressed sample bytes, flags, clocks and sample descriptions.
   static func splitControlledFragment(_ data: Data, video: NativeCMAF.Track, audio: NativeCMAF.Track,
-                                      maximumDuration: Double, sequence: UInt32) throws -> (Data, Data) {
+                                      maximumVideoTicks: UInt64, sequence: UInt32) throws -> (Data, Data) {
     struct Run {
       let header: Data
       let video: Bool
@@ -342,7 +342,7 @@ enum NativeFragmentedMP4 {
       let samples: [Data]
       let dependencies: Data?
     }
-    guard maximumDuration.isFinite, maximumDuration > 0 else { throw NativeHLSError.partDuration }
+    guard maximumVideoTicks > 0 else { throw NativeHLSError.partDuration }
     let top = try NativeCMAF.boxes(data)
     guard top.count == 2, top[0].type == "moof", top[1].type == "mdat" else {
       throw NativeHLSError.invalidMedia
@@ -400,7 +400,7 @@ enum NativeFragmentedMP4 {
     var cut: (video: Int, audio: Int)?
     for index in image.durations.indices.dropLast() {
       elapsed += image.durations[index]
-      guard Double(elapsed) / Double(video.scale) <= maximumDuration else { break }
+      guard elapsed <= maximumVideoTicks else { break }
       let boundary = Double(image.clock + elapsed) / Double(video.scale)
       var audioClock = sound.clock
       var count = 0
@@ -411,7 +411,13 @@ enum NativeFragmentedMP4 {
       }
       if count > 0, count < sound.entries.count { cut = (index + 1, count) }
     }
-    guard let cut, sequence < UInt32.max else { throw NativeHLSError.partDuration }
+    guard sequence < UInt32.max else { throw NativeHLSError.partDuration }
+    guard let cut else {
+      throw NativeHLSFailureDetail.partBoundary(
+        videoTicks: image.durations.reduce(0, +), maximumTicks: maximumVideoTicks,
+        firstSampleTicks: image.durations.first ?? 0, scale: video.scale,
+        videoSamples: image.entries.count, audioSamples: sound.entries.count)
+    }
     func fragment(first: Bool) throws -> Data {
       var components: [(Data, Data)] = []
       for run in runs {

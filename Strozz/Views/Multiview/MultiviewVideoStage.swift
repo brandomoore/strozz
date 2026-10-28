@@ -9,7 +9,10 @@ struct MultiviewVideoStage<Content: View>: View {
   var body: some View {
     GeometryReader { geometry in
       let frames = MultiviewGeometry.frames(ids: controller.panes.map(\.id), size: geometry.size,
-        layout: controller.layout, primary: controller.primaryPaneID, expanded: controller.expandedPaneID)
+        layout: controller.layout, primary: controller.primaryPaneID, expanded: controller.expandedPaneID,
+        aspectRatios: Dictionary(uniqueKeysWithValues: controller.panes.map {
+          ($0.id, $0.presentation.videoAspectRatio)
+        }))
       ZStack(alignment: .topLeading) {
         ForEach(controller.panes) { pane in
           if let frame = frames[pane.id] {

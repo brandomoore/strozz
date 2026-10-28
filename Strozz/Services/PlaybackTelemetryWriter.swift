@@ -16,6 +16,7 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
   private var pending = 0
   private var dropped = 0
   private let maximumPending: Int
+  private let remote: PlaybackTelemetryRemote?
   private let directory: URL
   private let maximumFileBytes: Int
   private let maximumFiles: Int
@@ -47,6 +48,7 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
     directory: URL = URL.cachesDirectory.appendingPathComponent("PlaybackDiagnostics", isDirectory: true),
     maximumFileBytes: Int = 4 * 1024 * 1024, maximumFiles: Int = 8,
     maximumPending: Int = 256, mirrorToSystemLog: Bool = true,
+    remote: PlaybackTelemetryRemote? = .shared,
     queue: DispatchQueue = DispatchQueue(label: "com.thatcube.Strozz.playback-telemetry", qos: .utility),
     uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
   ) {
@@ -55,6 +57,7 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
     self.maximumFileBytes = maximumFileBytes
     self.maximumFiles = maximumFiles
     self.maximumPending = maximumPending
+    self.remote = remote
     self.mirrorToSystemLog = mirrorToSystemLog
     self.queue = queue
     self.uptime = uptime
@@ -79,6 +82,7 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
   }
 
   func append(_ record: PlaybackTelemetryRecord) {
+    remote?.append(record)
     admissionLock.lock()
     guard pending < maximumPending else {
       dropped += 1
@@ -196,6 +200,7 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
         continuation.resume()
       }
     }
+    await remote?.flush()
   }
 
   private func openPart() throws {

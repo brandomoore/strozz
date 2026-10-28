@@ -23,7 +23,7 @@
     <main id="main" class="prose wrap">
       <p class="eyebrow">Strozz for Apple TV, iPhone, and iPad</p>
       <h1>Privacy.</h1>
-      <p class="updated">Last updated October 19, 2026</p>
+      <p class="updated">Last updated October 26, 2026</p>
       <p>This policy describes the Strozz app and strozz.brando.page.
         Strozz connects to streaming services to play the content you choose.
         You can browse public Twitch streams and read chat without signing in.</p>
@@ -39,11 +39,24 @@
         authorize, such as your follows and sending chat messages. Account tokens
         are stored in the device Keychain. Twitch sign-in and an optional Twitch
         rewards connection sync through encrypted records in your private iCloud
-        database between devices using the same Apple Account. Viewing history and
-        playback progress remain device-local.</p>
+        database between devices using the same Apple Account. The app's history
+        and saved-progress databases remain device-local; beta diagnostics can
+        include the limited playback metadata described below.</p>
       <p>Sign out disconnects the current device. Sign out everywhere signs out
         Strozz's synced Twitch connections on your other devices when they connect.
         You can also revoke Strozz's authorization through the streaming service.</p>
+      <p>Connecting Kick opens Kick's website in a separate browser profile inside
+        Strozz on iPhone or iPad. Kick handles the login; its website session stays
+        in that device's WebKit storage, separate from the Keychain-based Twitch
+        connection. Strozz imports your Kick account identifier, username, followed
+        channels, and their public stream metadata. This list is cached locally
+        and shared through encrypted records in your private iCloud database.
+        Kick website cookies and passwords are not shared with Apple TV, iCloud,
+        or a Strozz server. Follow imports refresh while the connected mobile app
+        is open. Disconnect Kick removes the shared Strozz connection and the
+        local website session on the mobile device performing the disconnect;
+        other devices stop importing when they receive the disconnection. It does
+        not unfollow channels or sign you out of other Kick apps or browsers.</p>
 
       <h2>Streaming and other services</h2>
       <p>Strozz requests video, chat, account information, artwork, and emotes from
@@ -61,6 +74,24 @@
         to share logs, screenshots, or feedback, the information you send is used
         to investigate the report. Review it before sharing, and do not post
         account tokens or other private information in public issues.</p>
+      <p>TestFlight builds with automatic diagnostics send playback incidents,
+        crash reports, and lightweight stream-health summaries to Sentry without
+        a separate opt-in. Reports include public channel names, viewing
+        timestamps, platform/build, quality, buffer and frame/clock progress,
+        structured error codes, and recovery actions. Each stream has a random
+        diagnostic session identifier, including in multiview. App Store builds
+        do not enable this automatic remote reporting.</p>
+      <p>Diagnostic reports exclude chat text and participants, Twitch or Apple
+        account identities, credentials, signed stream URLs, request headers,
+        screenshots, and audio/video recordings. Client filtering and project
+        scrubbing limit identifying data. Sentry receives network connection
+        information to accept reports; the project is configured to prevent
+        storing IP addresses and scrub user/geography fields. See
+        <a href="https://sentry.io/privacy/">Sentry's privacy policy</a>.</p>
+      <p>Local diagnostic history and offline upload queues are bounded and
+        purgeable. Repeated incidents are coalesced with counts. Reports may be
+        delayed or lost when a device is offline, its cache is reclaimed, or a
+        service quota is reached; collection is not a complete viewing record.</p>
       <p>TestFlight is operated by Apple. Apple handles beta participation and may
         share crash information, usage information, and feedback with the developer
         under its <a href="https://www.apple.com/legal/privacy/data/en/test-flight/">TestFlight privacy terms</a>.</p>

@@ -65,6 +65,8 @@ struct BrowseCategoriesView: View {
 
             Spacer()
 
+            MultiviewLineupButton()
+
             Button("Refresh") {
               Task { await service.loadCategories() }
             }
@@ -201,6 +203,7 @@ struct CategoryStreamsView: View {
             }
 
             Spacer()
+            MultiviewLineupButton()
           }
           .focusSection()
 

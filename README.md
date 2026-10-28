@@ -74,9 +74,11 @@ The feature list below describes the Apple TV app. See
 - **Live moments surfaced.** Polls, predictions, hype trains, creator goals, and
   incoming/outgoing raids appear as calm, display-only overlays.
 - **Simulcast chat merge (experimental).** When a streamer you're watching is
-  also live on YouTube or Kick, their chats can be merged into a single pane.
-  When YouTube chat connects, the player can show its live viewer count even
-  if the streamer is not in the shared YouTube alias catalog.
+  also on YouTube or Kick, their linked chats share one pane and live viewer
+  counts stay visible independently of the selected video platform. Switching
+  between that creator's video sources does not clear or reconnect their chats.
+  Twitch and Kick use push delivery; YouTube uses polling without an additional
+  per-message delay after each received batch.
 
 ### Discover
 
@@ -104,6 +106,64 @@ The feature list below describes the Apple TV app. See
 - **Night Shift.** An optional warm screen wash that eases in after sunset on a
   solar or manual schedule.
 - **Tune the grid.** Adjustable stream-card sizes and a stream-language filter.
+
+## Kick playback (in development)
+
+Kick is part of the existing **Following**, recommendations, search, and Apple TV
+multiview lineup, not a separate tab. Search for an exact Kick channel name or
+`kick.com` channel URL to open a live stream, including Kick-exclusive creators.
+Playback does not require a Twitch or Kick account.
+
+To bring in your real Kick follows, open **Account > Connect Kick** in Strozz on
+iPhone or iPad. Sign in on the Kick website shown inside the app; the complete
+follow list then syncs through private iCloud records to Strozz on devices using
+the same Apple Account. Apple TV's **Settings > Accounts > Kick** includes a code
+that opens this setup in the installed mobile app. Website cookies stay in that
+mobile device's separate WebKit profile; they are not sent to Apple TV or a Strozz
+server. Connecting another mobile device uses its own website session.
+
+Follow membership refreshes while the connected mobile app is open. Open it after
+following or unfollowing someone on Kick; Apple TV can refresh stream availability
+independently. **Sync Kick follows** retries an import, and **Disconnect Kick from
+Strozz** removes the shared connection without unfollowing anyone on Kick.
+Failed or incomplete imports preserve the previous list and show an error.
+This integration uses Kick's undocumented website follow endpoint, not an
+official OAuth follow scope; provider changes or access restrictions can require
+reconnecting or an app update.
+
+Confirmed Twitch/Kick creator links are merged into one card, with combined
+viewer counts when both streams are live. Matching usernames alone never merge
+accounts. Kick recommendation candidates come from confirmed links to creators
+in the existing discovery pools, not a new global Kick trending directory.
+
+While watching Twitch, choose **Kick** in the TV player's stream-source menu, or
+enter the Kick channel under **Quality > Stream source** on mobile. Verify the
+destination handle: handles can differ across platforms. Source switching happens
+inside the existing player without returning to browsing or opening another
+player. Switching resolves fresh playback and can briefly buffer; it is not a
+gapless video transition.
+
+Kick video uses Strozz's native incremental low-latency engine, with Auto and
+explicit advertised qualities. Kick uses the same TV player controls, chat
+layout/settings, quality menu, and rewind interface as Twitch. On mobile it uses
+the same player, chat layout, playback settings, mini-player, and background PiP
+lifecycle. Only provider capabilities differ: Kick chat is read-only, and Twitch
+watch rewards and past-broadcast handoff require Twitch video. If the creator has
+a linked Twitch account, sending still goes to that Twitch channel while watching
+Kick or YouTube. A Kick-only creator is never treated as a same-named Twitch
+account. Kick chat sending is not included. Automatic playback diagnostics remain
+enabled through the shared players.
+Access restrictions and unavailable streams are shown explicitly; Strozz does
+not bypass provider access controls. These changes are not yet in the published
+TestFlight build.
+
+Use **Linked creator channels** in TV chat settings or mobile playback/chat
+settings to add or correct this creator's Twitch, Kick, and YouTube accounts.
+Links are saved on this device and restored when opening a linked account.
+Automatic discovery uses curated mappings or explicit public profile links,
+not an assumption that matching handles identify the same person. Keep the
+primary account and currently playing account linked; switch video before
+removing a playing peer. Unknown or ambiguous accounts need an explicit link.
 
 ## Getting started
 
@@ -210,7 +270,7 @@ On iPad, a collapsible native sidebar keeps **Home**, **Browse**, **Account**,
 and live followed channels available while browsing. Tap a live channel to open
 the full-width player; the sidebar stays out of playback. Home and the sidebar
 share one followed-channel list, so no extra follow fetch is needed. Narrow iPad
-windows retain compact tab navigation, and iPhone keeps its three-tab layout.
+windows and iPhone retain compact tab navigation.
 The iPad sidebar uses compact rounded navigation rows and three-line channel
 summaries with inline viewer counts. Home's feed tabs share the native toolbar
 instead of stacking duplicate headings above the streams.
@@ -349,10 +409,11 @@ Chat settings are also available from **Account** and when reading anonymously.
 Adjust mobile size presets, fonts, spacing, emote sizing and animation, badges,
 mention/reply/keyword highlights, and extra-delay chat sync. Existing mobile
 sizes remain the defaults; resetting appearance preserves saved keywords.
-Optional incoming YouTube and Kick chat are off until enabled. While watching
-a stream, edit its other channel handles or URLs and tap **Apply channel
-targets**; defaults use the Twitch handle, not automatic cross-platform account
-matching. Targets belong to the active stream session. Sending remains Twitch-only.
+Incoming YouTube and Kick chat use this creator's linked accounts, with separate
+feed toggles. New preferences enable both; existing saved choices are respected.
+While watching, use **Linked creator channels** to edit and save the creator's
+accounts. Feed toggles do not disable live viewer statistics. Sending remains
+Twitch-only, targeting the linked Twitch account rather than the selected video.
 
 Twitch live video uses the native engine for both Auto and fixed resolutions on
 TV and mobile. The older Auto Low Latency/High Quality choices are removed, and
@@ -474,11 +535,12 @@ keeps counting while playback is paused, and is omitted when the start time is
 unknown. Mobile fetches this optional metadata separately so it cannot delay
 playback startup.
 
-This is not full TV feature parity: VOD chat replay, clips, multiview, YouTube/Kick playback
-and chat merging, interactive reward redemption/polls, and advanced TV settings are not included. Playback
-stops in the background; Picture in Picture/background audio are not yet
-supported. Returning resolves fresh stream URLs instead of reviving an expired
-native engine. Paused/rewound positions are preserved when still available; an
+This is not full TV feature parity: VOD chat replay, clips, multiview,
+interactive reward redemption/polls, and advanced TV settings are not included.
+Mobile supports background Picture in Picture and preserves the previous
+expanded or in-app mini-player layout on return. A suspended native session
+resolves fresh stream URLs instead of reviving an expired engine.
+Paused/rewound positions are preserved when still available; an
 expired position shows an error rather than silently jumping to live.
 Like TV, mobile recreates both its player and AVKit rendering owner on foreground
 return and media-service reset, preserving mute, volume, quality, and pause/DVR
@@ -749,7 +811,21 @@ near live avoid an unnecessary reload. Deliberate pauses, rewinds, and VOD
 positions are preserved. "LIVE" means the source's playable live position,
 including its normal buffering margin, not zero broadcast/network latency.
 
-Multiview pauses its wall when Strozz goes into the background. On return, it
+On Apple TV, hold a live Twitch or Kick card anywhere you browse and choose
+**Add to multiview**. Search shows channels before categories. The **Multiview**
+button grows with your selected avatars alongside the page's scrolling controls;
+open it to remove streams or start watching once you have at least two. You can
+also start or return to multiview from a channel's hold menu. The normal player's
+controls let you add the stream you're watching. There is no separate multiview
+discovery tab.
+Hold Play/Pause from any screen to start or return to your multiview lineup.
+A normal press keeps its usual behavior. If more streams are needed, a toast
+reminds you to add them without leaving the current screen.
+Back from the wall, or **Browse streams** in its controls, lets you add more
+through the same browsing and search actions. The wall pauses while you browse;
+**Return to multiview** resumes the same lineup.
+
+Multiview also pauses its wall when Strozz goes into the background. On return, it
 re-resolves each pane's live playlist and resumes all streams without changing
 the chosen grid/spotlight layout or audio selection.
 
@@ -759,10 +835,24 @@ with normal chat and controls; Back returns it to the wall without reconnecting.
 Explicit source/quality changes and error recovery remain real playback changes.
 Play/Pause opens wall controls in the grid and controls playback when expanded.
 Other panes remain live and muted while expanded, with a lower bitrate and
-resolution preference. These are adaptive preferences, not re-encoding: a
+resolution preference: fully hidden peers target up to 360p / 800 kbps, while
+visible spotlight thumbnails retain their 480p / 800 kbps preference. Returning
+immediately forwards the visible budget to the native producer. A newly visible
+pane can use fresh measured bandwidth and sufficient buffer without the normal
+upgrade-vote delay; ordinary bandwidth-driven changes keep their hysteresis.
+This does not restart players or seek the playhead. Actual decoded HD can still
+take several seconds to return, so hidden panes are not deliberately forced down
+to 160p. These are adaptive preferences, not re-encoding: a
 Source-only feed or decode-recovery override can exceed the requested thumbnail
 budget. The selected pane, player item, and AVKit surface are retained; a normal
 layout transition does not create an extra decoder.
+
+An ended multiview stream shows the channel name and **Went offline**, including
+in spotlight thumbnails. Genuine load failures remain distinct. Offline requires
+a definitive live-status response, including after a failed native player item
+has been removed; network errors or an unknown status never imply offline.
+Select on the focused unavailable pane retries it, without a mouse-only "click"
+instruction or moving focus to hidden single-player controls.
 
 The TV latency readout shows numeric seconds behind the available live edge
 (for example, **3.18s**), including the normal playback cushion rather than
@@ -871,11 +961,11 @@ not include chat text or chat participants. Watch-rewards diagnostics record
 report acknowledgements and server-returned streak counts, never access tokens
 or activation codes.
 
-Debug native playback also records segment-boundary decode/presentation clocks,
+Native playback also records segment-boundary decode/presentation clocks,
 the first audio clock, packet IDs and codec profile/level when available, plus
 served rendition changes and their program-date mapping. Before changing active
-rendition or stopping an engine, it saves bounded recent rendition state and the
-last 16 resource-request timings. This is metadata only, not a media recording;
+rendition or stopping an engine, it saves bounded recent rendition state; Debug
+builds additionally retain the last 16 resource-request timings. This is metadata only, not a media recording;
 signed URLs, credentials and headers are excluded.
 Native decoded-frame pulls also record paired begin/end events so a media-service
 reset can be correlated with sampling without changing or disabling the sampler.
@@ -924,7 +1014,62 @@ prose, or error comments. Failures retain only structured evidence such as
 error domain/code, AVPlayer error-log status code, and an explicit HTTP status
 when AVFoundation includes one. YouTube resolution records the client/version
 and sanitized failure category, never visitor context or response bodies. Public channel names and
-viewing timestamps do appear. The tool reads locally and never uploads logs.
+viewing timestamps do appear. The pull/analyze tool reads locally and never uploads logs.
+
+#### Automatic TestFlight reports
+
+TestFlight builds automatically send playback diagnostics to the dedicated
+`strozz` Sentry project. No opt-in is required for beta builds. App Store builds
+do not enable remote reporting. Development builds require the explicit launch
+environment `STROZZ_SENTRY_DEVELOPMENT=1`; simulators and ordinary tests do not
+upload. `STROZZ_SENTRY_VERIFICATION=1` is reserved for the explicit synthetic
+delivery check.
+For an explicitly opted-in local device installation, build with
+`STROZZ_DEVELOPMENT_DIAGNOSTICS=YES` to keep development reporting enabled on
+normal launches without passing an environment flag each time. The setting is
+baked into that installed build, defaults to `NO`, and cannot enable uploads in
+App Store builds or ordinary simulators.
+
+Each watched stream, including every multiview pane and mobile playback, has
+its own session ID and bounded recent metadata history. Healthy sessions send
+start/end summaries and at most one periodic health log per minute. Errors and
+significant stalls send an incident with up to 128 recent records, bounded to
+64 KiB of encoded history. One noisy pane cannot consume another pane's
+per-stream allowance. Identical incidents are coalesced for 30 seconds; limits
+of 12 incidents per stream and 120 per app per minute prevent an error loop from
+flooding the service. Coalesced incidents and omitted records are counted rather
+than presented as complete evidence.
+
+Media transfers also record response/first-byte timing, time since the last body
+bytes, delivered byte/chunk counts, HTTP status, connection reuse/protocol and
+DNS/connect/TLS durations when URLSession supplies them. Consumer backpressure
+is counted separately so time spent waiting on Strozz's parser is not mistaken
+for a stalled network. These metadata-only summaries work for both Native
+controlled and passthrough playback in Release builds; URLs, headers and
+network addresses are not included. Missing timing phases stay unknown.
+
+After an incident, the next observed playback progress or session close within
+two minutes can attach a second bounded history checkpoint to the same Sentry
+issue. It includes late transfer details and reconnect/alignment/progress events,
+with an explicit progress-versus-session-ended outcome. Starting a reconnect or
+interrupting a stall record is not itself proof of successful recovery. These
+checkpoints share the existing incident rate limits.
+
+Reports include public channel names, viewing timestamps, app/platform/build,
+quality, buffers, clock/frame progress, structured error codes and recovery
+actions. They never include chat content, viewer identities, account credentials,
+signed URLs, headers, network addresses, screenshots, video or audio recordings.
+Sentry's automatic network/UI breadcrumbs, HTTP error capture, screenshots,
+view hierarchy and profiling/tracing are disabled. Crash collection remains
+enabled, with sanitized playback context.
+
+Reporting runs on a bounded background queue, independently of the local cache,
+so a reclaimed/full local log does not disable remote incident collection.
+Sentry queues envelopes for offline delivery and retry, retaining at most 128
+cached envelopes. This is not unlimited history: tvOS cache reclamation,
+extended offline use, server filtering or account quotas can still lose data.
+Client discard reports and explicit omission counts must be checked before
+treating an incident as a complete record.
 
 YouTube simulcasts use the native-HLS client shared with YouTube-only playback
 and captions. Startup respects AVPlayer's native buffering wait; a stall

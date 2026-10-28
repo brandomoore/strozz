@@ -6,12 +6,15 @@ struct MobileAccountView: View {
   @Environment(WatchHistoryService.self) private var history
   @Environment(MobileVODProgressStore.self) private var vodProgress
   @Environment(TwitchAccountSync.self) private var sync
+  @Environment(KickFollowingStore.self) private var kick
+  @Environment(MobileKickSignIn.self) private var kickSignIn
   @Environment(\.scenePhase) private var scenePhase
   @AppStorage(PersistenceKey.chatSyncToStream) private var chatSync = true
   @AppStorage(RecommendationPreferences.enabledDefaultsKey) private var personalized = true
   @State private var confirmingClearHistory = false
   @State private var showSignIn = false
   @State private var showLocalSignOut = false
+  @State private var disconnectKick = false
 
   var body: some View {
     @Bindable var theme = theme
@@ -64,6 +67,42 @@ struct MobileAccountView: View {
 
       MobileWatchRewardsSettings()
 
+      Section {
+        if let account = kick.document?.account {
+          Text(account.username).font(.headline)
+          Text("\(kick.document?.follows.count ?? 0) followed channels")
+            .foregroundStyle(.secondary)
+          Button("Sync Kick follows") {
+            Task {
+              await kick.synchronize()
+              if kick.isImporter { await kickSignIn.refreshIfNeeded(using: kick, force: true) }
+            }
+          }
+          .disabled(kick.isBusy || kickSignIn.isImporting)
+          if !kick.isImporter || kick.errorMessage != nil || kickSignIn.errorMessage != nil {
+            Button("Reconnect Kick on this device") { kickSignIn.connect(using: kick) }
+          }
+          Button("Disconnect Kick from Strozz", role: .destructive) { disconnectKick = true }
+        } else {
+          Button { kickSignIn.connect(using: kick) } label: {
+            Text("Connect Kick")
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .contentShape(Rectangle())
+          }
+            .accessibilityIdentifier("account-connect-kick")
+        }
+        if kick.isBusy || kickSignIn.isImporting { ProgressView("Syncing Kick follows") }
+        if kick.isConnected, let date = kick.document?.importedAt {
+          Text("Follows imported \(date, format: .dateTime.month(.abbreviated).day().hour().minute())")
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        if let error = kick.errorMessage ?? kickSignIn.errorMessage { Text(error).font(.callout).foregroundStyle(.secondary) }
+      } header: {
+        Text("Kick")
+      } footer: {
+        Text("Connect once here to add your real Kick follows on every Strozz device using this Apple Account. Follows refresh while this app is open. Your Kick website session stays on this device.")
+      }
+
       Section("Appearance") {
         Picker("Theme", selection: $theme.theme) {
           ForEach(AppTheme.allCases) { theme in Text(theme.displayName).tag(theme) }
@@ -95,6 +134,15 @@ struct MobileAccountView: View {
     .confirmationDialog("Clear this account's history on this device?", isPresented: $confirmingClearHistory) {
       Button("Clear history", role: .destructive) { history.clear(); vodProgress.clear() }
     }
+    .confirmationDialog("Disconnect Kick on all your Strozz devices?", isPresented: $disconnectKick,
+                        titleVisibility: .visible) {
+      Button("Disconnect Kick", role: .destructive) {
+        Task {
+          do { try await kick.disconnect(); await kickSignIn.clearWebsiteSession() }
+          catch { kick.report(error) }
+        }
+      }
+    } message: { Text("This removes the imported list from Strozz. It does not unfollow anyone on Kick.") }
     .onChange(of: scenePhase) { _, phase in
       if phase == .active { Task { await sync.synchronize(); await auth.validateSessionIfNeeded() } }
     }

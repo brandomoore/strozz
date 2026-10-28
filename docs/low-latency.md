@@ -1,6 +1,6 @@
 # Playback architecture and troubleshooting
 
-Current guidance for local Twitch live playback on Apple TV and iPhone/iPad.
+Current guidance for local live playback on Apple TV and iPhone/iPad.
 Earlier experiments remain in Git history; they are not alternate shipping modes.
 For setup, UI conventions and releases, start with [AGENTS.md](../AGENTS.md).
 
@@ -41,6 +41,137 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
 | Recovery, drift and chat timing policies | `NativePlaybackRecovery.swift`, `NativeLiveCatchUp.swift`, `LiveChatSyncBaseline.swift` in `Strozz/Services/` |
 | Retained evidence and analysis | `PlaybackTelemetry.swift`, `PlaybackTelemetryWriter.swift` in `Strozz/Services/`; [`playback-diagnostics.py`](../tools/playback-diagnostics.py) |
 
+### Kick and cross-platform viewing
+
+`KickPlaybackService` resolves a public Kick channel document and its signed IVS
+HLS master using ordinary HTTPS requests. It distinguishes actual offline state
+(`livestream: null`) from missing channels, malformed responses, and access
+restrictions. Signed playback URLs are not saved in the recent-channel model.
+Playback has no hidden browser, challenge bypass, or additional player SDK.
+Public discovery uses `/api/v1/channels/{slug}` for live artwork because the v2
+document may return `thumbnail: null`. Playback and previews still resolve their
+signed media through v2; artwork lookup does not sit on the playback path.
+
+Discovery shares the existing Following, recommendation, search and multiview
+surfaces. `KickFollowingStore` owns a complete real-account follow snapshot;
+`KickDiscoveryService` independently refreshes public channel status and merges
+only creator identities confirmed by saved links, curated aliases or
+`CreatorSourceResolver`. Curated aliases are bundled on both platforms, including
+confirmed same-name pairs, and are not lost when a downloaded table omits them.
+Known links merge immediately without waiting for background profile discovery.
+Equal names alone remain separate provider-qualified identities. Recommendation
+candidates are linked creators from existing pools, not a global Kick directory.
+The multiview pane's playback target includes the provider and actual Kick slug;
+metadata synchronization must retain its pane ID and existing `PlayerModel`.
+Both TV focus previews and mobile feed previews resolve Kick media as Kick, never
+as a same-named Twitch stream.
+
+Mobile setup is a visible Kick login website in an isolated persistent WebKit
+profile. Same-origin reads import `/api/v1/user` and every page of
+`/api/v2/channels/followed`, then verify the account again. Failed, malformed,
+incomplete or account-switched reads cannot replace the last saved roster.
+Terminal pages may omit `nextCursor` or set it to `null`; the `channels` array
+remains required, and malformed cursors, repeated cursors, and failed later pages
+must still reject the import rather than save a partial roster.
+This undocumented endpoint has no stability guarantee. There is no client
+secret, cookie-paste workflow, session relay or bot-challenge bypass.
+Sign-in preparation is time-bounded; reloading an already-prepared website
+retries navigation without restarting account synchronization or clearing cookies.
+
+Only account identity and public follow metadata enter the encrypted
+`KickFollowing.payload` record in the private `StrozzAccounts` CloudKit zone.
+Website sessions stay on the importing mobile device. Conditional writes and
+connection-scoped importer bindings fence stale writes and disconnect tombstones.
+Apple-account changes invalidate local state; a website profile from another
+owner is cleared before reuse. Deploy the versioned schema before distributing
+this feature.
+
+Imports refresh at most every five minutes while the importing mobile app is
+foreground and not playing, or through an explicit sync. Failure attempts also
+observe this interval. Website content is unloaded after import/dismissal;
+opening Strozz without a Kick connection must not create a browser/player for
+Kick. Public live status refresh is separate, bounded to four requests in flight, with followed
+channels published before slower identity discovery. Identity lookups also have
+four-request concurrency and bounded retry intervals. Same-name followed accounts
+are prioritized for identity verification, never accepted on name alone. New
+imports restart discovery promptly on both platforms. TV discovery runs outside
+the Home startup chain so it cannot delay Twitch recommendations or initial focus.
+After the initial/account refresh, TV status polling respects Home's idle gate
+rather than reordering rails under active navigation. Discovery loops pause during
+playback; imports are not continuous TV-side OAuth follow synchronization.
+
+Kick has no separate player UI or playback model. TV uses `PlayerView` and
+`PlayerModel`; mobile uses `MobilePlayerView`, `MobilePlaybackModel`, and the
+existing `MobilePlaybackSession` video/PiP owner. `LiveStreamSource` supplies typed
+provider identity and validation. Source changes use these existing models,
+retain their mounted AVPlayer, resolve fresh playback, and fence late results
+by the normal load/session generations. Native recovery, buffering, catch-up,
+rewind, chat rendering/settings, diagnostics, gestures, and layout remain owned
+by the same player code as Twitch. Mobile mini-player/PiP ownership is not
+replaced during a source change.
+
+Keep provider identity separate from a channel handle. A Kick-only channel must
+not open Twitch IRC, request Twitch metadata/profiles/VODs, earn Twitch rewards,
+send Twitch chat, or enter Twitch recommendation history under the same text
+handle. Kick's read-only status uses the existing chat UI; unavailable
+provider-specific capabilities must not justify a different player interface.
+
+`CreatorLiveSession` owns one `ChatService`, Hermes listener, linked-account
+graph, and live viewer snapshots for the creator on both platforms. The selected
+video is a separate `PlatformLiveTarget`. A known-peer video switch must not
+change the creator generation, restart chat workers, clear message history,
+discard a draft/reading position, or reset counts. Changing creator or explicitly
+editing the identity graph rotates the generation and fences old async work.
+Suspension prevents late discovery from reconnecting transports.
+
+Automatic identity discovery uses curated aliases and explicit public social
+links. A same-name Twitch account for a Kick creator is only a candidate and
+needs a reciprocal Kick link or matching explicit YouTube identity; ambiguous
+reverse mappings are rejected. Native **Linked creator channels** settings
+provide explicit, validated, device-local persisted links when discovery cannot
+prove the association. Never fall back to guessed handles for merged chat.
+Twitch sending uses the linked Twitch account even when video is Kick/YouTube;
+earning watch rewards and Twitch VOD lookup still require actual Twitch video.
+
+Viewer snapshots refresh separately from chat preferences and video metadata:
+Twitch/Kick every 30 seconds, YouTube no more than every 90 seconds. Authoritative
+offline hides a count; unknown results preserve only a bounded last-known value
+(90 seconds for Twitch/Kick, 120 seconds for YouTube). YouTube's count must come
+from a current-live watch page, never total views. Existing extra-delay chat sync
+still applies when enabled, but received YouTube batches enter the common ingest
+pipeline immediately rather than trickling across another poll interval.
+`CreatorLiveSessionTests` covers video-switch continuity, explicit identity,
+persistence/reverse entry, independent counts, expiry, and stop/suspend fences.
+
+Kick chat negotiates its current anonymous Pusher application through Kick's
+public realtime connection endpoint. Do not bake in an application key:
+retired keys return Pusher error 4001 even when video and channel lookup work.
+Socket errors reconnect with backoff and negotiate again; they do not retry an
+obsolete hardcoded key forever or interrupt video.
+
+IVS `#EXT-X-PREFETCH` and `#EXT-X-PREFETCH-DISCONTINUITY` preserve real source
+sequences, timestamps, and periods. Auto retains all advertised video qualities.
+Explicit Kick qualities use controlled TS-to-CMAF remuxing pinned by stable
+variant identity, not passthrough TS or a bitrate ceiling. IVS can rotate **all**
+variant URLs on consecutive requests for the same master: match stable ID or
+resolution/frame-rate attributes against the fresh master, never URL equality.
+Filter to the explicit rendition before metadata/bootstrap work; do not make a
+fixed quality wait for unselected renditions.
+
+The opt-in `KickSharedPlayerLiveTests` exercise these actual existing player
+models, including standalone Kick, explicit qualities, and Twitch/Kick switches.
+They compare actual decoded video/PDT delay with a
+plain AVPlayer HLS baseline over 90 seconds. Set
+`TEST_RUNNER_STROZZ_KICK_LIVE_TESTS=1` when invoking `tools/xcbuild.sh test`;
+`TEST_RUNNER_STROZZ_KICK_CHANNEL` defaults to `xqc`. A separate handoff test needs
+`TEST_RUNNER_STROZZ_KICK_SWITCH_TWITCH_CHANNEL` naming a currently live Twitch
+channel. They check fixed quality, restored Auto, decoded Twitch/Kick transitions,
+and renderer identity. Existing audio/background/PiP regression suites continue
+to cover the same owners used by Kick. XCTest retains
+numeric latency evidence. Simulator PDT delay is not hardware glass-to-glass
+latency, a universal latency guarantee, or a comparison with the official IVS
+iOS SDK. Provider availability and stream formats can change.
+
 ## Invariants that fixes must preserve
 
 - **Auto is genuinely adaptive.** Do not pin Source, remove supported qualities,
@@ -68,10 +199,20 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   `NativeTransportDemuxer.removingTransportTimingSEI` and its regressions.
   Adaptive decode checks must feed `updateControlledPlayback` and inspect actual
   CVPixelBuffer dimensions; AVPlayer preferences alone do not drive this engine.
+- **Keep PES assembly linear.** Remove a pending PES from its dictionary before
+  appending the next transport packet, then restore it if incomplete. Retaining
+  the dictionary's copy makes each small append copy the accumulated payload,
+  including expensive virtual-memory copies for large keyframes. Preserve
+  independent state when a demuxer is copied, and keep A/V payloads and clocks
+  unchanged.
 - **Respect format and part contracts.** Source-CMAF requires muxed AVC/AAC-LC,
   compatible track IDs/timebases and audio configuration within a period, and no
   edit lists. Unsupported media fails explicitly, not by silently hiding a
   quality. Compatible initialization-URL rotations are not new periods.
+  CMAF `skip` boxes designate unused space, just like `free` boxes; accept them
+  before, between and after complete `moof`/`mdat` pairs without changing media
+  or clocks. Keep size/truncation checks; `skip` between `moof` and `mdat` remains
+  unsupported because discarding it would invalidate the source sample offsets.
   Nonterminal parts must meet the 85% minimum of the 450-ms target (382.5 ms);
   cutting at 380 ms has produced invalid 50-fps playlists.
   Upstream CMAF fragment boundaries are not necessarily valid part boundaries:
@@ -79,6 +220,11 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   video/audio runs at encoded-sample boundaries when needed, preserving sample
   bytes, flags, descriptions and presentation clocks rather than widening the
   target or rejecting a supported rendition. Bound each media entry to ten seconds.
+  Accumulate and split part durations in integer video-clock ticks, rounding the
+  maximum down and the minimum up. Floating-point sums can put a legal
+  133 + 150 + 167-ms group above 450 ms and incorrectly attempt an impossible
+  sample split. Genuine unsplittable cuts report `partial_sample_boundary`
+  with numeric tick, timescale and sample-count evidence, never media or URLs.
 - **Keep normal latency policy.** Incremental-prefetch sources target 1.5-second
   hold-back and a three-second preferred forward buffer. Completed-only sources
   use cadence-aware timing; do not force the incremental constants onto them.
@@ -101,6 +247,17 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
   intentional privacy pause, including during pending loads; expanded-pane sleep
   also owns the hidden panes' pauses. Recheck item/player/generation ownership
   after asynchronous work.
+  TV foreground source resolution must also use this shared retry budget for
+  transient transport loss/timeouts, with a short cancellable delay and at most
+  two retries per refresh. Do not retry authentication, offline, certificate or
+  cancellation errors. Fence every attempt/result against channel, session,
+  generation, background and source changes. `native_hls_resume_retry`,
+  `native_hls_resume_resolved` and `native_hls_resume_failed` distinguish attempts
+  and elapsed resolution time without retaining requests or credentials.
+  Remote incidents retain a bounded follow-up checkpoint when progress resumes
+  or the session closes within two minutes, grouped with the originating issue.
+  `diagnostic_kind=recovery` is informational evidence, not a new failure;
+  `outcome=session_ended` must not be interpreted as recovered playback.
 - **Do not turn background work into a live failure.** Unused-rendition reports
   are optional and must not block active media. Unavailable historical resources
   fail locally rather than killing healthy live production. Keep reader queues,
@@ -124,6 +281,72 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
 - **Chat sync means extra delay.** `LiveChatSyncBaseline` learns the normal live
   cushion; synchronization adds only excess delay, not total encoder/live-edge
   latency. Rewind uses retained chat/replay behavior, not a second live delay.
+
+### Chat text wrapping
+
+Chat text uses width-constrained token measurement on both TV and mobile.
+Long URLs and usernames wrap within the available pane instead of extending
+beyond its edge. Wrapping changes layout only, not the original message or URL;
+ordinary tokens, emotes and the atomic flow layout used by settings retain
+their existing behavior.
+
+### Multiview selection and chrome
+
+TV multiview uses one `MultiviewLineup` owned by Home and passed through an optional
+environment value. Hold a live channel card in Following, Browse, Search or channel
+recommendations to add/remove it; the normal player also has a multiview control.
+Search lists channels before categories. The contextual avatar button opens only
+lineup management, not another discovery page. It lives inside each page's
+scrolling header alongside existing actions, never in a reserved fixed strip.
+Its width animates with the selected avatars while its height stays constant;
+there is no empty six-slot reservation. Channel hold menus also expose Start or
+Return to multiview, using the same launch requirements as the manager. Adding
+never starts playback or navigates away. Avatar insertion/removal and button
+resizing respect Reduce Motion.
+
+Selection uses provider-qualified channel keys, not pool-specific stream/user
+IDs. Status refreshes query the selected channels themselves: absence from a
+partial discovery response is not offline evidence. While browsing, an explicitly
+offline selection remains visible as Offline for ten seconds, then fades away.
+It stops counting toward the limit and launch roster immediately; returning live
+during the grace period preserves its selection if capacity has not been reused.
+An active player pane does not auto-remove: its offline notice remains, with
+native View channel and Remove actions. These controls use the dark video
+surface's appearance even in Light theme. Removing the last pane exits multiview.
+Channel pages temporarily suspend wall audio without replacing players, then
+restore the prior audio owner and mute choice when dismissed.
+Back from the wall (or Browse streams in its controls) returns to the same browsing
+state. The wall and each surviving player view/model remain mounted, but playback,
+native producers and chat are suspended rather than decoding behind browsing.
+Return uses native suspension recovery to re-resolve live sources and rebuild
+their audio/video renderers while retaining the pane models, layout and audio
+owner. New selections join that same controller; no second active queue is
+created. Hidden browsing cards cannot run previews behind the wall.
+
+After ten idle seconds, the focused/audible pane's outside outline dims to 35%
+of its active opacity instead of disappearing. The icon-only audio badge and
+focused metadata still hide; remote interaction restores full chrome without
+changing audio ownership. Both overlays use the shared native Liquid Glass
+HUD treatment, with theme-aware opaque surfaces when transparency is disabled.
+The outline switches instantly between panes; other chrome animations are unchanged.
+Pane frames match the video's presentation aspect ratio rather than a letterboxed
+layout cell. Pictures pack together with 10-point gaps, just enough for the
+outside outlines, and a 5-point screen-edge allowance. Unused aspect-ratio space
+stays around the wall instead of between rows. These bounds stay stable while
+chrome hides. Compact players do not ignore safe areas: doing so expands their
+native video surfaces toward screen edges independently of the pane outlines.
+Expanded playback remains edge-to-edge with the same retained player.
+
+Holding Play/Pause for 0.7 seconds opens the shared lineup from browsing or a
+presented screen; holding it in an expanded pane returns to the wall. The
+window-scoped recognizer arbitrates with the normal Play/Pause command, so a
+hold must not also pause playback or toggle the wall HUD. Short presses keep
+their existing behavior. An insufficient lineup shows the existing toast pill
+above the current screen for three seconds without dismissing it. Recognizer
+and toast ownership follow the Home window and are removed when it detaches.
+The lineup marks the entire presentation handoff as busy, including UIKit
+dismissal, so Home cannot insert a first-run setup prompt between the old
+screen and multiview.
 
 ### Multiview ceilings
 
@@ -222,6 +445,23 @@ background probe is late too, broader scheduling pressure is possible. Probes
 are inactive for background/idle playback; absence of a delay event is not proof
 of healthy playback. `playback_main_operation_slow` names slow synchronous
 snapshot, audio-track, access-log or error-log reads.
+
+In Debug builds, scheduler reports also carry background-only process resource
+samples; these additional measurements are not collected in Release. CPU
+`process_cpu_core_equivalents` is CPU seconds divided by the recorded sampling
+interval: 1.0 means one fully occupied core, not the whole device. Pending main
+callbacks retain peak sampled CPU, resident memory and physical footprint
+without queuing more callbacks. These are whole-process measurements shared by
+all panes, not per-stream costs; never sum the panes' resource values.
+Compare `resource_sample_uptime_seconds` with the event time, since the latest
+background sample can precede main-queue delivery. The first sample after
+monitoring resumes has no CPU delta. `volume_free_bytes`/`volume_total_bytes`
+describe the filesystem, not an app cache quota, and refresh at most every 15
+seconds (`disk_sample_uptime_seconds`). Resource errors have explicit numeric
+codes rather than fabricated zero usage/free space. Sample duration and its
+pending-callback peak expose the probe's own overhead. These measurements help
+attribute pressure; they do not prove which function stalled or why a cache
+file disappeared.
 
 For lost sound after a stall, treat reconnecting the output as a workaround,
 not evidence against an app bug. `audio_playback_state` records route port types,

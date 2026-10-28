@@ -20,7 +20,8 @@ import Observation
 final class PlayerModel {
   // MARK: Chat & events
 
-  let chat = ChatService()
+  let creatorSession: CreatorLiveSession
+  var chat: ChatService { creatorSession.chat }
   let watchTracker = TwitchWatchTracker()
 
   /// Twitch login -> Kick slug overrides for streamers whose Kick name differs
@@ -35,11 +36,22 @@ final class PlayerModel {
 
   /// Surfaces live polls / predictions / hype trains / goals for the watched
   /// channel via Twitch's private Hermes WebSocket (read-only).
-  let hermes = HermesEventService()
+  var hermes: HermesEventService { creatorSession.hermes }
+  var eventSubChannel: String?
+  @ObservationIgnored var resolveYouTubeLive: @Sendable (String) async throws -> AltSourceService.YouTubeLive =
+    AltSourceService.youtubeLive
+  @ObservationIgnored var loadChannelMetadata: @Sendable (String) async -> ChannelMetadata? =
+    PlaybackService.channelMetadata
 
   // MARK: Playback
 
   var player = AVPlayer()
+  var livePlatform = LivePlatform.twitch
+  var primaryPlatform = LivePlatform.twitch
+  var kickPlaybackTarget = ""
+  var twitchPlaybackTarget = ""
+  var sourceQuality = "Auto"
+  @ObservationIgnored var didInitializeLiveSource = false
   @ObservationIgnored var multiviewContext: MultiviewPlaybackContext?
   var isVideoPresentationVisible: Bool { multiviewContext?.videoIsVisible ?? true }
   @ObservationIgnored var activateAudioSession: @MainActor () throws -> Void = PlaybackAudioSession.activate
@@ -97,9 +109,17 @@ final class PlayerModel {
   /// Always-on structured playback recorder. It mirrors key events to OSLog and
   /// persists a bounded JSONL session for agent-driven postmortem analysis.
   let playbackTelemetry: PlaybackTelemetryRecorder
+  @ObservationIgnored let loadStreamStatus: @Sendable (String) async -> StreamLiveStatus
+  @ObservationIgnored let resolveLivePlayback: @Sendable (PlatformLiveTarget) async throws -> StreamPlayback
 
-  init(playbackTelemetry: PlaybackTelemetryRecorder = PlaybackTelemetryRecorder()) {
+  init(playbackTelemetry: PlaybackTelemetryRecorder = PlaybackTelemetryRecorder(),
+       loadStreamStatus: @escaping @Sendable (String) async -> StreamLiveStatus = PlaybackService.streamLiveStatus(for:),
+       resolveLivePlayback: @escaping @Sendable (PlatformLiveTarget) async throws -> StreamPlayback = { try await $0.resolvePlayback() },
+       creatorSession: CreatorLiveSession? = nil) {
+    self.creatorSession = creatorSession ?? CreatorLiveSession()
     self.playbackTelemetry = playbackTelemetry
+    self.loadStreamStatus = loadStreamStatus
+    self.resolveLivePlayback = resolveLivePlayback
   }
   @ObservationIgnored var startupProgress = LivePlaybackStartup.Progress()
   @ObservationIgnored var chatSyncBaseline = LiveChatSyncBaseline()

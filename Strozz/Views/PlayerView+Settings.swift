@@ -125,6 +125,13 @@ extension PlayerView {
         settingsSectionHeader("Chat Width")
         settingsStepperRow(.width)
       }
+      settingsDisclosureRow(title: "Linked creator channels", detail: "Shared chat and viewer counts",
+        focusTag: .chatCreatorChannels) {
+        showCreatorChannels = true
+      }
+      if let error = model.creatorSession.identityError {
+        Text(error).font(.caption).foregroundStyle(chatSettingsForeground)
+      }
 
       VStack(alignment: .leading, spacing: 7) {
         settingsSectionHeader("Chat Position")
@@ -230,7 +237,7 @@ extension PlayerView {
             ChatKeyboardHostField(
               text: $experimentalYouTubeMergeChannelOrURL,
               activationToken: youtubeInputActivationToken,
-              onSubmit: {},
+              onSubmit: commitYouTubeCreatorTarget,
               returnKeyType: .done,
               dismissesOnReturn: true,
               keyboardPrompt: "YouTube handle or channel URL"
@@ -294,7 +301,7 @@ extension PlayerView {
             ChatKeyboardHostField(
               text: $experimentalKickMergeChannelOrURL,
               activationToken: kickInputActivationToken,
-              onSubmit: {},
+              onSubmit: commitKickCreatorTarget,
               returnKeyType: .done,
               dismissesOnReturn: true,
               keyboardPrompt: "Kick handle or channel URL"

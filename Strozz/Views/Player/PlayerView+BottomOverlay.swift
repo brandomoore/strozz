@@ -90,6 +90,34 @@ extension PlayerView {
       Spacer(minLength: 18)
 
       HStack(spacing: 14) {
+        if !isVOD, currentLiveTarget.platform != .youtube, let multiviewLineup {
+          Button {
+            hideTask?.cancel()
+            if !multiviewLineup.contains(multiviewChannel), !multiviewLineup.isFull {
+              multiviewLineup.toggle(multiviewChannel)
+              scheduleHide()
+            } else {
+              showMultiviewLineup = true
+            }
+          } label: {
+            Icon(glyph: .borderAll)
+              .overlay(alignment: .bottomTrailing) {
+                if multiviewLineup.contains(multiviewChannel) {
+                  Icon(glyph: .check, size: 12)
+                    .foregroundStyle(palette.chromeOnOpaque)
+                    .frame(width: 18, height: 18)
+                    .background(palette.chromeOpaqueSurface, in: Circle())
+                    .offset(x: 8, y: 6)
+                }
+              }
+          }
+          .accessibilityLabel(multiviewLineup.contains(multiviewChannel) || multiviewLineup.isFull
+            ? "Multiview" : "Add to multiview")
+          .accessibilityIdentifier("player-multiview")
+          .disabled(!multiviewLineup.contains(multiviewChannel) && isOffline)
+          .focused($focus, equals: .multiview)
+          .onMoveCommand { if $0 == .up { requestSeekBarFocus() } }
+        }
         // The visible menu content is kept `.equatable()` so the player's
         // once-per-second latency churn doesn't re-render (and blink) the open
         // menu. The focus + navigation modifiers are applied OUTSIDE that
@@ -144,7 +172,7 @@ extension PlayerView {
               }
             }
           },
-          sourceAvailable: youtubeSourceAvailable,
+          sourceAvailable: !isVOD && !isMultiviewCompact,
           sourceOptions: streamSourceOptions,
           sourceSelectedIndex: selectedStreamSourceIndex,
           onSelectSource: { selectStreamSource(at: $0) },
@@ -190,7 +218,7 @@ extension PlayerView {
           if direction == .up { requestSeekBarFocus() }
         }
 
-        if !isUsingAltSource {
+        if !isUsingAltSource, model.livePlatform == .twitch {
           Button {
             hideTask?.cancel()
             focusRecoveryTask?.cancel()
@@ -488,7 +516,7 @@ extension PlayerView {
           scheduleHide()
           return
         }
-        if isQualityMenuPresented || showRewards {
+        if isQualityMenuPresented || showRewards || showMultiviewLineup {
           scheduleHide()
           return
         }
@@ -516,6 +544,10 @@ extension PlayerView {
   /// is paused while the page is up, and its latency monitor + watchdog are
   /// suspended so the non-advancing playhead isn't mistaken for a stall.
   func presentChannelPage() {
+    if model.livePlatform == .kick {
+      showKickChannelInfo = true
+      return
+    }
     model.beginPlaybackAbsence(.channelPage, isVOD: isVOD)
     hideTask?.cancel()
     focusRecoveryTask?.cancel()
@@ -525,8 +557,8 @@ extension PlayerView {
     }
     player.pause()
     channelPageTarget = ChannelPageTarget(
-      login: activeChannel,
-      displayName: channelDisplayName.isEmpty ? activeChannel : channelDisplayName,
+      login: model.creatorSession.twitchChannel ?? currentLiveTarget.channel,
+      displayName: channelDisplayName.isEmpty ? currentLiveTarget.channel : channelDisplayName,
       profileImageURL: channelAvatarURL
     )
   }
@@ -564,7 +596,7 @@ extension PlayerView {
 
   func isControlFocus(_ focus: Focusable) -> Bool {
     switch focus {
-    case .streamInfo, .quality, .rewards, .chatToggle, .chatInput, .rewindScrubber:
+    case .streamInfo, .quality, .rewards, .multiview, .chatToggle, .chatInput, .rewindScrubber:
       return true
     default:
       return false
@@ -611,6 +643,7 @@ extension PlayerView {
     case .chatSettingsButton,
       .chatPresetOption,
       .chatAdvancedButton,
+      .chatCreatorChannels,
       .chatWidthOption,
       .chatLayoutOption,
       .chatSyncToggle,

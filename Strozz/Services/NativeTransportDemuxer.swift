@@ -87,7 +87,9 @@ struct NativeTransportDemuxer {
       }
       pending[pid] = PES(audio: pid == audioPID)
     }
-    guard var value = pending[pid] else { return result }
+    // Release the dictionary's ownership before growing the PES. Otherwise
+    // every 188-byte packet copies the entire accumulated payload.
+    guard var value = pending.removeValue(forKey: pid) else { return result }
     value.bytes.append(contentsOf: bytes[offset...])
     guard value.bytes.count <= 4 * 1024 * 1024 else { throw NativeHLSError.invalidMedia }
     if value.length == nil, value.bytes.count >= 6 {
@@ -98,7 +100,6 @@ struct NativeTransportDemuxer {
     }
     if let length = value.length, value.bytes.count >= length {
       value.bytes = Data(value.bytes.prefix(length))
-      pending.removeValue(forKey: pid)
       result += try decode(value)
     } else {
       pending[pid] = value

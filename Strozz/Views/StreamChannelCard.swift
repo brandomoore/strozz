@@ -111,6 +111,8 @@ struct StreamChannelCard: View {
 
   @Environment(\.themePalette) private var palette
   @Environment(\.glassDisabled) private var glassDisabled
+  @Environment(\.multiviewLineup) private var multiviewLineup
+  @Environment(\.streamPreviewsEnabled) private var streamPreviewsEnabled
   @AppStorage(CardPresentation.storageKey) private var presentationRaw = CardPresentation.fallback.rawValue
   @State private var nativePreview = NativeLivePreview()
   private var previewPlayer: AVPlayer { nativePreview.player }
@@ -125,12 +127,23 @@ struct StreamChannelCard: View {
 
   var body: some View {
     cardBody
+      .overlay(alignment: .topTrailing) {
+        if multiviewLineup?.contains(channel) == true {
+          Icon(glyph: .check, size: 22)
+            .foregroundStyle(palette.chromeOnOpaque)
+            .padding(9)
+            .background(palette.chromeOpaqueSurface, in: Circle())
+            .padding(14)
+            .allowsHitTesting(false)
+        }
+      }
       .onAppear {
         handleFocusChange(isFocused)
       }
       .onChange(of: isFocused) { _, focused in
         handleFocusChange(focused)
       }
+      .onChange(of: streamPreviewsEnabled) { _, _ in handleFocusChange(isFocused) }
       .onChange(of: nativePreview.isReady) { _, ready in
         guard isFocused, isShowingLivePreviewSurface else { return }
         withAnimation(.easeInOut(duration: 0.24)) { livePreviewOpacity = ready ? 1 : 0 }
@@ -142,10 +155,15 @@ struct StreamChannelCard: View {
         channel: channel,
         onWatch: onWatch,
         onGoToChannel: onGoToChannel,
-        onNotInterested: onNotInterested
+        onNotInterested: onNotInterested,
+        multiviewAvailable: multiviewLineup.map {
+          !$0.entries.isEmpty || (channel.platform != .youtube && channel.isLive)
+        } ?? false
       )
       .accessibilityElement(children: .ignore)
       .accessibilityLabel(accessibilityLabel)
+      .accessibilityValue(multiviewLineup?.contains(channel) == true ? "In multiview" : "")
+      .accessibilityIdentifier("stream-card-\(channel.channelKey)")
   }
 
   @ViewBuilder
@@ -204,7 +222,10 @@ struct StreamChannelCard: View {
       .clipShape(Circle())
 
       VStack(alignment: .leading, spacing: CardMetrics.captionLineSpacing) {
-        Text(channel.displayName)
+        HStack(spacing: 6) {
+          ChannelPlatformIcons(channel: channel, size: 16)
+          Text(channel.displayName).lineLimit(1, reservesSpace: true)
+        }
           .font(.subheadline.weight(.semibold))
           .foregroundStyle(usesLiftFocusedText ? palette.liftPrimaryText : Color.primary)
           .lineLimit(1, reservesSpace: true)
@@ -235,6 +256,8 @@ struct StreamChannelCard: View {
   /// sentence instead of disconnected avatar/name/title fragments.
   private var accessibilityLabel: Text {
     var parts: [String] = [channel.displayName]
+    parts.append(channel.platform.title)
+    if channel.platform != .kick, channel.kick != nil { parts.append("Kick") }
     parts.append(channel.isLive ? "Live" : "Offline")
     if !channel.title.isEmpty {
       parts.append(channel.title)
@@ -345,7 +368,7 @@ struct StreamChannelCard: View {
 
   @MainActor
   private func handleFocusChange(_ focused: Bool) {
-    guard focused, channel.isLive else {
+    guard focused, streamPreviewsEnabled, channel.isLive else {
       stopPreviewPlayback(clearCachedURL: false)
       return
     }
@@ -365,7 +388,7 @@ struct StreamChannelCard: View {
         let sourceURL = try await sourceURLTask
         guard !Task.isCancelled else { return }
         await MainActor.run {
-          guard !Task.isCancelled, isFocused, previewGeneration == generation else { return }
+          guard !Task.isCancelled, isFocused, streamPreviewsEnabled, previewGeneration == generation else { return }
           startPreviewPlayback(from: sourceURL)
           previewTask = nil
         }
@@ -389,6 +412,7 @@ struct StreamChannelCard: View {
     if let cachedURL {
       return cachedURL
     }
+    if channel.platform == .kick { return try await KickPlaybackService.previewHLSURL(for: login) }
     return try await PlaybackService.previewHLSURL(for: login)
   }
 
@@ -397,8 +421,12 @@ struct StreamChannelCard: View {
     cachedPreviewURL = sourceURL
     if previewSourceURL != sourceURL {
       let login = channel.login
+      let platform = channel.platform
       nativePreview.start(url: sourceURL) { original in
-        try await PlaybackService.pinnedHLSURL(for: login,
+        if platform == .kick {
+          return try await KickPlaybackService.previewHLSURL(for: login, original: original)
+        }
+        return try await PlaybackService.pinnedHLSURL(for: login,
           targetBitrate: original ? 0 : 1_500_000, forceRefresh: true)
       }
       previewSourceURL = sourceURL
@@ -422,6 +450,10 @@ struct StreamChannelCard: View {
   }
 }
 
+extension EnvironmentValues {
+  @Entry var streamPreviewsEnabled = true
+}
+
 private extension View {
   /// Attaches the channel card's press-and-hold context menu when at least one
   /// action is supplied. tvOS surfaces this on a long press of the focused card.
@@ -430,9 +462,10 @@ private extension View {
     channel: FollowedChannel,
     onWatch: ((FollowedChannel) -> Void)?,
     onGoToChannel: ((FollowedChannel) -> Void)?,
-    onNotInterested: ((FollowedChannel) -> Void)?
+    onNotInterested: ((FollowedChannel) -> Void)?,
+    multiviewAvailable: Bool
   ) -> some View {
-    if onWatch == nil && onGoToChannel == nil && onNotInterested == nil {
+    if onWatch == nil && onGoToChannel == nil && onNotInterested == nil && !multiviewAvailable {
       self
     } else {
       contextMenu {
@@ -450,6 +483,7 @@ private extension View {
             Label("Go to Channel", systemImage: "person.crop.circle")
           }
         }
+        MultiviewSelectionAction(channel: channel)
         if let onNotInterested {
           Button(role: .destructive) {
             onNotInterested(channel)

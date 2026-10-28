@@ -35,6 +35,8 @@ struct HomeFollowingSection: View {
 
         Spacer()
 
+        MultiviewLineupButton()
+
         HStack(spacing: 8) {
           if !isUsingDemoData {
             Button {

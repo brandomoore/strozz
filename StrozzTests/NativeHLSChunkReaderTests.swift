@@ -7,6 +7,104 @@ import XCTest
 #endif
 
 final class NativeHLSChunkReaderTests: XCTestCase {
+  func testFailedTransferDistinguishesNoResponseFromStoppedBodyBytes() {
+    let noResponse = NativeHLSChunkReader.RequestTiming(startedAt: 10)
+      .diagnostic(error: URLError(.timedOut), at: 18)
+    XCTAssertEqual(noResponse.attributes["request_phase"], "before_response")
+    XCTAssertEqual(noResponse.attributes["error_code"], "-1001")
+    XCTAssertEqual(noResponse.counters["response_bytes_received"], 0)
+    XCTAssertNil(noResponse.metrics["last_body_age_seconds"])
+    XCTAssertNil(noResponse.metrics["dns_seconds"], "Missing network phases must remain unknown")
+    var partial = NativeHLSChunkReader.RequestTiming(startedAt: 10)
+    partial.responseAt = 10.1
+    partial.status = 200
+    partial.received(bytes: 1024, at: 10.2)
+    partial.consumed(pending: 0, at: 10.3)
+    let stalled = partial.diagnostic(error: URLError(.timedOut), at: 18.2)
+    XCTAssertEqual(stalled.attributes["request_phase"], "receiving_body")
+    XCTAssertEqual(stalled.counters["http_status"], 200)
+    XCTAssertEqual(stalled.counters["response_bytes_received"], 1024)
+    XCTAssertEqual(stalled.metrics["last_body_age_seconds"] ?? -1, 8, accuracy: 0.0001)
+    XCTAssertEqual(stalled.metrics["consumer_pause_seconds"] ?? -1, 0.1, accuracy: 0.0001)
+    XCTAssertEqual(stalled.metrics["first_body_seconds"] ?? -1, 0.2, accuracy: 0.0001)
+  }
+
+  func testTransferEvidenceKeepsConsumerBackpressureSeparateFromMissingBytes() {
+    var timing = NativeHLSChunkReader.RequestTiming(startedAt: 0)
+    timing.responseAt = 0.1
+    timing.received(bytes: 100, at: 0.2)
+    timing.received(bytes: 200, at: 0.3)
+    timing.consumed(pending: 1, at: 3)
+    let paused = timing.diagnostic(error: URLError(.timedOut), at: 5.2)
+    XCTAssertEqual(paused.counters["pending_consumer_chunks"], 1)
+    XCTAssertEqual(paused.metrics["consumer_pause_seconds"] ?? -1, 5, accuracy: 0.0001)
+    XCTAssertEqual(paused.counters["response_chunks_received"], 2)
+    XCTAssertEqual(paused.counters["response_bytes_received"], 300)
+    timing.consumed(pending: 0, at: 5.3)
+    let ended = timing.diagnostic(error: nil, at: 5.4)
+    XCTAssertEqual(ended.attributes["outcome"], "completed")
+    XCTAssertNil(ended.attributes["error_domain"])
+    XCTAssertEqual(ended.counters["pending_consumer_chunks"], 0)
+    XCTAssertEqual(ended.metrics["consumer_pause_seconds"] ?? -1, 5.1, accuracy: 0.0001)
+  }
+
+  func testTransferDiagnosticArrivesBeforeCompletionAndPreservesConnectionReuse() async throws {
+    let server = try ChunkReaderServer()
+    let base = try await server.start()
+    let reader = NativeHLSChunkReader()
+    let probe = TransferReportProbe()
+    defer { reader.stop(); server.stop() }
+    for index in 0..<2 {
+      var bytes = Data()
+      for try await chunk in reader.stream(URLRequest(url: base.appendingPathComponent("segment-\(index)")),
+        observeTransfer: { probe.append($0) }) {
+        bytes += chunk.data
+        reader.consumedChunk(chunk)
+      }
+      XCTAssertEqual(bytes, Data([1, 2, 3, 4]))
+      XCTAssertEqual(probe.values.count, index + 1, "Evidence must precede the consumer's terminal callback")
+    }
+    let report = try XCTUnwrap(probe.values.last)
+    XCTAssertEqual(report.attributes["outcome"], "completed")
+    XCTAssertEqual(report.attributes["connection_reused"], "true")
+    XCTAssertEqual(report.counters["response_bytes_received"], 4)
+    XCTAssertEqual(report.counters["http_status"], 200)
+    XCTAssertNotNil(report.metrics["first_body_seconds"])
+    let attributes = report.attributes.values.joined()
+    XCTAssertFalse(attributes.contains("127.0.0.1"))
+    XCTAssertFalse(attributes.contains("segment-"))
+    XCTAssertFalse(attributes.contains("http://"))
+  }
+
+  func testPartialBodyTimeoutRetainsBytesAndReportsBeforeTheErrorReachesTheConsumer() async throws {
+    let server = try ChunkReaderServer()
+    let base = try await server.start()
+    let reader = NativeHLSChunkReader()
+    let probe = TransferReportProbe()
+    defer { reader.stop(); server.stop() }
+    var bytes = Data()
+    do {
+      for try await chunk in reader.stream(
+        URLRequest(url: base.appendingPathComponent("hold")),
+        observeTransfer: { probe.append($0) }) {
+        bytes += chunk.data
+        reader.consumedChunk(chunk)
+      }
+      XCTFail("A partial transfer must still fail with its original error")
+    } catch {
+      XCTAssertEqual((error as? URLError)?.code, .timedOut)
+      XCTAssertEqual(probe.values.count, 1)
+    }
+    XCTAssertEqual(bytes, Data([1, 2, 3, 4]))
+    let report = try XCTUnwrap(probe.values.first)
+    XCTAssertEqual(report.attributes["request_phase"], "receiving_body")
+    XCTAssertEqual(report.attributes["error_code"], "-1001")
+    XCTAssertEqual(report.counters["response_bytes_received"], 4)
+    XCTAssertNotNil(report.metrics["last_body_age_seconds"])
+    XCTAssertFalse(report.attributes.values.joined().contains("127.0.0.1"))
+    XCTAssertFalse(report.attributes.values.joined().contains("http://"))
+  }
+
   func testDeliveryTimingSeparatesIngressFromConsumerAndProcessingDelays() {
     var timing = NativeHLSChunkReader.DeliveryTiming(startedAt: 10)
     timing.observe(bytes: 100, receivedAt: 10.1, consumedAt: 12.1, finishedAt: 15.1)
@@ -18,6 +116,13 @@ final class NativeHLSChunkReaderTests: XCTestCase {
     XCTAssertEqual(timing.metrics["max_consumer_queue_seconds"] ?? -1, 2, accuracy: 0.0001)
     XCTAssertEqual(timing.metrics["max_remux_publish_seconds"] ?? -1, 3, accuracy: 0.0001)
     XCTAssertEqual(timing.metrics["transfer_wall_seconds"] ?? -1, 5.4, accuracy: 0.0001)
+  }
+
+  private final class TransferReportProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reports: [NativeHLSPlaybackDiagnostic] = []
+    func append(_ report: NativeHLSPlaybackDiagnostic) { lock.withLock { reports.append(report) } }
+    var values: [NativeHLSPlaybackDiagnostic] { lock.withLock { reports } }
   }
 
   func testQueuedIngressCannotBeMisreportedAsNetworkWait() {

@@ -7,6 +7,24 @@ import SwiftUI
 // chain exceeds its budget). Every method applies one cohesive set of modifiers
 // to the passed-in content, in the same order as the original single chain.
 extension PlayerView {
+  func handleCreatorGenerationChange() {
+    model.resetChatReading()
+    chatDraft = ""
+    model.chatSendError = nil
+    guard isUsingAltSource, model.creatorSession.isActive else { return }
+    if model.creatorSession.sources?.youtube != nil {
+      Task { await switchToAltYouTubeSource() }
+    } else {
+      resetAltSourceWork()
+      isUsingAltSource = false
+      altYouTubeMasterURL = nil
+      altSourceStatus = nil
+      startLatencyMonitor()
+      startRateController()
+      startPlaybackWatchdog()
+    }
+  }
+
   /// Incoming/outgoing raid banners and sleep-mode state transitions
   /// (channel-offline auto-sleep and the "still watching" focus pull).
   func raidAndSleepBannerHandlers(_ content: some View) -> some View {
@@ -46,7 +64,7 @@ extension PlayerView {
       // Outgoing raids (the channel you're watching raiding someone else):
       // mirror Twitch's native behavior and follow by default, but give a brief
       // cancelable window first.
-      guard let newRaid else { return }
+      guard let newRaid, model.livePlatform == .twitch, !isUsingAltSource else { return }
       beginOutgoingRaidFollow(newRaid)
     }
     .onChange(of: goLive?.pending) { _, pending in
@@ -89,8 +107,14 @@ extension PlayerView {
       guard !isMultiviewCompact else { return }
       await monitorWatchRewards()
     }
-    .task(id: model.multiviewContext?.reloadID) {
+    .task(id: MultiviewLoadRequest(reloadID: model.multiviewContext?.reloadID, browsing: isMultiviewBrowsing)) {
+      if isMultiviewBrowsing {
+        suspendMultiviewForBrowsing()
+        return
+      }
       if activeChannel.isEmpty { activeChannel = channel }
+      initializeLiveSource()
+      if resumeMultiviewAfterBrowsingIfNeeded() { return }
       if model.multiviewContext == nil {
         migrateNativeLiveProfile()
         UserDefaults.standard.set(true, forKey: PersistenceKey.nativePlaybackDefaultApplied)
@@ -104,18 +128,17 @@ extension PlayerView {
         resetDiagnostics()
         beginPlaybackTelemetry()
         configurePlayerForLive()
-        applyExperimentalYouTubeSettings()
-        applyExperimentalKickSettings()
         if !isMultiviewCompact {
-          chat.connect(to: activeChannel)
-          eventSub.start(forChannel: activeChannel, auth: auth)
-          hermes.start(forChannel: activeChannel)
+          connectCurrentLiveChat()
         }
-        async let metadataTask: Void = refreshChannelMetadata()
+        model.channelMetadataTask?.cancel()
+        model.channelMetadataTask = Task { await refreshChannelMetadata() }
         await loadInitialSource()
-        _ = await metadataTask
       }
       if !isMultiviewCompact { focus = .video }
+    }
+    .onChange(of: isMultiviewBrowsing) { _, browsing in
+      if !browsing, !isMultiviewCompact { trackpad.start() }
     }
     .onAppear {
       setIdleTimer(disabled: true)
@@ -133,6 +156,18 @@ extension PlayerView {
     }
     #endif
     .onChange(of: isMultiviewCompact) { _, _ in updateMultiviewPresentation() }
+    .onChange(of: model.creatorSession.sources) { _, _ in
+      synchronizeCreatorServices()
+      applyExperimentalYouTubeSettings()
+      applyExperimentalKickSettings()
+    }
+    .task(id: model.creatorSession.generation.uuidString + (model.creatorSession.sources?.youtube ?? "")) {
+      await refreshYouTubeSourceAvailability()
+    }
+    .onChange(of: model.creatorSession.generation) { _, _ in
+      handleCreatorGenerationChange()
+    }
+
     .onChange(of: model.multiviewContext?.focusRequest) { _, _ in
       guard !isMultiviewCompact else { return }
       pendingControlFocus = .quality
@@ -345,9 +380,9 @@ extension PlayerView {
       player.pause()
       replacePlaybackItem(with: nil)
       captionController.stop()
-      chat.disconnect()
+      model.creatorSession.stop()
+      model.eventSubChannel = nil
       eventSub.stop()
-      hermes.stop()
       // Hand go-live suppression back to Home now that no channel is on screen.
       if !isMultiviewCompact { goLive?.suppressedLogin = nil }
       setIdleTimer(disabled: false)
@@ -365,6 +400,20 @@ extension PlayerView {
     .onChange(of: model.multiviewContext?.moveRequests) { _, _ in
       guard let direction = model.multiviewContext?.moveDirection else { return }
       handlePlayerMoveCommand(direction)
+    }
+    .onChange(of: model.multiviewContext?.watchRequests) { _, _ in
+      guard let channel = model.multiviewContext?.requestedChannel else { return }
+      switch channel.platform {
+      case .twitch: followRaid(channel.login)
+      case .kick:
+        if currentLiveTarget == PlatformLiveTarget(platform: .kick, channel: channel.login) {
+          model.multiviewContext?.reloadID = UUID()
+        } else {
+          switchToKickSource(channel: channel.login)
+        }
+      case .youtube:
+        Task { await switchToAltYouTubeSource(resolvedTarget: channel.login) }
+      }
     }
   }
 
@@ -597,13 +646,7 @@ extension PlayerView {
     .onChange(of: experimentalYouTubeMergeEnabled) { _, _ in
       applyExperimentalYouTubeSettings()
     }
-    .onChange(of: experimentalYouTubeMergeChannelOrURL) { _, _ in
-      applyExperimentalYouTubeSettings()
-    }
     .onChange(of: experimentalKickMergeEnabled) { _, _ in
-      applyExperimentalKickSettings()
-    }
-    .onChange(of: experimentalKickMergeChannelOrURL) { _, _ in
       applyExperimentalKickSettings()
     }
   }
@@ -613,6 +656,12 @@ extension PlayerView {
   func channelChangeHandlers(_ content: some View) -> some View {
     content
     .onChange(of: activeChannel) { _, _ in
+      if model.didInitializeLiveSource, let root = model.creatorSession.sources?.root,
+        root.channel != activeChannel {
+        model.livePlatform = .twitch
+        model.twitchPlaybackTarget = activeChannel
+        model.creatorSession.start(.init(platform: .twitch, channel: activeChannel))
+      }
       showRewards = false
       model.watchTracker.stop()
       // A manual override is scoped to the channel it was entered for; clear it
@@ -641,7 +690,7 @@ extension PlayerView {
       goLive?.suppressedLogin = activeChannel
     }
     .task(id: activeChannel) {
-      guard !isMultiviewCompact else { return }
+      guard !isMultiviewCompact, initialPlatform == .twitch else { return }
       await refreshYouTubeAutoTarget()
     }
     .task(id: isLoading) {
@@ -651,7 +700,7 @@ extension PlayerView {
       await refreshYouTubeSourceAvailability()
     }
     .task(id: activeChannel) {
-      guard !isMultiviewCompact else { return }
+      guard !isMultiviewCompact, initialPlatform == .twitch else { return }
       await refreshKickAutoTarget()
     }
   }

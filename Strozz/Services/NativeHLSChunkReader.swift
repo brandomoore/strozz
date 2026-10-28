@@ -46,10 +46,72 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
     }
   }
 
+  struct RequestTiming: Sendable {
+    let startedAt: Double
+    var responseAt: Double?
+    var firstBodyAt: Double?
+    var lastBodyAt: Double?
+    var receivedBytes = 0
+    var receivedChunks = 0
+    var pendingConsumerChunks = 0
+    var status: Int?
+    var consumerPausedAt: Double?
+    var consumerPausedSeconds = 0.0
+    var networkAttributes: [String: String] = [:]
+    var networkMetrics: [String: Double] = [:]
+
+    mutating func received(bytes: Int, at now: Double) {
+      if firstBodyAt == nil { firstBodyAt = now }
+      lastBodyAt = now
+      receivedBytes += bytes
+      receivedChunks += 1
+      pendingConsumerChunks += 1
+      if consumerPausedAt == nil { consumerPausedAt = now }
+    }
+
+    mutating func consumed(pending: Int, at now: Double) {
+      pendingConsumerChunks = pending
+      guard pending == 0 else { return }
+      if let consumerPausedAt { consumerPausedSeconds += max(0, now - consumerPausedAt) }
+      consumerPausedAt = nil
+    }
+
+    func diagnostic(error: Error?, at now: Double) -> NativeHLSPlaybackDiagnostic {
+      var attributes = networkAttributes
+      attributes["stage"] = "media_transfer"
+      attributes["outcome"] = error == nil ? "completed" : "failed"
+      attributes["request_phase"] = lastBodyAt != nil ? "receiving_body"
+        : responseAt != nil ? "awaiting_body" : "before_response"
+      if let error {
+        let value = error as NSError
+        attributes["error_domain"] = value.domain
+        attributes["error_code"] = String(value.code)
+      }
+      var metrics = networkMetrics
+      metrics["request_started_uptime_seconds"] = startedAt
+      metrics["request_duration_seconds"] = max(0, now - startedAt)
+      metrics["response_headers_seconds"] = responseAt.map { max(0, $0 - startedAt) }
+      metrics["first_body_seconds"] = firstBodyAt.map { max(0, $0 - startedAt) }
+      metrics["last_body_age_seconds"] = lastBodyAt.map { max(0, now - $0) }
+      metrics["consumer_pause_seconds"] = consumerPausedSeconds
+        + (consumerPausedAt.map { max(0, now - $0) } ?? 0)
+      var counters = ["response_bytes_received": receivedBytes, "response_chunks_received": receivedChunks]
+      counters["http_status"] = status
+      counters["pending_consumer_chunks"] = pendingConsumerChunks
+      return .init(event: .delivery, attributes: attributes, metrics: metrics, counters: counters, uptime: now)
+    }
+  }
+
+  private struct TransferObservation {
+    var timing: RequestTiming
+    let report: @Sendable (NativeHLSPlaybackDiagnostic) -> Void
+  }
+
   private static let capacity = 32
   #if DEBUG
   private var metricsObservers: [Int: @Sendable ([String: String]) -> Void] = [:]
   #endif
+  private var transfers: [Int: TransferObservation] = [:]
   private let lock = NSCondition()
   private var continuation: AsyncThrowingStream<Chunk, Error>.Continuation?
   private var session: URLSession?
@@ -65,7 +127,9 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
   }
 
   func stream(_ request: URLRequest,
-              observeMetrics: (@Sendable ([String: String]) -> Void)? = nil) -> AsyncThrowingStream<Chunk, Error> {
+              observeMetrics: (@Sendable ([String: String]) -> Void)? = nil,
+              observeTransfer: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil
+  ) -> AsyncThrowingStream<Chunk, Error> {
     AsyncThrowingStream(bufferingPolicy: .bufferingOldest(Self.capacity)) { continuation in
       lock.lock()
       guard !stopped, self.task == nil else {
@@ -89,6 +153,10 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
       pendingChunks.removeAll(keepingCapacity: true)
       let task = session.dataTask(with: request)
       self.task = task
+      if let observeTransfer {
+        transfers[task.taskIdentifier] = TransferObservation(
+          timing: RequestTiming(startedAt: ProcessInfo.processInfo.systemUptime), report: observeTransfer)
+      }
       #if DEBUG
       metricsObservers[task.taskIdentifier] = observeMetrics
       #endif
@@ -108,6 +176,10 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
       pendingChunks.removeAll(keepingCapacity: true)
       lock.broadcast()
     }
+    transfers.removeValue(forKey: task.taskIdentifier)
+    #if DEBUG
+    metricsObservers.removeValue(forKey: task.taskIdentifier)
+    #endif
     lock.unlock()
     task.cancel()
   }
@@ -121,6 +193,7 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
     self.session = nil
     self.task = nil
     pendingChunks.removeAll(keepingCapacity: true)
+    transfers.removeAll()
     lock.broadcast()
     #if DEBUG
     metricsObservers.removeAll()
@@ -135,6 +208,8 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
                   completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void) {
     lock.lock()
     let continuation = self.task === dataTask ? self.continuation : nil
+    transfers[dataTask.taskIdentifier]?.timing.responseAt = ProcessInfo.processInfo.systemUptime
+    transfers[dataTask.taskIdentifier]?.timing.status = (response as? HTTPURLResponse)?.statusCode
     lock.unlock()
     guard let continuation else { completionHandler(.cancel); return }
     guard (response as? HTTPURLResponse)?.statusCode == 200 else {
@@ -159,6 +234,7 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
     let id = nextChunkID
     nextChunkID += 1
     pendingChunks.insert(id)
+    transfers[dataTask.taskIdentifier]?.timing.received(bytes: data.count, at: receivedAt)
     lock.unlock()
     dataTask.suspend()
     switch continuation.yield(Chunk(data: data, receivedAtUptime: receivedAt, task: dataTask, id: id)) {
@@ -175,7 +251,11 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
   func consumedChunk(_ chunk: Chunk) {
     lock.lock()
     let consumed = task === chunk.task && pendingChunks.remove(chunk.id) != nil
-    if consumed { lock.signal() }
+    if consumed {
+      transfers[chunk.task.taskIdentifier]?.timing.consumed(
+        pending: pendingChunks.count, at: ProcessInfo.processInfo.systemUptime)
+      lock.signal()
+    }
     lock.unlock()
     if consumed { chunk.task.resume() }
   }
@@ -183,6 +263,7 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
   func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
     lock.lock()
     let continuation = self.task === task ? self.continuation : nil
+    let transfer = transfers.removeValue(forKey: task.taskIdentifier)
     if self.task === task {
       self.task = nil
       self.continuation = nil
@@ -193,15 +274,45 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
     metricsObservers.removeValue(forKey: task.taskIdentifier)
     #endif
     lock.unlock()
+    if let transfer {
+      transfer.report(transfer.timing.diagnostic(error: error, at: ProcessInfo.processInfo.systemUptime))
+    }
     if let error { continuation?.finish(throwing: error) }
     else { continuation?.finish() }
   }
 
-  #if DEBUG
   func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
     lock.lock()
+    #if DEBUG
     let observeMetrics = metricsObservers[task.taskIdentifier]
+    #endif
+    if transfers[task.taskIdentifier] != nil, let transaction = metrics.transactionMetrics.last {
+      var attributes = ["connection_reused": String(transaction.isReusedConnection),
+        "network_protocol": transaction.networkProtocolName ?? "unknown",
+        "network_expensive": String(transaction.isExpensive),
+        "network_constrained": String(transaction.isConstrained),
+        "network_cellular": String(transaction.isCellular)]
+      attributes["connection_phase"] = transaction.secureConnectionStartDate != nil
+        && transaction.secureConnectionEndDate == nil ? "tls"
+        : transaction.connectStartDate != nil && transaction.connectEndDate == nil ? "connect"
+        : transaction.domainLookupStartDate != nil && transaction.domainLookupEndDate == nil ? "dns"
+        : transaction.requestEndDate != nil ? "request_sent" : "unobserved"
+      transfers[task.taskIdentifier]?.timing.networkAttributes = attributes
+      for (name, start, end) in [
+        ("dns_seconds", transaction.domainLookupStartDate, transaction.domainLookupEndDate),
+        ("connect_seconds", transaction.connectStartDate, transaction.connectEndDate),
+        ("tls_seconds", transaction.secureConnectionStartDate, transaction.secureConnectionEndDate),
+        ("first_byte_seconds", transaction.requestEndDate, transaction.responseStartDate),
+        ("response_body_seconds", transaction.responseStartDate, transaction.responseEndDate),
+      ] {
+        if let start, let end {
+          let value = end.timeIntervalSince(start)
+          if value.isFinite, value >= 0 { transfers[task.taskIdentifier]?.timing.networkMetrics[name] = value }
+        }
+      }
+    }
     lock.unlock()
+    #if DEBUG
     for transaction in metrics.transactionMetrics {
       var values = ["reused": String(transaction.isReusedConnection),
         "protocol": transaction.networkProtocolName ?? "unknown"]
@@ -214,6 +325,6 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
       }
       observeMetrics?(values)
     }
+    #endif
   }
-  #endif
 }

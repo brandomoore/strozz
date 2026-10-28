@@ -1,5 +1,28 @@
 import SwiftUI
 
+struct ChannelPlatformIcons: View {
+  let channel: FollowedChannel
+  var size: CGFloat = 14
+
+  var body: some View {
+    HStack(spacing: 4) {
+      Icon(glyph: primaryGlyph, size: size).accessibilityLabel(channel.platform.title)
+      if channel.platform != .kick, channel.kick != nil {
+        Icon(glyph: .brandKick, size: size).accessibilityLabel("Kick")
+      }
+    }
+    .fixedSize()
+  }
+
+  private var primaryGlyph: Glyph {
+    switch channel.platform {
+    case .twitch: .brandTwitch
+    case .kick: .brandKick
+    case .youtube: .brandYoutube
+    }
+  }
+}
+
 /// Tabler icons (MIT) we use, vendored as template SVGs in
 /// `Assets.xcassets/Tabler`.
 ///

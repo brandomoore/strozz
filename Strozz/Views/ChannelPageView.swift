@@ -98,6 +98,21 @@ struct ChannelPageView: View {
   }
 
   var body: some View {
+    VStack(spacing: 0) {
+      if target.platform == .kick {
+        KickChannelDetailsView(slug: target.login) { onWatchChannel?($0) }
+          .onExitCommand { dismiss() }
+      } else {
+        twitchContent
+      }
+    }
+    .background {
+      LinearGradient(colors: palette.backgroundColors, startPoint: .top, endPoint: .bottom)
+        .ignoresSafeArea()
+    }
+  }
+
+  private var twitchContent: some View {
     GeometryReader { geo in
       let safeTop = geo.safeAreaInsets.top
       // Full screen height, including the overscan-safe insets that tvOS adds.
@@ -238,6 +253,7 @@ struct ChannelPageView: View {
       }
 
       Spacer(minLength: 0)
+      MultiviewLineupButton()
       if !isOwnChannel {
         ChannelFollowButton(login: target.login, displayName: headerName,
           auth: environment.auth, rewards: environment.watchRewards, follows: environment.follows)
@@ -408,6 +424,7 @@ struct ChannelPageView: View {
       .accessibilityLabel(liveCardAccessibilityLabel(profile))
       .accessibilityHint("Watch")
     }
+    .contextMenu { MultiviewSelectionAction(channel: followedChannel(from: profile)) }
     .padding(.horizontal, AppLayout.horizontalPadding)
   }
 

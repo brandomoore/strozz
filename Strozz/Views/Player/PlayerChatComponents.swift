@@ -16,6 +16,7 @@ struct ChatMessagesColumn: View {
   /// VOD chat-replay source. Mutually exclusive with `chat`.
   var replay: VODChatReplayService? = nil
   let channel: String
+  var platform: LivePlatform = .twitch
   let replayStartMessageID: ChatMessage.ID?
   /// When non-nil, the viewer is paused/scrolling: render this fixed snapshot
   /// instead of the live buffer so the list can't shift under them. While nil,
@@ -54,7 +55,9 @@ struct ChatMessagesColumn: View {
     return Array(chat.messages[startIndex...])
   }
 
-  private var isConnected: Bool { replay?.isReady ?? chat?.isConnected ?? false }
+  private var isConnected: Bool {
+    replay?.isReady ?? (platform == .kick ? chat?.kickIsConnected : chat?.isConnected) ?? false
+  }
   private var emoteURLs: [String: URL] { replay?.emoteURLs ?? chat?.emoteURLs ?? [:] }
   private var badgeURLs: [String: URL] { replay?.badgeURLs ?? chat?.badgeURLs ?? [:] }
   private var cheermotes: [Cheermote] { replay?.cheermotes ?? chat?.cheermotes ?? [] }
@@ -81,7 +84,8 @@ struct ChatMessagesColumn: View {
       viewerDisplayName: viewerDisplayName,
       highlightKeywords: highlightKeywords,
       isConnected: isConnected,
-      isReconnecting: chat.map { !$0.isConnected } ?? false,
+      isReconnecting: chat != nil && !isConnected,
+      connectionPlatform: platform,
       connectionError: replay?.errorMessage,
       emoteURLs: emoteURLs,
       badgeURLs: badgeURLs,
@@ -288,9 +292,7 @@ struct QualityMenu: View, Equatable {
         .onAppear(perform: onMenuPresented)
         .onDisappear(perform: onMenuDismissed)
 
-        // Stream Source: swap the live video between Twitch and the streamer's
-        // YouTube simulcast (lower latency). Only offered when a YouTube
-        // simulcast actually resolved for this channel.
+        // YouTube is offered when resolved; Kick opens the cross-platform player.
         if sourceAvailable {
           Menu {
             Picker("Source", selection: sourceSelection) {

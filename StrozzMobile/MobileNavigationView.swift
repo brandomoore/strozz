@@ -46,19 +46,26 @@ struct MobileRootSidebar: View {
   let onSelect: (FollowedChannel) -> Void
   @Environment(TwitchAuthSession.self) private var auth
   @Environment(TwitchAccountSync.self) private var sync
+  @Environment(KickDiscoveryService.self) private var kick
 
   var body: some View {
     MobileBrowsingSidebar(
       selection: $selection,
-      channels: MobileHomeFeed.visibleFollows(follows.channels, authenticated: auth.isAuthenticated,
-        isDemo: follows.isUsingDemoData, category: nil),
-      authenticated: auth.isAuthenticated, restoring: sync.isRestoringAccount,
-      loading: follows.isLoading || (follows.lastUpdatedAt == nil && follows.errorMessage == nil),
-      errorMessage: follows.errorMessage, onSelect: onSelect,
-      onRetry: { Task { if !follows.isRefreshing { await follows.refresh(using: auth) } } })
-      .refreshable {
-        if auth.isAuthenticated, !follows.isRefreshing { await follows.refresh(using: auth) }
-      }
+      channels: kick.mergedFollowing(MobileHomeFeed.visibleFollows(
+        follows.channels, authenticated: auth.isAuthenticated, isDemo: follows.isUsingDemoData, category: nil), liveOnly: true),
+      authenticated: auth.isAuthenticated || kick.follows.isConnected,
+      restoring: sync.isRestoringAccount && !kick.follows.isConnected,
+      loading: auth.isAuthenticated && (follows.isLoading || (follows.lastUpdatedAt == nil && follows.errorMessage == nil)),
+      errorMessage: (auth.isAuthenticated ? follows.errorMessage : nil)
+        ?? kick.errorMessage ?? (kick.follows.isConnected ? kick.follows.errorMessage : nil), onSelect: onSelect,
+      onRetry: { Task { await refresh() } })
+      .refreshable { await refresh() }
+  }
+
+  private func refresh() async {
+    if auth.isAuthenticated, !follows.isRefreshing { await follows.refresh(using: auth) }
+    await kick.follows.synchronize()
+    await kick.refresh(twitch: follows.channels, force: true, preservingRecommendations: true)
   }
 }
 
@@ -116,7 +123,8 @@ struct MobileBrowsingSidebar: View {
           ForEach(channels, id: \.channelKey) { channel in
             Button { onSelect(channel) } label: {
               MobileSidebarChannelRow(name: channel.displayName, category: channel.gameName,
-                title: channel.title, viewers: channel.viewerCount, avatarURL: channel.profileImageURL)
+                title: channel.title, viewers: channel.combinedViewerCount, avatarURL: channel.profileImageURL,
+                channel: channel)
             }
             .buttonStyle(.plain)
             .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
@@ -165,6 +173,7 @@ struct MobileSidebarChannelRow: View {
   let title: String
   let viewers: Int?
   let avatarURL: URL?
+  var channel: FollowedChannel? = nil
   @Environment(\.dynamicTypeSize) private var typeSize
   @ScaledMetric(relativeTo: .body) private var avatarSize: CGFloat = 36
 
@@ -181,6 +190,7 @@ struct MobileSidebarChannelRow: View {
       .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         header {
+          if let channel { ChannelPlatformIcons(channel: channel) }
           Text(name).font(.body.weight(.semibold))
             .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
             .frame(maxWidth: .infinity, alignment: .leading)

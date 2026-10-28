@@ -126,6 +126,13 @@ final class PlaybackTelemetryTests: XCTestCase {
     let delay = try XCTUnwrap(saved.first { $0.name == "playback_scheduler_delay" })
     XCTAssertGreaterThanOrEqual(delay.metrics["main_queue_delay_seconds"] ?? 0, 0.25)
     XCTAssertLessThan(delay.metrics["background_probe_interval_seconds"] ?? .infinity, 1.5)
+    #if DEBUG
+    XCTAssertNotNil(delay.metrics["resource_sample_uptime_seconds"])
+    XCTAssertNotNil(delay.metrics["process_resident_bytes"])
+    XCTAssertNotNil(delay.metrics["process_footprint_bytes"])
+    XCTAssertNotNil(delay.metrics["volume_free_bytes"])
+    XCTAssertNotNil(delay.metrics["resource_sample_duration_seconds"])
+    #endif
     XCTAssertTrue(saved.contains { $0.attributes["operation"] == "synthetic_main_block" })
     XCTAssertEqual(saved.last?.name, "session_ended")
   }
@@ -158,6 +165,83 @@ final class PlaybackTelemetryTests: XCTestCase {
     XCTAssertNil(state.finish(stale, at: 204))
     XCTAssertEqual(state.finish(resumed, at: 204)?.backgroundInterval, 1)
   }
+
+  func testResourceCPUUsesElapsedTimeAndDoesNotInventAMissingBaseline() {
+    let before = PlaybackResourceSample(observedAt: 10, cpuSeconds: 50)
+    let after = PlaybackResourceSample(observedAt: 12, cpuSeconds: 53)
+    XCTAssertNil(after.since(nil).metrics["process_cpu_core_equivalents"])
+    XCTAssertEqual(after.since(before).metrics["process_cpu_interval_seconds"], 2)
+    XCTAssertEqual(after.since(before).metrics["process_cpu_core_equivalents"], 1.5)
+    XCTAssertNil(before.since(after).metrics["process_cpu_core_equivalents"])
+    let unavailable = PlaybackResourceSample(observedAt: 13,
+      snapshot: PlaybackTelemetrySnapshot(counters: ["resource_cpu_error_code": 5]))
+    XCTAssertNil(unavailable.since(after).metrics["process_cpu_core_equivalents"])
+    XCTAssertEqual(unavailable.since(after).counters["resource_cpu_error_code"], 5)
+    XCTAssertNil(after.since(unavailable).metrics["process_cpu_core_equivalents"])
+  }
+
+  func testPendingProbeRetainsResourcePeaksWithoutRetainingEverySample() throws {
+    func sample(_ time: Double, _ cpu: Double, _ memory: Double) -> PlaybackResourceSample {
+      PlaybackResourceSample(observedAt: time, cpuSeconds: cpu,
+        snapshot: PlaybackTelemetrySnapshot(metrics: [
+          "process_resident_bytes": memory, "process_footprint_bytes": memory / 2,
+          "resource_sample_duration_seconds": 0.001,
+        ]))
+    }
+    var state = PlaybackSchedulerProbe.State()
+    state.setEnabled(true, at: 0)
+    let first = try XCTUnwrap(state.tick(at: 1, resource: sample(1, 10, 100)))
+    XCTAssertNil(state.finish(first, at: 1.01)?.resources.metrics["process_cpu_core_equivalents"])
+    let blocked = try XCTUnwrap(state.tick(at: 2, resource: sample(2, 12, 300)))
+    XCTAssertNil(state.tick(at: 3, resource: sample(3, 12.5, 200)))
+    XCTAssertNil(state.tick(at: 7, resource: sample(7, 13.5, 100)))
+    let report = try XCTUnwrap(state.finish(blocked, at: 7.1))
+    XCTAssertEqual(report.coalescedTicks, 2)
+    XCTAssertEqual(report.resources.metrics["process_cpu_interval_seconds"], 4)
+    XCTAssertEqual(report.resources.metrics["process_cpu_core_equivalents"], 0.25)
+    XCTAssertEqual(report.resources.metrics["process_cpu_peak_core_equivalents"], 2)
+    XCTAssertEqual(report.resources.metrics["process_resident_bytes"], 100)
+    XCTAssertEqual(report.resources.metrics["process_peak_resident_bytes"], 300)
+    XCTAssertEqual(report.resources.metrics["process_peak_footprint_bytes"], 150)
+    XCTAssertEqual(report.resources.metrics["resource_sample_uptime_seconds"], 7)
+    let next = try XCTUnwrap(state.tick(at: 8, resource: sample(8, 14, 50)))
+    let fresh = try XCTUnwrap(state.finish(next, at: 8.01))
+    XCTAssertEqual(fresh.resources.metrics["process_cpu_peak_core_equivalents"], 0.5)
+    XCTAssertEqual(fresh.resources.metrics["process_peak_resident_bytes"], 50)
+    state.setEnabled(false, at: 9)
+    state.setEnabled(true, at: 100)
+    let resumed = try XCTUnwrap(state.tick(at: 101, resource: sample(101, 200, 75)))
+    XCTAssertNil(state.finish(resumed, at: 101.01)?.resources.metrics["process_cpu_core_equivalents"],
+      "Background/idle CPU must not be attributed to resumed playback")
+  }
+
+  #if DEBUG
+  func testResourceSamplerBoundsDiskReadsAndReportsFailureWithoutStaleFreeSpace() throws {
+    let directory = temporaryDirectory()
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    var sampler = PlaybackResourceSampler(directory: directory)
+    let initial = sampler.sample(at: 0)
+    XCTAssertNotNil(initial.cpuSeconds)
+    XCTAssertGreaterThan(try XCTUnwrap(initial.snapshot.metrics["process_resident_bytes"]), 0)
+    XCTAssertGreaterThan(try XCTUnwrap(initial.snapshot.metrics["process_footprint_bytes"]), 0)
+    XCTAssertGreaterThanOrEqual(try XCTUnwrap(initial.snapshot.metrics["volume_free_bytes"]), 0)
+    XCTAssertGreaterThan(try XCTUnwrap(initial.snapshot.metrics["volume_total_bytes"]), 0)
+    try FileManager.default.removeItem(at: directory)
+    let cached = sampler.sample(at: 14)
+    XCTAssertEqual(cached.snapshot.metrics["volume_free_bytes"], initial.snapshot.metrics["volume_free_bytes"])
+    XCTAssertEqual(cached.snapshot.metrics["disk_sample_uptime_seconds"], 0)
+    let failed = sampler.sample(at: 15)
+    XCTAssertNotNil(failed.snapshot.counters["resource_disk_error_code"])
+    XCTAssertNil(failed.snapshot.metrics["volume_free_bytes"])
+    XCTAssertNil(failed.snapshot.metrics["volume_total_bytes"])
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    XCTAssertNotNil(sampler.sample(at: 16).snapshot.counters["resource_disk_error_code"])
+    let recovered = sampler.sample(at: 30)
+    XCTAssertNotNil(recovered.snapshot.metrics["volume_free_bytes"])
+    XCTAssertNil(recovered.snapshot.counters["resource_disk_error_code"])
+  }
+  #endif
 
   private func temporaryDirectory() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

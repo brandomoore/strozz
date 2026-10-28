@@ -71,7 +71,7 @@ struct MobileSearchResults: View {
           MobileChannelSearchRow(channel: channel)
         }
         .buttonStyle(.plain)
-        .disabled(!channel.isLive)
+        .disabled(!channel.isLive && channel.platform != .kick)
         .accessibilityIdentifier("stream-\(channel.channelKey)")
       }
       ForEach(service.categoryResults) { category in
@@ -98,7 +98,10 @@ struct MobileChannelSearchRow: View {
       } placeholder: { Circle().fill(.quaternary) }
       .frame(width: 40, height: 40).clipShape(Circle())
       VStack(alignment: .leading, spacing: 3) {
-        Text(channel.displayName).font(.subheadline.weight(.semibold)).lineLimit(1)
+        HStack(spacing: 5) {
+          ChannelPlatformIcons(channel: channel)
+          Text(channel.displayName).font(.subheadline.weight(.semibold)).lineLimit(1)
+        }
         if channel.isLive {
           Text("\(channel.gameName) · \(channel.title)")
             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -270,14 +273,17 @@ struct MobileChannelCard: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       MobileStreamArtwork(channelKey: channel.channelKey, thumbnailURL: channel.thumbnailURL,
-                          isLive: channel.isLive, viewerCount: channel.viewerCount, preview: preview)
+                          isLive: channel.isLive, viewerCount: channel.combinedViewerCount, preview: preview)
       HStack(alignment: .top, spacing: 10) {
         CachedAsyncImage(url: channel.profileImageURL) { image in
           image.resizable().scaledToFill()
         } placeholder: { Circle().fill(.quaternary) }
         .frame(width: 40, height: 40).clipShape(Circle())
         VStack(alignment: .leading, spacing: 3) {
-          Text(channel.displayName).font(.headline).lineLimit(1, reservesSpace: true)
+          HStack(spacing: 5) {
+            ChannelPlatformIcons(channel: channel)
+            Text(channel.displayName).font(.headline).lineLimit(1, reservesSpace: true)
+          }
           Text(channel.title).font(.subheadline).lineLimit(2, reservesSpace: true)
           Text(channel.gameName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }

@@ -10,13 +10,13 @@ enum MultiviewLayout {
 }
 
 enum MultiviewQualityTier {
-  case source, grid, grid720, grid1080, thumbnail
+  case source, grid, grid720, grid1080, thumbnail, hidden
 
   var targetBitrate: Int {
     switch self {
     case .source, .grid720, .grid1080: 0
     case .grid: 3_000_000
-    case .thumbnail: 800_000
+    case .thumbnail, .hidden: 800_000
     }
   }
 
@@ -26,6 +26,7 @@ enum MultiviewQualityTier {
     case .grid, .grid720: CGSize(width: 1280, height: 720)
     case .grid1080: CGSize(width: 1920, height: 1080)
     case .thumbnail: CGSize(width: 854, height: 480)
+    case .hidden: CGSize(width: 640, height: 360)
     }
   }
 }
@@ -35,7 +36,9 @@ enum MultiviewQualityTier {
 @Observable
 final class MultiviewPlaybackContext {
   var isExpanded = false
+  private(set) var videoAspectRatio = MultiviewGeometry.defaultAspectRatio
   var videoIsVisible = true
+  var isBrowsing = false
   var qualityTier: MultiviewQualityTier = .grid
   var profile = LivePlaybackProfile.nativeLowLatency
   var quality = "Auto"
@@ -45,7 +48,17 @@ final class MultiviewPlaybackContext {
   var playPauseRequests = 0
   var moveRequests = 0
   var moveDirection = MoveCommandDirection.up
+  var watchRequests = 0
+  var requestedChannel: FollowedChannel?
+  @ObservationIgnored var needsBrowsingResume = false
   @ObservationIgnored var onClose: (() -> Void)?
+
+  func updateVideoAspectRatio(_ size: CGSize?) {
+    guard let size, size.width.isFinite, size.height.isFinite,
+      size.width > 0, size.height > 0 else { return }
+    let ratio = size.width / size.height
+    if videoAspectRatio != ratio { videoAspectRatio = ratio }
+  }
 }
 
 @MainActor
@@ -61,9 +74,34 @@ final class MultiviewPane: Identifiable {
   var isLoading: Bool { model.isLoading }
   var hasError: Bool { model.errorMessage != nil || model.isOffline }
   var qualityTier: MultiviewQualityTier { presentation.qualityTier }
+  var isTwitchLive: Bool {
+    channel.platform == .twitch && model.livePlatform == .twitch
+      && !model.isUsingAltSource && model.liveVODHandoff?.isActive != true
+  }
+  var playbackTarget: PlatformLiveTarget {
+    .init(platform: model.livePlatform,
+      channel: model.livePlatform == .kick ? model.kickPlaybackTarget : model.activeChannel)
+  }
+
+  func synchronizeChannel() {
+    let target = playbackTarget
+    guard !target.channel.isEmpty,
+      target.channel != channel.login || target.platform != channel.platform else { return }
+    channel = FollowedChannel(id: id, login: target.channel, displayName: model.channelDisplayName,
+      title: model.streamTitle, gameName: "", viewerCount: nil, thumbnailURL: nil,
+      profileImageURL: model.channelAvatarURL, isLive: true)
+    channel.platform = target.platform
+  }
+
+  func accessibilityStatus(isTransitioning: Bool) -> LocalizedStringResource {
+    if model.isOffline { return "Offline" }
+    if isLoading { return "Loading" }
+    if hasError { return "Unavailable" }
+    return isTransitioning ? "Transitioning" : "Live"
+  }
 
   init(channel: FollowedChannel) {
-    id = channel.id
+    id = channel.platform == .twitch ? channel.id : "\(channel.platform.rawValue):\(channel.id)"
     self.channel = channel
     presentation = MultiviewPlaybackContext()
     model = PlayerModel()
@@ -106,6 +144,7 @@ final class MultiviewController {
   private(set) var isTransitioning = false
   private(set) var restoredPaneID: String?
   private(set) var focusRestoreRequest = UUID()
+  private(set) var isBrowsing = false
   @ObservationIgnored var reduceMotion = false
   @ObservationIgnored private var transitionID = UUID()
   @ObservationIgnored private let muted: Bool
@@ -137,6 +176,7 @@ final class MultiviewController {
 
   private func configure(_ pane: MultiviewPane) {
     pane.presentation.onClose = { [weak self] in self?.collapse() }
+    pane.presentation.isBrowsing = isBrowsing
   }
 
   @discardableResult
@@ -213,14 +253,28 @@ final class MultiviewController {
 
   private func refreshQuality() {
     for pane in panes {
-      pane.presentation.videoIsVisible = expandedPaneID == nil || pane.id == expandedPaneID
+      pane.presentation.videoIsVisible = !isBrowsing && (expandedPaneID == nil || pane.id == expandedPaneID)
       if let expandedPaneID {
-        pane.presentation.qualityTier = pane.id == expandedPaneID ? .source : .thumbnail
+        pane.presentation.qualityTier = pane.id == expandedPaneID ? .source : .hidden
       } else if layout == .spotlight {
         pane.presentation.qualityTier = pane.id == primaryPane?.id ? .source : .thumbnail
       } else {
         pane.presentation.qualityTier = controlledAuto ? (panes.count <= 4 ? .grid1080 : .grid720) : .grid
       }
+    }
+  }
+
+  func setBrowsing(_ browsing: Bool) {
+    guard isBrowsing != browsing else { return }
+    isBrowsing = browsing
+    for pane in panes {
+      pane.presentation.isBrowsing = browsing
+      if browsing { pane.player.pause() }
+    }
+    refreshQuality()
+    if !browsing {
+      restoredPaneID = audiblePaneID ?? panes.first?.id
+      focusRestoreRequest = UUID()
     }
   }
 
@@ -232,6 +286,23 @@ final class MultiviewController {
       pane.isAudible = pane.id == next
       pane.player.isMuted = muted || !pane.isAudible
     }
+  }
+
+  struct AudioState {
+    let paneID: String?
+    let wasMuted: Bool
+  }
+
+  func suspendAudio() -> AudioState {
+    let state = AudioState(paneID: audiblePaneID,
+      wasMuted: panes.first(where: { $0.id == audiblePaneID })?.player.isMuted ?? true)
+    setAudiblePane(nil)
+    return state
+  }
+
+  func restoreAudio(_ state: AudioState) {
+    setAudiblePane(state.paneID)
+    if state.wasMuted { panes.first(where: { $0.id == state.paneID })?.player.isMuted = true }
   }
 
   func synchronizeExpandedSleep() {
@@ -261,41 +332,74 @@ final class MultiviewController {
 }
 
 enum MultiviewGeometry {
+  static let defaultAspectRatio: CGFloat = 16 / 9
+  static let maximumOutlineWidth: CGFloat = 5
+  static let gap = maximumOutlineWidth * 2
+
   static func frames(ids: [String], size: CGSize, layout: MultiviewLayout,
-                     primary: String?, expanded: String?) -> [String: CGRect] {
-    guard !ids.isEmpty, size.width > 0, size.height > 0 else { return [:] }
-    let gap: CGFloat = 16
+                     primary: String?, expanded: String?,
+                     aspectRatios: [String: CGFloat] = [:]) -> [String: CGRect] {
+    guard !ids.isEmpty, size.width > maximumOutlineWidth * 2,
+      size.height > maximumOutlineWidth * 2 else { return [:] }
+    let bounds = CGRect(origin: .zero, size: size)
+      .insetBy(dx: maximumOutlineWidth, dy: maximumOutlineWidth)
+    func ratio(_ id: String) -> CGFloat { aspectRatios[id] ?? defaultAspectRatio }
     var frames: [String: CGRect] = [:]
-    if layout == .spotlight {
+    if layout == .spotlight && ids.count > 1 {
       let selected = ids.first(where: { $0 == primary }) ?? ids[0]
       let others = ids.filter { $0 != selected }
-      let height: CGFloat = others.isEmpty ? 0 : min(169, size.height / 4)
-      frames[selected] = CGRect(x: 0, y: 0, width: size.width,
-        height: size.height - (others.isEmpty ? 0 : height + gap))
-      if !others.isEmpty {
-        let width = min(300, (size.width - gap * CGFloat(others.count - 1)) / CGFloat(others.count))
-        for (index, id) in others.enumerated() {
-          frames[id] = CGRect(x: CGFloat(index) * (width + gap), y: size.height - height, width: width, height: height)
-        }
+      let totalRatio = others.reduce(CGFloat.zero) { $0 + ratio($1) }
+      let stripGaps = gap * CGFloat(others.count - 1)
+      let stripHeight = max(0, min(169, bounds.height / 4, (bounds.width - stripGaps) / totalRatio))
+      let mainHeight = max(0, min(bounds.height - stripHeight - gap, bounds.width / ratio(selected)))
+      let top = bounds.midY - (mainHeight + gap + stripHeight) / 2
+      let mainWidth = mainHeight * ratio(selected)
+      frames[selected] = CGRect(x: bounds.midX - mainWidth / 2, y: top,
+        width: mainWidth, height: mainHeight)
+      var x = bounds.midX - (stripHeight * totalRatio + stripGaps) / 2
+      for id in others {
+        let width = stripHeight * ratio(id)
+        frames[id] = CGRect(x: x, y: top + mainHeight + gap, width: width, height: stripHeight)
+        x += width + gap
       }
-    } else if ids.count == 1 {
-      frames[ids[0]] = CGRect(origin: .zero, size: size)
     } else if ids.count == 3 {
-      let width = (size.width - gap) / 2
-      let height = (size.height - gap) / 2
-      frames[ids[0]] = CGRect(x: 0, y: 0, width: width, height: size.height)
-      for index in 1..<3 {
-        frames[ids[index]] = CGRect(x: width + gap, y: CGFloat(index - 1) * (height + gap),
-                                   width: width, height: height)
-      }
+      // One large picture beside two stacked pictures, not a tall letterboxed cell.
+      let stackRatio = 1 / (1 / ratio(ids[1]) + 1 / ratio(ids[2]))
+      let height = max(0, min(bounds.height,
+        (bounds.width - gap + gap * stackRatio) / (ratio(ids[0]) + stackRatio)))
+      let mainWidth = height * ratio(ids[0])
+      let sideWidth = max(0, height - gap) * stackRatio
+      let left = bounds.midX - (mainWidth + gap + sideWidth) / 2
+      let top = bounds.midY - height / 2
+      frames[ids[0]] = CGRect(x: left, y: top, width: mainWidth, height: height)
+      let upperHeight = sideWidth / ratio(ids[1])
+      frames[ids[1]] = CGRect(x: left + mainWidth + gap, y: top,
+        width: sideWidth, height: upperHeight)
+      frames[ids[2]] = CGRect(x: left + mainWidth + gap, y: top + upperHeight + gap,
+        width: sideWidth, height: sideWidth / ratio(ids[2]))
     } else {
-      let columns = ids.count > 4 ? 3 : 2
-      let rows = ids.count <= 2 ? 1 : 2
-      let width = (size.width - gap * CGFloat(columns - 1)) / CGFloat(columns)
-      let height = (size.height - gap * CGFloat(rows - 1)) / CGFloat(rows)
-      for (index, id) in ids.enumerated() {
-        frames[id] = CGRect(x: CGFloat(index % columns) * (width + gap),
-          y: CGFloat(index / columns) * (height + gap), width: width, height: height)
+      let columns = min(ids.count, ids.count > 4 ? 3 : 2)
+      let rows = stride(from: 0, to: ids.count, by: columns).map {
+        Array(ids[$0..<min($0 + columns, ids.count)])
+      }
+      let rowRatios = rows.map { row in row.reduce(CGFloat.zero) { $0 + ratio($1) } }
+      var height = (bounds.height - gap * CGFloat(rows.count - 1)) / CGFloat(rows.count)
+      for (index, row) in rows.enumerated() {
+        height = min(height, (bounds.width - gap * CGFloat(row.count - 1)) / rowRatios[index])
+      }
+      height = max(0, height)
+      let widths = rows.enumerated().map { index, row in
+        height * rowRatios[index] + gap * CGFloat(row.count - 1)
+      }
+      let left = bounds.midX - (widths.max() ?? 0) / 2
+      let top = bounds.midY - (height * CGFloat(rows.count) + gap * CGFloat(rows.count - 1)) / 2
+      for (index, row) in rows.enumerated() {
+        var x = left
+        for id in row {
+          let width = height * ratio(id)
+          frames[id] = CGRect(x: x, y: top + CGFloat(index) * (height + gap), width: width, height: height)
+          x += width + gap
+        }
       }
     }
     if let expanded, ids.contains(expanded) { frames[expanded] = CGRect(origin: .zero, size: size) }

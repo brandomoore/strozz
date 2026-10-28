@@ -6,6 +6,43 @@ import XCTest
 #endif
 
 final class NativeCMAFRemuxTests: XCTestCase {
+  func testExact450msBoundaryDoesNotTryToSplitAnIndivisibleLastSample() throws {
+    let cases: [(Int, [UInt64])] = [
+      (1000, [133, 150, 167]),
+      (60_000, [6000, 12_000, 9000]),
+      (90_000, [9000, 9000, 9000, 13_500]),
+      (1_000_000, [133_000, 150_000, 167_000]),
+    ]
+    for (scale, durations) in cases {
+      let format = try NativeCMAFRemuxer.Format(initialization(scale: scale))
+      let source = sampleStream(scale: scale, durations: durations)
+      var converter = try NativeCMAFRemuxer(format: format, videoDescriptionIndex: 1,
+        firstSequence: 1, presentationReference: nil)
+      let parts = try converter.append(source) + converter.finish(expectedDuration: 0.45)
+      XCTAssertEqual(parts.count, 1, "A legal exact-target part must not require a sample split")
+      XCTAssertEqual(parts[0].duration, 0.45)
+      XCTAssertEqual(parts[0].videoSamples, durations.count)
+      for track in [format.video, format.audio] {
+        let before = try samples(source, track: track)
+        let after = try samples(parts[0].bytes, track: track)
+        let epoch = Int64(NativeCMAFClock.epochSeconds * track.scale)
+        XCTAssertEqual(before.bytes, after.bytes)
+        XCTAssertEqual(before.decode.map { $0 + epoch }, after.decode)
+        XCTAssertEqual(before.presentation.map { $0 + epoch }, after.presentation)
+        XCTAssertEqual(before.durations, after.durations)
+        XCTAssertEqual(before.flags, after.flags)
+      }
+      var excessive = durations
+      excessive[excessive.count - 1] += 1
+      var rejected = try NativeCMAFRemuxer(format: format, videoDescriptionIndex: 1,
+        firstSequence: 1, presentationReference: nil)
+      XCTAssertThrowsError(try rejected.append(sampleStream(scale: scale, durations: excessive))) { error in
+        XCTAssertEqual(NativeHLSError.classify(error), .partDuration,
+          "Do not admit an unpartitionable part one video tick over the maximum")
+      }
+    }
+  }
+
   func testMappedCMAFDropsOnlyIncompatibleHRDTimingAndRewritesSampleSizes() throws {
     let format = try NativeCMAFRemuxer.Format(initialization())
     let timingAndCaption = Data([6, 0, 1, 0x11, 1, 1, 0x22, 4, 1, 0x55, 0x80])
@@ -137,6 +174,22 @@ final class NativeCMAFRemuxTests: XCTestCase {
     return (payloads, presentation, decode, durations, flags)
   }
 
+  private func sampleStream(scale: Int, durations: [UInt64]) -> Data {
+    var output = Data()
+    var video = UInt64(scale)
+    var audio: UInt64 = 48_000
+    for (index, duration) in durations.enumerated() {
+      let nextVideo = video + duration
+      let targetAudio = nextVideo * 48_000 / UInt64(scale)
+      let count = Int((targetAudio - audio + 1023) / 1024)
+      output += fragment(videoClock: video, audioClock: audio, audioCount: count,
+        sequence: UInt64(index + 1), independent: index == 0, videoDuration: duration)
+      video = nextVideo
+      audio += UInt64(count * 1024)
+    }
+    return output
+  }
+
   func testSplittingAnOversizedNormalizedFragmentKeepsEverySampleAndRejectsInvalidBounds() throws {
     let videoTrack = NativeCMAF.Track(id: 1, scale: 90_000, duration: 0, flags: 0)
     let audioTrack = NativeCMAF.Track(id: 2, scale: 48_000, duration: 0, flags: 0)
@@ -157,7 +210,7 @@ final class NativeCMAFRemuxTests: XCTestCase {
       videoDescriptionIndex: 2, videoDecodeTime: 9_000_000, compositionShift: 0,
       audioDecodeTime: 4_800_000, sequence: 7)
     let split = try NativeFragmentedMP4.splitControlledFragment(normalized, video: videoTrack,
-      audio: audioTrack, maximumDuration: 0.45, sequence: 7)
+      audio: audioTrack, maximumVideoTicks: 40_500, sequence: 7)
     let first = try NativeCMAF.fragmentTiming(NativeCMAF.child(split.0, "moof"), track: videoTrack)
     XCTAssertEqual(first.duration, 40_500)
     for track in [videoTrack, audioTrack] {
@@ -169,12 +222,80 @@ final class NativeCMAFRemuxTests: XCTestCase {
       XCTAssertEqual(before.durations, after.durations)
       XCTAssertEqual(before.flags, after.flags)
     }
-    for (limit, sequence) in [(Double.nan, UInt32(7)), (0.001, 7), (0.45, UInt32.max)] {
+    for (limit, sequence) in [(UInt64(0), UInt32(7)), (90, 7), (40_500, UInt32.max)] {
       XCTAssertThrowsError(try NativeFragmentedMP4.splitControlledFragment(normalized,
-        video: videoTrack, audio: audioTrack, maximumDuration: limit, sequence: sequence))
+        video: videoTrack, audio: audioTrack, maximumVideoTicks: limit, sequence: sequence)) { error in
+        if limit == 90 {
+          XCTAssertEqual(NativeHLSError.classify(error), .partDuration)
+          let diagnostic = NativeHLSFailureDiagnostic(error: error, operation: "indexing",
+            rendition: 0, active: 0, fatal: true)
+          XCTAssertEqual(diagnostic.attributes["detail"], "partial_sample_boundary")
+          XCTAssertEqual(diagnostic.counters["incoming_video_ticks"], 45_000)
+          XCTAssertEqual(diagnostic.counters["maximum_video_ticks"], 90)
+          XCTAssertEqual(diagnostic.counters["first_video_sample_ticks"], 1500)
+          XCTAssertEqual(diagnostic.counters["video_timescale"], 90_000)
+          XCTAssertEqual(diagnostic.counters["incoming_video_samples"], 30)
+          XCTAssertEqual(diagnostic.counters["incoming_audio_samples"], 24)
+        }
+      }
     }
     XCTAssertThrowsError(try NativeFragmentedMP4.splitControlledFragment(Data(normalized.dropLast()),
-      video: videoTrack, audio: audioTrack, maximumDuration: 0.45, sequence: 7))
+      video: videoTrack, audio: audioTrack, maximumVideoTicks: 40_500, sequence: 7))
+  }
+
+  func testFreeSpaceBoxesPreserveRemuxedMediaAcrossChunkBoundaries() throws {
+    let format = try NativeCMAFRemuxer.Format(initialization())
+    let source = segment(videoClock: 19_000_000, audioClock: 912_000)
+    var original = try NativeCMAFRemuxer(format: format, videoDescriptionIndex: 3,
+      firstSequence: 70, presentationReference: nil)
+    let expected = try original.append(source) + original.finish(expectedDuration: 2)
+    for type in ["free", "skip"] {
+      for padding in [box(type, Data()), box(type, Data([1, 2, 3])),
+        word(1) + Data(type.utf8) + word(0) + word(16)] {
+        var padded = padding
+        for item in try NativeCMAF.boxes(source) {
+          padded += box(item.type, item.payload)
+          if item.type == "mdat" { padded += padding }
+        }
+        for chunkSize in [1, 7, 37, padded.count] {
+          var converter = try NativeCMAFRemuxer(format: format, videoDescriptionIndex: 3,
+            firstSequence: 70, presentationReference: nil)
+          var parts: [NativeTransportRemuxer.Part] = []
+          for offset in stride(from: 0, to: padded.count, by: chunkSize) {
+            parts += try converter.append(padded.subdata(in: offset..<min(offset + chunkSize, padded.count)))
+          }
+          parts += try converter.finish(expectedDuration: 2)
+          XCTAssertEqual(parts.map(\.bytes), expected.map(\.bytes),
+            "\(type) padding must not change samples, clocks, offsets or part boundaries")
+          XCTAssertEqual(parts.map(\.duration), expected.map(\.duration))
+          XCTAssertEqual(parts.map(\.independent), expected.map(\.independent))
+          XCTAssertEqual(converter.nextSequence, original.nextSequence)
+        }
+      }
+    }
+  }
+
+  func testFreeSpaceBoxesStillRejectInvalidSizesTruncationAndEmbeddedOffsets() throws {
+    let format = try NativeCMAFRemuxer.Format(initialization())
+    let source = fragment(videoClock: 1_000_000, audioClock: 48_000, audioCount: 5,
+      sequence: 1, independent: true)
+    for type in ["free", "skip"] {
+      for padding in [word(7) + Data(type.utf8), word(33 * 1024 * 1024) + Data(type.utf8),
+        Data(box(type, Data([1])).dropLast())] {
+        var converter = try NativeCMAFRemuxer(format: format, videoDescriptionIndex: 1,
+          firstSequence: 1, presentationReference: nil)
+        XCTAssertThrowsError(try converter.append(source + padding) + converter.finish(expectedDuration: 0.1)) {
+          XCTAssertEqual(NativeHLSError.classify($0), .invalidMedia)
+        }
+      }
+      var converter = try NativeCMAFRemuxer(format: format, videoDescriptionIndex: 1,
+        firstSequence: 1, presentationReference: nil)
+      let movie = try box("moof", NativeCMAF.child(source, "moof"))
+      XCTAssertThrowsError(try converter.append(movie + box(type, Data()))) {
+        XCTAssertEqual(NativeHLSError.classify($0), .unsupported,
+          "Do not discard bytes between moof and mdat without adjusting their offsets")
+      }
+    }
   }
 
   func testUnknownEightByteMediaBoxReportsOnlyItsStructuralIdentity() throws {
@@ -237,7 +358,8 @@ final class NativeCMAFRemuxTests: XCTestCase {
   }
 
   private func fragment(videoClock: UInt64, audioClock: UInt64, audioCount: Int,
-                        sequence: UInt64, independent: Bool, videoPayload: Data? = nil) -> Data {
+                        sequence: UInt64, independent: Bool, videoPayload: Data? = nil,
+                        videoDuration: UInt64 = 100_000) -> Data {
     let videoBytes = videoPayload ?? Data([0, 0, 0, 2, independent ? 0x65 : 0x41, UInt8(sequence & 255)])
     let audioBytes = Data(repeating: 0x21, count: audioCount * 3)
     func traf(id: UInt64, audio: Bool, offset: Int) -> Data {
@@ -247,7 +369,7 @@ final class NativeCMAFRemuxTests: XCTestCase {
       if audio {
         for _ in 0..<audioCount { run += word(1024) + word(3) }
       } else {
-        run += word(100_000) + word(UInt64(videoBytes.count))
+        run += word(videoDuration) + word(UInt64(videoBytes.count))
           + word(independent ? 0x02000000 : 0x01010000)
       }
       return box("traf", header + clock + full("trun", run, flags: audio ? 0x301 : 0x701))

@@ -66,32 +66,56 @@ final class PlaybackSchedulerProbe: @unchecked Sendable {
     let observedAt: Double
     let backgroundInterval: Double
     let coalescedTicks: Int
+    let resources: PlaybackTelemetrySnapshot
     var mainDelay: Double { max(0, observedAt - enqueuedAt) }
   }
 
   struct State {
-    private var enabled = false
+    private(set) var enabled = false
+    private(set) var generation = 0
     private var nextID = 0
     private var lastTick: Double?
     private var pending: Ticket?
     private var maximumInterval = 0.0
     private var coalesced = 0
+    private var previousResource: PlaybackResourceSample?
+    private var resources = PlaybackTelemetrySnapshot()
 
     init() {}
 
     mutating func setEnabled(_ enabled: Bool, at now: Double) {
       guard self.enabled != enabled else { return }
       self.enabled = enabled
+      generation += 1
       pending = nil
       lastTick = enabled ? now : nil
       maximumInterval = 0
       coalesced = 0
+      previousResource = nil
+      resources = PlaybackTelemetrySnapshot()
     }
 
-    mutating func tick(at now: Double) -> Ticket? {
+    mutating func tick(at now: Double, resource: PlaybackResourceSample? = nil) -> Ticket? {
       guard enabled else { return nil }
       maximumInterval = max(maximumInterval, lastTick.map { max(0, now - $0) } ?? 0)
       lastTick = now
+      if let resource {
+        let previous = resources
+        resources = resource.since(previousResource)
+        for (currentKey, peakKey) in [
+          ("process_cpu_core_equivalents", "process_cpu_peak_core_equivalents"),
+          ("process_resident_bytes", "process_peak_resident_bytes"),
+          ("process_footprint_bytes", "process_peak_footprint_bytes"),
+          ("resource_sample_duration_seconds", "resource_sample_peak_duration_seconds"),
+        ] {
+          if let current = resources.metrics[currentKey] {
+            resources.metrics[peakKey] = max(current, previous.metrics[peakKey] ?? current)
+          } else {
+            resources.metrics[peakKey] = previous.metrics[peakKey]
+          }
+        }
+        previousResource = resource
+      }
       guard pending == nil else { coalesced += 1; return nil }
       nextID += 1
       let ticket = Ticket(id: nextID, enqueuedAt: now)
@@ -102,10 +126,11 @@ final class PlaybackSchedulerProbe: @unchecked Sendable {
     mutating func finish(_ ticket: Ticket, at now: Double) -> Report? {
       guard enabled, pending == ticket else { return nil }
       let report = Report(enqueuedAt: ticket.enqueuedAt, observedAt: now,
-        backgroundInterval: maximumInterval, coalescedTicks: coalesced)
+        backgroundInterval: maximumInterval, coalescedTicks: coalesced, resources: resources)
       pending = nil
       maximumInterval = 0
       coalesced = 0
+      resources = PlaybackTelemetrySnapshot()
       return report
     }
   }
@@ -113,6 +138,9 @@ final class PlaybackSchedulerProbe: @unchecked Sendable {
   private let lock = NSLock()
   private var state = State()
   private let timer: DispatchSourceTimer
+  #if DEBUG
+  private var resourceSampler = PlaybackResourceSampler()
+  #endif
   private let report: @MainActor @Sendable (Report) -> Void
 
   init(report: @escaping @MainActor @Sendable (Report) -> Void) {
@@ -122,7 +150,16 @@ final class PlaybackSchedulerProbe: @unchecked Sendable {
     timer.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(50))
     timer.setEventHandler { [weak self] in
       guard let self,
-        let ticket = self.lock.withLock({ self.state.tick(at: ProcessInfo.processInfo.systemUptime) }) else { return }
+        let generation = self.lock.withLock({ self.state.enabled ? self.state.generation : nil }) else { return }
+      #if DEBUG
+      let resource = self.resourceSampler.sample()
+      #else
+      let resource: PlaybackResourceSample? = nil
+      #endif
+      guard let ticket = self.lock.withLock({ () -> Ticket? in
+        guard self.state.generation == generation else { return nil }
+        return self.state.tick(at: ProcessInfo.processInfo.systemUptime, resource: resource)
+      }) else { return }
       // One pending callback per player, even when main is blocked for minutes.
       DispatchQueue.main.async { [weak self] in
         guard let self,
@@ -208,11 +245,12 @@ final class PlaybackTelemetryRecorder {
       guard delayed || report.observedAt - self.lastSchedulerReportAt >= 15 else { return }
       self.lastSchedulerReportAt = report.observedAt
       self.recordEvent(delayed ? "playback_scheduler_delay" : "playback_scheduler_sample",
-        level: delayed ? .warning : .debug, metrics: [
+        level: delayed ? .warning : .debug, metrics: report.resources.metrics.merging([
           "probe_enqueued_uptime_seconds": report.enqueuedAt,
           "main_queue_delay_seconds": report.mainDelay,
           "background_probe_interval_seconds": report.backgroundInterval,
-        ], counters: ["coalesced_probe_ticks": report.coalescedTicks])
+        ]) { _, new in new },
+        counters: report.resources.counters.merging(["coalesced_probe_ticks": report.coalescedTicks]) { _, new in new })
     }
   }
 

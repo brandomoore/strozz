@@ -34,24 +34,17 @@ enum MobileChatAppearance {
 
 @MainActor
 enum MobileChatSourcePreferences {
-  static func apply(to chat: ChatService, channel: String, defaults: UserDefaults = .standard) {
-    guard !channel.isEmpty, chat.channel == channel.lowercased() else { return }
-    let youtube = defaults.object(forKey: PersistenceKey.experimentalYouTubeMergeEnabled) as? Bool ?? false
-    let kick = defaults.object(forKey: PersistenceKey.experimentalKickMergeEnabled) as? Bool ?? false
-    if chat.youtubeMergeEnabled != youtube {
-      chat.configureExperimentalYouTubeMerge(enabled: youtube,
-        channelOrURL: chat.youtubeChannelOrURL.isEmpty ? "@\(channel)" : chat.youtubeChannelOrURL)
-    }
-    if chat.kickMergeEnabled != kick {
-      chat.configureExperimentalKickMerge(enabled: kick,
-        channelOrURL: chat.kickChannelOrURL.isEmpty ? channel : chat.kickChannelOrURL)
-    }
+  static func apply(to creator: CreatorLiveSession, defaults: UserDefaults = .standard) {
+    let youtube = defaults.object(forKey: PersistenceKey.experimentalYouTubeMergeEnabled) as? Bool ?? true
+    let kick = defaults.object(forKey: PersistenceKey.experimentalKickMergeEnabled) as? Bool ?? true
+    creator.configureChat(kickEnabled: kick, youtubeEnabled: youtube)
   }
 }
 
 struct MobileChatSettingsView: View {
   var channel: String? = nil
   var service: ChatService? = nil
+  var creatorSession: CreatorLiveSession? = nil
   @Environment(\.themePalette) private var palette
   @AppStorage(PersistenceKey.chatTextSizeValue) private var textSize = MobileChatAppearance.textSize
   @AppStorage(PersistenceKey.chatLineHeightValue) private var lineHeight = Double(ChatAppearance.defaultLineHeight)
@@ -96,7 +89,7 @@ struct MobileChatSettingsView: View {
       } footer: {
         Text("Chat stays live normally. If video falls behind, incoming chat waits to match it. Sending is immediate.")
       }
-      MobileChatSourceSettings(channel: channel, service: service)
+      MobileChatSourceSettings(channel: channel, service: service, creatorSession: creatorSession)
       Section {
         Button("Reset appearance") {
           textSize = MobileChatAppearance.textSize
@@ -230,25 +223,28 @@ private struct MobileChatHighlightSettings: View {
 private struct MobileChatSourceSettings: View {
   let channel: String?
   let service: ChatService?
-  @AppStorage(PersistenceKey.experimentalYouTubeMergeEnabled) private var youtube = false
-  @AppStorage(PersistenceKey.experimentalKickMergeEnabled) private var kick = false
+  let creatorSession: CreatorLiveSession?
+  @AppStorage(PersistenceKey.experimentalYouTubeMergeEnabled) private var youtube = true
+  @AppStorage(PersistenceKey.experimentalKickMergeEnabled) private var kick = true
   @State private var youtubeTarget: String
   @State private var kickTarget: String
+  @State private var showCreatorChannels = false
 
-  init(channel: String?, service: ChatService?) {
+  init(channel: String?, service: ChatService?, creatorSession: CreatorLiveSession?) {
     self.channel = channel
     self.service = service
+    self.creatorSession = creatorSession
     _youtubeTarget = State(initialValue: service?.youtubeChannelOrURL.isEmpty == false
-      ? service?.youtubeChannelOrURL ?? "" : channel.map { "@\($0)" } ?? "")
+      ? service?.youtubeChannelOrURL ?? "" : creatorSession?.sources?.youtube ?? "")
     _kickTarget = State(initialValue: service?.kickChannelOrURL.isEmpty == false
-      ? service?.kickChannelOrURL ?? "" : channel ?? "")
+      ? service?.kickChannelOrURL ?? "" : creatorSession?.sources?.kick ?? "")
   }
 
   var body: some View {
     Section {
       Toggle("YouTube chat", isOn: $youtube)
         .onChange(of: youtube) { _, _ in applyTargets() }
-      if let service, channel != nil {
+      if let service, channel != nil, creatorSession == nil {
         TextField("YouTube handle or URL", text: $youtubeTarget)
           .textInputAutocapitalization(.never).autocorrectionDisabled()
           .submitLabel(.done).onSubmit(applyTargets)
@@ -258,7 +254,7 @@ private struct MobileChatSourceSettings: View {
       }
       Toggle("Kick chat", isOn: $kick)
         .onChange(of: kick) { _, _ in applyTargets() }
-      if let service, channel != nil {
+      if let service, channel != nil, creatorSession == nil {
         TextField("Kick handle or URL", text: $kickTarget)
           .textInputAutocapitalization(.never).autocorrectionDisabled()
           .submitLabel(.done).onSubmit(applyTargets)
@@ -267,18 +263,29 @@ private struct MobileChatSourceSettings: View {
         }
         Button("Apply channel targets", action: applyTargets)
       }
+      if let creatorSession {
+        Button("Linked creator channels") { showCreatorChannels = true }
+          .sheet(isPresented: $showCreatorChannels) {
+            CreatorChannelsView(session: creatorSession)
+          }
+      }
+      if let error = creatorSession?.identityError { Text(error).font(.caption).foregroundStyle(.secondary) }
     } header: {
       Text("Chat sources")
     } footer: {
-      if channel == nil {
-        Text("Open a stream to edit its other channel targets. Extra chat sources are off until enabled.")
+      if channel == nil, creatorSession == nil {
+        Text("Open a stream to edit its linked chat channels.")
       } else {
-        Text("Targets default to this streamer's Twitch handle. Edit them if the other channel differs, then tap Apply. Your messages still go to Twitch.")
+        Text("Only linked creator channels are merged. Use Linked creator channels to edit the accounts. Sending uses their linked Twitch channel.")
       }
     }
   }
 
   private func applyTargets() {
+    if let creatorSession {
+      creatorSession.configureChat(kickEnabled: kick, youtubeEnabled: youtube)
+      return
+    }
     guard let service, let channel, service.channel == channel.lowercased() else { return }
     if service.youtubeMergeEnabled != youtube || service.youtubeChannelOrURL != youtubeTarget.trimmingCharacters(in: .whitespacesAndNewlines) {
       service.configureExperimentalYouTubeMerge(enabled: youtube, channelOrURL: youtubeTarget)

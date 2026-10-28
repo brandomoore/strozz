@@ -17,6 +17,7 @@ extension PlayerView {
         chat: isVOD ? nil : chat,
         replay: isVOD ? replay : nil,
         channel: channel,
+        platform: model.creatorSession.chatPlatform,
         replayStartMessageID: chatReplayStartMessageID,
         frozenMessages: chatFrozenMessages,
         textSize: chatTextSize,
@@ -149,7 +150,13 @@ extension PlayerView {
         ChatSyncSendIndicator(deadline: deadline, total: chatSyncSendDelay)
       }
 
-      if environment.accountSync.isRestoringAccount {
+      if model.creatorSession.twitchChannel == nil {
+        Text("Kick chat is read-only.")
+          .font(.subheadline)
+          .foregroundStyle(palette.chromeOnOpaque.opacity(0.7))
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.vertical, 12)
+      } else if environment.accountSync.isRestoringAccount {
         TwitchAccountLoadingView()
           .padding(.vertical, 12)
       } else if auth.isAuthenticated {

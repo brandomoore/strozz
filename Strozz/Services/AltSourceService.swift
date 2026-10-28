@@ -80,7 +80,7 @@ enum AltSourceService {
 
   // MARK: - Video resolution
 
-  private static func resolveLiveVideoID(from input: String) async throws -> String {
+  static func resolveLiveVideoID(from input: String) async throws -> String {
     let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
     if let direct = extractVideoID(from: trimmed) { return direct }
 
@@ -151,7 +151,10 @@ enum AltSourceService {
     throw ResolutionError.noLiveVideo
   }
 
-  private static func liveLookupURL(from input: String) -> URL? {
+  static func liveLookupURL(from input: String) -> URL? {
+    if input.hasPrefix("UC"), CreatorSourceResolver.youtubeTarget(input) == input {
+      return URL(string: "https://www.youtube.com/channel/\(input)/live")
+    }
     if input.hasPrefix("http") {
       if input.contains("/live") { return URL(string: input) }
       let sep = input.hasSuffix("/") ? "" : "/"

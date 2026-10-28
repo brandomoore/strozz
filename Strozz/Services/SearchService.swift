@@ -11,9 +11,12 @@ final class SearchService {
     private(set) var query = ""
     private var requestID = UUID()
     private let loadData: NetworkClient.DataLoader
+    private let loadKick: @Sendable (String) async throws -> KickChannel
 
-    init(loadData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) }) {
+    init(loadData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) },
+         loadKick: @escaping @Sendable (String) async throws -> KickChannel = { try await KickPlaybackService.channel($0) }) {
         self.loadData = loadData
+        self.loadKick = loadKick
     }
 
     var hasResults: Bool { !channelResults.isEmpty || !categoryResults.isEmpty }
@@ -49,6 +52,7 @@ final class SearchService {
             if requestID == currentRequestID { isSearching = false }
         }
 
+        async let kick = kickResult(for: trimmed)
         do {
             let results = try await fetchSearchResults(for: trimmed)
             // Ignore stale responses if the query changed while in flight.
@@ -56,9 +60,6 @@ final class SearchService {
             channelResults = results.channels
             categoryResults = results.categories
             prewarmStaticArtwork(channels: results.channels, categories: results.categories)
-            if !hasResults {
-                errorMessage = "No results for \"\(trimmed)\"."
-            }
         } catch {
             guard !Task.isCancelled, requestID == currentRequestID, query == trimmed else { return }
             if !preservingResultsOnFailure {
@@ -67,6 +68,23 @@ final class SearchService {
             }
             errorMessage = "Could not search right now."
         }
+        let kickResult = await kick
+        guard !Task.isCancelled, requestID == currentRequestID, query == trimmed else { return }
+        switch kickResult {
+        case .success(let channel):
+            channelResults.removeAll { $0.platform == .kick }
+            if let channel { channelResults.append(channel.followedChannel) }
+        case .failure(let error):
+            errorMessage = String(localized: "Kick search is unavailable: \(error.localizedDescription)")
+        }
+        if !hasResults, errorMessage == nil { errorMessage = "No results for \"\(trimmed)\"." }
+    }
+
+    private func kickResult(for query: String) async -> Result<KickChannel?, Error> {
+        guard let slug = try? KickPlaybackService.slug(from: query) else { return .success(nil) }
+        do { return .success(try await loadKick(slug)) }
+        catch KickPlaybackService.Failure.notFound { return .success(nil) }
+        catch { return .failure(error) }
     }
 
     /// Warm the decoded-image cache for the *static* artwork search results show —

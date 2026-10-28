@@ -33,15 +33,19 @@ extension PlayerView {
   /// no VOD is available yet (offline, no past-broadcast storage, sub-only, still
   /// processing), throttled so it can retry later without hammering Twitch.
   func resolveBroadcastVODIfNeeded() async -> LiveVODHandoff? {
+    guard isLiveSession, model.livePlatform == .twitch, !isUsingAltSource else { return nil }
     if let liveVODHandoff { return liveVODHandoff }
-    guard isLiveSession else { return nil }
+    let source = currentLiveTarget
+    let session = model.playbackTelemetry.sessionID
     let now = Date()
     guard now.timeIntervalSince(lastBroadcastVODResolveAt) >= broadcastVODResolveCooldownSeconds
     else { return nil }
     lastBroadcastVODResolveAt = now
-    guard let broadcast = await PlaybackService.currentBroadcastVOD(for: activeChannel) else {
+    guard let broadcast = await PlaybackService.currentBroadcastVOD(for: currentLiveTarget.channel) else {
       return nil
     }
+    guard !Task.isCancelled, currentLiveTarget == source,
+      model.playbackTelemetry.sessionID == session else { return nil }
     let title = streamTitle.isEmpty ? channelDisplayName : streamTitle
     let handoff = LiveVODHandoff(broadcast: broadcast, title: title, isActive: false)
     liveVODHandoff = handoff
@@ -169,8 +173,8 @@ extension PlayerView {
     stopLatencyMonitor()
     stopPlaybackWatchdog()
     eventSub.stop()
-    hermes.stop()
-    chat.disconnect()
+    model.eventSubChannel = nil
+    model.creatorSession.suspend()
     captionController.stop()
     pinnedToLive = false
   }
@@ -184,9 +188,7 @@ extension PlayerView {
     // rewind window fresh from the live edge.
     lowLatencyProxy.resetDVR()
     configurePlayerForLive()
-    chat.connect(to: activeChannel)
-    eventSub.start(forChannel: activeChannel, auth: auth)
-    hermes.start(forChannel: activeChannel)
+    connectCurrentLiveChat()
     await load(reason: reason)
     syncCaptions()
   }

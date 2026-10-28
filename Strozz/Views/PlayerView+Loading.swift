@@ -12,29 +12,39 @@ extension PlayerView {
     model.startupAudioClaimUntil = nil
     model.startupAudioClaimUsed = false
     model.audioInterrupted = false
-    let login = activeChannel
+    if model.livePlatform == .kick {
+      recordPlaybackEvent("initial_source_selected", attributes: ["source": "kick"])
+      await load(reason: reason)
+      return
+    }
+    let login = currentLiveTarget.channel
     let sessionID = model.playbackTelemetry.sessionID
     let generation = model.altRecovery.generation
+    let creatorGeneration = model.creatorSession.generation
     if model.multiviewContext == nil, preferYouTubeSource,
-      livePlaybackProfile != .nativeLowLatency, !didManuallySelectSource {
+      livePlaybackProfile != .nativeLowLatency, !didManuallySelectSource,
+      let target = model.creatorSession.sources?.youtube {
       do {
         let source = try await LivePlaybackStartup.resolveYouTube {
-          let target = await Self.resolveYouTubeTarget(forTwitchLogin: login)
           try Task.checkCancellation()
           return LivePlaybackStartup.YouTubeSource(
-            target: target, live: try await AltSourceService.youtubeLive(forTarget: target))
+            target: target, live: try await model.resolveYouTubeLive(target))
         }
-        guard !Task.isCancelled, login == activeChannel,
+        guard !Task.isCancelled, login == currentLiveTarget.channel,
+          creatorGeneration == model.creatorSession.generation,
+          target == model.creatorSession.sources?.youtube,
           sessionID == model.playbackTelemetry.sessionID,
           generation == model.altRecovery.generation, !didManuallySelectSource else { return }
         youtubeAutoResolvedTarget = source.target
         applyExperimentalYouTubeSettings()
         youtubeSourceAvailable = true
         recordPlaybackEvent("initial_source_selected", attributes: ["source": "youtube"])
-        await switchToAltYouTubeSource(resolved: source.live)
+        await switchToAltYouTubeSource(resolved: source.live, resolvedTarget: source.target)
         return
       } catch {
-        guard !Task.isCancelled, login == activeChannel,
+        guard !Task.isCancelled, login == currentLiveTarget.channel,
+          creatorGeneration == model.creatorSession.generation,
+          target == model.creatorSession.sources?.youtube,
           sessionID == model.playbackTelemetry.sessionID,
           generation == model.altRecovery.generation, !didManuallySelectSource else { return }
         recordPlaybackEvent(
@@ -43,7 +53,7 @@ extension PlayerView {
         )
       }
     }
-    guard !Task.isCancelled, backgroundedAt == nil else { return }
+    guard !Task.isCancelled, backgroundedAt == nil, !isMultiviewBrowsing else { return }
     recordPlaybackEvent("initial_source_selected", attributes: ["source": "twitch"])
     await load(reason: reason)
   }
@@ -65,7 +75,7 @@ extension PlayerView {
   func load(maxAttempts: Int = 3, reason: String = "initial")
     async
   {
-    guard !Task.isCancelled, backgroundedAt == nil else { return }
+    guard !Task.isCancelled, backgroundedAt == nil, !isMultiviewBrowsing else { return }
     // While the experimental alternate source (YouTube simulcast) is active the
     // player holds a plain non-Twitch item. Every `load()` rebuilds the proxied
     // Twitch pipeline via `makeItem` and re-arms the Twitch control loops, which
@@ -216,8 +226,9 @@ extension PlayerView {
     // An unavailable HLS playlist can mean expired media, not an ended stream.
     // Only a successful live-status lookup may label the channel offline.
     let resolvedOffline = (lastError as? PlaybackError) == .offline
+      || (lastError as? KickPlaybackService.Failure) == .offline
     if resolvedOffline || lastError == nil || lastError is LoadTimeoutError {
-      let status = await PlaybackService.streamLiveStatus(for: activeChannel)
+      let status = await loadCurrentStreamStatus(activeChannel)
       guard !Task.isCancelled, telemetrySessionID == model.playbackTelemetry.sessionID,
         loadingChannel == activeChannel, sourceGeneration == model.altRecovery.generation,
         !isUsingAltSource else { return }
@@ -245,9 +256,11 @@ extension PlayerView {
   }
 
   func resolvePlaybackWithTimeout() async throws -> StreamPlayback {
-    try await withThrowingTaskGroup(of: StreamPlayback.self) { group in
+    let target = currentLiveTarget
+    let resolve = model.resolveLivePlayback
+    return try await withThrowingTaskGroup(of: StreamPlayback.self) { group in
       group.addTask {
-        try await PlaybackService.resolve(for: activeChannel)
+        try await resolve(target)
       }
       group.addTask {
         try await Task.sleep(for: .seconds(resolveTimeoutSeconds))
@@ -365,7 +378,10 @@ extension PlayerView {
     model.nativeNeedsRefresh = false
     currentSourceURL = url
     let nativeVideo = playback?.qualities.first(where: { $0.url == url })?.isAudioOnly != true
-    let reuseNative = model.nativeHLS?.sourceURL == url && nativeVideo
+    let nativeRoot = model.livePlatform == .kick && nativeVideo ? playback?.master ?? url : url
+    let fixedID = model.livePlatform == .kick ? playback?.qualities.first(where: { $0.url == url })?.id : nil
+    let reuseNative = model.nativeHLS?.sourceURL == nativeRoot
+      && model.nativeHLS?.fixedRenditionID == fixedID && nativeVideo
       && !isVOD && !isUsingAltSource && !player.isExternalPlaybackActive
       ? model.nativeHLS : nil
     if reuseNative == nil { model.nativeHLS?.stop() }
@@ -403,7 +419,7 @@ extension PlayerView {
     // playlist, exactly as a manual "LL proxy off" would.
     let promotePrefetch = livePlaybackProfile.promotesPrefetch(
       legacyEnabled: lowLatencyProxyEnabled, unstable: isStreamUnstable)
-    let useProxy = promotePrefetch || streamRewindEnabled
+    let useProxy = model.livePlatform == .twitch && (promotePrefetch || streamRewindEnabled)
     lowLatencyProxy.configure(
       promotePrefetch: promotePrefetch,
       retainHistory: streamRewindEnabled,
@@ -416,7 +432,6 @@ extension PlayerView {
       let generation = model.nativeGeneration
       let telemetry = model.playbackTelemetry
       let sessionID = telemetry.sessionID
-      #if DEBUG
       let trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = { [weak telemetry] detail in
         let dispatchedAt = ProcessInfo.processInfo.systemUptime
         Task { @MainActor in
@@ -427,15 +442,14 @@ extension PlayerView {
             counters: detail.counters)
         }
       }
-      #else
-      let trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil
-      #endif
-      let native = reuseNative ?? NativeLowLatencyHLS(sourceURL: url, headers: PlaybackService.streamHeaders,
+      let native = reuseNative ?? NativeLowLatencyHLS(sourceURL: nativeRoot, headers: livePlaybackHeaders,
         history: streamRewindEnabled ? rewindWindowSeconds : 12,
+        fixedRenditionID: fixedID,
         initialBudget: .init(
           maximumWidth: Int(model.multiviewContext?.qualityTier.maximumResolution.width ?? 0),
           maximumHeight: Int(model.multiviewContext?.qualityTier.maximumResolution.height ?? 0),
-          maximumBitrate: model.multiviewContext?.qualityTier.targetBitrate ?? 0),
+          maximumBitrate: model.multiviewContext?.qualityTier.targetBitrate ?? 0,
+          videoIsHidden: model.multiviewContext?.videoIsVisible == false),
         diagnostic: { [weak telemetry] detail in
           let dispatchedAt = ProcessInfo.processInfo.systemUptime
           Task { @MainActor in
@@ -465,7 +479,7 @@ extension PlayerView {
     }
     let asset = AVURLAsset(
       url: assetURL,
-      options: ["AVURLAssetHTTPHeaderFieldsKey": PlaybackService.streamHeaders]
+      options: ["AVURLAssetHTTPHeaderFieldsKey": livePlaybackHeaders]
     )
     if let native = model.nativeHLS {
       asset.resourceLoader.setDelegate(native, queue: native.queue)
@@ -519,6 +533,7 @@ extension PlayerView {
     player.pause()
     stopLatencyMonitor()
     stopPlaybackWatchdog()
+    probeOfflineIfStreamEnded(allowMissingItem: true)
   }
 
   func recoverNativeHLS(
@@ -591,7 +606,7 @@ extension PlayerView {
     reason: String = "suspension",
     resolve: (@MainActor () async throws -> StreamPlayback)? = nil
   ) {
-    guard model.nativeNeedsRefresh else { return }
+    guard model.nativeNeedsRefresh, !isMultiviewBrowsing else { return }
     model.beginPlaybackLoad()
     model.nativeRefreshTask?.cancel()
     let generation = model.nativeGeneration
@@ -603,14 +618,40 @@ extension PlayerView {
       defer {
         if generation == model.nativeGeneration { model.nativeRefreshTask = nil }
       }
+      @MainActor func isCurrentRefresh() -> Bool {
+        !Task.isCancelled && model.nativeNeedsRefresh && generation == model.nativeGeneration
+          && sessionID == model.playbackTelemetry.sessionID && channel == activeChannel
+          && backgroundedAt == nil && !isUsingAltSource && !isVOD && !model.mediaServicesUnavailable
+      }
+      var resolutionAttempt = 0
+      let resolutionStarted = ProcessInfo.processInfo.systemUptime
+      @MainActor func resolveFreshSource() async throws -> StreamPlayback {
+        while true {
+          guard isCurrentRefresh() else { throw CancellationError() }
+          resolutionAttempt += 1
+          do {
+            if let resolve { return try await resolve() }
+            return try await resolvePlaybackWithTimeout()
+          } catch {
+            guard isCurrentRefresh() else { throw CancellationError() }
+            guard resolutionAttempt < 3, model.nativeRecovery.takeResolutionRetry(for: error) else {
+              throw error
+            }
+            recordPlaybackEvent("native_hls_resume_retry", level: .warning,
+              attributes: PlaybackTelemetryRecorder.errorAttributes(error)
+                .merging(["reason": reason]) { _, new in new },
+              counters: ["resolution_attempt": resolutionAttempt,
+                         "attempts_in_window": model.nativeRecovery.attempts.count])
+            try await Task.sleep(for: .milliseconds(500))
+          }
+        }
+      }
       do {
-        let resolved: StreamPlayback
-        if let resolve { resolved = try await resolve() }
-        else { resolved = try await resolvePlaybackWithTimeout() }
-        guard !Task.isCancelled, model.nativeNeedsRefresh, generation == model.nativeGeneration,
-          sessionID == model.playbackTelemetry.sessionID, channel == activeChannel,
-          backgroundedAt == nil, !isUsingAltSource, !isVOD else { return }
-        guard !model.mediaServicesUnavailable else { return }
+        let resolved = try await resolveFreshSource()
+        guard isCurrentRefresh() else { return }
+        recordPlaybackEvent("native_hls_resume_resolved", attributes: ["reason": reason],
+          metrics: ["resolve_duration_seconds": ProcessInfo.processInfo.systemUptime - resolutionStarted],
+          counters: ["resolution_attempt": resolutionAttempt])
         let intent = model.nativePositionIntent
         let position = intent == initialIntent ? initialPosition
           : ((!pinnedToLive || isUserPaused) ? player.currentItem?.currentDate() : nil)
@@ -640,12 +681,13 @@ extension PlayerView {
           startPlaybackWatchdog()
         }
       } catch {
-        guard !Task.isCancelled, generation == model.nativeGeneration,
-          sessionID == model.playbackTelemetry.sessionID else { return }
+        guard isCurrentRefresh() else { return }
         errorMessage = error.localizedDescription
         isLoading = false
         recordPlaybackEvent("native_hls_resume_failed", level: .error,
-          attributes: PlaybackTelemetryRecorder.errorAttributes(error).merging(["reason": reason]) { _, new in new })
+          attributes: PlaybackTelemetryRecorder.errorAttributes(error).merging(["reason": reason]) { _, new in new },
+          metrics: ["resolve_duration_seconds": ProcessInfo.processInfo.systemUptime - resolutionStarted],
+          counters: ["resolution_attempt": resolutionAttempt])
       }
     }
   }
@@ -882,7 +924,7 @@ extension PlayerView {
 
   func resumePlaybackAfterAbsence(restoreLive: Bool) {
     guard !isOffline, !isSleeping, backgroundedAt == nil, channelPageTarget == nil,
-      !model.multiviewSleepSuspended,
+      !model.multiviewSleepSuspended, !isMultiviewBrowsing,
       !model.livePlaybackReturn.isAway, !model.audioInterrupted,
       !model.mediaServicesUnavailable else { return }
     if model.mediaServicesResetPending {
@@ -1293,15 +1335,16 @@ extension PlayerView {
   /// single-flight so the 2s watchdog (or a play-to-end notification) can call
   /// it freely. Only a definitive `.offline` acts; `.live`/`.unknown` are
   /// ignored so transient network hiccups never surface a false offline screen.
-  func probeOfflineIfStreamEnded() {
+  func probeOfflineIfStreamEnded(allowMissingItem: Bool = false) {
+    let item = player.currentItem
     guard !isLoading, !isOffline, !isVOD, !isUsingAltSource, !isRecoveringPlayback,
-      shouldPlayAltSource, let item = player.currentItem,
+      shouldPlayAltSource, item != nil || allowMissingItem,
       let generation = mon.beginOfflineProbe(at: Date(), cooldown: offlineProbeCooldownSeconds)
     else { return }
     let channel = activeChannel
     let sessionID = model.playbackTelemetry.sessionID
     model.offlineProbeTask = Task { @MainActor in
-      let status = await PlaybackService.streamLiveStatus(for: channel)
+      let status = await loadCurrentStreamStatus(channel)
       guard !Task.isCancelled, mon.finishOfflineProbe(generation: generation) else { return }
       model.offlineProbeTask = nil
       guard !isLoading, !isOffline, !isVOD, !isUsingAltSource, shouldPlayAltSource,
@@ -1367,7 +1410,7 @@ extension PlayerView {
     // once a broadcast ends), authoritatively check whether the channel is still
     // live. Only act on a definitive `.offline`; `.live`/`.unknown` fall through
     // to the normal reload-based recovery for genuine transient stalls.
-    let liveStatus = await PlaybackService.streamLiveStatus(for: channel)
+    let liveStatus = await loadCurrentStreamStatus(channel)
     guard !Task.isCancelled, recoverySessionID == model.playbackTelemetry.sessionID,
       generation == mon.healthGeneration, sourceGeneration == model.altRecovery.generation,
       channel == activeChannel, item === player.currentItem,
@@ -1442,7 +1485,7 @@ extension PlayerView {
     isLoading = false
     errorMessage = nil
     isOffline = true
-    focus = .offlineViewChannel
+    if !isMultiviewCompact { focus = .offlineViewChannel }
   }
 
   /// Re-attempts playback from the offline empty state (e.g. the streamer just
@@ -1732,11 +1775,29 @@ extension PlayerView {
   }
 
   func refreshChannelMetadata() async {
-    let login = activeChannel
     let sessionID = model.playbackTelemetry.sessionID
-    let metadata = await PlaybackService.channelMetadata(for: login)
-    guard !Task.isCancelled, login == activeChannel,
-      sessionID == model.playbackTelemetry.sessionID else { return }
+    let target = currentLiveTarget
+    let creatorGeneration = model.creatorSession.generation
+    if target.platform == .kick {
+      do {
+        let channel = try await KickPlaybackService.channel(target.channel)
+        guard !Task.isCancelled, target == currentLiveTarget,
+          sessionID == model.playbackTelemetry.sessionID else { return }
+        channelDisplayName = channel.displayName
+        channelAvatarURL = channel.imageURL
+        streamTitle = channel.title
+        model.channelStreamStartedAt = channel.startedAt
+      } catch {
+        guard !Task.isCancelled, target == currentLiveTarget else { return }
+        recordPlaybackEvent("channel_metadata_unavailable", level: .warning,
+          attributes: PlaybackTelemetryRecorder.errorAttributes(error))
+      }
+      return
+    }
+    guard let login = target.platform == .youtube ? model.creatorSession.twitchChannel : target.channel else { return }
+    let metadata = await model.loadChannelMetadata(login)
+    guard !Task.isCancelled, creatorGeneration == model.creatorSession.generation,
+      sessionID == model.playbackTelemetry.sessionID, target == currentLiveTarget else { return }
     guard let metadata else {
       recordPlaybackEvent("channel_metadata_unavailable", level: .warning)
       channelDisplayName = login
@@ -1753,7 +1814,7 @@ extension PlayerView {
       streamTitle = metadata.title
       // Seed the live viewer badge so a number shows immediately; Hermes pubsub
       // takes over with live updates and ignores this seed once it arrives.
-      hermes.seedViewerCount(metadata.viewersCount)
+      if model.creatorSession.twitchChannel == login { hermes.seedViewerCount(metadata.viewersCount) }
     }
   }
 

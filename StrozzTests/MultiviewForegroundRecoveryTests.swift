@@ -5,6 +5,48 @@ import XCTest
 
 @MainActor
 final class MultiviewForegroundRecoveryTests: XCTestCase {
+  func testProfileAudioSuspensionPreservesPlayersAndPriorMuteChoice() {
+    let controller = controller(count: 2)
+    defer { controller.teardown() }
+    let pane = controller.panes[0]
+    let player = pane.player
+    controller.setAudiblePane(pane.id)
+    for muted in [false, true] {
+      pane.player.isMuted = muted
+      let state = controller.suspendAudio()
+      XCTAssertNil(controller.audiblePaneID)
+      XCTAssertTrue(controller.panes.allSatisfy { $0.player.isMuted })
+      controller.restoreAudio(state)
+      XCTAssertEqual(controller.audiblePaneID, pane.id)
+      XCTAssertEqual(pane.player.isMuted, muted)
+      XCTAssertTrue(pane.player === player)
+    }
+  }
+
+  func testOfflinePaneIsDistinctFromLoadFailureAndRemoteRetryKeepsItsIdentity() {
+    let controller = controller(count: 2)
+    defer { controller.teardown() }
+    let pane = controller.panes[0]
+    pane.model.isLoading = false
+    pane.model.isOffline = true
+    XCTAssertTrue(pane.hasError)
+    XCTAssertEqual(String(localized: pane.accessibilityStatus(isTransitioning: false)), "Offline")
+    XCTAssertEqual(String(localized: pane.accessibilityStatus(isTransitioning: true)), "Offline")
+    let player = pane.player
+    let previous = pane.presentation.reloadID
+    controller.load(pane)
+    XCTAssertNotEqual(pane.presentation.reloadID, previous)
+    XCTAssertTrue(pane.player === player)
+    XCTAssertEqual(pane.channel.displayName, "Fixture 0")
+
+    pane.model.isOffline = false
+    pane.model.errorMessage = "Synthetic native failure"
+    XCTAssertEqual(String(localized: pane.accessibilityStatus(isTransitioning: false)), "Unavailable")
+    pane.model.errorMessage = nil
+    XCTAssertEqual(String(localized: pane.accessibilityStatus(isTransitioning: true)), "Transitioning")
+    XCTAssertEqual(String(localized: pane.accessibilityStatus(isTransitioning: false)), "Live")
+  }
+
   func testHiddenExpandedPeersCannotForceDecodeRecoveryAndBecomeVisibleAgain() {
     let controller = controller(count: 3)
     defer { controller.teardown() }
@@ -65,7 +107,7 @@ final class MultiviewForegroundRecoveryTests: XCTestCase {
     }
     controller.expand(controller.panes[0].id)
     XCTAssertEqual(controller.panes[0].qualityTier, .source)
-    XCTAssertTrue(controller.panes.dropFirst().allSatisfy { $0.qualityTier == .thumbnail })
+    XCTAssertTrue(controller.panes.dropFirst().allSatisfy { $0.qualityTier == .hidden })
     controller.collapse()
     XCTAssertTrue(controller.panes.allSatisfy { $0.qualityTier == .grid1080 })
     controller.addPane(FollowedChannel(id: "new", login: "new", displayName: "New",
@@ -94,6 +136,49 @@ final class MultiviewForegroundRecoveryTests: XCTestCase {
     XCTAssertEqual(small.panes.first?.qualityTier, .grid1080)
     XCTAssertEqual(legacy.panes.first?.qualityTier, .grid,
       "An explicit diagnostic opt-out retains the previous resource policy")
+  }
+
+  func testOnlyFullyHiddenPeersUse360pAndReturnRestoresVisibleBudgetsWithoutReloading() {
+    let controller = controller(count: 3, controlledAuto: true)
+    defer { controller.teardown() }
+    let players = controller.panes.map(\.player)
+    let requests = controller.panes.map(\.presentation.reloadID)
+    let items = controller.panes.map { pane in
+      let item = AVPlayerItem(url: URL(fileURLWithPath: "/dev/null"))
+      pane.player.replaceCurrentItem(with: item)
+      return item
+    }
+    let primary = controller.panes[0]
+    let peer = controller.panes[1]
+    let view = PlayerView(channel: peer.channel.login, auth: TwitchAuthSession(), model: peer.model)
+    controller.spotlight(primary.id)
+    XCTAssertEqual(peer.qualityTier, .thumbnail)
+    XCTAssertTrue(peer.model.isVideoPresentationVisible)
+    view.applyMultiviewBudget()
+    XCTAssertEqual(items[1].preferredMaximumResolution.height, 480)
+    controller.expand(primary.id)
+    XCTAssertEqual(primary.qualityTier, .source)
+    XCTAssertEqual(peer.qualityTier, .hidden)
+    XCTAssertFalse(peer.model.isVideoPresentationVisible)
+    view.applyMultiviewBudget()
+    XCTAssertEqual(items[1].preferredMaximumResolution, CGSize(width: 640, height: 360))
+    XCTAssertEqual(items[1].preferredPeakBitRate, 800_000)
+    controller.collapse()
+    XCTAssertEqual(peer.qualityTier, .thumbnail)
+    XCTAssertTrue(peer.model.isVideoPresentationVisible)
+    view.applyMultiviewBudget()
+    XCTAssertEqual(items[1].preferredMaximumResolution.height, 480)
+    controller.toggleLayout()
+    view.applyMultiviewBudget()
+    XCTAssertEqual(peer.qualityTier, .grid1080)
+    XCTAssertEqual(items[1].preferredMaximumResolution.height, 1080)
+    XCTAssertEqual(items[1].preferredPeakBitRate, 0)
+    for (index, pane) in controller.panes.enumerated() {
+      XCTAssertTrue(pane.player === players[index])
+      XCTAssertTrue(pane.player.currentItem === items[index])
+      XCTAssertEqual(pane.presentation.reloadID, requests[index])
+      XCTAssertEqual(pane.presentation.quality, "Auto")
+    }
   }
 
   func testDiagnosticLayerSelectionIsStableAcrossExpansionAndExcludesStandalone() {
@@ -163,7 +248,7 @@ final class MultiviewForegroundRecoveryTests: XCTestCase {
     for (index, pane) in controller.panes.enumerated() {
       XCTAssertTrue(pane.player === players[index])
       XCTAssertTrue(pane.player.currentItem === items[index])
-      XCTAssertEqual(pane.qualityTier, pane === selected ? .source : .thumbnail)
+      XCTAssertEqual(pane.qualityTier, pane === selected ? .source : .hidden)
       XCTAssertEqual(pane.player.isMuted, pane !== selected)
     }
     selected.player.isMuted = true
@@ -228,27 +313,64 @@ final class MultiviewForegroundRecoveryTests: XCTestCase {
   }
 
   func testLayoutsKeepStablePaneKeysAndStayInsideViewport() throws {
-    let size = CGSize(width: 1920, height: 1080)
-    for count in 1...6 {
-      let ids = (0..<count).map(String.init)
-      for layout in [MultiviewLayout.grid, .spotlight] {
-        let frames = MultiviewGeometry.frames(ids: ids, size: size, layout: layout,
-          primary: ids.last, expanded: nil)
-        XCTAssertEqual(Set(frames.keys), Set(ids))
-        for frame in frames.values {
-          XCTAssertGreaterThan(frame.width, 0)
-          XCTAssertGreaterThan(frame.height, 0)
-          XCTAssertGreaterThanOrEqual(frame.minX, 0)
-          XCTAssertGreaterThanOrEqual(frame.minY, 0)
-          XCTAssertLessThanOrEqual(frame.maxX, size.width + 0.001)
-          XCTAssertLessThanOrEqual(frame.maxY, size.height + 0.001)
+    XCTAssertEqual(MultiviewGeometry.gap, 10)
+    for size in [CGSize(width: 1920, height: 1080), CGSize(width: 3840, height: 2160),
+      CGSize(width: 1280, height: 720), CGSize(width: 854, height: 480)] {
+      for count in 1...6 {
+        let ids = (0..<count).map(String.init)
+        let mixedRatios: [CGFloat] = [4 / 3, 16 / 9, 9 / 16, 2.4, 1, 16 / 9]
+        for ratios in [[:], Dictionary(uniqueKeysWithValues: zip(ids, mixedRatios))] {
+          for layout in [MultiviewLayout.grid, .spotlight] {
+            let frames = MultiviewGeometry.frames(ids: ids, size: size, layout: layout,
+              primary: ids.last, expanded: nil, aspectRatios: ratios)
+            XCTAssertEqual(Set(frames.keys), Set(ids))
+            for id in ids {
+              let frame = try XCTUnwrap(frames[id])
+              XCTAssertGreaterThan(frame.width, 0)
+              XCTAssertGreaterThan(frame.height, 0)
+              XCTAssertEqual(frame.width / frame.height,
+                ratios[id] ?? MultiviewGeometry.defaultAspectRatio, accuracy: 0.0001)
+              let outlined = frame.insetBy(dx: -5, dy: -5)
+              XCTAssertGreaterThanOrEqual(outlined.minX, -0.001)
+              XCTAssertGreaterThanOrEqual(outlined.minY, -0.001)
+              XCTAssertLessThanOrEqual(outlined.maxX, size.width + 0.001)
+              XCTAssertLessThanOrEqual(outlined.maxY, size.height + 0.001)
+              var nearestGap = CGFloat.infinity
+              for (otherID, other) in frames where otherID != id {
+                let dx = max(0, frame.minX - other.maxX, other.minX - frame.maxX)
+                let dy = max(0, frame.minY - other.maxY, other.minY - frame.maxY)
+                XCTAssertGreaterThanOrEqual(max(dx, dy), 9.999,
+                  "Outside outlines must not overlap another picture")
+                if dx == 0 { nearestGap = min(nearestGap, dy) }
+                if dy == 0 { nearestGap = min(nearestGap, dx) }
+              }
+              if count > 1 {
+                XCTAssertEqual(nearestGap, 10, accuracy: 0.001,
+                  "Pictures must pack against a neighbor, not retain letterboxed cell gaps")
+              }
+            }
+            let expanded = MultiviewGeometry.frames(ids: ids, size: size, layout: layout,
+              primary: ids.last, expanded: ids[0], aspectRatios: ratios)
+            XCTAssertEqual(expanded[ids[0]], CGRect(origin: .zero, size: size))
+            for id in ids.dropFirst() { XCTAssertEqual(expanded[id], frames[id]) }
+          }
         }
-        let expanded = MultiviewGeometry.frames(ids: ids, size: size, layout: layout,
-          primary: ids.last, expanded: ids[0])
-        XCTAssertEqual(expanded[ids[0]], CGRect(origin: .zero, size: size))
-        for id in ids.dropFirst() { XCTAssertEqual(expanded[id], frames[id]) }
       }
     }
+  }
+
+  func testPictureAspectRatioRetainsLastKnownSizeWhileItemIsUnavailable() {
+    let context = MultiviewPlaybackContext()
+    XCTAssertEqual(context.videoAspectRatio, 16 / 9, accuracy: 0.0001)
+    context.updateVideoAspectRatio(CGSize(width: 640, height: 480))
+    XCTAssertEqual(context.videoAspectRatio, 4 / 3, accuracy: 0.0001)
+    for size in [nil, .zero, CGSize(width: CGFloat.nan, height: 720),
+      CGSize(width: 1280, height: CGFloat.infinity)] {
+      context.updateVideoAspectRatio(size)
+      XCTAssertEqual(context.videoAspectRatio, 4 / 3, accuracy: 0.0001)
+    }
+    context.updateVideoAspectRatio(CGSize(width: 1080, height: 1920))
+    XCTAssertEqual(context.videoAspectRatio, 9 / 16, accuracy: 0.0001)
   }
 
   func testClosingExpandedPlayerRestoresTheWallInsteadOfDismissingIt() {

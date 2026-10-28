@@ -32,6 +32,8 @@ final class AppEnvironment {
   let follows = FollowedChannelsService()
   /// Anonymous "popular / top streams" recommendations and categories.
   let recommendations = RecommendationsService()
+  let kickFollows = KickFollowingStore()
+  let kickDiscovery: KickDiscoveryService
   /// On-device personalized recommendations derived from follows + history.
   let personalized = PersonalizedRecommendationsService()
   /// On-device watch history feeding personalization.
@@ -63,6 +65,7 @@ final class AppEnvironment {
   let goLiveSettings = GoLiveNotificationSettings()
 
   init() {
+    kickDiscovery = KickDiscoveryService(follows: kickFollows)
     goLive.notificationSettings = goLiveSettings
   }
 }

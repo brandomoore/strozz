@@ -50,6 +50,12 @@ struct PlayerView: View {
   /// the hand-off looks seamless (the channel's frame fills immediately) instead
   /// of flashing a black "Loading…" screen.
   var posterURL: URL? = nil
+  var initialPlatform: LivePlatform = .twitch
+  @State var showKickChannelInfo = false
+  @State var showCreatorChannels = false
+  @State var showMultiviewLineup = false
+  @State var startMultiviewAfterDismissal = false
+  @Environment(\.multiviewLineup) var multiviewLineup
 
 
 
@@ -69,11 +75,12 @@ struct PlayerView: View {
   var preferredQuality: String {
     get {
       playback?.qualities.first(where: { $0.id == model.decodeRecoveryQualityID })?.name
-        ?? model.multiviewContext?.quality ?? storedPreferredQuality
+        ?? (model.livePlatform == .kick ? model.sourceQuality : model.multiviewContext?.quality ?? storedPreferredQuality)
     }
     nonmutating set {
       model.decodeRecoveryQualityID = nil
-      if let context = model.multiviewContext { context.quality = newValue }
+      if model.livePlatform == .kick { model.sourceQuality = newValue }
+      else if let context = model.multiviewContext { context.quality = newValue }
       else { storedPreferredQuality = newValue }
     }
   }
@@ -607,7 +614,7 @@ struct PlayerView: View {
   // its `focusTag`, and must be registered in that allow-list — otherwise tvOS
   // can't land focus on it and traps on a neighbor.
   enum Focusable: Hashable {
-    case video, streamInfo, quality, rewards, chatToggle, chatInput, errorBack, audioResume, nativeRetry
+    case video, streamInfo, quality, rewards, multiview, chatToggle, chatInput, errorBack, audioResume, nativeRetry
     case offlineViewChannel, offlineTryAgain
     case chatSend
     /// VOD-only: invisible target inside the chat pane that holds focus while the
@@ -629,6 +636,7 @@ struct PlayerView: View {
     // will bounce off the control. See that function's doc comment.
     case chatPresetOption(Int)
     case chatAdvancedButton
+    case chatCreatorChannels
     case chatWidthOption(Int)
     case chatLayoutOption(Int)
     case chatCaptionsToggle
@@ -803,7 +811,7 @@ struct PlayerView: View {
   /// PlayerView+EventHandlers.swift; this property is purely the view tree.
   var playerStack: some View {
     ZStack {
-      palette.playerBackdrop.ignoresSafeArea()
+      palette.playerBackdrop.ignoresSafeArea(edges: isMultiviewCompact ? [] : .all)
         // Attached to the backdrop (a child) rather than the root ZStack so it
         // doesn't collide with the sign-in `.fullScreenCover` below. Two
         // presentation modifiers on the *same* view conflict on tvOS and only
@@ -835,7 +843,7 @@ struct PlayerView: View {
             .transition(.move(edge: .trailing))
         }
       }
-      .ignoresSafeArea()
+      .ignoresSafeArea(edges: isMultiviewCompact ? [] : .all)
 
       if showRaidEvents, let raid = chat.pendingRaid, shouldShowIncomingRaid(raid) {
         raidBanner(raid)
@@ -919,6 +927,28 @@ struct PlayerView: View {
     .fullScreenCover(isPresented: $showSignInSheet) {
       SignInView(auth: auth)
     }
+    .alert("Channel info", isPresented: $showKickChannelInfo) {
+      Button("Done", role: .cancel) {}
+    } message: {
+      Text("\(channelDisplayName)\n\(streamTitle)\nKick: \(model.kickPlaybackTarget)")
+    }
+    .sheet(isPresented: $showCreatorChannels) {
+      CreatorChannelsView(session: model.creatorSession).environment(\.themePalette, palette)
+    }
+    .sheet(isPresented: $showMultiviewLineup, onDismiss: {
+      if startMultiviewAfterDismissal {
+        startMultiviewAfterDismissal = false
+        multiviewLineup?.requestPlayback()
+      }
+      scheduleHide()
+    }) {
+      if let multiviewLineup {
+        MultiviewLineupView(lineup: multiviewLineup) {
+          startMultiviewAfterDismissal = true
+          showMultiviewLineup = false
+        }
+      }
+    }
   }
 
   // MARK: - Video + controls
@@ -966,7 +996,7 @@ struct PlayerView: View {
   /// browser User-Agent (googlevideo blocks the default UA), Twitch needs its
   /// player Referer/Origin.
   var captionAudioSourceHeaders: [String: String] {
-    isUsingAltSource ? Self.altSourceHTTPHeaders : PlaybackService.streamHeaders
+    livePlaybackHeaders
   }
 
   /// Reconcile the on-device caption engine with current playback state. Cheap

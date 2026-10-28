@@ -13,6 +13,14 @@ struct MobileChannelProfileView: View {
   @State private var refreshID = UUID()
 
   var body: some View {
+    if channel.platform == .kick {
+      KickChannelDetailsView(slug: channel.login, onWatch: onLive)
+    } else {
+      twitchContent
+    }
+  }
+
+  private var twitchContent: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 24) {
         MobileChannelProfileHeader(channel: channel, profile: profile, onLive: onLive)

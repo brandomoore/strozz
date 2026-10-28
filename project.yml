@@ -16,6 +16,7 @@ settings:
     TARGETED_DEVICE_FAMILY: "3" # Apple TV
     STROZZ_ICLOUD_ENVIRONMENT: Development
     STROZZ_APS_ENVIRONMENT: development
+    STROZZ_DEVELOPMENT_DIAGNOSTICS: "NO"
   configs:
     Release:
       STROZZ_ICLOUD_ENVIRONMENT: Production
@@ -24,6 +25,9 @@ configFiles:
   Debug: Config/Development.xcconfig
   Release: Config/Release.xcconfig
 packages:
+  Sentry:
+    url: https://github.com/getsentry/sentry-cocoa.git
+    exactVersion: 9.30.2
   SDWebImage:
     url: https://github.com/SDWebImage/SDWebImage.git
     from: 5.21.0
@@ -76,6 +80,11 @@ targets:
           - "CheermoteCatalogService.swift"
           - "WebSocketService.swift"
           - "PlaybackService.swift"
+          - "AltSourceService.swift"
+          - "Kick*.swift"
+          - "LiveStreamSource.swift"
+          - "CreatorLiveSession.swift"
+          - "HermesEventService.swift"
           - "Native*.swift"
           - "LowLatencyHLSProxy.swift"
           - "LiveChatSyncBaseline.swift"
@@ -102,9 +111,15 @@ targets:
       - path: Strozz/Views/ChannelFollowButton.swift
       - path: Strozz/Views/ChannelFollowFixture.swift
       - path: Strozz/Resources/StreamerAffinity.json
+      - path: Strozz/Resources/KickAliases.json
       - path: Strozz/Views/RichChatLineView.swift
+      - path: Strozz/Views/KickDirectoryView.swift
+      - path: Strozz/Views/KickChannelDetailsView.swift
+      - path: Strozz/Views/CreatorChannelsView.swift
       - path: Strozz/Views/Chat/ChatColor.swift
     dependencies:
+      - package: Sentry
+        product: Sentry
       - package: SDWebImage
         product: SDWebImage
       - package: SDWebImageSwiftUI
@@ -138,10 +153,16 @@ targets:
       - path: StrozzMobileTests
       - path: StrozzTests/PlaybackPresentationStateTests.swift
       - path: StrozzTests/PlaybackTelemetryTests.swift
+      - path: StrozzTests/PlaybackTelemetryRemoteTests.swift
+      - path: StrozzTests/PlaybackTelemetrySentryTests.swift
       - path: StrozzTests/NativeRenditionReportTests.swift
       - path: StrozzTests/NativeTransportStreamTests.swift
       - path: StrozzTests/NativeTransportRemuxTests.swift
       - path: StrozzTests/NativeCMAFRemuxTests.swift
+      - path: StrozzTests/KickPlaybackTests.swift
+      - path: StrozzTests/KickSharedPlayerTests.swift
+      - path: StrozzTests/KickFollowingTests.swift
+      - path: StrozzTests/CreatorLiveSessionTests.swift
       - path: StrozzTests/NativeAdaptiveRenditionPolicyTests.swift
       - path: StrozzTests/NativeBufferedStallRecoveryTests.swift
       - path: StrozzTests/NativeHLSChunkReaderTests.swift
@@ -152,6 +173,7 @@ targets:
       - path: StrozzTests/TwitchChannelFollowTests.swift
       - path: StrozzTests/TwitchGIFTests.swift
       - path: StrozzTests/ChatBadgeRenderingTests.swift
+      - path: StrozzTests/ChatTextWrappingTests.swift
       - path: StrozzTests/YouTubeMergedChatViewerTests.swift
     dependencies:
       - target: StrozzMobile
@@ -170,6 +192,7 @@ targets:
     sources:
       - path: StrozzMobileUITests
       - path: StrozzUITests/ChannelFollowUITests.swift
+      - path: StrozzUITests/KickPlaybackUITests.swift
     dependencies:
       - target: StrozzMobile
     settings:
@@ -186,6 +209,8 @@ targets:
     sources:
       - path: Strozz
     dependencies:
+      - package: Sentry
+        product: Sentry
       - package: SDWebImage
         product: SDWebImage
       - package: SDWebImageSwiftUI

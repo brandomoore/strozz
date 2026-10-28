@@ -110,6 +110,7 @@ final class HermesEventService {
   /// arrives (or after `stop()`); the player seeds an initial value from channel
   /// metadata so a number shows immediately on open.
   private(set) var viewerCount: Int?
+  private(set) var viewerCountUpdatedAt: Date?
 
   // Per-kind displayable state (drives `currentMoment` via `recompute()`).
   private(set) var poll: LivePoll?
@@ -187,6 +188,7 @@ final class HermesEventService {
     hypeTrain = nil
     goal = nil
     viewerCount = nil
+    viewerCountUpdatedAt = nil
     currentMoment = nil
   }
 
@@ -196,6 +198,7 @@ final class HermesEventService {
   func seedViewerCount(_ count: Int?) {
     guard let count, viewerCount == nil else { return }
     viewerCount = count
+    viewerCountUpdatedAt = Date()
   }
 
   // MARK: - Receive loop
@@ -313,6 +316,7 @@ final class HermesEventService {
   private func applyViewCount(_ payload: [String: Any]) {
     guard let viewers = Self.intValue(payload["viewers"]) else { return }
     viewerCount = viewers
+    viewerCountUpdatedAt = Date()
   }
 
   // MARK: Poll

@@ -35,7 +35,10 @@ final class MobileHomePreview {
   @ObservationIgnored private let resolve: (String) async throws -> URL
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "home-preview")
 
-  init(resolve: @escaping (String) async throws -> URL = { try await PlaybackService.previewHLSURL(for: $0) }) {
+  init(resolve: @escaping (String) async throws -> URL = {
+    if $0.hasPrefix("kick:") { return try await KickPlaybackService.previewHLSURL(for: String($0.dropFirst(5))) }
+    return try await PlaybackService.previewHLSURL(for: $0)
+  }) {
     self.resolve = resolve
   }
 
@@ -76,7 +79,10 @@ final class MobileHomePreview {
         let url = try await resolve(next)
         guard isCurrent(request) else { return }
         playback.start(url: url) { original in
-          try await PlaybackService.pinnedHLSURL(for: next,
+          if next.hasPrefix("kick:") {
+            return try await KickPlaybackService.previewHLSURL(for: String(next.dropFirst(5)), original: original)
+          }
+          return try await PlaybackService.pinnedHLSURL(for: next,
             targetBitrate: original ? 0 : 1_500_000, forceRefresh: true)
         }
       } catch {

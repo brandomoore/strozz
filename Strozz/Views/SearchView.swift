@@ -11,6 +11,14 @@ struct SearchView: View {
   @State private var path: [TwitchCategory] = []
   @Environment(PlaybackReturnRefreshCoordinator.self) private var playbackReturnRefresh
 
+  init(selectedChannel: Binding<FollowedChannel?>, channelPageTarget: Binding<ChannelPageTarget?>,
+       service: SearchService = SearchService(), initialQuery: String = "") {
+    _selectedChannel = selectedChannel
+    _channelPageTarget = channelPageTarget
+    _service = State(initialValue: service)
+    _query = State(initialValue: initialQuery)
+  }
+
   var body: some View {
     NavigationStack(path: $path) {
       SearchResultsView(
@@ -46,6 +54,7 @@ struct SearchView: View {
 
 private struct SearchResultsView: View {
   @Environment(PlaybackReturnRefreshCoordinator.self) private var playbackReturnRefresh
+  @Environment(\.multiviewLineup) private var lineup
   @Binding var query: String
   let service: SearchService
   let onSelectChannel: (FollowedChannel) -> Void
@@ -70,6 +79,13 @@ private struct SearchResultsView: View {
   var body: some View {
     ScrollView(.vertical, showsIndicators: false) {
       VStack(alignment: .leading, spacing: 32) {
+        if service.channelResults.isEmpty, lineup?.entries.isEmpty == false {
+          HStack {
+            Text("Search").font(.title3.weight(.bold))
+            Spacer()
+            MultiviewLineupButton()
+          }
+        }
         if service.isSearching && !service.hasResults {
           HStack(spacing: 12) {
             ProgressView()
@@ -86,12 +102,12 @@ private struct SearchResultsView: View {
             .padding(.top, 12)
         }
 
-        if !service.categoryResults.isEmpty {
-          categoriesSection
-        }
-
         if !service.channelResults.isEmpty {
           channelsSection
+        }
+
+        if !service.categoryResults.isEmpty {
+          categoriesSection
         }
       }
       .padding(.horizontal, AppLayout.horizontalPadding)
@@ -131,9 +147,14 @@ private struct SearchResultsView: View {
 
   private var channelsSection: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text("Channels")
-        .font(.title3.weight(.bold))
-        .accessibilityAddTraits(.isHeader)
+      HStack {
+        Text("Channels")
+          .font(.title3.weight(.bold))
+          .accessibilityAddTraits(.isHeader)
+        Spacer()
+        MultiviewLineupButton()
+      }
+      .frame(minHeight: 64)
 
       LazyVGrid(columns: channelColumns, spacing: 24) {
         ForEach(service.channelResults, id: \.channelKey) { channel in
@@ -158,7 +179,8 @@ private struct SearchResultsView: View {
           .focusEffectDisabled()
           .onTapGesture {
             preparePlaybackReturn()
-            onSelectChannel(channel)
+            if channel.platform == .kick, channel.isLive { onWatchChannel(channel) }
+            else { onSelectChannel(channel) }
           }
           .zIndex(isFocused ? 2 : 0)
         }

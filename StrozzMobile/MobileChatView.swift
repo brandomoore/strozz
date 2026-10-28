@@ -3,6 +3,8 @@ import SwiftUI
 struct MobileChatView: View, Equatable {
   let service: ChatService
   let channel: String
+  var platform: LivePlatform = .twitch
+  var creatorSession: CreatorLiveSession? = nil
   let composer: MobileChatComposerState
   let scroll: MobileChatScrollState
   var rewards: MobileChatRewardsSummary? = nil
@@ -20,15 +22,16 @@ struct MobileChatView: View, Equatable {
   private var updatesActive: Bool { isActive && !isManipulating && scenePhase == .active }
 
   nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-    lhs.service === rhs.service && lhs.channel == rhs.channel && lhs.composer === rhs.composer
+    lhs.service === rhs.service && lhs.channel == rhs.channel && lhs.platform == rhs.platform
+      && lhs.creatorSession === rhs.creatorSession && lhs.composer === rhs.composer
       && lhs.scroll === rhs.scroll && lhs.rewards == rhs.rewards
       && lhs.isActive == rhs.isActive && lhs.isManipulating == rhs.isManipulating
   }
 
   var body: some View {
     VStack(spacing: 0) {
-      if !service.isConnected {
-        Text("Connecting...")
+      if platform == .kick ? !service.kickIsConnected : !service.isConnected {
+        Text(platform == .kick ? service.kickStatusMessage ?? "Connecting..." : "Connecting...")
           .font(.caption)
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -39,13 +42,15 @@ struct MobileChatView: View, Equatable {
                          viewerLogin: auth.userLogin, viewerDisplayName: auth.userDisplayName, scroll: scroll,
                          animationsActive: isActive && !isManipulating)
       Divider()
-      if auth.isAuthenticated, sync?.isRestoringAccount != true {
+      if platform == .twitch, auth.isAuthenticated, sync?.isRestoringAccount != true {
         MobileChatComposer(channel: channel, onSettings: { showSettings = true }, rewards: rewards,
           composer: composer, onEmotes: { showEmotes = true })
       } else {
         HStack {
           if let rewards { MobileChatRewardsButton(summary: rewards) }
-          if sync?.isRestoringAccount == true {
+          if platform != .twitch {
+            Text("\(platform.title) chat is read-only.").font(.caption).foregroundStyle(.secondary)
+          } else if sync?.isRestoringAccount == true {
             TwitchAccountLoadingView()
           } else {
             Button("Sign in to chat") { showAccount = true }
@@ -76,7 +81,7 @@ struct MobileChatView: View, Equatable {
     }
     .sheet(isPresented: $showSettings) {
       NavigationStack {
-        MobileChatSettingsView(channel: channel, service: service)
+        MobileChatSettingsView(channel: channel, service: service, creatorSession: creatorSession)
           .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showSettings = false } } }
       }
       .environment(\.themePalette, palette)

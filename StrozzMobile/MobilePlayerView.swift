@@ -193,6 +193,7 @@ struct MobilePlayerView: View {
 
   var body: some View {
     GeometryReader { geometry in
+      let channel = model.presentationChannel(fallback: self.channel)
       let isPhone = UIDevice.current.userInterfaceIdiom == .phone
       let phoneLandscape = isPhone && verticalSizeClass == .compact
       let tabletLandscape = geometry.size.width > geometry.size.height + geometry.safeAreaInsets.bottom
@@ -238,7 +239,9 @@ struct MobilePlayerView: View {
             .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
           }
           // One timeline/composer moves between positions without remounting.
-          MobileChatView(service: model.chat, channel: channel.login,
+          MobileChatView(service: model.chat, channel: model.creatorSession.twitchChannel ?? model.source.channel,
+            platform: model.creatorSession.chatPlatform,
+            creatorSession: model.creatorSession,
             composer: chatComposer, scroll: chatScroll, rewards: MobileChatRewardsSummary.snapshot(of: session.watchTracker),
             isActive: chatIsVisible, isManipulating: collapseProgress > 0 || chatWidthDrag.initialWidth != nil)
             .equatable()
@@ -338,6 +341,10 @@ struct MobilePlayerView: View {
       .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: streamDetailsVisible)
       .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.9), value: session.isExpanded)
       .onChange(of: session.isExpanded) { _, _ in collapseProgress = 0 }
+      .onChange(of: model.creatorSession.generation) { _, _ in
+        chatComposer = MobileChatComposerState()
+        chatScroll = MobileChatScrollState()
+      }
       .onChange(of: layout) { _, _ in
         collapseProgress = 0
         windowScene?.keyWindow?.endEditing(true)
@@ -509,6 +516,8 @@ struct MobileVideoView: View {
         .clipped()
         .opacity(model.isLoading ? 0 : 1)
         .accessibilityIdentifier("mobile-video-surface")
+        .accessibilityLabel("\(model.source.platform.title) stream")
+        .accessibilityValue(model.presentationState == .ready ? "Ready" : "Loading")
         .allowsHitTesting(false)
       if model.mode == .video && model.isExternalPlayback && !model.isLoading {
         Label {
@@ -586,7 +595,8 @@ struct MobileVideoView: View {
         }
       } else if !isMinimized && showsControls {
         MobilePlayerControls(
-          model: model, viewerCount: channel.viewerCount, hideChat: $hideChat, isFullscreen: isFullscreen,
+          model: model, viewerCount: model.creatorSession.sources == nil ? channel.viewerCount : nil,
+          hideChat: $hideChat, isFullscreen: isFullscreen,
           onCollapse: onCollapse,
           onClose: onClose,
           onFullscreen: { interaction += 1; onFullscreen() },
@@ -639,8 +649,9 @@ struct MobileVideoView: View {
         .presentationDetents([.medium, .large])
     }
     .sheet(isPresented: $showShare) {
-      MobileShareSheet(url: URL(string: "https://www.twitch.tv/")!.appendingPathComponent(channel.login))
-        .presentationDetents([.medium, .large])
+      if let url = model.source.watchURL {
+        MobileShareSheet(url: url).presentationDetents([.medium, .large])
+      }
     }
   }
 

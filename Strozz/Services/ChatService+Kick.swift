@@ -11,13 +11,6 @@ import Foundation
 /// endpoint) we can subscribe anonymously — no auth token required, mirroring
 /// the anonymous Twitch and YouTube reads elsewhere in this service.
 extension ChatService {
-  /// Kick's public Pusher app key + cluster, as used by the web chat client.
-  private static let kickPusherAppKey = "32cbd69e4b950bf97679"
-  private static let kickPusherURL = URL(
-    string:
-      "wss://ws-us2.pusher.com/app/\(kickPusherAppKey)?protocol=7&client=js&version=8.4.0&flash=false"
-  )!
-
   func restartKickLoopIfNeeded() {
     stopKickLoop(clearStatus: false)
 
@@ -39,6 +32,7 @@ extension ChatService {
   }
 
   func stopKickLoop(clearStatus: Bool) {
+    kickIsConnected = false
     kickReceiveTask?.cancel()
     kickReceiveTask = nil
     kickConnection.cancel()
@@ -81,13 +75,17 @@ extension ChatService {
           throw KickScrapeError.invalidResponse
         }
 
-        kickConnection.connect(to: Self.kickPusherURL)
+        let socketURL = try await KickPlaybackService.chatURL()
+        guard !Task.isCancelled else { return }
+        kickConnection.connect(to: socketURL)
+        kickIsConnected = false
         kickSubscribedChannel = nil
 
         try await runKickReceive(chatroomID: chatroomID)
       } catch {
         if Task.isCancelled { break }
         kickStatusMessage = "Kick chat unavailable right now."
+        kickIsConnected = false
         kickConnection.cancel()
         kickSubscribedChannel = nil
 
@@ -114,7 +112,7 @@ extension ChatService {
       @unknown default: continue
       }
 
-      await handleKickFrame(text, chatroomID: chatroomID)
+      try await handleKickFrame(text, chatroomID: chatroomID)
 
       // A reconnect (or teardown) replaces the socket; stop reading the old one
       // so the next loop iteration receives on the fresh task instead.
@@ -122,7 +120,7 @@ extension ChatService {
     }
   }
 
-  private func handleKickFrame(_ text: String, chatroomID: Int) async {
+  private func handleKickFrame(_ text: String, chatroomID: Int) async throws {
     guard let data = text.data(using: .utf8),
       let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
       let event = envelope["event"] as? String
@@ -131,11 +129,14 @@ extension ChatService {
     }
 
     switch event {
+    case "pusher:error":
+      throw KickPlaybackService.Failure.chatUnavailable
     case "pusher:connection_established":
       sendKickSubscribe(chatroomID: chatroomID)
     case "pusher:ping":
       kickConnection.send(.string("{\"event\":\"pusher:pong\",\"data\":{}}"))
     case "pusher_internal:subscription_succeeded":
+      kickIsConnected = true
       kickStatusMessage = kickConnectedStatus()
     case let event where event.contains("ChatMessageEvent"):
       // Pusher nests the event payload as a JSON-encoded string in `data`.
@@ -189,48 +190,13 @@ extension ChatService {
   /// Returns nil for a missing channel (HTTP 404) so callers can try the next
   /// candidate instead of spinning on backoff.
   static func fetchKickChannelInfo(slug: String) async throws -> KickChannelInfo? {
-    guard let url = URL(string: "https://kick.com/api/v2/channels/\(slug)") else {
-      return nil
-    }
-
-    var request = URLRequest(url: url)
-    request.timeoutInterval = 20
-    request.setValue(kickAPIUserAgent, forHTTPHeaderField: "User-Agent")
-    request.setValue("application/json", forHTTPHeaderField: "Accept")
-    request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
-
-    let (data, response) = try await URLSession.shared.data(for: request)
-    guard let http = response as? HTTPURLResponse else {
-      throw KickScrapeError.invalidResponse
-    }
-    guard (200...299).contains(http.statusCode) else {
-      // 404 simply means there's no such channel; surface that as "not found"
-      // (nil) rather than an error so we don't spin on backoff for a typo.
-      if http.statusCode == 404 { return nil }
-      throw KickScrapeError.httpFailure(http.statusCode)
-    }
-
-    guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-      let chatroom = root["chatroom"] as? [String: Any],
-      let id = chatroom["id"] as? Int
-    else {
-      return nil
-    }
-
-    let canonicalSlug = (root["slug"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? slug
-    let username = ((root["user"] as? [String: Any])?["username"] as? String)
-      .flatMap { $0.isEmpty ? nil : $0 } ?? canonicalSlug
-    // `livestream` is a non-null object only while the channel is broadcasting.
-    let livestream = root["livestream"] as? [String: Any]
-    let isLive = livestream != nil
-    // The live object carries the concurrent viewer count; Kick has used both
-    // `viewer_count` and `viewers` over time, so accept either.
-    let viewerCount = (livestream?["viewer_count"] as? Int)
-      ?? (livestream?["viewers"] as? Int)
-
+    let channel: KickChannel
+    do { channel = try await KickPlaybackService.channel(slug) }
+    catch KickPlaybackService.Failure.notFound { return nil }
+    guard let id = channel.chatroomID else { throw KickScrapeError.invalidResponse }
     return KickChannelInfo(
-      chatroomID: id, slug: canonicalSlug, username: username, isLive: isLive,
-      viewerCount: viewerCount)
+      chatroomID: id, slug: channel.slug, username: channel.displayName, isLive: channel.isLive,
+      viewerCount: channel.viewerCount)
   }
 
   private static let kickAPIUserAgent =

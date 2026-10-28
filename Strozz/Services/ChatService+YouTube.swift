@@ -39,7 +39,6 @@ extension ChatService {
     var continuationToken: String?
     var apiKey: String?
     var clientVersion: String?
-    var isFirstPoll = true
 
     while !Task.isCancelled {
       do {
@@ -92,26 +91,9 @@ extension ChatService {
         let delay = pollResult.timeoutMs ?? youtubePollFallbackDelayMs
         let clampedDelay = max(youtubePollMinDelayMs, delay)
 
-        if isFirstPoll {
-          // First load: enqueue normally. The playhead + warm-up rule shows
-          // recent backlog right away (capped) and eases live messages in,
-          // so the panel fills instantly instead of waiting out the full delay.
-          if !freshMessages.isEmpty { await enqueueTokenized(freshMessages) }
-          isFirstPoll = false
-          try? await Task.sleep(for: .milliseconds(Int(clampedDelay)))
-        } else if freshMessages.count > 1 {
-          // Trickle messages evenly across the polling interval so they arrive
-          // one-by-one rather than all at once.
-          let perMs = clampedDelay / UInt64(freshMessages.count)
-          for msg in freshMessages {
-            guard !Task.isCancelled else { return }
-            await enqueueTokenized([msg])
-            try? await Task.sleep(for: .milliseconds(Int(perMs)))
-          }
-        } else {
-          if !freshMessages.isEmpty { await enqueueTokenized(freshMessages) }
-          try? await Task.sleep(for: .milliseconds(Int(clampedDelay)))
-        }
+        // Do not trickle an already-received batch across another poll interval.
+        if !freshMessages.isEmpty { await enqueueTokenized(freshMessages) }
+        try? await Task.sleep(for: .milliseconds(Int(clampedDelay)))
       } catch {
         if Task.isCancelled { break }
         youtubeStatusMessage = "YouTube chat unavailable right now."
@@ -566,9 +548,12 @@ extension ChatService {
     return nil
   }
 
-  private static func makeYouTubeLiveLookupURL(from input: String) -> URL? {
+  static func makeYouTubeLiveLookupURL(from input: String) -> URL? {
     let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
+    if trimmed.hasPrefix("UC"), CreatorSourceResolver.youtubeTarget(trimmed) == trimmed {
+      return URL(string: "https://www.youtube.com/channel/\(trimmed)/live")
+    }
 
     if trimmed.hasPrefix("@") {
       return URL(string: "https://www.youtube.com/\(trimmed)/live")
