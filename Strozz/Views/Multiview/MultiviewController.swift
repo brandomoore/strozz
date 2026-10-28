@@ -36,6 +36,7 @@ enum MultiviewQualityTier {
 @Observable
 final class MultiviewPlaybackContext {
   var isExpanded = false
+  private(set) var videoAspectRatio = MultiviewGeometry.defaultAspectRatio
   var videoIsVisible = true
   var isBrowsing = false
   var qualityTier: MultiviewQualityTier = .grid
@@ -51,6 +52,13 @@ final class MultiviewPlaybackContext {
   var requestedChannel: FollowedChannel?
   @ObservationIgnored var needsBrowsingResume = false
   @ObservationIgnored var onClose: (() -> Void)?
+
+  func updateVideoAspectRatio(_ size: CGSize?) {
+    guard let size, size.width.isFinite, size.height.isFinite,
+      size.width > 0, size.height > 0 else { return }
+    let ratio = size.width / size.height
+    if videoAspectRatio != ratio { videoAspectRatio = ratio }
+  }
 }
 
 @MainActor
@@ -324,48 +332,76 @@ final class MultiviewController {
 }
 
 enum MultiviewGeometry {
-  static let videoInset: CGFloat = 6
+  static let defaultAspectRatio: CGFloat = 16 / 9
+  static let maximumOutlineWidth: CGFloat = 5
+  static let gap = maximumOutlineWidth * 2
 
   static func frames(ids: [String], size: CGSize, layout: MultiviewLayout,
-                     primary: String?, expanded: String?) -> [String: CGRect] {
-    guard !ids.isEmpty, size.width > 0, size.height > 0 else { return [:] }
-    let gap: CGFloat = 16
+                     primary: String?, expanded: String?,
+                     aspectRatios: [String: CGFloat] = [:]) -> [String: CGRect] {
+    guard !ids.isEmpty, size.width > maximumOutlineWidth * 2,
+      size.height > maximumOutlineWidth * 2 else { return [:] }
+    let bounds = CGRect(origin: .zero, size: size)
+      .insetBy(dx: maximumOutlineWidth, dy: maximumOutlineWidth)
+    func ratio(_ id: String) -> CGFloat { aspectRatios[id] ?? defaultAspectRatio }
     var frames: [String: CGRect] = [:]
-    if layout == .spotlight {
+    if layout == .spotlight && ids.count > 1 {
       let selected = ids.first(where: { $0 == primary }) ?? ids[0]
       let others = ids.filter { $0 != selected }
-      let height: CGFloat = others.isEmpty ? 0 : min(169, size.height / 4)
-      frames[selected] = CGRect(x: 0, y: 0, width: size.width,
-        height: size.height - (others.isEmpty ? 0 : height + gap))
-      if !others.isEmpty {
-        let width = min(300, (size.width - gap * CGFloat(others.count - 1)) / CGFloat(others.count))
-        for (index, id) in others.enumerated() {
-          frames[id] = CGRect(x: CGFloat(index) * (width + gap), y: size.height - height, width: width, height: height)
+      let totalRatio = others.reduce(CGFloat.zero) { $0 + ratio($1) }
+      let stripGaps = gap * CGFloat(others.count - 1)
+      let stripHeight = max(0, min(169, bounds.height / 4, (bounds.width - stripGaps) / totalRatio))
+      let mainHeight = max(0, min(bounds.height - stripHeight - gap, bounds.width / ratio(selected)))
+      let top = bounds.midY - (mainHeight + gap + stripHeight) / 2
+      let mainWidth = mainHeight * ratio(selected)
+      frames[selected] = CGRect(x: bounds.midX - mainWidth / 2, y: top,
+        width: mainWidth, height: mainHeight)
+      var x = bounds.midX - (stripHeight * totalRatio + stripGaps) / 2
+      for id in others {
+        let width = stripHeight * ratio(id)
+        frames[id] = CGRect(x: x, y: top + mainHeight + gap, width: width, height: stripHeight)
+        x += width + gap
+      }
+    } else if ids.count == 3 {
+      // One large picture beside two stacked pictures, not a tall letterboxed cell.
+      let stackRatio = 1 / (1 / ratio(ids[1]) + 1 / ratio(ids[2]))
+      let height = max(0, min(bounds.height,
+        (bounds.width - gap + gap * stackRatio) / (ratio(ids[0]) + stackRatio)))
+      let mainWidth = height * ratio(ids[0])
+      let sideWidth = max(0, height - gap) * stackRatio
+      let left = bounds.midX - (mainWidth + gap + sideWidth) / 2
+      let top = bounds.midY - height / 2
+      frames[ids[0]] = CGRect(x: left, y: top, width: mainWidth, height: height)
+      let upperHeight = sideWidth / ratio(ids[1])
+      frames[ids[1]] = CGRect(x: left + mainWidth + gap, y: top,
+        width: sideWidth, height: upperHeight)
+      frames[ids[2]] = CGRect(x: left + mainWidth + gap, y: top + upperHeight + gap,
+        width: sideWidth, height: sideWidth / ratio(ids[2]))
+    } else {
+      let columns = min(ids.count, ids.count > 4 ? 3 : 2)
+      let rows = stride(from: 0, to: ids.count, by: columns).map {
+        Array(ids[$0..<min($0 + columns, ids.count)])
+      }
+      let rowRatios = rows.map { row in row.reduce(CGFloat.zero) { $0 + ratio($1) } }
+      var height = (bounds.height - gap * CGFloat(rows.count - 1)) / CGFloat(rows.count)
+      for (index, row) in rows.enumerated() {
+        height = min(height, (bounds.width - gap * CGFloat(row.count - 1)) / rowRatios[index])
+      }
+      height = max(0, height)
+      let widths = rows.enumerated().map { index, row in
+        height * rowRatios[index] + gap * CGFloat(row.count - 1)
+      }
+      let left = bounds.midX - (widths.max() ?? 0) / 2
+      let top = bounds.midY - (height * CGFloat(rows.count) + gap * CGFloat(rows.count - 1)) / 2
+      for (index, row) in rows.enumerated() {
+        var x = left
+        for id in row {
+          let width = height * ratio(id)
+          frames[id] = CGRect(x: x, y: top + CGFloat(index) * (height + gap), width: width, height: height)
+          x += width + gap
         }
       }
-    } else if ids.count == 1 {
-      frames[ids[0]] = CGRect(origin: .zero, size: size)
-    } else if ids.count == 3 {
-      let width = (size.width - gap) / 2
-      let height = (size.height - gap) / 2
-      frames[ids[0]] = CGRect(x: 0, y: 0, width: width, height: size.height)
-      for index in 1..<3 {
-        frames[ids[index]] = CGRect(x: width + gap, y: CGFloat(index - 1) * (height + gap),
-                                   width: width, height: height)
-      }
-    } else {
-      let columns = ids.count > 4 ? 3 : 2
-      let rows = ids.count <= 2 ? 1 : 2
-      let width = (size.width - gap * CGFloat(columns - 1)) / CGFloat(columns)
-      let height = (size.height - gap * CGFloat(rows - 1)) / CGFloat(rows)
-      for (index, id) in ids.enumerated() {
-        frames[id] = CGRect(x: CGFloat(index % columns) * (width + gap),
-          y: CGFloat(index / columns) * (height + gap), width: width, height: height)
-      }
     }
-    // Reserve room for an outside outline even on the screen's outer edges.
-    // This inset never changes with focus/chrome visibility.
-    frames = frames.mapValues { $0.insetBy(dx: videoInset, dy: videoInset) }
     if let expanded, ids.contains(expanded) { frames[expanded] = CGRect(origin: .zero, size: size) }
     return frames
   }

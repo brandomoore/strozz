@@ -711,7 +711,7 @@ struct MultiviewPaneTile: View {
   }
 
   private var borderWidth: CGFloat {
-    if isFocused { return style == .compact ? 4 : 5 }
+    if isFocused { return style == .compact ? 4 : MultiviewGeometry.maximumOutlineWidth }
     if pane.isAudible { return 3 }
     return 1
   }

@@ -321,9 +321,13 @@ focused metadata still hide; remote interaction restores full chrome without
 changing audio ownership. Both overlays use the shared native Liquid Glass
 HUD treatment, with theme-aware opaque surfaces when transparency is disabled.
 The outline switches instantly between panes; other chrome animations are unchanged.
-Outlines occupy reserved gutters outside video pixels, including at the screen
-edges; the gutter is stable while chrome hides. Expanded playback remains
-edge-to-edge with the same retained player.
+Pane frames match the video's presentation aspect ratio rather than a letterboxed
+layout cell. Pictures pack together with 10-point gaps, just enough for the
+outside outlines, and a 5-point screen-edge allowance. Unused aspect-ratio space
+stays around the wall instead of between rows. These bounds stay stable while
+chrome hides. Compact players do not ignore safe areas: doing so expands their
+native video surfaces toward screen edges independently of the pane outlines.
+Expanded playback remains edge-to-edge with the same retained player.
 
 ### Multiview ceilings
 

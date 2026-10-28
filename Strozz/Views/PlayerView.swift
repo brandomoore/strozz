@@ -811,7 +811,7 @@ struct PlayerView: View {
   /// PlayerView+EventHandlers.swift; this property is purely the view tree.
   var playerStack: some View {
     ZStack {
-      palette.playerBackdrop.ignoresSafeArea()
+      palette.playerBackdrop.ignoresSafeArea(edges: isMultiviewCompact ? [] : .all)
         // Attached to the backdrop (a child) rather than the root ZStack so it
         // doesn't collide with the sign-in `.fullScreenCover` below. Two
         // presentation modifiers on the *same* view conflict on tvOS and only
@@ -843,7 +843,7 @@ struct PlayerView: View {
             .transition(.move(edge: .trailing))
         }
       }
-      .ignoresSafeArea()
+      .ignoresSafeArea(edges: isMultiviewCompact ? [] : .all)
 
       if showRaidEvents, let raid = chat.pendingRaid, shouldShowIncomingRaid(raid) {
         raidBanner(raid)

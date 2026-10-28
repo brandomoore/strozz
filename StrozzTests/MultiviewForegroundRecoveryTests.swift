@@ -313,28 +313,64 @@ final class MultiviewForegroundRecoveryTests: XCTestCase {
   }
 
   func testLayoutsKeepStablePaneKeysAndStayInsideViewport() throws {
-    let size = CGSize(width: 1920, height: 1080)
-    for count in 1...6 {
-      let ids = (0..<count).map(String.init)
-      for layout in [MultiviewLayout.grid, .spotlight] {
-        let frames = MultiviewGeometry.frames(ids: ids, size: size, layout: layout,
-          primary: ids.last, expanded: nil)
-        XCTAssertEqual(Set(frames.keys), Set(ids))
-        for frame in frames.values {
-          XCTAssertGreaterThan(frame.width, 0)
-          XCTAssertGreaterThan(frame.height, 0)
-          let outlined = frame.insetBy(dx: -5, dy: -5)
-          XCTAssertGreaterThanOrEqual(outlined.minX, 0)
-          XCTAssertGreaterThanOrEqual(outlined.minY, 0)
-          XCTAssertLessThanOrEqual(outlined.maxX, size.width + 0.001)
-          XCTAssertLessThanOrEqual(outlined.maxY, size.height + 0.001)
+    XCTAssertEqual(MultiviewGeometry.gap, 10)
+    for size in [CGSize(width: 1920, height: 1080), CGSize(width: 3840, height: 2160),
+      CGSize(width: 1280, height: 720), CGSize(width: 854, height: 480)] {
+      for count in 1...6 {
+        let ids = (0..<count).map(String.init)
+        let mixedRatios: [CGFloat] = [4 / 3, 16 / 9, 9 / 16, 2.4, 1, 16 / 9]
+        for ratios in [[:], Dictionary(uniqueKeysWithValues: zip(ids, mixedRatios))] {
+          for layout in [MultiviewLayout.grid, .spotlight] {
+            let frames = MultiviewGeometry.frames(ids: ids, size: size, layout: layout,
+              primary: ids.last, expanded: nil, aspectRatios: ratios)
+            XCTAssertEqual(Set(frames.keys), Set(ids))
+            for id in ids {
+              let frame = try XCTUnwrap(frames[id])
+              XCTAssertGreaterThan(frame.width, 0)
+              XCTAssertGreaterThan(frame.height, 0)
+              XCTAssertEqual(frame.width / frame.height,
+                ratios[id] ?? MultiviewGeometry.defaultAspectRatio, accuracy: 0.0001)
+              let outlined = frame.insetBy(dx: -5, dy: -5)
+              XCTAssertGreaterThanOrEqual(outlined.minX, -0.001)
+              XCTAssertGreaterThanOrEqual(outlined.minY, -0.001)
+              XCTAssertLessThanOrEqual(outlined.maxX, size.width + 0.001)
+              XCTAssertLessThanOrEqual(outlined.maxY, size.height + 0.001)
+              var nearestGap = CGFloat.infinity
+              for (otherID, other) in frames where otherID != id {
+                let dx = max(0, frame.minX - other.maxX, other.minX - frame.maxX)
+                let dy = max(0, frame.minY - other.maxY, other.minY - frame.maxY)
+                XCTAssertGreaterThanOrEqual(max(dx, dy), 9.999,
+                  "Outside outlines must not overlap another picture")
+                if dx == 0 { nearestGap = min(nearestGap, dy) }
+                if dy == 0 { nearestGap = min(nearestGap, dx) }
+              }
+              if count > 1 {
+                XCTAssertEqual(nearestGap, 10, accuracy: 0.001,
+                  "Pictures must pack against a neighbor, not retain letterboxed cell gaps")
+              }
+            }
+            let expanded = MultiviewGeometry.frames(ids: ids, size: size, layout: layout,
+              primary: ids.last, expanded: ids[0], aspectRatios: ratios)
+            XCTAssertEqual(expanded[ids[0]], CGRect(origin: .zero, size: size))
+            for id in ids.dropFirst() { XCTAssertEqual(expanded[id], frames[id]) }
+          }
         }
-        let expanded = MultiviewGeometry.frames(ids: ids, size: size, layout: layout,
-          primary: ids.last, expanded: ids[0])
-        XCTAssertEqual(expanded[ids[0]], CGRect(origin: .zero, size: size))
-        for id in ids.dropFirst() { XCTAssertEqual(expanded[id], frames[id]) }
       }
     }
+  }
+
+  func testPictureAspectRatioRetainsLastKnownSizeWhileItemIsUnavailable() {
+    let context = MultiviewPlaybackContext()
+    XCTAssertEqual(context.videoAspectRatio, 16 / 9, accuracy: 0.0001)
+    context.updateVideoAspectRatio(CGSize(width: 640, height: 480))
+    XCTAssertEqual(context.videoAspectRatio, 4 / 3, accuracy: 0.0001)
+    for size in [nil, .zero, CGSize(width: CGFloat.nan, height: 720),
+      CGSize(width: 1280, height: CGFloat.infinity)] {
+      context.updateVideoAspectRatio(size)
+      XCTAssertEqual(context.videoAspectRatio, 4 / 3, accuracy: 0.0001)
+    }
+    context.updateVideoAspectRatio(CGSize(width: 1080, height: 1920))
+    XCTAssertEqual(context.videoAspectRatio, 9 / 16, accuracy: 0.0001)
   }
 
   func testClosingExpandedPlayerRestoresTheWallInsteadOfDismissingIt() {

@@ -151,6 +151,7 @@ extension PlayerView {
   /// Multi-description movies keep static presentation metadata; use observed
   /// decoder dimensions rather than reporting the first description forever.
   func updateResolvedQuality() {
+    model.multiviewContext?.updateVideoAspectRatio(player.currentItem?.presentationSize)
     let resolved = computeResolvedQualityName()
     // Assign only on change: this runs every second, and rewriting the same
     // `@State` value still re-executes the player body (flashing focus).

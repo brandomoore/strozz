@@ -1,3 +1,4 @@
+import AVKit
 import SwiftUI
 import XCTest
 @testable import Strozz
@@ -172,6 +173,137 @@ final class MultiviewFocusRenderingTests: XCTestCase {
         }
       }
     }
+  }
+
+  func testPackedOutlinesFollowActualAVKitPicturesAcrossLayouts() async throws {
+    let videos = [
+      try await makePictureVideo(width: 640, height: 360),
+      try await makePictureVideo(width: 640, height: 480),
+    ]
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    defer { window.rootViewController = previous }
+    let environment = AppEnvironment()
+
+    func videoControllers(_ root: UIViewController) -> [AVPlayerViewController] {
+      (root as? AVPlayerViewController).map { [$0] } ?? root.children.flatMap(videoControllers)
+    }
+    func videoLayers(_ root: CALayer) -> [AVPlayerLayer] {
+      (root as? AVPlayerLayer).map { [$0] } ?? (root.sublayers ?? []).flatMap(videoLayers)
+    }
+
+    for count in 1...6 {
+      let controller = MultiviewController(channels: (0..<count).map {
+        FollowedChannel(id: "picture-\($0)", login: "picture\($0)", displayName: "Picture \($0)",
+          title: "", gameName: "", viewerCount: nil, thumbnailURL: nil,
+          profileImageURL: nil, isLive: true)
+      }, muted: true)
+      defer { controller.teardown() }
+      for (index, pane) in controller.panes.enumerated() {
+        pane.model.isLoading = false
+        pane.player.replaceCurrentItem(with: AVPlayerItem(url: videos[index % videos.count]))
+        pane.player.play()
+      }
+      let host = UIHostingController(rootView: MultiviewPictureRenderingFixture(controller: controller)
+        .environment(environment))
+      window.rootViewController = host
+      host.view.layoutIfNeeded()
+      for _ in 0..<100 {
+        let surfaces = videoControllers(host)
+        if surfaces.count == count && surfaces.allSatisfy(\.isReadyForDisplay)
+          && controller.panes.allSatisfy({ ($0.player.currentItem?.presentationSize.height ?? 0) > 0 }) { break }
+        try await Task.sleep(for: .milliseconds(50))
+      }
+      XCTAssertEqual(videoControllers(host).count, count)
+      XCTAssertTrue(videoControllers(host).allSatisfy(\.isReadyForDisplay),
+        "Alignment must use actual decoded pictures, not unloaded video containers")
+      for (index, pane) in controller.panes.enumerated() {
+        PlayerView(channel: pane.channel.login, auth: TwitchAuthSession(), model: pane.model)
+          .updateResolvedQuality()
+        XCTAssertEqual(pane.presentation.videoAspectRatio, index.isMultiple(of: 2) ? 16 / 9 : 4 / 3,
+          accuracy: 0.0001, "The layout must receive the loaded item's presentation aspect ratio")
+        pane.player.pause()
+      }
+      for layout in [MultiviewLayout.grid, .spotlight] {
+        if layout == .spotlight { controller.spotlight(controller.panes.last!.id) }
+        try await Task.sleep(for: .milliseconds(500))
+        let expected = MultiviewGeometry.frames(ids: controller.panes.map(\.id),
+          size: host.view.bounds.size, layout: layout, primary: controller.primaryPaneID, expanded: nil,
+          aspectRatios: Dictionary(uniqueKeysWithValues: controller.panes.map {
+            ($0.id, $0.presentation.videoAspectRatio)
+          }))
+        let surfaces = videoControllers(host)
+        for pane in controller.panes {
+          let surface = try XCTUnwrap(surfaces.first { $0.player === pane.player })
+          let layer = try XCTUnwrap(videoLayers(surface.view.layer).first { $0.player === pane.player })
+          let picture = layer.convert(layer.videoRect, to: host.view.layer)
+          let frame = try XCTUnwrap(expected[pane.id])
+          let description = "\(count) \(layout) \(pane.id)"
+          XCTAssertEqual(picture.minX, frame.minX, accuracy: 1, description)
+          XCTAssertEqual(picture.maxX, frame.maxX, accuracy: 1, description)
+          XCTAssertEqual(picture.minY, frame.minY, accuracy: 1, description)
+          XCTAssertEqual(picture.maxY, frame.maxY, accuracy: 1, description)
+        }
+        let image = UIGraphicsImageRenderer(bounds: host.view.bounds).image { _ in
+          host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+        }
+        let active = try XCTUnwrap(expected[controller.panes[0].id])
+        for point in [
+          CGPoint(x: active.minX - 2, y: active.midY),
+          CGPoint(x: active.maxX + 2, y: active.midY),
+          CGPoint(x: active.midX, y: active.minY - 2),
+          CGPoint(x: active.midX, y: active.maxY + 2),
+        ] {
+          XCTAssertGreaterThan(try pixel(image, at: point).min() ?? 0, 230,
+            "The outside outline must track all four native picture edges")
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "Packed AVKit pictures \(count) \(layout)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+      }
+    }
+  }
+
+  private func makePictureVideo(width: Int, height: Int) async throws -> URL {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
+    addTeardownBlock {
+      if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+    }
+    let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+    let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+      AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height,
+    ])
+    let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input,
+      sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB])
+    writer.add(input)
+    XCTAssertTrue(writer.startWriting())
+    writer.startSession(atSourceTime: .zero)
+    var buffer: CVPixelBuffer?
+    XCTAssertEqual(CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32ARGB,
+      [kCVPixelBufferCGImageCompatibilityKey: true, kCVPixelBufferCGBitmapContextCompatibilityKey: true]
+        as CFDictionary, &buffer), kCVReturnSuccess)
+    let pixels = try XCTUnwrap(buffer)
+    CVPixelBufferLockBaseAddress(pixels, [])
+    let context = try XCTUnwrap(CGContext(data: CVPixelBufferGetBaseAddress(pixels),
+      width: width, height: height, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixels),
+      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue))
+    context.setFillColor(UIColor.red.cgColor)
+    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    CVPixelBufferUnlockBaseAddress(pixels, [])
+    for frame in 0..<30 {
+      for _ in 0..<200 {
+        if input.isReadyForMoreMediaData { break }
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      XCTAssertTrue(input.isReadyForMoreMediaData)
+      XCTAssertTrue(adaptor.append(pixels, withPresentationTime: CMTime(value: Int64(frame), timescale: 10)))
+    }
+    input.markAsFinished()
+    await writer.finishWriting()
+    XCTAssertEqual(writer.status, .completed, String(describing: writer.error))
+    return url
   }
 
   func testFocusOutlineReachesFinalPixelsOnFirstUpdate() async throws {
@@ -422,6 +554,32 @@ private struct LineupButtonRenderingFixture: View {
       .preferredColorScheme(.dark)
       .onAppear { isFocused = true }
       .onChange(of: isFocused) { _, value in focus.isFocused = value }
+  }
+}
+
+private struct MultiviewPictureRenderingFixture: View {
+  let controller: MultiviewController
+
+  var body: some View {
+    MultiviewVideoStage(controller: controller) { pane in
+      MultiviewPicturePaneFixture(pane: pane, isFocused: pane.id == controller.panes.first?.id)
+    }
+    .background(Color.black)
+    .ignoresSafeArea()
+  }
+}
+
+private struct MultiviewPicturePaneFixture: View {
+  let pane: MultiviewPane
+  let isFocused: Bool
+
+  var body: some View {
+    var player = PlayerView(channel: pane.channel.login, auth: TwitchAuthSession(), model: pane.model)
+    player.inputTestContent = { AnyView($0.playerStack) }
+    return player.overlay {
+      MultiviewPaneTile(pane: pane, isFocused: isFocused, isPrimary: false,
+        showsMetadata: false, showsChrome: true, style: .full, palette: .dark, glassDisabled: true)
+    }
   }
 }
 
