@@ -336,6 +336,29 @@ stays around the wall instead of between rows. These bounds stay stable while
 chrome hides. Compact players do not ignore safe areas: doing so expands their
 native video surfaces toward screen edges independently of the pane outlines.
 Expanded playback remains edge-to-edge with the same retained player.
+Metadata adapts to the actual pane bounds rather than its quality tier: smaller
+panes omit title/game details, and the smallest show only the channel and audio
+cue. Chrome cannot enlarge the picture's outside outline or spill into peers.
+
+Featured, Spotlight and Equal are explicit TV layout choices. Featured places
+the pinned primary beside a compact secondary grid; Spotlight uses a thumbnail
+strip; Equal uses common-height, aspect-correct pictures without a three-stream
+primary exception. `primaryPaneID` is independent of focus/audio and remains
+selected across layout changes. Promotion changes geometry, not pane order,
+player items or reload identifiers. Existing quality budgets remain unchanged:
+Featured and Equal use the grid tiers; Spotlight retains its source/thumbnail tiers.
+
+Play/Pause reveals a bottom Liquid Glass toolbar with Layout, Browse streams
+(Add stream in the standalone picker flow), and Done. Layout opens the same
+picker as Layout in a pane's hold menu; Back closes the picker before the
+toolbar. Focus is contained in controls while open, preserving audio and the
+return pane. Controls never auto-dismiss under focus. Their measured height
+drives bottom clearance: leave fitting pictures unchanged, translate into unused
+space next, and only then recompute smaller frames with unchanged rows/columns
+and outside-outline gaps. Layout and clearance motion respects Reduce Motion;
+ordinary pane focus does not resize the wall.
+Controls constrain their labels to the available width and use the shared
+theme-aware player button styles, including the native Reduce Transparency path.
 
 Holding Play/Pause for 0.7 seconds opens the shared lineup from browsing or a
 presented screen; holding it in an expanded pane returns to the wall. The

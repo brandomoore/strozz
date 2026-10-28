@@ -225,8 +225,9 @@ final class MultiviewFocusRenderingTests: XCTestCase {
           accuracy: 0.0001, "The layout must receive the loaded item's presentation aspect ratio")
         pane.player.pause()
       }
-      for layout in [MultiviewLayout.grid, .spotlight] {
-        if layout == .spotlight { controller.spotlight(controller.panes.last!.id) }
+      for layout in MultiviewLayout.allCases {
+        controller.makePrimary(controller.panes.last!.id)
+        controller.setLayout(layout)
         try await Task.sleep(for: .milliseconds(500))
         let expected = MultiviewGeometry.frames(ids: controller.panes.map(\.id),
           size: host.view.bounds.size, layout: layout, primary: controller.primaryPaneID, expanded: nil,

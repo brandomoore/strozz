@@ -827,13 +827,23 @@ through the same browsing and search actions. The wall pauses while you browse;
 
 Multiview also pauses its wall when Strozz goes into the background. On return, it
 re-resolves each pane's live playlist and resumes all streams without changing
-the chosen grid/spotlight layout or audio selection.
+the chosen layout, primary stream, or audio selection.
+
+Press Play/Pause on the wall for the bottom **Layout**, **Browse streams**, and
+**Done** controls. Choose **Featured** (a large primary beside smaller streams),
+**Spotlight** (a large primary above a thumbnail strip), or **Equal** (equal-sized
+streams with matching video proportions). Hold a secondary stream and choose
+**Make primary** in Featured or Spotlight; moving focus changes audio, not the
+primary. The hold menu also offers **Layout…** and **Full screen**.
+Controls use existing empty space first, moving or reducing the wall only when
+needed to keep video unobscured. Back closes the layout picker, then the controls,
+returning focus to the same stream. **Done** closes controls, not multiview.
 
 Multiview also uses the normal native live player for every pane. Selecting a
 pane zooms that same player and video surface into the single-stream layout
 with normal chat and controls; Back returns it to the wall without reconnecting.
 Explicit source/quality changes and error recovery remain real playback changes.
-Play/Pause opens wall controls in the grid and controls playback when expanded.
+Play/Pause opens controls in any wall layout and controls playback when expanded.
 Other panes remain live and muted while expanded, with a lower bitrate and
 resolution preference: fully hidden peers target up to 360p / 800 kbps, while
 visible spotlight thumbnails retain their 480p / 800 kbps preference. Returning

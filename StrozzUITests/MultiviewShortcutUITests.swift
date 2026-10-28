@@ -235,7 +235,7 @@ final class MultiviewShortcutUITests: XCTestCase {
     XCTAssertEqual(panes.count, 2)
     let initialIDs = panes.allElementsBoundByIndex.map(\.identifier)
     press(.playPause, duration: 1.1, app: app, name: "hold on real wall")
-    XCTAssertFalse(app.buttons["Spotlight"].exists, "A long hold must not toggle the wall HUD.")
+    XCTAssertFalse(app.buttons["multiview-layout"].exists, "A long hold must not toggle the wall HUD.")
     XCTAssertEqual(panes.allElementsBoundByIndex.map(\.identifier), initialIDs)
     press(.right, app: app, name: "focus real pane")
     // The production pane's AX wrapper does not consistently expose UIKit focus;
@@ -250,7 +250,7 @@ final class MultiviewShortcutUITests: XCTestCase {
     XCTAssertFalse(expanded.exists)
     XCTAssertEqual(panes.allElementsBoundByIndex.map(\.identifier), initialIDs)
     press(.playPause, app: app, name: "real wall short press")
-    XCTAssertTrue(app.buttons["Spotlight"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["multiview-layout"].waitForExistence(timeout: 5))
   }
 
   func testProductionSettingsAndSearchShortcut() throws {

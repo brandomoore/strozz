@@ -3,6 +3,7 @@ import SwiftUI
 /// Layout changes only the bounds of identity-stable player subtrees.
 struct MultiviewVideoStage<Content: View>: View {
   let controller: MultiviewController
+  var bottomClearance: CGFloat = 0
   @ViewBuilder var content: (MultiviewPane) -> Content
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -12,7 +13,7 @@ struct MultiviewVideoStage<Content: View>: View {
         layout: controller.layout, primary: controller.primaryPaneID, expanded: controller.expandedPaneID,
         aspectRatios: Dictionary(uniqueKeysWithValues: controller.panes.map {
           ($0.id, $0.presentation.videoAspectRatio)
-        }))
+        }), bottomClearance: bottomClearance)
       ZStack(alignment: .topLeading) {
         ForEach(controller.panes) { pane in
           if let frame = frames[pane.id] {
@@ -29,6 +30,7 @@ struct MultiviewVideoStage<Content: View>: View {
       .animation(.motionAware(.easeInOut(duration: 0.35), reduceMotion: reduceMotion), value: controller.expandedPaneID)
       .animation(.motionAware(.easeInOut(duration: 0.35), reduceMotion: reduceMotion), value: controller.layout)
       .animation(.motionAware(.easeInOut(duration: 0.35), reduceMotion: reduceMotion), value: controller.primaryPaneID)
+      .animation(.motionAware(.easeInOut(duration: 0.25), reduceMotion: reduceMotion), value: bottomClearance)
     }
   }
 }

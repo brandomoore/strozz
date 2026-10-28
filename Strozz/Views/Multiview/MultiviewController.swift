@@ -5,8 +5,26 @@ import SwiftUI
 
 let multiviewPaneLimit = 6
 
-enum MultiviewLayout {
-  case grid, spotlight
+enum MultiviewLayout: String, CaseIterable {
+  case featured, spotlight, grid
+
+  var title: LocalizedStringResource {
+    switch self {
+    case .featured: "Featured"
+    case .spotlight: "Spotlight"
+    case .grid: "Equal"
+    }
+  }
+
+  var glyph: Glyph {
+    switch self {
+    case .featured: .sidebarRightCollapse
+    case .spotlight: .layoutBottombar
+    case .grid: .layoutGrid
+    }
+  }
+
+  var hasPrimary: Bool { self != .grid }
 }
 
 enum MultiviewQualityTier {
@@ -138,7 +156,7 @@ final class MultiviewPane: Identifiable {
 final class MultiviewController {
   private(set) var panes: [MultiviewPane]
   private(set) var audiblePaneID: String?
-  private(set) var layout = MultiviewLayout.grid
+  private(set) var layout = MultiviewLayout.featured
   private(set) var primaryPaneID: String?
   private(set) var expandedPaneID: String?
   private(set) var isTransitioning = false
@@ -212,8 +230,8 @@ final class MultiviewController {
     refreshQuality()
   }
 
-  func toggleLayout() {
-    layout = layout == .grid ? .spotlight : .grid
+  func setLayout(_ layout: MultiviewLayout) {
+    self.layout = layout
     refreshQuality()
   }
 
@@ -338,19 +356,63 @@ enum MultiviewGeometry {
 
   static func frames(ids: [String], size: CGSize, layout: MultiviewLayout,
                      primary: String?, expanded: String?,
-                     aspectRatios: [String: CGFloat] = [:]) -> [String: CGRect] {
+                     aspectRatios: [String: CGFloat] = [:],
+                     bottomClearance: CGFloat = 0) -> [String: CGRect] {
     guard !ids.isEmpty, size.width > maximumOutlineWidth * 2,
       size.height > maximumOutlineWidth * 2 else { return [:] }
     let bounds = CGRect(origin: .zero, size: size)
       .insetBy(dx: maximumOutlineWidth, dy: maximumOutlineWidth)
-    func ratio(_ id: String) -> CGFloat { aspectRatios[id] ?? defaultAspectRatio }
+    let ratios = Dictionary(uniqueKeysWithValues: ids.map { ($0, aspectRatios[$0] ?? defaultAspectRatio) })
+    let columns = (1...ids.count).max { lhs, rhs in
+      gridHeight(ids: ids, bounds: bounds, columns: lhs, ratios: ratios)
+        < gridHeight(ids: ids, bounds: bounds, columns: rhs, ratios: ratios)
+    } ?? 1
+    func arrangement(in bounds: CGRect) -> [String: CGRect] {
+      arrangedFrames(ids: ids, bounds: bounds, layout: layout, primary: primary,
+        ratios: ratios, gridColumns: columns)
+    }
+    var frames = arrangement(in: bounds)
+    if expanded == nil, bottomClearance > 0 {
+      let available = CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width,
+        height: max(1, bounds.height - bottomClearance))
+      let occupied = frames.values.reduce(CGRect.null) { $0.union($1) }
+      if occupied.maxY > available.maxY {
+        if occupied.height <= available.height {
+          // Use existing letterboxing before reducing any picture's size.
+          frames = frames.mapValues { $0.offsetBy(dx: 0, dy: available.maxY - occupied.maxY) }
+        } else {
+          // Keep the same rows/columns and full outside-outline gaps when shrinking.
+          frames = arrangement(in: available)
+        }
+      }
+    }
+    if let expanded, ids.contains(expanded) { frames[expanded] = CGRect(origin: .zero, size: size) }
+    return frames
+  }
+
+  private static func gridHeight(ids: [String], bounds: CGRect, columns: Int,
+                                 ratios: [String: CGFloat]) -> CGFloat {
+    let rowCount = (ids.count + columns - 1) / columns
+    var height = (bounds.height - gap * CGFloat(rowCount - 1)) / CGFloat(rowCount)
+    for start in stride(from: 0, to: ids.count, by: columns) {
+      let row = ids[start..<min(start + columns, ids.count)]
+      let totalRatio = row.reduce(CGFloat.zero) { $0 + ratios[$1, default: defaultAspectRatio] }
+      height = min(height, (bounds.width - gap * CGFloat(row.count - 1)) / totalRatio)
+    }
+    return max(0, height)
+  }
+
+  private static func arrangedFrames(ids: [String], bounds: CGRect, layout: MultiviewLayout,
+                                     primary: String?, ratios: [String: CGFloat],
+                                     gridColumns: Int) -> [String: CGRect] {
+    func ratio(_ id: String) -> CGFloat { ratios[id, default: defaultAspectRatio] }
+    let selected = ids.first(where: { $0 == primary }) ?? ids[0]
+    let others = ids.filter { $0 != selected }
     var frames: [String: CGRect] = [:]
-    if layout == .spotlight && ids.count > 1 {
-      let selected = ids.first(where: { $0 == primary }) ?? ids[0]
-      let others = ids.filter { $0 != selected }
+    if layout == .spotlight && !others.isEmpty {
       let totalRatio = others.reduce(CGFloat.zero) { $0 + ratio($1) }
       let stripGaps = gap * CGFloat(others.count - 1)
-      let stripHeight = max(0, min(169, bounds.height / 4, (bounds.width - stripGaps) / totalRatio))
+      let stripHeight = max(0, min(bounds.height / 4, (bounds.width - stripGaps) / totalRatio))
       let mainHeight = max(0, min(bounds.height - stripHeight - gap, bounds.width / ratio(selected)))
       let top = bounds.midY - (mainHeight + gap + stripHeight) / 2
       let mainWidth = mainHeight * ratio(selected)
@@ -362,32 +424,39 @@ enum MultiviewGeometry {
         frames[id] = CGRect(x: x, y: top + mainHeight + gap, width: width, height: stripHeight)
         x += width + gap
       }
-    } else if ids.count == 3 {
-      // One large picture beside two stacked pictures, not a tall letterboxed cell.
-      let stackRatio = 1 / (1 / ratio(ids[1]) + 1 / ratio(ids[2]))
-      let height = max(0, min(bounds.height,
-        (bounds.width - gap + gap * stackRatio) / (ratio(ids[0]) + stackRatio)))
-      let mainWidth = height * ratio(ids[0])
-      let sideWidth = max(0, height - gap) * stackRatio
+    } else if layout == .featured && !others.isEmpty {
+      let columns = others.count > 3 ? 2 : 1
+      let rows = stride(from: 0, to: others.count, by: columns).map {
+        Array(others[$0..<min($0 + columns, others.count)])
+      }
+      let rowRatios = rows.map { $0.reduce(CGFloat.zero) { $0 + ratio($1) } }
+      let primaryRows = CGFloat(max(2, rows.count))
+      let mainGaps = gap * (primaryRows - 1)
+      let height = max(0, min((bounds.height - mainGaps) / primaryRows,
+        (bounds.width - mainGaps * ratio(selected) - gap * CGFloat(columns))
+          / (primaryRows * ratio(selected) + (rowRatios.max() ?? 0))))
+      let mainHeight = height * primaryRows + mainGaps
+      let mainWidth = mainHeight * ratio(selected)
+      let sideWidth = height * (rowRatios.max() ?? 0) + gap * CGFloat(columns - 1)
       let left = bounds.midX - (mainWidth + gap + sideWidth) / 2
-      let top = bounds.midY - height / 2
-      frames[ids[0]] = CGRect(x: left, y: top, width: mainWidth, height: height)
-      let upperHeight = sideWidth / ratio(ids[1])
-      frames[ids[1]] = CGRect(x: left + mainWidth + gap, y: top,
-        width: sideWidth, height: upperHeight)
-      frames[ids[2]] = CGRect(x: left + mainWidth + gap, y: top + upperHeight + gap,
-        width: sideWidth, height: sideWidth / ratio(ids[2]))
+      frames[selected] = CGRect(x: left, y: bounds.midY - mainHeight / 2,
+        width: mainWidth, height: mainHeight)
+      let top = bounds.midY - (height * CGFloat(rows.count) + gap * CGFloat(rows.count - 1)) / 2
+      for (index, row) in rows.enumerated() {
+        var x = left + mainWidth + gap
+        for id in row {
+          let width = height * ratio(id)
+          frames[id] = CGRect(x: x, y: top + CGFloat(index) * (height + gap), width: width, height: height)
+          x += width + gap
+        }
+      }
     } else {
-      let columns = min(ids.count, ids.count > 4 ? 3 : 2)
+      let columns = gridColumns
       let rows = stride(from: 0, to: ids.count, by: columns).map {
         Array(ids[$0..<min($0 + columns, ids.count)])
       }
       let rowRatios = rows.map { row in row.reduce(CGFloat.zero) { $0 + ratio($1) } }
-      var height = (bounds.height - gap * CGFloat(rows.count - 1)) / CGFloat(rows.count)
-      for (index, row) in rows.enumerated() {
-        height = min(height, (bounds.width - gap * CGFloat(row.count - 1)) / rowRatios[index])
-      }
-      height = max(0, height)
+      let height = gridHeight(ids: ids, bounds: bounds, columns: columns, ratios: ratios)
       let widths = rows.enumerated().map { index, row in
         height * rowRatios[index] + gap * CGFloat(row.count - 1)
       }
@@ -402,7 +471,6 @@ enum MultiviewGeometry {
         }
       }
     }
-    if let expanded, ids.contains(expanded) { frames[expanded] = CGRect(origin: .zero, size: size) }
     return frames
   }
 }
