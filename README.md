@@ -799,6 +799,9 @@ open it to remove streams or start watching once you have at least two. You can
 also start or return to multiview from a channel's hold menu. The normal player's
 controls let you add the stream you're watching. There is no separate multiview
 discovery tab.
+Hold Play/Pause from any screen to start or return to your multiview lineup.
+A normal press keeps its usual behavior. If more streams are needed, a toast
+reminds you to add them without leaving the current screen.
 Back from the wall, or **Browse streams** in its controls, lets you add more
 through the same browsing and search actions. The wall pauses while you browse;
 **Return to multiview** resumes the same lineup.

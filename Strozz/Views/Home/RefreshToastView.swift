@@ -14,25 +14,35 @@ enum RefreshToastState: Equatable {
 /// re-tap of the Home tab gives the viewer visible feedback.
 struct RefreshToastView: View {
   let state: RefreshToastState
+
+  var body: some View {
+    ToastPill {
+      HStack(spacing: 14) {
+        switch state {
+        case .refreshing:
+          ProgressView()
+            .scaleEffect(0.9)
+          Text("Refreshing…")
+        case .done:
+          Icon(glyph: .circleCheckFilled, size: 30)
+            .foregroundStyle(.green)
+          Text("Refreshed")
+        case .failed:
+          Icon(glyph: .alertCircle, size: 30)
+          Text("Refresh failed")
+        }
+      }
+    }
+  }
+}
+
+struct ToastPill<Content: View>: View {
+  @ViewBuilder var content: Content
   @Environment(\.glassDisabled) private var glassDisabled
   @Environment(\.themePalette) private var palette
 
   var body: some View {
-    HStack(spacing: 14) {
-      switch state {
-      case .refreshing:
-        ProgressView()
-          .scaleEffect(0.9)
-        Text("Refreshing…")
-      case .done:
-        Icon(glyph: .circleCheckFilled, size: 30)
-          .foregroundStyle(.green)
-        Text("Refreshed")
-      case .failed:
-        Icon(glyph: .alertCircle, size: 30)
-        Text("Refresh failed")
-      }
-    }
+    content
     .font(.headline)
     .foregroundStyle(glassDisabled ? palette.chromeOnOpaque : .primary)
     .padding(.horizontal, 30)

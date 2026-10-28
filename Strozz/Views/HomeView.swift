@@ -93,6 +93,7 @@ struct HomeView: View {
 
   @Environment(\.colorScheme) private var systemColorScheme
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.glassDisabled) private var glassDisabled
   @Environment(\.scenePhase) private var scenePhase
   @FocusState private var focusedItemID: String?
 
@@ -146,6 +147,8 @@ struct HomeView: View {
       }
     }
       .environment(\.multiviewLineup, multiview)
+      .background(MultiviewRemoteShortcut(lineup: multiview, palette: resolvedPalette,
+        glassDisabled: glassDisabled))
       .onChange(of: multiview.playbackRequest) { _, _ in
         pendingMultiviewStart = true
         if selectedChannel != nil { selectedChannel = nil }
@@ -784,7 +787,7 @@ struct HomeView: View {
   /// and dismissing one counts as an interaction.
   private var isPresentingCover: Bool {
     isPresentingPlayer || channelPageTarget != nil || showSignIn || showYouTubeSignIn
-      || showGoLiveSetup
+      || showGoLiveSetup || multiview.isOpeningPlayback
   }
 
   /// Everything that means the viewer is actively using Home. Any change resets

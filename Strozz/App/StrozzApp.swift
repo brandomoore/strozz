@@ -31,6 +31,8 @@ struct StrozzApp: App {
           MultiviewSelectionFixture()
         } else if ProcessInfo.processInfo.environment["STROZZ_MULTIVIEW_BROWSE_FIXTURE"] == "1" {
           MultiviewBrowseFixture()
+        } else if ProcessInfo.processInfo.environment["STROZZ_MULTIVIEW_SHORTCUT_FIXTURE"] == "1" {
+          MultiviewShortcutFixture()
         } else if ProcessInfo.processInfo.environment["STROZZ_SIGN_IN_FIXTURE"] == "1" {
           TwitchSignInFixture()
         } else if ProcessInfo.processInfo.environment["STROZZ_HOME_ERROR_FIXTURE"] == "1" {

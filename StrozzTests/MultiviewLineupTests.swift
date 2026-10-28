@@ -153,6 +153,108 @@ final class MultiviewLineupTests: XCTestCase {
     XCTAssertNil(lineup.nextExpiry)
   }
 
+  func testReturningToVisibleWallCollapsesWithoutReplacingPlayersOrTogglingTransport() throws {
+    let lineup = MultiviewLineup { _ in .live }
+    defer { lineup.clear() }
+    lineup.toggle(channel("one"))
+    lineup.toggle(channel("two"))
+    lineup.startPlayback()
+    let controller = try XCTUnwrap(lineup.controller)
+    let panes = controller.panes
+    let players = panes.map(\.player)
+    controller.spotlight(panes[1].id)
+    controller.expand(panes[1].id)
+    let transportRequests = panes.map(\.presentation.playPauseRequests)
+    XCTAssertNotNil(controller.expandedPaneID)
+
+    lineup.requestPlayback()
+    XCTAssertTrue(lineup.isOpeningPlayback)
+    lineup.startPlayback()
+    XCTAssertFalse(lineup.isOpeningPlayback)
+    XCTAssertTrue(lineup.controller === controller)
+    XCTAssertNil(controller.expandedPaneID)
+    XCTAssertEqual(controller.layout, .spotlight)
+    XCTAssertEqual(controller.audiblePaneID, panes[1].id)
+    XCTAssertEqual(panes.map(\.presentation.playPauseRequests), transportRequests)
+    for index in panes.indices {
+      XCTAssertTrue(controller.panes[index] === panes[index])
+      XCTAssertTrue(controller.panes[index].player === players[index])
+    }
+    lineup.startPlayback()
+    XCTAssertNil(controller.expandedPaneID, "Another hold on the wall is not a toggle")
+    XCTAssertNil(lineup.notice)
+  }
+
+  func testReturningToAlreadyVisibleOfflineWallDoesNotShowASelectionAlert() throws {
+    let lineup = MultiviewLineup { _ in .live }
+    defer { lineup.clear() }
+    lineup.toggle(channel("one"))
+    lineup.toggle(channel("two"))
+    lineup.startPlayback()
+    let controller = try XCTUnwrap(lineup.controller)
+    controller.expand(controller.panes[0].id)
+    lineup.observe(.offline, key: "one")
+    lineup.observe(.offline, key: "two")
+    XCTAssertFalse(lineup.canStart)
+    lineup.startPlayback()
+    XCTAssertTrue(lineup.isShowingPlayback)
+    XCTAssertTrue(lineup.controller === controller)
+    XCTAssertNil(controller.expandedPaneID)
+    XCTAssertNil(lineup.notice)
+  }
+
+  func testWindowShortcutInstallationIsIdempotentAndScopedToItsOwnWindow() throws {
+    let lineup = MultiviewLineup { _ in .live }
+    let first = UIWindow()
+    let second = UIWindow()
+    let unrelated = UITapGestureRecognizer()
+    first.addGestureRecognizer(unrelated)
+    let coordinator = MultiviewRemoteShortcut.Coordinator(lineup: lineup,
+      palette: AppTheme.light.palette(systemColorScheme: .light), glassDisabled: true)
+    defer { coordinator.attach(to: nil) }
+    coordinator.attach(to: first)
+    let recognizer = try XCTUnwrap(first.gestureRecognizers?.first { $0 !== unrelated } as? UILongPressGestureRecognizer)
+    XCTAssertEqual(recognizer.allowedPressTypes, [NSNumber(value: UIPress.PressType.playPause.rawValue)])
+    XCTAssertEqual(recognizer.minimumPressDuration, 0.7)
+    coordinator.attach(to: first)
+    XCTAssertEqual(first.gestureRecognizers?.count, 2)
+
+    let shortPress = UITapGestureRecognizer()
+    shortPress.allowedPressTypes = [NSNumber(value: UIPress.PressType.playPause.rawValue)]
+    XCTAssertTrue(coordinator.gestureRecognizer(recognizer, shouldBeRequiredToFailBy: shortPress))
+    let select = UITapGestureRecognizer()
+    select.allowedPressTypes = [NSNumber(value: UIPress.PressType.select.rawValue)]
+    XCTAssertFalse(coordinator.gestureRecognizer(recognizer, shouldBeRequiredToFailBy: select))
+
+    coordinator.attach(to: second)
+    XCTAssertEqual(first.gestureRecognizers, [unrelated])
+    XCTAssertEqual(second.gestureRecognizers?.count, 1)
+    coordinator.attach(to: nil)
+    XCTAssertTrue(second.gestureRecognizers?.isEmpty ?? true)
+    XCTAssertEqual(first.gestureRecognizers, [unrelated])
+    XCTAssertNil(lineup.controller)
+  }
+
+  func testPresentationHandoffRemainsBusyUntilStartOrCancellation() {
+    let lineup = MultiviewLineup { _ in .live }
+    defer { lineup.clear() }
+    let request = lineup.playbackRequest
+    lineup.preparePlaybackRequest()
+    XCTAssertTrue(lineup.isOpeningPlayback)
+    XCTAssertEqual(lineup.playbackRequest, request, "Modal dismissal must finish before navigation")
+    lineup.cancelPlaybackRequest()
+    XCTAssertFalse(lineup.isOpeningPlayback)
+    lineup.requestPlayback()
+    XCTAssertTrue(lineup.isOpeningPlayback)
+    XCTAssertNotEqual(lineup.playbackRequest, request)
+    lineup.startPlayback()
+    XCTAssertFalse(lineup.isOpeningPlayback, "A rejected request must also release the handoff")
+    XCTAssertNotNil(lineup.notice)
+    lineup.preparePlaybackRequest()
+    lineup.clear()
+    XCTAssertFalse(lineup.isOpeningPlayback)
+  }
+
   func testStaleStatusCannotExpireAReaddedSelection() async throws {
     let requested = expectation(description: "Status request")
     var pending: CheckedContinuation<StreamLiveStatus, Never>?

@@ -16,6 +16,7 @@ final class MultiviewLineup {
   private(set) var entries: [Entry] = []
   private(set) var controller: MultiviewController?
   private(set) var isShowingPlayback = false
+  private(set) var isOpeningPlayback = false
   private(set) var playbackRequest = UUID()
   var notice: String?
   @ObservationIgnored private let loadStatus: @MainActor (FollowedChannel) async -> StreamLiveStatus
@@ -66,11 +67,23 @@ final class MultiviewLineup {
     controller?.teardown()
     controller = nil
     isShowingPlayback = false
+    isOpeningPlayback = false
   }
 
-  func requestPlayback() { playbackRequest = UUID() }
+  func preparePlaybackRequest() { isOpeningPlayback = true }
+  func cancelPlaybackRequest() { isOpeningPlayback = false }
+
+  func requestPlayback() {
+    preparePlaybackRequest()
+    playbackRequest = UUID()
+  }
 
   func startPlayback() {
+    defer { isOpeningPlayback = false }
+    if isShowingPlayback {
+      controller?.collapse()
+      return
+    }
     guard canStart else {
       notice = String(localized: "Select at least two live streams.")
       return
@@ -81,6 +94,7 @@ final class MultiviewLineup {
         muted: ProcessInfo.processInfo.environment["STROZZ_MUTE_PLAYBACK"] == "1")
     }
     isShowingPlayback = true
+    controller?.collapse()
     controller?.setBrowsing(false)
   }
 

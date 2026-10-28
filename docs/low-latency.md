@@ -329,6 +329,17 @@ chrome hides. Compact players do not ignore safe areas: doing so expands their
 native video surfaces toward screen edges independently of the pane outlines.
 Expanded playback remains edge-to-edge with the same retained player.
 
+Holding Play/Pause for 0.7 seconds opens the shared lineup from browsing or a
+presented screen; holding it in an expanded pane returns to the wall. The
+window-scoped recognizer arbitrates with the normal Play/Pause command, so a
+hold must not also pause playback or toggle the wall HUD. Short presses keep
+their existing behavior. An insufficient lineup shows the existing toast pill
+above the current screen for three seconds without dismissing it. Recognizer
+and toast ownership follow the Home window and are removed when it detaches.
+The lineup marks the entire presentation handoff as busy, including UIKit
+dismissal, so Home cannot insert a first-run setup prompt between the old
+screen and multiview.
+
 ### Multiview ceilings
 
 Normal controlled grids permit up to 1920x1080 with one through four panes and
