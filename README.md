@@ -794,9 +794,11 @@ including its normal buffering margin, not zero broadcast/network latency.
 
 On Apple TV, hold a live Twitch or Kick card anywhere you browse and choose
 **Add to multiview**. Search shows channels before categories. The **Multiview**
-button appears with your selected avatars; open it to remove streams or start
-watching once you have at least two. The normal player's controls also let you
-add the stream you're watching. There is no separate multiview discovery tab.
+button grows with your selected avatars alongside the page's scrolling controls;
+open it to remove streams or start watching once you have at least two. You can
+also start or return to multiview from a channel's hold menu. The normal player's
+controls let you add the stream you're watching. There is no separate multiview
+discovery tab.
 Back from the wall, or **Browse streams** in its controls, lets you add more
 through the same browsing and search actions. The wall pauses while you browse;
 **Return to multiview** resumes the same lineup.

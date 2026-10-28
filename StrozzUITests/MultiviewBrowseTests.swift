@@ -10,6 +10,95 @@ final class MultiviewBrowseTests: XCTestCase {
     verifySharedHoldActions(theme: "dark", opaque: false)
   }
 
+  func testInlineLineupGrowsWithoutChangingHeight() {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_MULTIVIEW_BROWSE_FIXTURE"] = "1"
+    app.launchEnvironment["STROZZ_MULTIVIEW_STATUS_THEME"] = "light"
+    app.launchEnvironment["STROZZ_MULTIVIEW_STATUS_OPAQUE"] = "1"
+    app.launch()
+    defer { app.terminate() }
+    XCTAssertTrue(app.buttons["Browse"].waitForExistence(timeout: 10))
+    XCTAssertFalse(app.buttons["multiview-lineup"].exists)
+    capture(app, "Inline Browse empty has no reserved button")
+    XCUIRemote.shared.press(.down)
+    var frames: [CGRect] = []
+    for (index, login) in ["alpha", "beta", "gamma"].enumerated() {
+      if index > 0 { XCUIRemote.shared.press(.right) }
+      let card = app.descendants(matching: .any)["stream-card-\(login)"].firstMatch
+      expectFocus(card)
+      selectContextAction("multiview-toggle-\(login)", in: app)
+      expectValue(card, "In multiview")
+      expectFocus(card)
+      let lineup = app.buttons["multiview-lineup"]
+      expectValue(lineup, "\(index + 1) streams")
+      frames.append(lineup.frame)
+      capture(app, "Inline Browse \(index + 1) avatars")
+    }
+    for frame in frames.dropFirst() {
+      XCTAssertEqual(frame.height, frames[0].height, accuracy: 1)
+      XCTAssertEqual(frame.midY, frames[0].midY, accuracy: 1)
+    }
+    XCTAssertEqual(frames[1].width - frames[0].width, 34, accuracy: 1)
+    XCTAssertEqual(frames[2].width - frames[1].width, 34, accuracy: 1)
+    XCTAssertEqual(frames[0].height, 70, accuracy: 1)
+    print("INLINE_GEOMETRY one=\(frames[0]) two=\(frames[1]) three=\(frames[2])")
+  }
+
+  func testNativeContextStartAndReturnPreserveSearchQuery() {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_MULTIVIEW_BROWSE_FIXTURE"] = "1"
+    app.launchEnvironment["STROZZ_MUTE_PLAYBACK"] = "1"
+    app.launch()
+    defer { app.terminate() }
+    XCTAssertTrue(app.buttons["Browse"].waitForExistence(timeout: 10))
+    XCUIRemote.shared.press(.down)
+    let alpha = app.descendants(matching: .any)["stream-card-alpha"].firstMatch
+    expectFocus(alpha)
+    selectContextAction("multiview-toggle-alpha", in: app)
+    expectFocus(alpha)
+    XCUIRemote.shared.press(.select, forDuration: 1.2)
+    let start = app.descendants(matching: .any)["multiview-context-start"].firstMatch
+    XCTAssertTrue(start.waitForExistence(timeout: 5))
+    XCTAssertEqual(start.label, "Start multiview")
+    XCTAssertFalse(start.isEnabled)
+    capture(app, "Native context Start disabled with one selection")
+    XCUIRemote.shared.press(.menu)
+    expectFocus(alpha)
+    XCUIRemote.shared.press(.right)
+    let beta = app.descendants(matching: .any)["stream-card-beta"].firstMatch
+    expectFocus(beta)
+    selectContextAction("multiview-toggle-beta", in: app)
+    expectFocus(beta)
+    XCUIRemote.shared.press(.left)
+    expectFocus(alpha)
+    XCUIRemote.shared.press(.up)
+    if !app.buttons["Search"].hasFocus { XCUIRemote.shared.press(.right) }
+    expectFocus(app.buttons["Search"])
+    XCUIRemote.shared.press(.select)
+    XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 10))
+    for expectedLabel in ["Start multiview", "Return to multiview"] {
+      focusSearchBeta(app)
+      XCTAssertEqual(app.searchFields.firstMatch.value as? String, "example")
+      XCUIRemote.shared.press(.select, forDuration: 1.2)
+      XCTAssertTrue(start.waitForExistence(timeout: 5))
+      XCTAssertEqual(start.label, expectedLabel)
+      XCTAssertTrue(start.isEnabled)
+      focusContextAction("multiview-context-start", in: app)
+      capture(app, "Search native context \(expectedLabel)")
+      XCUIRemote.shared.press(.select)
+      XCTAssertTrue(app.staticTexts["Fixture multiview"].waitForExistence(timeout: 5))
+      XCTAssertTrue(app.staticTexts["2 streams"].exists)
+      capture(app, "Search context \(expectedLabel) requested playback")
+      returnFromFixturePlayback(app)
+      XCTAssertTrue(beta.waitForExistence(timeout: 5))
+      XCTAssertEqual(app.searchFields.firstMatch.value as? String, "example")
+      expectValue(beta, "In multiview")
+      capture(app, "Search restored after context \(expectedLabel)")
+    }
+  }
+
   private func verifySharedHoldActions(theme: String, opaque: Bool) {
     continueAfterFailure = false
     let app = XCUIApplication()
@@ -60,13 +149,7 @@ final class MultiviewBrowseTests: XCTestCase {
     expectValue(alphaInSearch, "In multiview")
     capture(app, "Channels first in Search")
 
-    // Search's native field sits above its first result row.
-    for _ in 0..<4 {
-      if alphaInSearch.hasFocus || beta.hasFocus { break }
-      XCUIRemote.shared.press(.down)
-    }
-    if alphaInSearch.hasFocus { XCUIRemote.shared.press(.right) }
-    expectFocus(beta)
+    focusSearchBeta(app)
     XCUIRemote.shared.press(.select, forDuration: 1.2)
     let addBeta = app.cells.containing(.any, identifier: "multiview-toggle-beta").firstMatch
     XCTAssertTrue(addBeta.waitForExistence(timeout: 5))
@@ -94,7 +177,7 @@ final class MultiviewBrowseTests: XCTestCase {
     XCUIRemote.shared.press(.select)
     XCTAssertTrue(app.staticTexts["Fixture multiview"].waitForExistence(timeout: 5))
     capture(app, "\(theme) fixture playback request")
-    XCUIRemote.shared.press(.menu)
+    returnFromFixturePlayback(app)
     XCTAssertTrue(app.buttons["multiview-lineup"].waitForExistence(timeout: 5))
     focusFixtureLineup(app)
     XCUIRemote.shared.press(.select)
@@ -110,7 +193,7 @@ final class MultiviewBrowseTests: XCTestCase {
     XCUIRemote.shared.press(.select)
     XCTAssertTrue(app.staticTexts["Fixture multiview"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["1 streams"].exists)
-    XCUIRemote.shared.press(.menu)
+    returnFromFixturePlayback(app)
     focusFixtureLineup(app)
     XCUIRemote.shared.press(.select)
     XCTAssertTrue(start.waitForExistence(timeout: 5))
@@ -160,7 +243,110 @@ final class MultiviewBrowseTests: XCTestCase {
       XCTAssertTrue(panes.firstMatch.waitForExistence(timeout: 10))
       XCTAssertEqual(panes.count, 2)
       capture(app, "Real wall returned from shared manager")
+
+      XCUIRemote.shared.press(.menu)
+      let topCards = app.buttons.matching(
+        NSPredicate(format: "identifier BEGINSWITH 'topstreams-'"))
+      XCTAssertTrue(topCards.firstMatch.waitForExistence(timeout: 15))
+      for _ in 0..<5 {
+        if topCards.allElementsBoundByIndex.contains(where: { $0.hasFocus }) { break }
+        XCUIRemote.shared.press(.down)
+      }
+      XCTAssertTrue(topCards.allElementsBoundByIndex.contains(where: { $0.hasFocus }))
+      XCUIRemote.shared.press(.select, forDuration: 1.2)
+      let contextReturn = app.descendants(matching: .any)["multiview-context-start"].firstMatch
+      XCTAssertTrue(contextReturn.waitForExistence(timeout: 5))
+      XCTAssertEqual(contextReturn.label, "Return to multiview")
+      XCTAssertTrue(contextReturn.isEnabled)
+      focusContextAction("multiview-context-start", in: app)
+      capture(app, "Real Home native Return to multiview")
+      XCUIRemote.shared.press(.select)
+      XCTAssertTrue(panes.firstMatch.waitForExistence(timeout: 10))
+      XCTAssertEqual(panes.count, 2)
+      capture(app, "Real wall returned from native Home context menu")
     }
+  }
+
+  func testRealHomeAndBrowseLineupScrollsWithControls() {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_MULTIVIEW_UI_CHANNELS"] =
+      ProcessInfo.processInfo.environment["STROZZ_MATRIX_CHANNELS"] ?? "multiviewfixtureone,multiviewfixturetwo"
+    app.launchEnvironment["STROZZ_MUTE_PLAYBACK"] = "1"
+    app.launchArguments = ["-hasPromptedFirstLaunchSignIn", "YES"]
+    app.launch()
+    defer { app.terminate() }
+    let panes = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'multiview-pane-'"))
+    XCTAssertTrue(panes.firstMatch.waitForExistence(timeout: 20))
+    XCUIRemote.shared.press(.menu)
+    let lineup = app.buttons["multiview-lineup"]
+    let refresh = app.buttons["following-refresh"]
+    XCTAssertTrue(refresh.waitForExistence(timeout: 20))
+    XCTAssertTrue(lineup.waitForExistence(timeout: 5))
+    let homeLineupFrame = lineup.frame
+    let homeRefreshFrame = refresh.frame
+    let homeTitle = app.staticTexts["following-title"]
+    let homeTitleFrame = homeTitle.frame
+    XCTAssertEqual(homeLineupFrame.midY, homeRefreshFrame.midY, accuracy: 3)
+    XCTAssertLessThan(homeLineupFrame.maxX, homeRefreshFrame.minX)
+    if app.buttons["following-directory"].exists {
+      XCTAssertLessThan(homeLineupFrame.maxX, app.buttons["following-directory"].frame.minX)
+      XCTAssertEqual(homeLineupFrame.midY, app.buttons["following-directory"].frame.midY, accuracy: 3)
+    }
+    capture(app, "Real Home inline lineup beside Refresh")
+    for index in 0..<7 {
+      XCUIRemote.shared.press(.down)
+      capture(app, "Real Home scroll step \(index + 1)")
+      if index >= 3 && lineup.frame.maxY < 0 && refresh.frame.maxY < 0 { break }
+    }
+    XCTAssertFalse(lineup.isHittable)
+    XCTAssertFalse(refresh.isHittable)
+    XCTAssertLessThan(lineup.frame.maxY, 0)
+    XCTAssertEqual(lineup.frame.midY - homeLineupFrame.midY,
+      refresh.frame.midY - homeRefreshFrame.midY, accuracy: 3)
+    XCTAssertLessThan(homeTitle.frame.maxY, 0)
+    XCTAssertEqual(lineup.frame.midY - homeLineupFrame.midY,
+      homeTitle.frame.midY - homeTitleFrame.midY, accuracy: 3)
+    let homeScrolledFrame = lineup.frame
+    capture(app, "Real Home controls scrolled away together")
+
+    let browseTab = app.tabBars.buttons["Browse"]
+    for _ in 0..<10 {
+      if app.tabBars.buttons.allElementsBoundByIndex.contains(where: { $0.hasFocus }) { break }
+      XCUIRemote.shared.press(.up)
+    }
+    for _ in 0..<4 {
+      if browseTab.hasFocus { break }
+      XCUIRemote.shared.press(.right)
+    }
+    expectFocus(browseTab)
+    XCUIRemote.shared.press(.select)
+    let browseRefresh = app.buttons["Refresh"]
+    XCTAssertTrue(browseRefresh.waitForExistence(timeout: 15))
+    XCTAssertTrue(app.staticTexts["Browse"].exists)
+    XCTAssertGreaterThan(lineup.frame.minY, 0)
+    let browseLineupFrame = lineup.frame
+    let browseRefreshFrame = browseRefresh.frame
+    let browseTitle = app.staticTexts["Browse"]
+    let browseTitleFrame = browseTitle.frame
+    XCTAssertEqual(browseLineupFrame.midY, browseRefreshFrame.midY, accuracy: 3)
+    XCTAssertLessThan(browseLineupFrame.maxX, browseRefreshFrame.minX)
+    capture(app, "Real Browse inline lineup beside Refresh")
+    for index in 0..<8 {
+      XCUIRemote.shared.press(.down)
+      capture(app, "Real Browse scroll step \(index + 1)")
+      if index >= 3 && lineup.frame.maxY < 0 && browseRefresh.frame.maxY < 0 { break }
+    }
+    XCTAssertFalse(lineup.isHittable)
+    XCTAssertFalse(browseRefresh.isHittable)
+    XCTAssertLessThan(lineup.frame.maxY, 0)
+    XCTAssertEqual(lineup.frame.midY - browseLineupFrame.midY,
+      browseRefresh.frame.midY - browseRefreshFrame.midY, accuracy: 3)
+    XCTAssertLessThan(browseTitle.frame.maxY, 0)
+    XCTAssertEqual(lineup.frame.midY - browseLineupFrame.midY,
+      browseTitle.frame.midY - browseTitleFrame.midY, accuracy: 3)
+    capture(app, "Real Browse controls scrolled away together")
+    print("INLINE_SCROLL home=\(homeLineupFrame) -> \(homeScrolledFrame); browse=\(browseLineupFrame) -> \(lineup.frame)")
   }
 
   func testFullLineupDisablesAddingAnotherSearchChannel() {
@@ -309,8 +495,28 @@ final class MultiviewBrowseTests: XCTestCase {
     expectFocus(start)
   }
 
+  private func returnFromFixturePlayback(_ app: XCUIApplication) {
+    expectFocus(app.buttons["Browse streams"])
+    XCUIRemote.shared.press(.menu)
+    XCTAssertTrue(app.staticTexts["Fixture multiview"].waitForNonExistence(timeout: 5))
+  }
+
   private func focusFixtureLineup(_ app: XCUIApplication) {
     let lineup = app.buttons["multiview-lineup"]
+    if app.searchFields.firstMatch.exists {
+      focusSearchBeta(app)
+      XCUIRemote.shared.press(.right)
+      XCUIRemote.shared.press(.up)
+      if !lineup.hasFocus {
+        XCUIRemote.shared.press(.right)
+      }
+      if !lineup.hasFocus {
+        XCUIRemote.shared.press(.down)
+      }
+      expectFocus(lineup)
+      capture(app, "Search inline lineup receives native focus")
+      return
+    }
     for _ in 0..<4 {
       if app.buttons["Browse"].hasFocus || app.buttons["Search"].hasFocus || lineup.hasFocus { break }
       XCUIRemote.shared.press(.up)
@@ -320,6 +526,37 @@ final class MultiviewBrowseTests: XCTestCase {
       XCUIRemote.shared.press(.right)
     }
     expectFocus(lineup)
+  }
+
+  private func focusSearchBeta(_ app: XCUIApplication) {
+    let alpha = app.descendants(matching: .any)["stream-card-alpha"].firstMatch
+    let beta = app.descendants(matching: .any)["stream-card-beta"].firstMatch
+    let kick = app.descendants(matching: .any)["stream-card-kick:example"].firstMatch
+    let category = app.descendants(matching: .any).matching(
+      NSPredicate(format: "label == 'Example category'")).firstMatch
+    for _ in 0..<5 {
+      if alpha.hasFocus || beta.hasFocus || kick.hasFocus { break }
+      XCUIRemote.shared.press(category.hasFocus ? .up : .down)
+    }
+    if alpha.hasFocus { XCUIRemote.shared.press(.right) }
+    if kick.hasFocus { XCUIRemote.shared.press(.left) }
+    expectFocus(beta)
+  }
+
+  private func selectContextAction(_ identifier: String, in app: XCUIApplication) {
+    XCUIRemote.shared.press(.select, forDuration: 1.2)
+    focusContextAction(identifier, in: app)
+    XCUIRemote.shared.press(.select)
+  }
+
+  private func focusContextAction(_ identifier: String, in app: XCUIApplication) {
+    let action = app.cells.containing(.any, identifier: identifier).firstMatch
+    XCTAssertTrue(action.waitForExistence(timeout: 5))
+    for _ in 0..<5 {
+      if action.hasFocus { break }
+      XCUIRemote.shared.press(.down)
+    }
+    expectFocus(action)
   }
 
   private func expectValue(_ element: XCUIElement, _ value: String) {

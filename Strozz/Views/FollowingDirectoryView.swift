@@ -90,6 +90,7 @@ struct FollowingDirectoryView: View {
           }
 
           Spacer()
+          MultiviewLineupButton()
         }
         .focusSection()
 

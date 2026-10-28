@@ -5,20 +5,36 @@ struct MultiviewSelectionAction: View {
   @Environment(\.multiviewLineup) private var lineup
 
   var body: some View {
-    if let lineup, channel.platform != .youtube, channel.isLive || lineup.contains(channel) {
-      Button {
-        lineup.toggle(channel)
-      } label: {
-        Label {
-          if lineup.contains(channel) { Text("Remove from multiview") }
-          else if lineup.isFull { Text("Multiview full") }
-          else { Text("Add to multiview") }
-        } icon: {
-          Icon(glyph: lineup.contains(channel) ? .minus : .borderAll)
+    if let lineup {
+      if channel.platform != .youtube, channel.isLive || lineup.contains(channel) {
+        Button {
+          lineup.toggle(channel)
+        } label: {
+          Label {
+            if lineup.contains(channel) { Text("Remove from multiview") }
+            else if lineup.isFull { Text("Multiview full") }
+            else { Text("Add to multiview") }
+          } icon: {
+            Icon(glyph: lineup.contains(channel) ? .minus : .borderAll)
+          }
         }
+        .disabled(!lineup.contains(channel) && lineup.isFull)
+        .accessibilityIdentifier("multiview-toggle-\(channel.channelKey)")
       }
-      .disabled(!lineup.contains(channel) && lineup.isFull)
-      .accessibilityIdentifier("multiview-toggle-\(channel.channelKey)")
+      if !lineup.entries.isEmpty {
+        Button {
+          lineup.requestPlayback()
+        } label: {
+          Label {
+            if lineup.controller == nil { Text("Start multiview") }
+            else { Text("Return to multiview") }
+          } icon: {
+            Icon(glyph: .playerPlayFilled)
+          }
+        }
+        .disabled(!lineup.canStart)
+        .accessibilityIdentifier("multiview-context-start")
+      }
     }
   }
 }
@@ -30,26 +46,23 @@ struct MultiviewLineupButton: View {
   @State private var startAfterDismissal = false
 
   var body: some View {
-    if let lineup {
+    if let lineup, !lineup.entries.isEmpty {
       let avatars = lineup.entries.filter { $0.offlineSince == nil }
       Button { showingLineup = true } label: {
         HStack(spacing: 16) {
           Text("Multiview").lineLimit(1)
-          HStack(spacing: -12) {
+          HStack(spacing: -14) {
             ForEach(avatars) { entry in
-              MultiviewAvatar(url: entry.channel.profileImageURL)
+              MultiviewAvatar(url: entry.channel.profileImageURL, size: 48)
                 .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
                   removal: .opacity))
             }
           }
-          .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: avatars.map(\.id))
         }
-        .frame(width: 350, alignment: .leading)
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(height: 40)
       }
-      .opacity(lineup.entries.isEmpty ? 0 : 1)
-      .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: lineup.entries.isEmpty)
-      .disabled(lineup.entries.isEmpty)
-      .accessibilityHidden(lineup.entries.isEmpty)
+      .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: avatars.map(\.id))
       .accessibilityIdentifier("multiview-lineup")
       .accessibilityLabel("Multiview")
       .accessibilityValue("\(lineup.liveChannels.count) streams")
@@ -70,6 +83,7 @@ struct MultiviewLineupButton: View {
 
 private struct MultiviewAvatar: View {
   let url: URL?
+  var size: CGFloat = 40
   @Environment(\.themePalette) private var palette
 
   var body: some View {
@@ -77,9 +91,9 @@ private struct MultiviewAvatar: View {
       image.resizable().scaledToFill()
     } placeholder: {
       Circle().fill(palette.chromeOpaqueSurface)
-        .overlay { Icon(glyph: .userCircle, size: 32).foregroundStyle(palette.chromeOnOpaque) }
+        .overlay { Icon(glyph: .userCircle, size: size * 0.8).foregroundStyle(palette.chromeOnOpaque) }
     }
-    .frame(width: 40, height: 40)
+    .frame(width: size, height: size)
     .clipShape(Circle())
     .overlay { Circle().strokeBorder(palette.chromeOpaqueBorder, lineWidth: 2) }
     .accessibilityHidden(true)

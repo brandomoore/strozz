@@ -42,6 +42,83 @@ final class MultiviewFocusRenderingTests: XCTestCase {
     XCTAssertTrue(chrome.isVisible)
   }
 
+  func testLineupButtonAnimatesGrowingWidthWithoutChangingHeight() async throws {
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    defer { window.rootViewController = previous }
+
+    let reduceMotion = UIAccessibility.isReduceMotionEnabled
+    let lineup = MultiviewLineup { _ in .live }
+    defer { lineup.clear() }
+    func add(_ index: Int) {
+      lineup.toggle(FollowedChannel(id: "\(index)", login: "grow\(index)", displayName: "Grow \(index)",
+        title: "", gameName: "", viewerCount: nil, thumbnailURL: nil,
+        profileImageURL: nil, isLive: true))
+    }
+    add(0)
+    let focus = FocusObservation()
+    let host = UIHostingController(rootView: LineupButtonRenderingFixture(lineup: lineup, focus: focus))
+    window.rootViewController = host
+    host.view.layoutIfNeeded()
+    for _ in 0..<30 {
+      if focus.isFocused { break }
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    XCTAssertTrue(focus.isFocused)
+    try await Task.sleep(for: .milliseconds(300))
+
+    func snapshot() -> UIImage {
+      UIGraphicsImageRenderer(bounds: host.view.bounds).image { _ in
+        host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: false)
+      }
+    }
+    func extent(_ image: UIImage) throws -> CGSize {
+      let center = CGPoint(x: host.view.bounds.midX, y: host.view.bounds.midY)
+      var xs: [CGFloat] = []
+      var ys: [CGFloat] = []
+      // Native focused glass is gray; a white-only threshold measures the avatar glyphs instead.
+      for x in stride(from: CGFloat(0), to: host.view.bounds.width, by: 1) {
+        if try pixel(image, at: CGPoint(x: x, y: center.y)).min() ?? 0 > 100 { xs.append(x) }
+      }
+      for y in stride(from: CGFloat(0), to: host.view.bounds.height, by: 1) {
+        if try pixel(image, at: CGPoint(x: center.x, y: y)).min() ?? 0 > 100 { ys.append(y) }
+      }
+      return CGSize(width: try XCTUnwrap(xs.last) - XCTUnwrap(xs.first) + 1,
+        height: try XCTUnwrap(ys.last) - XCTUnwrap(ys.first) + 1)
+    }
+    let initial = try extent(snapshot())
+    var previousSize = initial
+    for count in 2...6 {
+      add(count - 1)
+      await NextDisplayFrame().wait()
+      let first = snapshot()
+      try await Task.sleep(for: .milliseconds(80))
+      let middle = snapshot()
+      try await Task.sleep(for: .milliseconds(300))
+      let final = snapshot()
+      let firstSize = try extent(first)
+      let middleSize = try extent(middle)
+      let finalSize = try extent(final)
+      XCTAssertGreaterThan(finalSize.width, previousSize.width + 20, "Every avatar must grow the native button")
+      XCTAssertEqual(finalSize.height, initial.height, accuracy: 2, "Larger avatars must not make a taller button")
+      if reduceMotion {
+        XCTAssertEqual(middleSize.width, finalSize.width, accuracy: 2)
+      } else {
+        XCTAssertTrue([firstSize.width, middleSize.width].contains {
+          $0 > previousSize.width + 2 && $0 < finalSize.width - 2
+        }, "The rendered native button must visibly interpolate its width, not jump or reserve six slots")
+      }
+      for (phase, image) in [("first", first), ("middle", middle), ("final", final)] {
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "Lineup \(count) avatars \(phase) reduced-motion-\(reduceMotion)"
+        attachment.lifetime = .keepAlways
+        self.add(attachment)
+      }
+      previousSize = finalSize
+    }
+  }
+
   func testOutlinePixelsStayOutsideVideoAndDimWithChrome() async throws {
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     let window = try XCTUnwrap(scene.keyWindow)
@@ -328,6 +405,24 @@ final class MultiviewFocusRenderingTests: XCTestCase {
 @MainActor
 private final class FocusObservation {
   var isFocused = false
+}
+
+private struct LineupButtonRenderingFixture: View {
+  let lineup: MultiviewLineup
+  let focus: FocusObservation
+  @FocusState private var isFocused: Bool
+
+  var body: some View {
+    MultiviewLineupButton()
+      .focused($isFocused)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(Color.black)
+      .environment(\.multiviewLineup, lineup)
+      .environment(\.themePalette, ThemePalette.dark)
+      .preferredColorScheme(.dark)
+      .onAppear { isFocused = true }
+      .onChange(of: isFocused) { _, value in focus.isFocused = value }
+  }
 }
 
 @MainActor

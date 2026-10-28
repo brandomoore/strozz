@@ -288,8 +288,13 @@ TV multiview uses one `MultiviewLineup` owned by Home and passed through an opti
 environment value. Hold a live channel card in Following, Browse, Search or channel
 recommendations to add/remove it; the normal player also has a multiview control.
 Search lists channels before categories. The contextual avatar button opens only
-lineup management, not another discovery page. Adding never starts playback or
-navigates away. Avatar insertion/removal respects Reduce Motion.
+lineup management, not another discovery page. It lives inside each page's
+scrolling header alongside existing actions, never in a reserved fixed strip.
+Its width animates with the selected avatars while its height stays constant;
+there is no empty six-slot reservation. Channel hold menus also expose Start or
+Return to multiview, using the same launch requirements as the manager. Adding
+never starts playback or navigates away. Avatar insertion/removal and button
+resizing respect Reduce Motion.
 
 Selection uses provider-qualified channel keys, not pool-specific stream/user
 IDs. Status refreshes query the selected channels themselves: absence from a

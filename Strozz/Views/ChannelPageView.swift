@@ -99,12 +99,6 @@ struct ChannelPageView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack {
-        Spacer()
-        MultiviewLineupButton()
-      }
-      .frame(height: 76)
-      .padding(.horizontal, AppLayout.horizontalPadding)
       if target.platform == .kick {
         KickChannelDetailsView(slug: target.login) { onWatchChannel?($0) }
           .onExitCommand { dismiss() }
@@ -259,6 +253,7 @@ struct ChannelPageView: View {
       }
 
       Spacer(minLength: 0)
+      MultiviewLineupButton()
       if !isOwnChannel {
         ChannelFollowButton(login: target.login, displayName: headerName,
           auth: environment.auth, rewards: environment.watchRewards, follows: environment.follows)

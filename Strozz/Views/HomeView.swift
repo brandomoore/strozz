@@ -495,16 +495,8 @@ struct HomeView: View {
     ZStack {
       AppBackground(palette: resolvedPalette)
 
-      VStack(spacing: 0) {
-        HStack {
-          Spacer()
-          MultiviewLineupButton()
-        }
-        .frame(height: 76)
-        .padding(.horizontal, AppLayout.horizontalPadding)
-        content()
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-      }
+      content()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
   }
 

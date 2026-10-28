@@ -29,7 +29,12 @@ struct KickChannelDetailsView: View {
           Text("Past broadcasts aren't available for Kick in Strozz.").foregroundStyle(.secondary)
         }
         if let errorMessage { Text(errorMessage).foregroundStyle(.secondary) }
-        Button("Refresh") { Task { await refresh() } }.disabled(loading)
+        HStack {
+          Button("Refresh") { Task { await refresh() } }.disabled(loading)
+          #if os(tvOS)
+          MultiviewLineupButton()
+          #endif
+        }
       }
       .padding()
       .frame(maxWidth: .infinity, alignment: .leading)

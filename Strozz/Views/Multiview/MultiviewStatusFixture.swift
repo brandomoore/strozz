@@ -149,42 +149,37 @@ struct MultiviewBrowseFixture: View {
     let settings = ProcessInfo.processInfo.environment
     let theme = AppTheme(rawValue: settings["STROZZ_MULTIVIEW_STATUS_THEME"] ?? "dark") ?? .dark
     let palette = theme.palette(systemColorScheme: scheme)
-    VStack(spacing: 24) {
-      HStack(spacing: 24) {
-        Button("Browse") { searching = false }
-          .focused($focus, equals: "browse")
-          .prefersDefaultFocus(true, in: focusScope)
-        Button("Search") { searching = true }
-        Spacer()
-        MultiviewLineupButton()
-      }
-      .frame(height: 76)
-      .padding(.horizontal, 60)
-      ZStack {
-        if searching {
+    Group {
+      if searching {
+        VStack(spacing: 24) {
+          browseControls
           SearchView(selectedChannel: $selectedChannel, channelPageTarget: $channelPageTarget,
             service: search, initialQuery: "example")
-        } else {
-          HStack(spacing: 24) {
-            ForEach(["alpha", "beta"], id: \.self) { login in
-              StreamChannelCard(channel: .init(id: login, login: login,
-                displayName: login.capitalized, title: "\(login.capitalized) live", gameName: "",
-                viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true),
-                isFocused: focus == login,
-                onWatch: login == "alpha" ? nil : { selectedChannel = $0 },
-                onGoToChannel: login == "alpha" ? nil : { channelPageTarget = ChannelPageTarget(channel: $0) })
-                .frame(width: 460)
-                .focusable()
-                .focused($focus, equals: login)
-                .focusEffectDisabled()
+        }
+      } else {
+        ScrollView {
+          VStack(spacing: 24) {
+            browseControls
+            HStack(spacing: 24) {
+              ForEach(["alpha", "beta", "gamma"], id: \.self) { login in
+                StreamChannelCard(channel: .init(id: login, login: login,
+                  displayName: login.capitalized, title: "\(login.capitalized) live", gameName: "",
+                  viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true),
+                  isFocused: focus == login,
+                  onWatch: login == "alpha" ? nil : { selectedChannel = $0 },
+                  onGoToChannel: login == "alpha" ? nil : { channelPageTarget = ChannelPageTarget(channel: $0) })
+                  .frame(width: 460)
+                  .focusable()
+                  .focused($focus, equals: login)
+                  .focusEffectDisabled()
+              }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, AppLayout.horizontalPadding)
+            .focusSection()
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.horizontal, AppLayout.horizontalPadding)
-          .focusSection()
         }
       }
-      Spacer()
     }
     .focusScope(focusScope)
     .background(AppBackground(palette: palette))
@@ -195,9 +190,11 @@ struct MultiviewBrowseFixture: View {
     .environment(\.streamPreviewsEnabled, false)
     .preferredColorScheme(theme.preferredColorScheme)
     .onChange(of: lineup.playbackRequest) { _, _ in lineup.startPlayback() }
-    .disabled(lineup.isShowingPlayback)
-    .overlay {
-      if lineup.isShowingPlayback, let controller = lineup.controller {
+    .fullScreenCover(isPresented: Binding(
+      get: { lineup.isShowingPlayback },
+      set: { if !$0 { lineup.browse() } }
+    )) {
+      if let controller = lineup.controller {
         VStack(spacing: 30) {
           Text("Fixture multiview")
           Text("\(controller.panes.count) streams")
@@ -208,6 +205,19 @@ struct MultiviewBrowseFixture: View {
         .onExitCommand { lineup.browse() }
       }
     }
+  }
+
+  private var browseControls: some View {
+    HStack(spacing: 24) {
+      Button("Browse") { searching = false }
+        .focused($focus, equals: "browse")
+        .prefersDefaultFocus(true, in: focusScope)
+      Button("Search") { searching = true }
+      Spacer()
+      if !searching { MultiviewLineupButton() }
+    }
+    .frame(height: 76)
+    .padding(.horizontal, AppLayout.horizontalPadding)
   }
 }
 #endif

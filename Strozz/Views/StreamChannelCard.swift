@@ -156,8 +156,9 @@ struct StreamChannelCard: View {
         onWatch: onWatch,
         onGoToChannel: onGoToChannel,
         onNotInterested: onNotInterested,
-        multiviewAvailable: multiviewLineup != nil && channel.platform != .youtube
-          && (channel.isLive || multiviewLineup?.contains(channel) == true)
+        multiviewAvailable: multiviewLineup.map {
+          !$0.entries.isEmpty || (channel.platform != .youtube && channel.isLive)
+        } ?? false
       )
       .accessibilityElement(children: .ignore)
       .accessibilityLabel(accessibilityLabel)
