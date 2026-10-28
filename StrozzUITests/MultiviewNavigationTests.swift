@@ -36,13 +36,15 @@ final class MultiviewNavigationTests: XCTestCase {
           let toggle = app.buttons["multiview-layout"]
           XCTAssertTrue(toggle.waitForExistence(timeout: 5))
           capture(app, name: "\(count) layout HUD")
-          XCTAssertTrue(toggle.hasFocus)
+          XCTAssertTrue(toggle.hasFocus || toggle.descendants(matching: .any)
+            .allElementsBoundByIndex.contains(where: \.hasFocus))
           XCUIRemote.shared.press(.select)
-          let choice = app.buttons["multiview-layout-\(layout)"]
+          let titles = ["featured": "Featured", "spotlight": "Spotlight", "grid": "Equal"]
+          let choice = app.cells.containing(.any, identifier: titles[layout]!).firstMatch
           XCTAssertTrue(choice.waitForExistence(timeout: 5))
           for _ in 0..<3 {
             if choice.hasFocus { break }
-            XCUIRemote.shared.press(layout == "grid" ? .right : .left)
+            XCUIRemote.shared.press(layout == "grid" ? .down : .up)
           }
           XCTAssertTrue(choice.hasFocus)
           XCUIRemote.shared.press(.select)

@@ -136,6 +136,7 @@ struct FollowingDirectoryView: View {
               .onTapGesture {
                 select(channel)
               }
+              .modifier(MultiviewCardShortcut(channel: channel))
               .zIndex(isFocused ? 2 : 0)
             }
           }

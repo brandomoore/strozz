@@ -348,23 +348,32 @@ selected across layout changes. Promotion changes geometry, not pane order,
 player items or reload identifiers. Existing quality budgets remain unchanged:
 Featured and Equal use the grid tiers; Spotlight retains its source/thumbnail tiers.
 
-Play/Pause reveals a bottom Liquid Glass toolbar with Layout, Browse streams
-(Add stream in the standalone picker flow), and Done. Layout opens the same
-picker as Layout in a pane's hold menu; Back closes the picker before the
-toolbar. Focus is contained in controls while open, preserving audio and the
+Play/Pause reveals a compact bottom Liquid Glass toolbar with Layout, Browse streams
+(Add stream in the standalone picker flow), and Done. Layout uses a native menu
+with an inline single-selection picker, also shared by the pane's hold-menu
+submenu. Native menu dismissal handles Back before the toolbar closes.
+Only the toolbar reserves wall space; the system menu temporarily overlays content.
+Focus is contained in controls while open, preserving audio and the
 return pane. Controls never auto-dismiss under focus. Their measured height
 drives bottom clearance: leave fitting pictures unchanged, translate into unused
 space next, and only then recompute smaller frames with unchanged rows/columns
 and outside-outline gaps. Layout and clearance motion respects Reduce Motion;
 ordinary pane focus does not resize the wall.
-Controls constrain their labels to the available width and use the shared
+Controls use normal-sized labels and the shared
 theme-aware player button styles, including the native Reduce Transparency path.
 
+A short Play/Pause press on a focused browsing stream card toggles its lineup
+membership through the existing selection path, including the six-stream limit.
+Only live Twitch/Kick cards or an already-selected card enable this command.
+The existing selection badge updates without opening a player or menu.
+`MultiviewCardShortcut` belongs on the browsing card's focusable wrapper;
+placing the command inside `StreamChannelCard` leaves it below the focused
+responder and drops the remote press.
 Holding Play/Pause for 0.7 seconds opens the shared lineup from browsing or a
 presented screen; holding it in an expanded pane returns to the wall. The
 window-scoped recognizer arbitrates with the normal Play/Pause command, so a
-hold must not also pause playback or toggle the wall HUD. Short presses keep
-their existing behavior. An insufficient lineup shows the existing toast pill
+hold must not also pause playback, toggle a browsing card, or toggle the wall HUD.
+Short presses inside playback keep their existing behavior. An insufficient lineup shows the existing toast pill
 above the current screen for three seconds without dismissing it. Recognizer
 and toast ownership follow the Home window and are removed when it detaches.
 The lineup marks the entire presentation handoff as busy, including UIKit

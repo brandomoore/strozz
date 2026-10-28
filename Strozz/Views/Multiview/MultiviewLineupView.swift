@@ -1,5 +1,22 @@
 import SwiftUI
 
+/// Attach outside the card's focusable wrapper, not inside its visual content.
+struct MultiviewCardShortcut: ViewModifier {
+  let channel: FollowedChannel
+  @Environment(\.multiviewLineup) private var lineup
+
+  func body(content: Content) -> some View {
+    content.onPlayPauseCommand(perform: action)
+  }
+
+  private var action: (() -> Void)? {
+    guard let lineup,
+      lineup.contains(channel) || (channel.isLive && channel.platform != .youtube)
+    else { return nil }
+    return { lineup.toggle(channel) }
+  }
+}
+
 struct MultiviewSelectionAction: View {
   let channel: FollowedChannel
   @Environment(\.multiviewLineup) private var lineup

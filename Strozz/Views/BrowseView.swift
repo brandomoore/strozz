@@ -250,6 +250,7 @@ struct CategoryStreamsView: View {
                   preparePlaybackReturn()
                   selectedChannel = channel
                 }
+                .modifier(MultiviewCardShortcut(channel: channel))
                 .zIndex(isFocused ? 2 : 0)
               }
             }

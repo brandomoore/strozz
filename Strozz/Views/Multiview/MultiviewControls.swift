@@ -2,11 +2,9 @@ import SwiftUI
 
 struct MultiviewControls: View {
   let layout: MultiviewLayout
-  let showsLayoutPicker: Bool
   let canBrowse: Bool
   let hasLineup: Bool
   var focus: FocusState<MultiviewFocusTarget?>.Binding
-  let onLayout: () -> Void
   let onSelectLayout: (MultiviewLayout) -> Void
   let onBrowse: () -> Void
   let onDone: () -> Void
@@ -15,86 +13,64 @@ struct MultiviewControls: View {
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
   var body: some View {
-    VStack(spacing: 24) {
-      if showsLayoutPicker {
-        MultiviewLayoutPicker(layout: layout, focus: focus, onSelect: onSelectLayout)
+    HStack(spacing: 12) {
+      Menu {
+        MultiviewLayoutOptions(layout: layout, onSelect: onSelectLayout)
+      } label: {
+        Label { Text("Layout") } icon: { Icon(glyph: layout.glyph, size: 20) }
+          .font(.system(size: 24, weight: .semibold))
       }
-      MultiviewControlRow {
-        Button(action: onLayout) {
-          Label { Text("Layout") } icon: { Icon(glyph: layout.glyph, size: 22) }
+      .focused(focus, equals: .layoutButton)
+      .accessibilityLabel("Layout")
+      .accessibilityValue(Text(layout.title))
+      .accessibilityIdentifier("multiview-layout")
+      if canBrowse {
+        Button(action: onBrowse) {
+          Label {
+            if hasLineup { Text("Browse streams") } else { Text("Add stream") }
+          } icon: { Icon(glyph: .plus, size: 20) }
+            .font(.system(size: 24, weight: .semibold))
         }
-        .focused(focus, equals: .layoutButton)
-        .accessibilityValue(Text(layout.title))
-        .accessibilityIdentifier("multiview-layout")
-        if canBrowse {
-          Button(action: onBrowse) {
-            Label {
-              if hasLineup { Text("Browse streams") } else { Text("Add stream") }
-            } icon: { Icon(glyph: .plus, size: 22) }
-          }
-          .focused(focus, equals: .addButton)
-          .accessibilityIdentifier("multiview-browse")
-        }
-        Button(action: onDone) {
-          Label { Text("Done") } icon: { Icon(glyph: .check, size: 22) }
-        }
-        .focused(focus, equals: .closeButton)
-        .accessibilityIdentifier("multiview-controls-done")
+        .focused(focus, equals: .addButton)
+        .accessibilityIdentifier("multiview-browse")
       }
-      .disabled(showsLayoutPicker)
+      Button(action: onDone) {
+        Label { Text("Done") } icon: { Icon(glyph: .check, size: 20) }
+          .font(.system(size: 24, weight: .semibold))
+      }
+      .focused(focus, equals: .closeButton)
+      .accessibilityIdentifier("multiview-controls-done")
     }
     .lineLimit(1)
+    .controlSize(.small)
+    .StrozzControlButtonStyle()
+    .padding(.horizontal, 16)
+    .padding(.vertical, 12)
+    .modifier(ChatSettingsPanelGlassStyle())
     .fixedSize(horizontal: false, vertical: true)
     .focusSection()
     .environment(\.colorScheme, palette.chromeColorScheme)
     .environment(\.glassDisabled, glassDisabled || reduceTransparency)
-    .task(id: showsLayoutPicker) {
-      focus.wrappedValue = showsLayoutPicker ? .layoutChoice(layout) : .layoutButton
-    }
+    .task { focus.wrappedValue = .layoutButton }
   }
 }
 
-private struct MultiviewLayoutPicker: View {
+struct MultiviewLayoutOptions: View {
   let layout: MultiviewLayout
-  var focus: FocusState<MultiviewFocusTarget?>.Binding
   let onSelect: (MultiviewLayout) -> Void
 
   var body: some View {
-    MultiviewControlRow {
+    Picker("Layout", selection: Binding(get: { layout }, set: onSelect)) {
       ForEach(MultiviewLayout.allCases, id: \.self) { choice in
-        Button { onSelect(choice) } label: {
-          HStack(spacing: 10) {
-            Icon(glyph: choice.glyph, size: 22)
-            Text(choice.title)
-            Icon(glyph: .check, size: 18)
-              .opacity(choice == layout ? 1 : 0)
-              .accessibilityHidden(true)
-          }
+        Label {
+          Text(choice.title)
+        } icon: {
+          Icon(glyph: choice.glyph)
         }
-        .focused(focus, equals: .layoutChoice(choice))
+        .tag(choice)
         .accessibilityIdentifier("multiview-layout-\(choice.rawValue)")
-        .accessibilityAddTraits(choice == layout ? [.isSelected] : [])
       }
     }
-  }
-}
-
-private struct MultiviewControlRow<Content: View>: View {
-  @ViewBuilder var content: () -> Content
-
-  var body: some View {
-    ViewThatFits(in: .horizontal) {
-      HStack(spacing: 22, content: content)
-        .font(.headline)
-        .padding(.horizontal, 28)
-        .fixedSize()
-      HStack(spacing: 12, content: content)
-        .font(.subheadline.weight(.semibold))
-        .padding(.horizontal, 18)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-    .StrozzControlButtonStyle()
-    .padding(.vertical, 18)
-    .modifier(ChatSettingsPanelGlassStyle())
+    .pickerStyle(.inline)
   }
 }

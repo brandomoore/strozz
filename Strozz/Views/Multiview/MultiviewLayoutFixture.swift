@@ -14,7 +14,13 @@ struct MultiviewLayoutFixture: View {
     var failure = ""
     private var directory: URL?
 
-    init(settings: [String: String] = ProcessInfo.processInfo.environment) {
+    init(settings: [String: String] = ProcessInfo.processInfo.environment, existingLineup: MultiviewLineup? = nil) {
+      if let existingLineup, let existingController = existingLineup.controller {
+        lineup = existingLineup
+        controller = existingController
+        channels = existingController.panes.map(\.channel)
+        return
+      }
       let count = min(6, max(1, Int(settings["STROZZ_LAYOUT_COUNT"] ?? "6") ?? 6))
       channels = (0..<7).map {
         FollowedChannel(id: "layout-\($0)", login: "layoutfixture\($0)",
@@ -109,10 +115,14 @@ struct MultiviewLayoutFixture: View {
     }
   }
 
-  @State private var model = Model()
+  @State private var model: Model
   @Environment(AppEnvironment.self) private var environment
   @Environment(\.colorScheme) private var scheme
   @Environment(\.glassDisabled) private var inheritedGlassDisabled
+
+  init(lineup: MultiviewLineup? = nil) {
+    _model = State(initialValue: Model(existingLineup: lineup))
+  }
 
   var body: some View {
     let settings = ProcessInfo.processInfo.environment
@@ -213,6 +223,7 @@ private struct MultiviewLayoutDiagnostics: UIViewRepresentable {
         return ["id": pane.id, "model": identity(pane.model), "player": identity(pane.player),
           "item": identity(pane.player.currentItem), "surface": identity(surface),
           "ready": surface?.isReadyForDisplay ?? false, "muted": pane.player.isMuted,
+          "rate": pane.player.rate, "playPauseRequests": pane.presentation.playPauseRequests,
           "picture": rect(picture), "aspect": pane.presentation.videoAspectRatio,
           "error": pane.model.errorMessage ?? "", "loading": pane.isLoading]
       }

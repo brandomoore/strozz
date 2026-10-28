@@ -811,16 +811,17 @@ near live avoid an unnecessary reload. Deliberate pauses, rewinds, and VOD
 positions are preserved. "LIVE" means the source's playable live position,
 including its normal buffering margin, not zero broadcast/network latency.
 
-On Apple TV, hold a live Twitch or Kick card anywhere you browse and choose
-**Add to multiview**. Search shows channels before categories. The **Multiview**
+On Apple TV, press Play/Pause on a focused live Twitch or Kick card to add or
+remove it from multiview, or hold the card and choose **Add to multiview**.
+Search shows channels before categories. The **Multiview**
 button grows with your selected avatars alongside the page's scrolling controls;
 open it to remove streams or start watching once you have at least two. You can
 also start or return to multiview from a channel's hold menu. The normal player's
 controls let you add the stream you're watching. There is no separate multiview
 discovery tab.
 Hold Play/Pause from any screen to start or return to your multiview lineup.
-A normal press keeps its usual behavior. If more streams are needed, a toast
-reminds you to add them without leaving the current screen.
+A normal press inside playback keeps its usual behavior. If more streams are
+needed, a toast reminds you to add them without leaving the current screen.
 Back from the wall, or **Browse streams** in its controls, lets you add more
 through the same browsing and search actions. The wall pauses while you browse;
 **Return to multiview** resumes the same lineup.
@@ -830,14 +831,14 @@ re-resolves each pane's live playlist and resumes all streams without changing
 the chosen layout, primary stream, or audio selection.
 
 Press Play/Pause on the wall for the bottom **Layout**, **Browse streams**, and
-**Done** controls. Choose **Featured** (a large primary beside smaller streams),
-**Spotlight** (a large primary above a thumbnail strip), or **Equal** (equal-sized
-streams with matching video proportions). Hold a secondary stream and choose
+**Done** controls. The native Layout menu offers **Featured** (a large primary
+beside smaller streams), **Spotlight** (a large primary above a thumbnail strip),
+or **Equal** (equal-sized streams with matching video proportions). Hold a secondary stream and choose
 **Make primary** in Featured or Spotlight; moving focus changes audio, not the
-primary. The hold menu also offers **Layout…** and **Full screen**.
+primary. The hold menu also offers a **Layout** submenu and **Full screen**.
 Controls use existing empty space first, moving or reducing the wall only when
-needed to keep video unobscured. Back closes the layout picker, then the controls,
-returning focus to the same stream. **Done** closes controls, not multiview.
+needed to keep video unobscured. Back closes the native layout menu, then the
+controls, returning focus to the same stream. **Done** closes controls, not multiview.
 
 Multiview also uses the normal native live player for every pane. Selecting a
 pane zooms that same player and video surface into the single-stream layout

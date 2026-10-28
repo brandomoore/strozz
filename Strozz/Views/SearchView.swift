@@ -182,6 +182,7 @@ private struct SearchResultsView: View {
             if channel.platform == .kick, channel.isLive { onWatchChannel(channel) }
             else { onSelectChannel(channel) }
           }
+          .modifier(MultiviewCardShortcut(channel: channel))
           .zIndex(isFocused ? 2 : 0)
         }
       }

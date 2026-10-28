@@ -6,6 +6,14 @@ import Vision
 final class MultiviewLayoutUITests: XCTestCase {
   override func setUp() { continueAfterFailure = false }
 
+  func testNativeLayoutMenuHasAccessibleName() throws {
+    let app = try launch(count: 2)
+    defer { app.terminate() }
+    press(.playPause, app: app, "Layout menu accessibility name")
+    XCTAssertEqual(app.buttons["multiview-layout"].label, "Layout",
+      "The menu button needs an accessible name, not only its current layout value.")
+  }
+
   func testControlAccessibilityIdentifiersRemainDistinct() throws {
     let app = try launch(count: 2)
     defer { app.terminate() }
@@ -14,9 +22,10 @@ final class MultiviewLayoutUITests: XCTestCase {
     XCTAssertTrue(app.buttons["multiview-browse"].exists)
     XCTAssertTrue(app.buttons["multiview-controls-done"].exists)
     press(.select, app: app, "inspect choice identifiers")
-    for id in ["multiview-layout-featured", "multiview-layout-spotlight", "multiview-layout-grid"] {
-      XCTAssertEqual(app.buttons.matching(identifier: id).count, 1)
+    for title in ["Featured", "Spotlight", "Equal"] {
+      XCTAssertEqual(app.cells.containing(.any, identifier: title).count, 1)
     }
+    assertSelectedLayout("featured", app: app)
   }
 
   func testToolbarLayoutPickerBackAndPlayerIdentity() throws {
@@ -30,9 +39,14 @@ final class MultiviewLayoutUITests: XCTestCase {
     expectFocus("multiview-layout", app: app)
     try assertIdentity(before, try state(app))
     try assertAudio(audio, app: app)
+    let toolbarState = try state(app)
+    let toolbarFrames = toolbarControls(app).map(\.frame)
     press(.select, app: app, "open layout picker")
+    XCTAssertEqual(toolbarFrames, toolbarControls(app).map(\.frame))
+    try assertPictureFrames(toolbarState, try state(app))
     expectFocus("multiview-layout-featured", app: app)
-    press(.right, app: app, "focus Spotlight")
+    assertSelectedLayout("featured", app: app)
+    press(.down, app: app, "focus Spotlight")
     expectFocus("multiview-layout-spotlight", app: app)
     press(.select, app: app, "select Spotlight")
     expectFocus("multiview-layout", app: app)
@@ -40,7 +54,8 @@ final class MultiviewLayoutUITests: XCTestCase {
     try assertIdentity(before, try state(app))
     try assertAudio(audio, app: app)
     press(.select, app: app, "reopen picker")
-    expectFocus("multiview-layout-spotlight", app: app)
+    expectFocus("multiview-layout-featured", app: app)
+    assertSelectedLayout("spotlight", app: app)
     press(.menu, app: app, "Back closes only picker")
     expectFocus("multiview-layout", app: app)
     XCTAssertFalse(control("multiview-layout-spotlight", app: app).exists)
@@ -82,13 +97,14 @@ final class MultiviewLayoutUITests: XCTestCase {
     let layout = app.cells.containing(.any, identifier: "multiview-context-layout").firstMatch
     XCTAssertTrue(layout.waitForExistence(timeout: 5))
     focusCell(layout, app: app)
-    press(.select, app: app, "context Layout opens shared picker")
+    press(.select, app: app, "context Layout opens native submenu")
     expectFocus("multiview-layout-featured", app: app)
-    press(.right, app: app, "picker Spotlight")
-    press(.right, app: app, "picker Equal")
+    assertSelectedLayout("featured", app: app)
+    press(.down, app: app, "picker Spotlight")
+    press(.down, app: app, "picker Equal")
     expectFocus("multiview-layout-grid", app: app)
     press(.select, app: app, "select Equal")
-    press(.menu, app: app, "close controls after Equal")
+    XCTAssertFalse(control("multiview-layout", app: app).exists, "Context submenu returns directly to the pane.")
     try assertAudio(audio, app: app)
     XCTAssertEqual(try state(app)["layout"] as? String, "grid")
     press(.select, duration: 1.2, app: app, "hold Equal pane")
@@ -166,6 +182,7 @@ final class MultiviewLayoutUITests: XCTestCase {
         focusLayout(layout, app: app)
         try assertControlsInViewport(app)
         press(.select, app: app, "\(count) choose \(layout)")
+        XCTAssertEqual(try state(app)["layout"] as? String, layout)
         try assertPicturesAboveToolbar(app)
         try assertIdentity(baseline, try state(app))
         press(.menu, app: app, "\(count) \(layout) wall")
@@ -183,6 +200,9 @@ final class MultiviewLayoutUITests: XCTestCase {
     continueAfterFailure = true
     try viewport(width: 854, height: 480, lineup: true)
   }
+  func test1920LineupNormalButtonSizesAndNativeChoices() throws {
+    try viewport(width: 1920, height: 1080, lineup: true)
+  }
   func test1280LogicalViewportControls() throws { try viewport(width: 1280, height: 720) }
   func test3840LogicalViewportControls() throws { try viewport(width: 3840, height: 2160) }
 
@@ -193,6 +213,7 @@ final class MultiviewLayoutUITests: XCTestCase {
       press(.right, app: app, "\(width)x\(height) \(count) Featured secondary metadata")
       let before = try state(app)
       press(.playPause, app: app, "\(width)x\(height) toolbar")
+      try assertNormalButtonSizes(app)
       let ids = ["multiview-layout"]
         + (control("multiview-browse", app: app).exists ? ["multiview-browse"] : [])
         + ["multiview-controls-done"]
@@ -200,17 +221,22 @@ final class MultiviewLayoutUITests: XCTestCase {
         if index > 0 { press(.right, app: app, "\(width)x\(height) focus \(id)") }
         expectFocus(id, app: app)
         try assertControlsInViewport(app)
-        try assertRenderedLabel(control(id, app: app).label, in: control(id, app: app), app: app)
+        try assertRenderedLabel(controlTitle(id, app: app), in: control(id, app: app), app: app)
       }
       for _ in 1..<ids.count { press(.left, app: app, "\(width)x\(height) return to Layout") }
       expectFocus("multiview-layout", app: app)
+      let toolbarState = try state(app)
+      let toolbarFrames = toolbarControls(app).map(\.frame)
       press(.select, app: app, "\(width)x\(height) picker")
+      XCTAssertEqual(toolbarFrames, toolbarControls(app).map(\.frame))
+      try assertPictureFrames(toolbarState, try state(app))
+      assertSelectedLayout("featured", app: app)
       for (index, choice) in ["featured", "spotlight", "grid"].enumerated() {
-        if index > 0 { press(.right, app: app, "\(width)x\(height) focus \(choice)") }
+        if index > 0 { press(.down, app: app, "\(width)x\(height) focus \(choice)") }
         let id = "multiview-layout-\(choice)"
         expectFocus(id, app: app)
         try assertControlsInViewport(app)
-        try assertRenderedLabel(control(id, app: app).label, in: control(id, app: app), app: app)
+        try assertRenderedLabel(controlTitle(id, app: app), in: control(id, app: app), app: app)
       }
       press(.menu, app: app, "\(width)x\(height) Back closes picker")
       expectFocus("multiview-layout", app: app)
@@ -219,13 +245,29 @@ final class MultiviewLayoutUITests: XCTestCase {
       try assertAudio(try XCTUnwrap(before["audio"] as? String), app: app)
       press(.select, app: app, "\(width)x\(height) reopen picker")
       expectFocus("multiview-layout-featured", app: app)
-      press(.right, app: app, "\(width)x\(height) Spotlight")
+      press(.down, app: app, "\(width)x\(height) Spotlight")
       press(.select, app: app, "\(width)x\(height) select Spotlight")
       try assertPicturesAboveToolbar(app)
       press(.menu, app: app, "\(width)x\(height) close")
       capture(app, "\(width)x\(height) \(count) Spotlight secondary metadata")
       try assertIdentity(before, try state(app))
       try assertAudio(try XCTUnwrap(before["audio"] as? String), app: app)
+      for layout in ["grid", "featured"] {
+        press(.playPause, app: app, "\(width) reopen controls for \(layout)")
+        press(.select, app: app, "\(width) native choices for \(layout)")
+        focusLayout(layout, app: app)
+        press(.select, app: app, "\(width) select \(layout)")
+        XCTAssertEqual(try state(app)["layout"] as? String, layout)
+        expectFocus("multiview-layout", app: app)
+        press(.select, app: app, "\(width) verify selected \(layout)")
+        XCTAssertTrue(control("multiview-layout-featured", app: app).waitForExistence(timeout: 5))
+        assertSelectedLayout(layout, app: app)
+        press(.menu, app: app, "\(width) dismiss verified menu")
+        try assertPicturesAboveToolbar(app)
+        try assertIdentity(before, try state(app))
+        try assertAudio(try XCTUnwrap(before["audio"] as? String), app: app)
+        press(.menu, app: app, "\(width) return wall after \(layout)")
+      }
       app.terminate()
     }
   }
@@ -255,7 +297,7 @@ final class MultiviewLayoutUITests: XCTestCase {
         press(.select, app: app, "\(theme) opaque-\(opaque) picker")
         expectFocus("multiview-layout-featured", app: app)
         try assertControlsInViewport(app)
-        press(.right, app: app, "\(theme) opaque-\(opaque) focus Spotlight")
+        press(.down, app: app, "\(theme) opaque-\(opaque) focus Spotlight")
         press(.select, app: app, "\(theme) opaque-\(opaque) choose Spotlight")
         press(.menu, app: app, "\(theme) opaque-\(opaque) return wall")
         press(.down, app: app, "\(theme) opaque-\(opaque) compact metadata")
@@ -275,7 +317,7 @@ final class MultiviewLayoutUITests: XCTestCase {
     let before = try state(app)
     press(.playPause, app: app, "Reduced Motion toolbar")
     press(.select, app: app, "Reduced Motion picker")
-    press(.right, app: app, "Reduced Motion Spotlight")
+    press(.down, app: app, "Reduced Motion Spotlight")
     press(.select, app: app, "Reduced Motion layout transition")
     press(.menu, app: app, "Reduced Motion close toolbar")
     press(.down, app: app, "Reduced Motion secondary metadata")
@@ -300,7 +342,7 @@ final class MultiviewLayoutUITests: XCTestCase {
       try assertOpaqueLabelContrast("multiview-layout-featured", app: app)
       try assertOpaqueLabelContrast("multiview-layout-spotlight", app: app)
       try assertOpaqueLabelContrast("multiview-layout-grid", app: app)
-      press(.right, app: app, "\(width) native Light Reduce Transparency Spotlight")
+      press(.down, app: app, "\(width) native Light Reduce Transparency Spotlight")
       press(.select, app: app, "\(width) native Light Reduce Transparency selected")
       press(.menu, app: app, "\(width) native Light Reduce Transparency close")
       app.terminate()
@@ -367,6 +409,45 @@ final class MultiviewLayoutUITests: XCTestCase {
     }
   }
 
+  private func toolbarControls(_ app: XCUIApplication) -> [XCUIElement] {
+    ["multiview-layout", "multiview-browse", "multiview-controls-done"]
+      .map { control($0, app: app) }.filter(\.exists)
+  }
+
+  private func assertNormalButtonSizes(_ app: XCUIApplication) throws {
+    let logical = try XCTUnwrap(try state(app)["logicalViewport"] as? [Double])
+    let scale = min(1, min(app.frame.width / logical[0], app.frame.height / logical[1]))
+    let dimensions = toolbarControls(app).map {
+      "\($0.identifier): frame=\($0.frame); logicalHeight=\($0.frame.height / scale); focused=\($0.hasFocus)"
+    }
+    let attachment = XCTAttachment(string: dimensions.joined(separator: "\n"))
+    attachment.name = "Measured normal toolbar sizes \(logical[0])"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+    for button in toolbarControls(app) {
+      XCTAssertGreaterThanOrEqual(button.frame.height / scale, 44)
+      XCTAssertLessThanOrEqual(button.frame.height / scale, 64, "Normal buttons must not return to the former ~80pt height.")
+    }
+  }
+
+  private func assertPictureFrames(_ before: [String: Any], _ after: [String: Any]) throws {
+    let old = try XCTUnwrap(before["panes"] as? [[String: Any]])
+    let new = try XCTUnwrap(after["panes"] as? [[String: Any]])
+    for (a, b) in zip(old, new) {
+      XCTAssertEqual(a["picture"] as? [Double], b["picture"] as? [Double],
+        "A native menu overlays video; it must not allocate an extra picker row or resize the wall.")
+    }
+  }
+
+  private func assertSelectedLayout(_ layout: String, app: XCUIApplication) {
+    let selected = control("multiview-layout-\(layout)", app: app)
+    XCTAssertTrue(selected.images["checkmark"].exists, "Native selected checkmark must be exposed.")
+    XCTAssertTrue(selected.descendants(matching: .any).allElementsBoundByIndex.contains(where: \.isSelected))
+    for other in ["featured", "spotlight", "grid"] where other != layout {
+      XCTAssertFalse(control("multiview-layout-\(other)", app: app).images["checkmark"].exists)
+    }
+  }
+
   private func assertPicturesAboveToolbar(_ app: XCUIApplication) throws {
     let top = control("multiview-layout", app: app).frame.minY
     for pane in try XCTUnwrap(try state(app)["panes"] as? [[String: Any]]) {
@@ -382,6 +463,13 @@ final class MultiviewLayoutUITests: XCTestCase {
       || ["multiview-browse", "multiview-controls-done"].contains(button.identifier) {
       XCTAssertTrue(viewport.insetBy(dx: -1, dy: -1).contains(button.frame),
         "\(button.identifier) \(button.frame) exceeds logical viewport \(viewport)")
+    }
+    for choice in ["featured", "spotlight", "grid"] {
+      let cell = control("multiview-layout-\(choice)", app: app)
+      if cell.exists {
+        XCTAssertTrue(viewport.insetBy(dx: -1, dy: -1).contains(cell.frame),
+          "Native menu choice \(choice) \(cell.frame) exceeds logical viewport \(viewport)")
+      }
     }
   }
 
@@ -433,8 +521,11 @@ final class MultiviewLayoutUITests: XCTestCase {
     let screenshot = try XCTUnwrap(app.screenshot().image.cgImage)
     let scale = CGFloat(screenshot.width) / app.frame.width
     let frame = button.frame
-    let crop = CGRect(x: frame.minX * scale, y: frame.minY * scale,
-      width: frame.width * scale, height: frame.height * scale)
+    // Exclude the native menu's checkmark/icon columns so Vision does not merge
+    // the four-square layout glyph into the word "Equal".
+    let textInset: CGFloat = button.elementType == .cell ? 110 : 0
+    let crop = CGRect(x: (frame.minX + textInset) * scale, y: frame.minY * scale,
+      width: (frame.width - textInset) * scale, height: frame.height * scale)
     let image = try XCTUnwrap(screenshot.cropping(to: crop))
     let request = VNRecognizeTextRequest()
     request.recognitionLevel = .accurate
@@ -472,7 +563,7 @@ final class MultiviewLayoutUITests: XCTestCase {
 
   private func assertOpaqueLabelContrast(_ identifier: String, app: XCUIApplication) throws {
     let button = control(identifier, app: app)
-    let capture = try recognizedLabel(button.label, in: button, app: app)
+    let capture = try recognizedLabel(controlTitle(identifier, app: app), in: button, app: app)
     let histogram = try colors(capture.image, rect: capture.textBounds.integral)
     let total = histogram.values.reduce(0, +)
     let substantial = histogram.filter { $0.value >= max(3, total / 100) }
@@ -516,7 +607,7 @@ final class MultiviewLayoutUITests: XCTestCase {
       if control("multiview-layout-\(layout)", app: app).hasFocus { return }
       let current = names.firstIndex { control("multiview-layout-\($0)", app: app).hasFocus } ?? 0
       let target = names.firstIndex(of: layout)!
-      press(target < current ? .left : .right, app: app, "focus \(layout) \(step)")
+      press(target < current ? .up : .down, app: app, "focus \(layout) \(step)")
     }
     expectFocus("multiview-layout-\(layout)", app: app)
   }
@@ -532,11 +623,30 @@ final class MultiviewLayoutUITests: XCTestCase {
   private func expectFocus(_ identifier: String, app: XCUIApplication) {
     let target = control(identifier, app: app)
     XCTAssertTrue(target.waitForExistence(timeout: 5), app.debugDescription)
-    XCTAssertTrue(target.hasFocus, app.debugDescription)
+    let focused = NSPredicate { _, _ in
+      MainActor.assumeIsolated {
+        target.hasFocus || target.descendants(matching: .any).allElementsBoundByIndex.contains(where: \.hasFocus)
+      }
+    }
+    XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: focused, object: nil)],
+      timeout: 5), .completed, app.debugDescription)
   }
 
   private func control(_ identifier: String, app: XCUIApplication) -> XCUIElement {
-    app.buttons[identifier]
+    if let title = choiceTitle(identifier) {
+      // UIKit's native menu cells retain labels/selection but do not forward SwiftUI Picker tag identifiers.
+      return app.cells.containing(.any, identifier: title).firstMatch
+    }
+    return app.buttons[identifier]
+  }
+
+  private func choiceTitle(_ identifier: String) -> String? {
+    ["multiview-layout-featured": "Featured", "multiview-layout-spotlight": "Spotlight",
+     "multiview-layout-grid": "Equal"][identifier]
+  }
+
+  private func controlTitle(_ identifier: String, app: XCUIApplication) -> String {
+    choiceTitle(identifier) ?? (identifier == "multiview-layout" ? "Layout" : control(identifier, app: app).label)
   }
 
   private func press(_ button: XCUIRemote.Button, duration: TimeInterval? = nil,

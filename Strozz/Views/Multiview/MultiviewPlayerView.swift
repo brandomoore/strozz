@@ -73,7 +73,6 @@ struct MultiviewPlayerView: View {
   @State private var profileAudioState: MultiviewController.AudioState?
   @State private var profileWatchRequest: (pane: MultiviewPane, channel: FollowedChannel)?
   @State private var showingControls = false
-  @State private var showingLayoutPicker = false
   @State private var controlsHeight: CGFloat = 0
   /// Last pane that held focus, so dismissing the HUD restores focus to it.
   @State private var lastPaneID: String?
@@ -127,13 +126,11 @@ struct MultiviewPlayerView: View {
         .disabled(showingControls)
 
         if showingControls {
-          MultiviewControls(layout: controller.layout, showsLayoutPicker: showingLayoutPicker,
+          MultiviewControls(layout: controller.layout,
             canBrowse: lineup != nil || (controller.canAddPane && !addableChannels.isEmpty),
             hasLineup: lineup != nil, focus: $focus,
-            onLayout: { showingLayoutPicker = true },
             onSelectLayout: { layout in
               controller.setLayout(layout)
-              showingLayoutPicker = false
               bumpChrome()
             }, onBrowse: {
               if let lineup { lineup.browse() } else { showingAddPicker = true }
@@ -213,7 +210,6 @@ struct MultiviewPlayerView: View {
       } else {
         focus = nil
         showingControls = false
-        showingLayoutPicker = false
       }
     }
     .onChange(of: controller.focusRestoreRequest) { _, _ in
@@ -226,7 +222,6 @@ struct MultiviewPlayerView: View {
       if browsing {
         focus = nil
         showingControls = false
-        showingLayoutPicker = false
         hintVisible = false
         chrome.cancel()
         hintHideTask?.cancel()
@@ -248,8 +243,6 @@ struct MultiviewPlayerView: View {
       if let expanded = controller.expandedPane {
         expanded.model.playbackTelemetry.recordEvent("multiview_exit_received")
         expanded.presentation.exitRequests &+= 1
-      } else if showingLayoutPicker {
-        showingLayoutPicker = false
       } else if showingControls {
         hideControls()
       } else {
@@ -409,11 +402,13 @@ struct MultiviewPlayerView: View {
       .accessibilityIdentifier("multiview-make-primary-\(pane.id)")
     }
 
-    Button {
-      lastPaneID = pane.id
-      revealControls(layoutPicker: true)
+    Menu {
+      MultiviewLayoutOptions(layout: controller.layout) { layout in
+        controller.setLayout(layout)
+        bumpChrome()
+      }
     } label: {
-      Label { Text("Layout…") } icon: { Icon(glyph: controller.layout.glyph) }
+      Label { Text("Layout") } icon: { Icon(glyph: controller.layout.glyph) }
     }
     .accessibilityIdentifier("multiview-context-layout")
 
@@ -492,11 +487,10 @@ struct MultiviewPlayerView: View {
     chrome.reveal()
   }
 
-  private func revealControls(layoutPicker: Bool = false) {
+  private func revealControls() {
     hintHideTask?.cancel()
     withAnimation(.motionAware(.easeOut(duration: 0.25), reduceMotion: reduceMotion)) {
       hintVisible = false
-      showingLayoutPicker = layoutPicker
       showingControls = true
     }
   }
@@ -504,7 +498,6 @@ struct MultiviewPlayerView: View {
   private func hideControls() {
     withAnimation(.motionAware(.easeOut(duration: 0.25), reduceMotion: reduceMotion)) {
       showingControls = false
-      showingLayoutPicker = false
     }
     let returning = controller.panes.first { $0.id == lastPaneID } ?? controller.panes.first
     focus = returning.map { .pane($0.id) }
@@ -527,7 +520,6 @@ enum MultiviewFocusTarget: Hashable {
   case profile(String)
   case remove(String)
   case layoutButton
-  case layoutChoice(MultiviewLayout)
   case addButton
   case closeButton
 }
