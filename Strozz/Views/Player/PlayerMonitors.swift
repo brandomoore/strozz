@@ -295,11 +295,11 @@ struct PlayerTitleHeader: View {
 /// subtle black scrim on tvOS 26+, with an `.ultraThinMaterial` fallback, plus
 /// the standard white hairline. Keeps every chip reading at the same darkness
 /// instead of the lighter bare-material look they had before.
-struct HUDChipGlassStyle: ViewModifier {
+struct HUDChipGlassStyle<BackgroundShape: InsettableShape>: ViewModifier {
+  let shape: BackgroundShape
   @Environment(\.glassDisabled) private var glassDisabled
   @Environment(\.themePalette) private var palette
   func body(content: Content) -> some View {
-    let shape = Capsule(style: .continuous)
     if glassDisabled {
       content
         .background(palette.chromeOpaqueSurface, in: shape)
@@ -319,6 +319,10 @@ struct HUDChipGlassStyle: ViewModifier {
         .clipShape(shape)
     }
   }
+}
+
+extension HUDChipGlassStyle where BackgroundShape == Capsule {
+  init() { shape = Capsule(style: .continuous) }
 }
 
 /// Isolated state the rewind transport bar observes, mirrored from the player's

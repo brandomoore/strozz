@@ -110,7 +110,7 @@ The feature list below describes the Apple TV app. See
 ## Kick playback (in development)
 
 Kick is part of the existing **Following**, recommendations, search, and Apple TV
-multiview picker, not a separate tab. Search for an exact Kick channel name or
+multiview lineup, not a separate tab. Search for an exact Kick channel name or
 `kick.com` channel URL to open a live stream, including Kick-exclusive creators.
 Playback does not require a Twitch or Kick account.
 
@@ -792,7 +792,16 @@ near live avoid an unnecessary reload. Deliberate pauses, rewinds, and VOD
 positions are preserved. "LIVE" means the source's playable live position,
 including its normal buffering margin, not zero broadcast/network latency.
 
-Multiview pauses its wall when Strozz goes into the background. On return, it
+On Apple TV, hold a live Twitch or Kick card anywhere you browse and choose
+**Add to multiview**. Search shows channels before categories. The **Multiview**
+button appears with your selected avatars; open it to remove streams or start
+watching once you have at least two. The normal player's controls also let you
+add the stream you're watching. There is no separate multiview discovery tab.
+Back from the wall, or **Browse streams** in its controls, lets you add more
+through the same browsing and search actions. The wall pauses while you browse;
+**Return to multiview** resumes the same lineup.
+
+Multiview also pauses its wall when Strozz goes into the background. On return, it
 re-resolves each pane's live playlist and resumes all streams without changing
 the chosen grid/spotlight layout or audio selection.
 

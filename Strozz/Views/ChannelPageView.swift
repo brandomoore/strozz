@@ -98,11 +98,23 @@ struct ChannelPageView: View {
   }
 
   var body: some View {
-    if target.platform == .kick {
-      KickChannelDetailsView(slug: target.login) { onWatchChannel?($0) }
-        .onExitCommand { dismiss() }
-    } else {
-      twitchContent
+    VStack(spacing: 0) {
+      HStack {
+        Spacer()
+        MultiviewLineupButton()
+      }
+      .frame(height: 76)
+      .padding(.horizontal, AppLayout.horizontalPadding)
+      if target.platform == .kick {
+        KickChannelDetailsView(slug: target.login) { onWatchChannel?($0) }
+          .onExitCommand { dismiss() }
+      } else {
+        twitchContent
+      }
+    }
+    .background {
+      LinearGradient(colors: palette.backgroundColors, startPoint: .top, endPoint: .bottom)
+        .ignoresSafeArea()
     }
   }
 
@@ -417,6 +429,7 @@ struct ChannelPageView: View {
       .accessibilityLabel(liveCardAccessibilityLabel(profile))
       .accessibilityHint("Watch")
     }
+    .contextMenu { MultiviewSelectionAction(channel: followedChannel(from: profile)) }
     .padding(.horizontal, AppLayout.horizontalPadding)
   }
 

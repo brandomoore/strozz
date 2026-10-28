@@ -55,7 +55,7 @@ extension PlayerView {
   }
 
   func updateWatchRewards() {
-    guard model.livePlatform == .twitch, !isMultiviewCompact, auth.isAuthenticated,
+    guard model.livePlatform == .twitch, !isMultiviewCompact, !isMultiviewBrowsing, auth.isAuthenticated,
       let userID = auth.userID, let item = player.currentItem else {
       model.watchTracker.stop()
       return

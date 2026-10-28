@@ -76,6 +76,98 @@ final class MultiviewContinuityLiveTests: XCTestCase {
     #endif
   }
 
+  func testOptInBrowsingSuspendsAndResumesNativeLineup() async throws {
+    #if targetEnvironment(simulator)
+    let settings = ProcessInfo.processInfo.environment
+    guard settings["STROZZ_MULTIVIEW_LIVE_TESTS"] == "1",
+      settings["STROZZ_MUTE_PLAYBACK"] == "1",
+      let names = settings["STROZZ_MATRIX_CHANNELS"] else {
+      throw XCTSkip("Enable muted simulator live tests with two to four live channels.")
+    }
+    let logins = names.split(separator: ",").map(String.init)
+    guard (2...4).contains(logins.count) else { return XCTFail("Select two to four live sources") }
+    let lineup = MultiviewLineup { _ in .live }
+    for login in logins {
+      lineup.toggle(FollowedChannel(id: login, login: login, displayName: login,
+        title: "", gameName: "", viewerCount: nil, thumbnailURL: nil,
+        profileImageURL: nil, isLive: true))
+    }
+    lineup.startPlayback()
+    let controller = try XCTUnwrap(lineup.controller)
+    let environment = AppEnvironment()
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    let host = UIHostingController(rootView: MultiviewPlayerView(
+      channels: [], availableChannels: [], auth: environment.auth, goLive: nil,
+      onWatch: { _ in }, controller: controller)
+      .environment(environment)
+      .environment(\.multiviewLineup, lineup)
+      .environment(\.themePalette, ThemePalette.dark))
+    window.rootViewController = host
+    defer {
+      lineup.clear()
+      window.rootViewController = previous
+    }
+    try await ready(controller, host: host, audiblePaneID: nil)
+    controller.spotlight(controller.panes[0].id)
+    let audioOwner = controller.audiblePaneID
+    let panes = controller.panes
+    let models = panes.map(\.model)
+    let players = controller.panes.map(\.player)
+    let items = try controller.panes.map { try XCTUnwrap($0.player.currentItem) }
+    attach(host, name: "Live wall before browsing")
+
+    lineup.browse()
+    try await Task.sleep(for: .seconds(1))
+    XCTAssertTrue(controller.isBrowsing)
+    XCTAssertTrue(controller.panes.allSatisfy {
+      $0.player.rate == 0 && !$0.presentation.videoIsVisible
+        && $0.model.nativeHLS == nil && $0.model.nativeNeedsRefresh
+    }, "Browsing must stop playback and native producers, not just hide video")
+    let pausedClocks = players.map { $0.currentTime().seconds }
+    try await Task.sleep(for: .seconds(1))
+    for (index, player) in players.enumerated() {
+      XCTAssertEqual(player.currentTime().seconds, pausedClocks[index], accuracy: 0.1)
+    }
+
+    lineup.startPlayback()
+    try await ready(controller, host: host, audiblePaneID: nil)
+    XCTAssertTrue(lineup.controller === controller)
+    XCTAssertEqual(controller.layout, .spotlight)
+    XCTAssertEqual(controller.audiblePaneID, audioOwner)
+    XCTAssertEqual(surfaces(in: host).count, panes.count)
+    for (index, pane) in controller.panes.enumerated() {
+      XCTAssertTrue(pane === panes[index])
+      XCTAssertTrue(pane.model === models[index])
+      // Existing native suspension recovery rebuilds the audio renderer too.
+      XCTAssertFalse(pane.player === players[index])
+      XCTAssertNil(players[index].currentItem)
+      XCTAssertEqual(players[index].rate, 0)
+      XCTAssertFalse(pane.player.currentItem === items[index],
+        "Returning must refresh the suspended live source")
+      XCTAssertTrue(isNativeAuto(pane))
+      XCTAssertFalse(pane.model.nativeNeedsRefresh)
+      let item = try XCTUnwrap(pane.player.currentItem)
+      let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [:])
+      item.add(output)
+      defer { item.remove(output) }
+      var frames = 0
+      for _ in 0..<20 {
+        try await Task.sleep(for: .milliseconds(100))
+        if output.hasNewPixelBuffer(forItemTime: item.currentTime()),
+          output.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) != nil {
+          frames += 1
+        }
+      }
+      XCTAssertGreaterThan(frames, 10, "Returned panes must deliver new decoded frames")
+    }
+    attach(host, name: "Live wall resumed after browsing")
+    #else
+    throw XCTSkip("This opt-in check must not take over the physical TV.")
+    #endif
+  }
+
   func testOptInPhysicalLiveFollowedZoomKeepsPlayback() async throws {
     #if targetEnvironment(simulator)
     throw XCTSkip("Hardware verification requires its own explicit opt-in.")

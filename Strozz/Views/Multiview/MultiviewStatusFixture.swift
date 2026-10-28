@@ -112,4 +112,102 @@ struct MultiviewSelectionFixture: View {
     }
   }
 }
+
+struct MultiviewBrowseFixture: View {
+  @State private var lineup: MultiviewLineup = {
+    let lineup = MultiviewLineup { _ in .live }
+    if ProcessInfo.processInfo.environment["STROZZ_MULTIVIEW_BROWSE_FULL"] == "1" {
+      for login in ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"] {
+        lineup.toggle(FollowedChannel(id: login, login: login, displayName: login.capitalized,
+          title: "", gameName: "", viewerCount: nil, thumbnailURL: nil,
+          profileImageURL: nil, isLive: true))
+      }
+    }
+    return lineup
+  }()
+  @State private var selectedChannel: FollowedChannel?
+  @State private var channelPageTarget: ChannelPageTarget?
+  @State private var refresh = PlaybackReturnRefreshCoordinator()
+  @State private var searching = false
+  @State private var search = SearchService(loadData: { request in
+    let data = Data(#"""
+      {"data":{"searchFor":{"channels":{"edges":[
+        {"item":{"id":"search-alpha","login":"alpha","displayName":"Alpha","stream":{"id":"live-alpha","title":"Alpha live"}}},
+        {"item":{"id":"search-beta","login":"beta","displayName":"Beta","stream":{"id":"live-beta","title":"Beta live"}}}
+      ]},"games":{"edges":[{"item":{"id":"category","name":"Example category"}}]}}}}
+      """#.utf8)
+    return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+  }, loadKick: { _ in
+    KickChannel(slug: "example", displayName: "Example", title: "Kick live", category: "",
+      viewerCount: 20, isLive: true, chatroomID: nil, imageURL: nil)
+  })
+  @FocusState private var focus: String?
+  @Namespace private var focusScope
+  @Environment(\.colorScheme) private var scheme
+
+  var body: some View {
+    let settings = ProcessInfo.processInfo.environment
+    let theme = AppTheme(rawValue: settings["STROZZ_MULTIVIEW_STATUS_THEME"] ?? "dark") ?? .dark
+    let palette = theme.palette(systemColorScheme: scheme)
+    VStack(spacing: 24) {
+      HStack(spacing: 24) {
+        Button("Browse") { searching = false }
+          .focused($focus, equals: "browse")
+          .prefersDefaultFocus(true, in: focusScope)
+        Button("Search") { searching = true }
+        Spacer()
+        MultiviewLineupButton()
+      }
+      .frame(height: 76)
+      .padding(.horizontal, 60)
+      ZStack {
+        if searching {
+          SearchView(selectedChannel: $selectedChannel, channelPageTarget: $channelPageTarget,
+            service: search, initialQuery: "example")
+        } else {
+          HStack(spacing: 24) {
+            ForEach(["alpha", "beta"], id: \.self) { login in
+              StreamChannelCard(channel: .init(id: login, login: login,
+                displayName: login.capitalized, title: "\(login.capitalized) live", gameName: "",
+                viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true),
+                isFocused: focus == login,
+                onWatch: login == "alpha" ? nil : { selectedChannel = $0 },
+                onGoToChannel: login == "alpha" ? nil : { channelPageTarget = ChannelPageTarget(channel: $0) })
+                .frame(width: 460)
+                .focusable()
+                .focused($focus, equals: login)
+                .focusEffectDisabled()
+            }
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, AppLayout.horizontalPadding)
+          .focusSection()
+        }
+      }
+      Spacer()
+    }
+    .focusScope(focusScope)
+    .background(AppBackground(palette: palette))
+    .environment(refresh)
+    .environment(\.multiviewLineup, lineup)
+    .environment(\.themePalette, palette)
+    .environment(\.glassDisabled, settings["STROZZ_MULTIVIEW_STATUS_OPAQUE"] == "1")
+    .environment(\.streamPreviewsEnabled, false)
+    .preferredColorScheme(theme.preferredColorScheme)
+    .onChange(of: lineup.playbackRequest) { _, _ in lineup.startPlayback() }
+    .disabled(lineup.isShowingPlayback)
+    .overlay {
+      if lineup.isShowingPlayback, let controller = lineup.controller {
+        VStack(spacing: 30) {
+          Text("Fixture multiview")
+          Text("\(controller.panes.count) streams")
+          Button("Browse streams") { lineup.browse() }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(palette.cardOpaqueSurface)
+        .onExitCommand { lineup.browse() }
+      }
+    }
+  }
+}
 #endif

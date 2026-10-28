@@ -22,6 +22,9 @@ struct KickChannelDetailsView: View {
             Button("Watch live") { onWatch(channel.followedChannel) }
               .buttonStyle(.borderedProminent)
               .accessibilityIdentifier("kick-watch-live")
+              #if os(tvOS)
+              .contextMenu { MultiviewSelectionAction(channel: channel.followedChannel) }
+              #endif
           }
           Text("Past broadcasts aren't available for Kick in Strozz.").foregroundStyle(.secondary)
         }

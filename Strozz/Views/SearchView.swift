@@ -11,6 +11,14 @@ struct SearchView: View {
   @State private var path: [TwitchCategory] = []
   @Environment(PlaybackReturnRefreshCoordinator.self) private var playbackReturnRefresh
 
+  init(selectedChannel: Binding<FollowedChannel?>, channelPageTarget: Binding<ChannelPageTarget?>,
+       service: SearchService = SearchService(), initialQuery: String = "") {
+    _selectedChannel = selectedChannel
+    _channelPageTarget = channelPageTarget
+    _service = State(initialValue: service)
+    _query = State(initialValue: initialQuery)
+  }
+
   var body: some View {
     NavigationStack(path: $path) {
       SearchResultsView(
@@ -86,12 +94,12 @@ private struct SearchResultsView: View {
             .padding(.top, 12)
         }
 
-        if !service.categoryResults.isEmpty {
-          categoriesSection
-        }
-
         if !service.channelResults.isEmpty {
           channelsSection
+        }
+
+        if !service.categoryResults.isEmpty {
+          categoriesSection
         }
       }
       .padding(.horizontal, AppLayout.horizontalPadding)

@@ -49,10 +49,8 @@ struct HomeView: View {
   @State private var selectedChannel: FollowedChannel?
   @State private var channelPageTarget: ChannelPageTarget?
   @State private var pendingWatchChannel: FollowedChannel?
-  /// Active multiview launch (roster). Item-based so the cover always presents
-  /// with the chosen channels — `isPresented` + a separate roster var raced on
-  /// first launch and showed an empty (black) wall.
-  @State private var multiviewLaunch: MultiviewLaunch?
+  @State private var multiview = MultiviewLineup()
+  @State private var pendingMultiviewStart = false
   #if DEBUG && targetEnvironment(simulator)
   @State private var didLaunchMultiviewUITest = false
   #endif
@@ -88,11 +86,6 @@ struct HomeView: View {
   /// don't rebuild the filter on every HomeView body pass (focus changes,
   /// scrolling, animations).
   @State private var topStreams: [FollowedChannel] = []
-  /// Followed channels that are live right now — the pool multiview draws from.
-  /// Memoized (rather than a computed `filter` over `follows.channels`) so the
-  /// large HomeView body doesn't re-filter the whole follow list on every focus
-  /// move and animation frame. Recomputed only when `follows.channels` changes.
-  @State private var liveFollowedChannels: [FollowedChannel] = []
 
   @AppStorage(StreamCardSize.storageKey) private var streamCardSizeRaw = StreamCardSize.fallback.rawValue
   @AppStorage(RecommendationPreferences.enabledDefaultsKey) private var personalizedEnabled = true
@@ -113,55 +106,8 @@ struct HomeView: View {
     StreamCardSize.resolve(streamCardSizeRaw)
   }
 
-  /// Followed channels that are live right now — the pool multiview draws from.
-  private func recomputeLiveFollowed() {
-    liveFollowedChannels = kick.mergedFollowing(
-      follows.isUsingDemoData && environment.kickFollows.isConnected ? [] : follows.channels, liveOnly: true)
-  }
-
-  /// Discovery sections for the multiview setup picker: Following first (the
-  /// most-wanted pool), then personalized recommendations, then popular streams.
-  /// `MultiviewSetupView` filters each to live and dedupes across sections.
-  private var multiviewSections: [MultiviewChannelSection] {
-    var sections: [MultiviewChannelSection] = [
-      MultiviewChannelSection(
-        id: "following",
-        title: follows.isUsingDemoData && !environment.kickFollows.isConnected ? "Trending" : "Following",
-        channels: liveFollowedChannels
-      )
-    ]
-    if personalizedEnabled, !personalized.channels.isEmpty {
-      sections.append(
-        MultiviewChannelSection(id: "recommended", title: "Recommended for you",
-          channels: kick.mergedRecommendations(personalized.channels, blocked: feedback.blockedLogins))
-      )
-    }
-    if !topStreams.isEmpty {
-      sections.append(
-        MultiviewChannelSection(id: "popular", title: "Popular right now", channels: topStreams)
-      )
-    } else if !recommendations.channels.isEmpty {
-      sections.append(
-        MultiviewChannelSection(id: "popular", title: "Popular right now", channels: recommendations.channels)
-      )
-    }
-    return sections
-  }
-
-  /// Every live channel the in-session "Add" picker can offer — the union of all
-  /// section pools, deduped by `channelKey` (see `FollowedChannel`), so
-  /// additions aren't limited to follows and one streamer can't be offered twice
-  /// under two different ids.
-  private var multiviewAvailablePool: [FollowedChannel] {
-    var seen = Set<String>()
-    return multiviewSections
-      .flatMap(\.channels)
-      .filter { $0.isLive && seen.insert($0.channelKey).inserted }
-  }
-
   enum SidebarTab: String, CaseIterable, Identifiable {
     case home = "Home"
-    case multiview = "Multiview"
     case browse = "Browse"
     case search = "Search"
     case settings = "Settings"
@@ -171,7 +117,6 @@ struct HomeView: View {
     var glyph: Glyph {
       switch self {
       case .home: return .home
-      case .multiview: return .borderAll
       case .browse: return .layoutGrid
       case .search: return .search
       case .settings: return .settings
@@ -184,7 +129,50 @@ struct HomeView: View {
   }
 
   var body: some View {
-    homeContent
+    ZStack {
+      homeContent
+        .environment(\.streamPreviewsEnabled, !isPresentingPlayer)
+        .opacity(multiview.isShowingPlayback ? 0 : 1)
+        .disabled(multiview.isShowingPlayback)
+        .accessibilityHidden(multiview.isShowingPlayback)
+      if let controller = multiview.controller {
+        MultiviewPlayerView(channels: [], availableChannels: [], auth: auth, goLive: goLive,
+          onWatch: { watchHistory.record($0) }, controller: controller)
+          .opacity(multiview.isShowingPlayback ? 1 : 0)
+          .disabled(!multiview.isShowingPlayback)
+          .accessibilityHidden(!multiview.isShowingPlayback)
+          .environment(\.themePalette, resolvedPalette)
+          .preferredColorScheme(themeManager.theme.preferredColorScheme)
+      }
+    }
+      .environment(\.multiviewLineup, multiview)
+      .onChange(of: multiview.playbackRequest) { _, _ in
+        pendingMultiviewStart = true
+        if selectedChannel != nil { selectedChannel = nil }
+        else if channelPageTarget != nil { channelPageTarget = nil }
+        else if youtubePlayback != nil { youtubePlayback = nil }
+        else { startPendingMultiview() }
+      }
+      .onChange(of: multiview.isShowingPlayback) { _, showing in
+        if !showing { handlePlayerDismissal() }
+      }
+      .task(id: multiview.isShowingPlayback || !isForeground) {
+        guard !multiview.isShowingPlayback, isForeground else { return }
+        while !Task.isCancelled {
+          await multiview.refreshStatuses()
+          do { try await Task.sleep(for: .seconds(15)) } catch { return }
+        }
+      }
+      .task(id: multiview.nextExpiry) {
+        guard let deadline = multiview.nextExpiry else { return }
+        do { try await ContinuousClock().sleep(until: deadline) } catch { return }
+        multiview.expire()
+      }
+      .alert("Multiview", isPresented: Binding(
+        get: { multiview.notice != nil }, set: { if !$0 { multiview.notice = nil } }
+      )) {
+        Button("OK", role: .cancel) { multiview.notice = nil }
+      } message: { Text(multiview.notice ?? "") }
       .task(id: KickRefreshSignature(
         isBrowsing: isForeground && !isPresentingPlayer, revision: kickRefreshRevision,
         importedAt: environment.kickFollows.document?.importedAt
@@ -208,8 +196,8 @@ struct HomeView: View {
         Task { await environment.kickFollows.synchronize() }
       }
       .onChange(of: environment.kickFollows.document) { _, _ in kick.applyRoster() }
-      .onChange(of: kick.directory) { _, _ in recomputeLiveFollowed(); recomputeTopStreams() }
-      .onChange(of: kick.links) { _, _ in recomputeLiveFollowed(); recomputeTopStreams() }
+      .onChange(of: kick.directory) { _, _ in recomputeTopStreams() }
+      .onChange(of: kick.links) { _, _ in recomputeTopStreams() }
       .onChange(of: kick.recommended) { _, _ in recomputeTopStreams() }
   }
 
@@ -238,23 +226,6 @@ struct HomeView: View {
         .tabItem {
           Label(SidebarTab.home.rawValue, image: SidebarTab.home.tablerImageName)
         }
-
-      // The Multiview tab shows the channel picker inline so the tab bar stays
-      // visible while choosing. Starting playback presents the immersive player
-      // as a full-screen cover (where hiding the tab bar is expected).
-      tabContainer {
-        MultiviewSetupView(
-          sections: multiviewSections,
-          onStart: { channels in
-            multiviewLaunch = MultiviewLaunch(channels: channels)
-          },
-          onCancel: { selectedSidebarTab = .home }
-        )
-      }
-      .tag(SidebarTab.multiview)
-      .tabItem {
-        Label(SidebarTab.multiview.rawValue, image: SidebarTab.multiview.tablerImageName)
-      }
 
       tabContainer {
         BrowseView(
@@ -344,10 +315,11 @@ struct HomeView: View {
         names.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") } })
       else { return }
       didLaunchMultiviewUITest = true
-      multiviewLaunch = MultiviewLaunch(channels: names.map {
-        FollowedChannel(id: $0, login: $0, displayName: $0, title: "", gameName: "",
-          viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true)
-      })
+      for name in names {
+        multiview.toggle(FollowedChannel(id: name, login: name, displayName: name, title: "", gameName: "",
+          viewerCount: nil, thumbnailURL: nil, profileImageURL: nil, isLive: true))
+      }
+      multiview.startPlayback()
     }
     #endif
     .task {
@@ -392,7 +364,6 @@ struct HomeView: View {
     }
     .onChange(of: follows.channels) { _, _ in
       requestFocusIfPossible(force: false)
-      recomputeLiveFollowed()
       recomputeTopStreams()
     }
     .onChange(of: recommendations.channels) { _, _ in
@@ -460,7 +431,10 @@ struct HomeView: View {
         await refreshPersonalizedIfNeeded(force: true)
       }
     }
-    .fullScreenCover(item: $selectedChannel, onDismiss: { handlePlayerDismissal() }) { channel in
+    .fullScreenCover(item: $selectedChannel, onDismiss: {
+      handlePlayerDismissal()
+      startPendingMultiview()
+    }) { channel in
       PlayerView(channel: channel.login, auth: auth, goLive: goLive, posterURL: channel.thumbnailURL,
         initialPlatform: channel.platform)
         .environment(\.themePalette, resolvedPalette)
@@ -469,6 +443,7 @@ struct HomeView: View {
       if pendingWatchChannel == nil { handlePlayerDismissal() }
       presentPendingWatchIfNeeded()
       promptGoLiveSetupIfNeeded()
+      startPendingMultiview()
     }) { target in
       ChannelPageView(
         target: target,
@@ -476,17 +451,6 @@ struct HomeView: View {
           pendingWatchChannel = channel
           channelPageTarget = nil
         }
-      )
-      .environment(\.themePalette, resolvedPalette)
-      .preferredColorScheme(themeManager.theme.preferredColorScheme)
-    }
-    .fullScreenCover(item: $multiviewLaunch, onDismiss: { handlePlayerDismissal() }) { launch in
-      MultiviewPlayerView(
-        channels: launch.channels,
-        availableChannels: multiviewAvailablePool,
-        auth: auth,
-        goLive: goLive,
-        onWatch: { watchHistory.record($0) }
       )
       .environment(\.themePalette, resolvedPalette)
       .preferredColorScheme(themeManager.theme.preferredColorScheme)
@@ -511,7 +475,10 @@ struct HomeView: View {
       .environment(\.themePalette, resolvedPalette)
       .preferredColorScheme(themeManager.theme.preferredColorScheme)
     }
-    .fullScreenCover(item: $youtubePlayback, onDismiss: { handlePlayerDismissal() }) { target in
+    .fullScreenCover(item: $youtubePlayback, onDismiss: {
+      handlePlayerDismissal()
+      startPendingMultiview()
+    }) { target in
       YouTubeLivePlayerView(videoID: target.videoID, title: target.title)
         .environment(\.themePalette, resolvedPalette)
         .preferredColorScheme(themeManager.theme.preferredColorScheme)
@@ -528,9 +495,24 @@ struct HomeView: View {
     ZStack {
       AppBackground(palette: resolvedPalette)
 
-      content()
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      VStack(spacing: 0) {
+        HStack {
+          Spacer()
+          MultiviewLineupButton()
+        }
+        .frame(height: 76)
+        .padding(.horizontal, AppLayout.horizontalPadding)
+        content()
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      }
     }
+  }
+
+  private func startPendingMultiview() {
+    guard pendingMultiviewStart, selectedChannel == nil, channelPageTarget == nil,
+      youtubePlayback == nil else { return }
+    pendingMultiviewStart = false
+    multiview.startPlayback()
   }
 
   /// Shared rail layout constants handed to each extracted Home section so they
@@ -752,6 +734,7 @@ struct HomeView: View {
   }
 
   private func requestFocusIfPossible(force: Bool) {
+    guard !isPresentingCover, selectedSidebarTab == .home else { return }
     guard let first = followingRowChannels.first else { return }
     if !force && (firstFocusRequested || focusedItemID != nil) { return }
 
@@ -759,6 +742,7 @@ struct HomeView: View {
     Task {
       try? await Task.sleep(for: .milliseconds(150))
       await MainActor.run {
+        guard !isPresentingCover, selectedSidebarTab == .home else { return }
         focusedItemID = HomeFollowingFocus.card(first.channelKey)
       }
     }
@@ -794,7 +778,7 @@ struct HomeView: View {
   }
 
   private var isPresentingPlayer: Bool {
-    selectedChannel != nil || multiviewLaunch != nil || youtubePlayback != nil
+    selectedChannel != nil || multiview.isShowingPlayback || youtubePlayback != nil
   }
 
   private struct KickRefreshSignature: Equatable {
@@ -878,7 +862,6 @@ struct HomeView: View {
     async let followedDone: Void = refreshFollowedChannelsIfNeeded(force: force)
     async let recommendationsDone: Void = refreshRecommendationsIfNeeded(force: force)
     await followedDone
-    recomputeLiveFollowed()
     await recommendationsDone
     // Creator discovery must not hold up Twitch recommendations or initial focus.
     kickRefreshRevision &+= 1
@@ -1126,14 +1109,6 @@ struct HomeAccountIdentity: Equatable {
     userID = auth.userID
     authenticated = auth.isAuthenticated
   }
-}
-
-/// One multiview session launch — wraps the chosen roster so the cover can be
-/// presented with `fullScreenCover(item:)`, which (unlike `isPresented` plus a
-/// separate roster var) always builds its content with the channels in hand.
-struct MultiviewLaunch: Identifiable {
-  let id = UUID()
-  let channels: [FollowedChannel]
 }
 
 /// A YouTube-only live stream the viewer chose to play (no Twitch equivalent),

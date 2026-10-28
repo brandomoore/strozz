@@ -42,7 +42,7 @@ final class MultiviewFocusRenderingTests: XCTestCase {
     XCTAssertTrue(chrome.isVisible)
   }
 
-  func testOutlinePixelsStayOutsideVideoAndDisappearWithChrome() async throws {
+  func testOutlinePixelsStayOutsideVideoAndDimWithChrome() async throws {
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     let window = try XCTUnwrap(scene.keyWindow)
     let previous = window.rootViewController
@@ -82,8 +82,11 @@ final class MultiviewFocusRenderingTests: XCTestCase {
               XCTAssertEqual(try pixel(image, at: point), [255, 0, 0],
                 "The outline cannot cover any video pixels: \(theme), opaque=\(opaque), compact=\(compact)")
             }
-            XCTAssertEqual(try pixel(image, at: .init(x: center.x - size.width / 2 - 2, y: center.y)),
-              visible ? [255, 255, 255] : [0, 0, 0])
+            let outline = try pixel(image, at: .init(x: center.x - size.width / 2 - 2, y: center.y))
+            for component in outline {
+              XCTAssertEqual(component, visible ? 255 : 89, accuracy: 2,
+                "The active outline must dim to 35%, never disappear")
+            }
             if !visible {
               XCTAssertEqual(try pixel(image, at: .init(x: center.x + size.width / 2 - 35,
                 y: center.y - size.height / 2 + 25)), [255, 0, 0], "The audio badge must also disappear")
@@ -122,7 +125,8 @@ final class MultiviewFocusRenderingTests: XCTestCase {
     try await Task.sleep(for: .milliseconds(300))
     for (focused, audible, visible) in [
       (true, true, true), (false, true, true), (false, false, true),
-      (true, false, true), (false, false, false), (true, true, true),
+      (true, false, true), (true, true, false), (false, true, false),
+      (false, false, false), (true, true, true),
     ] {
       let updated = expectation(description: "Focus \(focused), audio \(audible) rendered")
       pane.isAudible = audible
@@ -135,14 +139,85 @@ final class MultiviewFocusRenderingTests: XCTestCase {
         host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
       }
       let center = CGPoint(x: host.view.bounds.midX, y: host.view.bounds.midY)
-      XCTAssertEqual(try pixel(image, at: .init(x: center.x - 304, y: center.y)),
-        focused && visible ? [255, 255, 255] : [0, 0, 0],
-        "Outline must reach its final width on update: focus=\(focused), audio=\(audible)")
+      let outer = try pixel(image, at: .init(x: center.x - 304, y: center.y))
+      for component in outer {
+        XCTAssertEqual(component, focused ? (visible ? 255 : 89) : 0, accuracy: 2,
+          "Outline must reach its final width on update: focus=\(focused), audio=\(audible)")
+      }
       let inner = try pixel(image, at: .init(x: center.x - 302, y: center.y))
       if visible && (focused || audible) {
         XCTAssertGreaterThan(inner.min() ?? 0, 80)
+      } else if focused || audible {
+        XCTAssertGreaterThan(inner.min() ?? 0, 20, "Idle active outlines must remain visible")
+        XCTAssertLessThan(inner.max() ?? 255, 120, "Idle active outlines must be dim")
       } else {
         XCTAssertEqual(inner, [0, 0, 0], "The previous audio outline must not linger")
+      }
+    }
+  }
+
+  func testGlassOverlaysRemainReadableAcrossThemesAndTileSizes() async throws {
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = try XCTUnwrap(scene.keyWindow)
+    let previous = window.rootViewController
+    defer { window.rootViewController = previous }
+    let pane = MultiviewPane(channel: .init(id: "glass", login: "glass", displayName: "Channel",
+      title: "Live stream title", gameName: "Category", viewerCount: 1234,
+      thumbnailURL: nil, profileImageURL: nil, isLive: true))
+    pane.model.isLoading = false
+    pane.isAudible = true
+    defer { pane.stop() }
+
+    for theme in AppTheme.allCases {
+      for opaque in [false, true] {
+        for compact in [false, true] {
+          let palette = theme.palette(systemColorScheme: theme == .light ? .light : .dark)
+          let size = CGSize(width: compact ? 300 : 800, height: compact ? 169 : 450)
+          let host = UIHostingController(rootView:
+            LinearGradient(colors: [.red, .blue], startPoint: .topLeading, endPoint: .bottomTrailing)
+              .frame(width: size.width, height: size.height)
+              .overlay {
+                MultiviewPaneTile(pane: pane, isFocused: true, isPrimary: false,
+                  showsMetadata: true, style: compact ? .compact : .full,
+                  palette: palette, glassDisabled: opaque)
+              }
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
+              .background(palette.backgroundColors.last ?? palette.cardOpaqueSurface)
+              .preferredColorScheme(theme.preferredColorScheme))
+          window.rootViewController = host
+          host.view.layoutIfNeeded()
+          try await Task.sleep(for: .milliseconds(300))
+          let image = UIGraphicsImageRenderer(bounds: host.view.bounds).image { _ in
+            host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+          }
+          let attachment = XCTAttachment(image: image)
+          attachment.name = "Multiview glass \(theme.rawValue) opaque-\(opaque) compact-\(compact)"
+          attachment.lifetime = .keepAlways
+          add(attachment)
+          if opaque {
+            let x = host.view.bounds.midX + size.width / 2 - (compact ? 8 : 12) - (compact ? 18 : 22)
+            let y = host.view.bounds.midY - size.height / 2 + (compact ? 8 : 12) + 7
+            let background = try pixel(image, at: CGPoint(x: x, y: y))
+            if theme == .light {
+              XCTAssertGreaterThan(background.min() ?? 0, 230, "Light opaque audio surface must stay light")
+              let left = host.view.bounds.midX - size.width / 2
+              let bottom = host.view.bounds.midY + size.height / 2
+              var badgeTextPixels = 0
+              for x in stride(from: left + (compact ? 65 : 100),
+                to: left + (compact ? 240 : 350), by: 2) {
+                for y in stride(from: bottom - (compact ? 38 : 50),
+                  to: bottom - (compact ? 15 : 22), by: 2) {
+                  if try pixel(image, at: CGPoint(x: x, y: y)).max() ?? 255 < 120 {
+                    badgeTextPixels += 1
+                  }
+                }
+              }
+              XCTAssertGreaterThan(badgeTextPixels, 20, "LIVE/viewer text must be dark on Light opaque metadata")
+            } else {
+              XCTAssertLessThan(background.max() ?? 255, 50, "Dark opaque audio surface must stay dark")
+            }
+          }
+        }
       }
     }
   }

@@ -53,7 +53,7 @@ extension PlayerView {
         )
       }
     }
-    guard !Task.isCancelled, backgroundedAt == nil else { return }
+    guard !Task.isCancelled, backgroundedAt == nil, !isMultiviewBrowsing else { return }
     recordPlaybackEvent("initial_source_selected", attributes: ["source": "twitch"])
     await load(reason: reason)
   }
@@ -75,7 +75,7 @@ extension PlayerView {
   func load(maxAttempts: Int = 3, reason: String = "initial")
     async
   {
-    guard !Task.isCancelled, backgroundedAt == nil else { return }
+    guard !Task.isCancelled, backgroundedAt == nil, !isMultiviewBrowsing else { return }
     // While the experimental alternate source (YouTube simulcast) is active the
     // player holds a plain non-Twitch item. Every `load()` rebuilds the proxied
     // Twitch pipeline via `makeItem` and re-arms the Twitch control loops, which
@@ -606,7 +606,7 @@ extension PlayerView {
     reason: String = "suspension",
     resolve: (@MainActor () async throws -> StreamPlayback)? = nil
   ) {
-    guard model.nativeNeedsRefresh else { return }
+    guard model.nativeNeedsRefresh, !isMultiviewBrowsing else { return }
     model.beginPlaybackLoad()
     model.nativeRefreshTask?.cancel()
     let generation = model.nativeGeneration
@@ -924,7 +924,7 @@ extension PlayerView {
 
   func resumePlaybackAfterAbsence(restoreLive: Bool) {
     guard !isOffline, !isSleeping, backgroundedAt == nil, channelPageTarget == nil,
-      !model.multiviewSleepSuspended,
+      !model.multiviewSleepSuspended, !isMultiviewBrowsing,
       !model.livePlaybackReturn.isAway, !model.audioInterrupted,
       !model.mediaServicesUnavailable else { return }
     if model.mediaServicesResetPending {

@@ -1,7 +1,60 @@
 import AVFoundation
 import SwiftUI
 
+struct MultiviewLoadRequest: Equatable {
+  let reloadID: UUID?
+  let browsing: Bool
+}
+
 extension PlayerView {
+  var isMultiviewBrowsing: Bool { model.multiviewContext?.isBrowsing == true }
+
+  var multiviewChannel: FollowedChannel {
+    let target = currentLiveTarget
+    var value = FollowedChannel(id: target.channel, login: target.channel,
+      displayName: channelDisplayName.isEmpty ? target.channel : channelDisplayName,
+      title: streamTitle, gameName: "", viewerCount: nil, thumbnailURL: posterURL,
+      profileImageURL: channelAvatarURL, isLive: !isOffline)
+    value.platform = target.platform
+    return value
+  }
+
+  func suspendMultiviewForBrowsing() {
+    model.multiviewContext?.needsBrowsingResume = true
+    model.audioTakeoverTask?.cancel()
+    model.channelMetadataTask?.cancel()
+    model.watchTracker.stop()
+    hideTask?.cancel()
+    focusRecoveryTask?.cancel()
+    multiviewFocusTask?.cancel()
+    focus = nil
+    trackpad.stop()
+    model.creatorSession.suspend()
+    eventSub.stop()
+    model.eventSubChannel = nil
+    captionController.stop()
+    stopPlaybackWatchdog()
+    stopLatencyMonitor(clearPlaybackIntent: false)
+    resetAltSourceWork()
+    suspendNativePlayback(reason: "multiview_browsing")
+    player.pause()
+  }
+
+  func resumeMultiviewAfterBrowsingIfNeeded() -> Bool {
+    guard let context = model.multiviewContext, context.needsBrowsingResume else { return false }
+    context.needsBrowsingResume = false
+    guard model.nativeNeedsRefresh || (isUsingAltSource && player.currentItem != nil) else { return false }
+    if !isMultiviewCompact { connectCurrentLiveChat() }
+    model.channelMetadataTask?.cancel()
+    model.channelMetadataTask = Task { await refreshChannelMetadata() }
+    resumePlaybackAfterAbsence(restoreLive: true)
+    if !isMultiviewCompact {
+      syncCaptions()
+      focus = .video
+    }
+    return true
+  }
+
   func usesDirectMultiviewVideoLayer(
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) -> Bool {

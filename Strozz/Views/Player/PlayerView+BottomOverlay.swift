@@ -90,6 +90,34 @@ extension PlayerView {
       Spacer(minLength: 18)
 
       HStack(spacing: 14) {
+        if !isVOD, currentLiveTarget.platform != .youtube, let multiviewLineup {
+          Button {
+            hideTask?.cancel()
+            if !multiviewLineup.contains(multiviewChannel), !multiviewLineup.isFull {
+              multiviewLineup.toggle(multiviewChannel)
+              scheduleHide()
+            } else {
+              showMultiviewLineup = true
+            }
+          } label: {
+            Icon(glyph: .borderAll)
+              .overlay(alignment: .bottomTrailing) {
+                if multiviewLineup.contains(multiviewChannel) {
+                  Icon(glyph: .check, size: 12)
+                    .foregroundStyle(palette.chromeOnOpaque)
+                    .frame(width: 18, height: 18)
+                    .background(palette.chromeOpaqueSurface, in: Circle())
+                    .offset(x: 8, y: 6)
+                }
+              }
+          }
+          .accessibilityLabel(multiviewLineup.contains(multiviewChannel) || multiviewLineup.isFull
+            ? "Multiview" : "Add to multiview")
+          .accessibilityIdentifier("player-multiview")
+          .disabled(!multiviewLineup.contains(multiviewChannel) && isOffline)
+          .focused($focus, equals: .multiview)
+          .onMoveCommand { if $0 == .up { requestSeekBarFocus() } }
+        }
         // The visible menu content is kept `.equatable()` so the player's
         // once-per-second latency churn doesn't re-render (and blink) the open
         // menu. The focus + navigation modifiers are applied OUTSIDE that
@@ -488,7 +516,7 @@ extension PlayerView {
           scheduleHide()
           return
         }
-        if isQualityMenuPresented || showRewards {
+        if isQualityMenuPresented || showRewards || showMultiviewLineup {
           scheduleHide()
           return
         }
@@ -568,7 +596,7 @@ extension PlayerView {
 
   func isControlFocus(_ focus: Focusable) -> Bool {
     switch focus {
-    case .streamInfo, .quality, .rewards, .chatToggle, .chatInput, .rewindScrubber:
+    case .streamInfo, .quality, .rewards, .multiview, .chatToggle, .chatInput, .rewindScrubber:
       return true
     default:
       return false

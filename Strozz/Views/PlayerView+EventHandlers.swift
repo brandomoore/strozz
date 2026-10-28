@@ -107,9 +107,14 @@ extension PlayerView {
       guard !isMultiviewCompact else { return }
       await monitorWatchRewards()
     }
-    .task(id: model.multiviewContext?.reloadID) {
+    .task(id: MultiviewLoadRequest(reloadID: model.multiviewContext?.reloadID, browsing: isMultiviewBrowsing)) {
+      if isMultiviewBrowsing {
+        suspendMultiviewForBrowsing()
+        return
+      }
       if activeChannel.isEmpty { activeChannel = channel }
       initializeLiveSource()
+      if resumeMultiviewAfterBrowsingIfNeeded() { return }
       if model.multiviewContext == nil {
         migrateNativeLiveProfile()
         UserDefaults.standard.set(true, forKey: PersistenceKey.nativePlaybackDefaultApplied)
@@ -131,6 +136,9 @@ extension PlayerView {
         await loadInitialSource()
       }
       if !isMultiviewCompact { focus = .video }
+    }
+    .onChange(of: isMultiviewBrowsing) { _, browsing in
+      if !browsing, !isMultiviewCompact { trackpad.start() }
     }
     .onAppear {
       setIdleTimer(disabled: true)

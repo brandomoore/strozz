@@ -53,6 +53,9 @@ struct PlayerView: View {
   var initialPlatform: LivePlatform = .twitch
   @State var showKickChannelInfo = false
   @State var showCreatorChannels = false
+  @State var showMultiviewLineup = false
+  @State var startMultiviewAfterDismissal = false
+  @Environment(\.multiviewLineup) var multiviewLineup
 
 
 
@@ -611,7 +614,7 @@ struct PlayerView: View {
   // its `focusTag`, and must be registered in that allow-list — otherwise tvOS
   // can't land focus on it and traps on a neighbor.
   enum Focusable: Hashable {
-    case video, streamInfo, quality, rewards, chatToggle, chatInput, errorBack, audioResume, nativeRetry
+    case video, streamInfo, quality, rewards, multiview, chatToggle, chatInput, errorBack, audioResume, nativeRetry
     case offlineViewChannel, offlineTryAgain
     case chatSend
     /// VOD-only: invisible target inside the chat pane that holds focus while the
@@ -931,6 +934,20 @@ struct PlayerView: View {
     }
     .sheet(isPresented: $showCreatorChannels) {
       CreatorChannelsView(session: model.creatorSession).environment(\.themePalette, palette)
+    }
+    .sheet(isPresented: $showMultiviewLineup, onDismiss: {
+      if startMultiviewAfterDismissal {
+        startMultiviewAfterDismissal = false
+        multiviewLineup?.requestPlayback()
+      }
+      scheduleHide()
+    }) {
+      if let multiviewLineup {
+        MultiviewLineupView(lineup: multiviewLineup) {
+          startMultiviewAfterDismissal = true
+          showMultiviewLineup = false
+        }
+      }
     }
   }
 

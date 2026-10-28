@@ -63,6 +63,7 @@ struct MultiviewPlayerView: View {
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(AppEnvironment.self) private var environment
+  @Environment(\.multiviewLineup) private var lineup
   @State private var watchTracker = TwitchWatchTracker()
   @State private var controller: MultiviewController
   @FocusState private var focus: MultiviewFocusTarget?
@@ -168,7 +169,7 @@ struct MultiviewPlayerView: View {
       showHintBriefly()
     }
     .onChange(of: focus) { _, newValue in
-      guard !controller.isTransitioning, profileAudioState == nil else { return }
+      guard !controller.isBrowsing, !controller.isTransitioning, profileAudioState == nil else { return }
       if case let .pane(id) = newValue {
         if controller.audiblePaneID != id { watchTracker.stop() }
         lastPaneID = id
@@ -181,6 +182,7 @@ struct MultiviewPlayerView: View {
       bumpChrome()
     }
     .onPlayPauseCommand {
+      guard !controller.isBrowsing else { return }
       // Play/Pause toggles the controls HUD — a single, discoverable,
       // non-directional button that never fires while navigating the grid.
       if let expanded = controller.expandedPane {
@@ -192,6 +194,7 @@ struct MultiviewPlayerView: View {
       }
     }
     .onMoveCommand { direction in
+      guard !controller.isBrowsing else { return }
       guard let expanded = controller.expandedPane else { bumpChrome(); return }
       expanded.presentation.moveDirection = direction
       expanded.presentation.moveRequests &+= 1
@@ -227,6 +230,19 @@ struct MultiviewPlayerView: View {
       guard controller.expandedPaneID == nil else { return }
       focus = controller.restoredPaneID.map { .pane($0) }
     }
+    .onChange(of: controller.isBrowsing) { _, browsing in
+      UIApplication.shared.isIdleTimerDisabled = !browsing
+      watchTracker.stop()
+      if browsing {
+        focus = nil
+        showingControls = false
+        hintVisible = false
+        chrome.cancel()
+        hintHideTask?.cancel()
+      } else {
+        bumpChrome()
+      }
+    }
     .onChange(of: reduceMotion) { _, enabled in controller.reduceMotion = enabled }
     .onChange(of: controller.expandedPane?.model.isSleeping) { _, _ in
       controller.synchronizeExpandedSleep()
@@ -235,14 +251,16 @@ struct MultiviewPlayerView: View {
       watchTracker.stop()
     }
     .onChange(of: profilePane?.id) { _, _ in watchTracker.stop() }
+    .onChange(of: lineup?.playbackRequest) { _, _ in profilePane = nil }
     .onExitCommand {
+      guard !controller.isBrowsing else { return }
       if let expanded = controller.expandedPane {
         expanded.model.playbackTelemetry.recordEvent("multiview_exit_received")
         expanded.presentation.exitRequests &+= 1
       } else if showingControls {
         hideControls()
       } else {
-        dismiss()
+        if let lineup { lineup.browse() } else { dismiss() }
       }
     }
     .fullScreenCover(isPresented: $showingAddPicker) {
@@ -264,7 +282,7 @@ struct MultiviewPlayerView: View {
   // MARK: Controls
 
   private func updateWatchRewards() {
-    guard scenePhase == .active, controller.expandedPaneID == nil, !showingAddPicker, profilePane == nil,
+    guard !controller.isBrowsing, scenePhase == .active, controller.expandedPaneID == nil, !showingAddPicker, profilePane == nil,
       auth.isAuthenticated, let userID = auth.userID,
       let pane = controller.panes.first(where: { $0.id == controller.audiblePaneID }),
       pane.isTwitchLive,
@@ -331,7 +349,15 @@ struct MultiviewPlayerView: View {
       }
       .focused($focus, equals: .layoutButton)
 
-      if controller.canAddPane && !addableChannels.isEmpty {
+      if let lineup {
+        Button {
+          lineup.browse()
+        } label: {
+          Label { Text("Browse streams") } icon: { Icon(glyph: .plus, size: 22) }
+            .font(.headline)
+        }
+        .focused($focus, equals: .addButton)
+      } else if controller.canAddPane && !addableChannels.isEmpty {
         Button {
           showingAddPicker = true
         } label: {
@@ -412,7 +438,17 @@ struct MultiviewPlayerView: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .onChange(of: pane.playbackTarget) { _, _ in pane.synchronizeChannel() }
+    .onChange(of: pane.playbackTarget) { _, _ in
+      let previousKey = pane.channel.channelKey
+      pane.synchronizeChannel()
+      lineup?.synchronize(pane, previousKey: previousKey)
+    }
+    .onChange(of: pane.model.isOffline) { _, offline in
+      if offline { lineup?.observe(.offline, key: pane.channel.channelKey) }
+    }
+    .onChange(of: pane.isLoading) { _, loading in
+      if !loading, !pane.hasError { lineup?.observe(.live, key: pane.channel.channelKey) }
+    }
   }
 
   @ViewBuilder
@@ -451,7 +487,11 @@ struct MultiviewPlayerView: View {
       }
     }
 
-    if controller.canAddPane && !addableChannels.isEmpty {
+    if let lineup {
+      Button { lineup.browse() } label: {
+        Label { Text("Browse streams") } icon: { Icon(glyph: .plus) }
+      }
+    } else if controller.canAddPane && !addableChannels.isEmpty {
       Button {
         showingAddPicker = true
       } label: {
@@ -495,6 +535,12 @@ struct MultiviewPlayerView: View {
   }
 
   private func remove(_ pane: MultiviewPane) {
+    if let lineup {
+      lineup.remove(pane.channel.channelKey)
+      focus = controller.panes.first.map { .pane($0.id) }
+      bumpChrome()
+      return
+    }
     guard controller.panes.count > 1 else { dismiss(); return }
     let wasFocused = focusedPaneID == pane.id
     controller.removePane(pane.id)
@@ -639,17 +685,20 @@ struct MultiviewPaneTile: View {
 
       overlays
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .overlay {
       Rectangle()
         .strokeBorder(borderColor, lineWidth: borderWidth)
         .padding(-borderWidth)
-        .opacity(showsChrome ? 1 : 0)
+        .opacity(showsChrome ? 1 : (isFocused || pane.isAudible ? 0.35 : 0))
         // Snap the outline without changing other chrome animations or its idle fade.
         .animation(nil, value: isFocused)
         .animation(nil, value: pane.isAudible)
     }
     .animation(.easeOut(duration: 0.18), value: isFocused)
     .animation(.easeOut(duration: 0.2), value: pane.isAudible)
+    .environment(\.themePalette, palette)
+    .environment(\.glassDisabled, glassDisabled)
   }
 
   private var borderColor: Color {
@@ -698,26 +747,18 @@ struct MultiviewPaneTile: View {
   }
 
   private var audioCue: some View {
-    HStack(spacing: 6) {
-      Icon(glyph: .volume, size: style == .compact ? 18 : 22)
-      if style == .full {
-        Text("Audio")
-          .font(.subheadline.weight(.semibold))
-      }
-    }
-    .foregroundStyle(palette.videoControlScrim)
-    .padding(.horizontal, style == .compact ? 9 : 12)
-    .padding(.vertical, style == .compact ? 7 : 8)
-    .background(palette.videoControlForeground, in: Capsule())
-    .shadow(color: .black.opacity(0.4), radius: 6, y: 2)
+    Icon(glyph: .volume, size: style == .compact ? 18 : 22)
+      .foregroundStyle(palette.chromeOnOpaque)
+      .frame(width: style == .compact ? 36 : 44, height: style == .compact ? 36 : 44)
+      .modifier(HUDChipGlassStyle(shape: Circle()))
+      .accessibilityLabel("Audio")
   }
 
   /// Focused-pane metadata. Carries the same information, in the same order, as
   /// a Home card's caption — avatar, streamer, stream title, game, and the
   /// shared live/viewer badge — so a pane reads like the card the viewer picked
-  /// it from rather than a different, thinner summary. Sits over the video on a
-  /// dark scrim, so white content stays legible in every theme and with Reduce
-  /// Transparency on (the scrim is opaque, not theme-tinted). The filmstrip's
+  /// it from rather than a different, thinner summary. Shares the player's
+  /// Liquid Glass treatment and opaque accessibility fallback. The filmstrip's
   /// compact tiles keep only the streamer and the badge — there is no room for
   /// the rest at that size.
   private var metadataPill: some View {
@@ -727,19 +768,19 @@ struct MultiviewPaneTile: View {
       VStack(alignment: .leading, spacing: CardMetrics.captionLineSpacing) {
         Text(pane.channel.displayName)
           .font(style == .compact ? .subheadline.weight(.semibold) : .headline)
-          .foregroundStyle(.white)
+          .foregroundStyle(palette.chromeOnOpaque)
           .lineLimit(1)
 
         if style == .full {
           Text(pane.channel.title.isEmpty ? "No title" : pane.channel.title)
             .font(.subheadline)
-            .foregroundStyle(.white.opacity(0.85))
+            .foregroundStyle(palette.chromeOnOpaque.opacity(0.85))
             .lineLimit(1)
 
           if !pane.channel.gameName.isEmpty {
             Text(pane.channel.gameName)
               .font(.footnote)
-              .foregroundStyle(.white.opacity(0.7))
+              .foregroundStyle(palette.chromeOnOpaque.opacity(0.7))
               .lineLimit(1)
           }
         }
@@ -747,19 +788,15 @@ struct MultiviewPaneTile: View {
         LiveBadge(
           isLive: pane.channel.isLive,
           viewerCount: pane.channel.combinedViewerCount,
-          prominent: style == .full
+          prominent: style == .full,
+          foreground: palette.chromeOnOpaque
         )
         .padding(.top, style == .compact ? 0 : 2)
       }
     }
     .padding(.horizontal, style == .compact ? 10 : 14)
     .padding(.vertical, style == .compact ? 7 : 10)
-    .background(
-      glassDisabled
-        ? AnyShapeStyle(Color.black.opacity(0.62))
-        : AnyShapeStyle(.regularMaterial),
-      in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-    )
+    .modifier(HUDChipGlassStyle(shape: RoundedRectangle(cornerRadius: 12, style: .continuous)))
     // Cap the pill so a long stream title truncates instead of stretching it
     // across the whole pane.
     .frame(maxWidth: style == .compact ? 260 : 520, alignment: .leading)
@@ -770,7 +807,7 @@ struct MultiviewPaneTile: View {
     CachedAsyncImage(url: pane.channel.profileImageURL) { image in
       image.resizable().scaledToFill()
     } placeholder: {
-      Circle().fill(Color.white.opacity(0.18))
+      Circle().fill(palette.chromeOnOpaque.opacity(0.18))
     }
     .frame(width: style == .compact ? 26 : 44, height: style == .compact ? 26 : 44)
     .clipShape(Circle())

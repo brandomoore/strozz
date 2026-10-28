@@ -284,18 +284,37 @@ iOS SDK. Provider availability and stream formats can change.
 
 ### Multiview selection and chrome
 
+TV multiview uses one `MultiviewLineup` owned by Home and passed through an optional
+environment value. Hold a live channel card in Following, Browse, Search or channel
+recommendations to add/remove it; the normal player also has a multiview control.
+Search lists channels before categories. The contextual avatar button opens only
+lineup management, not another discovery page. Adding never starts playback or
+navigates away. Avatar insertion/removal respects Reduce Motion.
+
 Selection uses provider-qualified channel keys, not pool-specific stream/user
-IDs. A selected channel leaving the live pool remains visible as Offline for ten
-seconds, then fades away. It stops counting toward the limit and launch roster
-immediately; returning live during the grace period preserves its selection.
+IDs. Status refreshes query the selected channels themselves: absence from a
+partial discovery response is not offline evidence. While browsing, an explicitly
+offline selection remains visible as Offline for ten seconds, then fades away.
+It stops counting toward the limit and launch roster immediately; returning live
+during the grace period preserves its selection if capacity has not been reused.
 An active player pane does not auto-remove: its offline notice remains, with
 native View channel and Remove actions. These controls use the dark video
 surface's appearance even in Light theme. Removing the last pane exits multiview.
 Channel pages temporarily suspend wall audio without replacing players, then
 restore the prior audio owner and mute choice when dismissed.
+Back from the wall (or Browse streams in its controls) returns to the same browsing
+state. The wall and each surviving player view/model remain mounted, but playback,
+native producers and chat are suspended rather than decoding behind browsing.
+Return uses native suspension recovery to re-resolve live sources and rebuild
+their audio/video renderers while retaining the pane models, layout and audio
+owner. New selections join that same controller; no second active queue is
+created. Hidden browsing cards cannot run previews behind the wall.
 
-Focus outlines, the audio badge and focused metadata hide after ten idle
-seconds and return on remote interaction without changing audio ownership.
+After ten idle seconds, the focused/audible pane's outside outline dims to 35%
+of its active opacity instead of disappearing. The icon-only audio badge and
+focused metadata still hide; remote interaction restores full chrome without
+changing audio ownership. Both overlays use the shared native Liquid Glass
+HUD treatment, with theme-aware opaque surfaces when transparency is disabled.
 The outline switches instantly between panes; other chrome animations are unchanged.
 Outlines occupy reserved gutters outside video pixels, including at the screen
 edges; the gutter is stable while chrome hides. Expanded playback remains

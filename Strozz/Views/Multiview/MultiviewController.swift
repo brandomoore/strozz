@@ -37,6 +37,7 @@ enum MultiviewQualityTier {
 final class MultiviewPlaybackContext {
   var isExpanded = false
   var videoIsVisible = true
+  var isBrowsing = false
   var qualityTier: MultiviewQualityTier = .grid
   var profile = LivePlaybackProfile.nativeLowLatency
   var quality = "Auto"
@@ -48,6 +49,7 @@ final class MultiviewPlaybackContext {
   var moveDirection = MoveCommandDirection.up
   var watchRequests = 0
   var requestedChannel: FollowedChannel?
+  @ObservationIgnored var needsBrowsingResume = false
   @ObservationIgnored var onClose: (() -> Void)?
 }
 
@@ -91,7 +93,7 @@ final class MultiviewPane: Identifiable {
   }
 
   init(channel: FollowedChannel) {
-    id = channel.id
+    id = channel.platform == .twitch ? channel.id : "\(channel.platform.rawValue):\(channel.id)"
     self.channel = channel
     presentation = MultiviewPlaybackContext()
     model = PlayerModel()
@@ -134,6 +136,7 @@ final class MultiviewController {
   private(set) var isTransitioning = false
   private(set) var restoredPaneID: String?
   private(set) var focusRestoreRequest = UUID()
+  private(set) var isBrowsing = false
   @ObservationIgnored var reduceMotion = false
   @ObservationIgnored private var transitionID = UUID()
   @ObservationIgnored private let muted: Bool
@@ -165,6 +168,7 @@ final class MultiviewController {
 
   private func configure(_ pane: MultiviewPane) {
     pane.presentation.onClose = { [weak self] in self?.collapse() }
+    pane.presentation.isBrowsing = isBrowsing
   }
 
   @discardableResult
@@ -241,7 +245,7 @@ final class MultiviewController {
 
   private func refreshQuality() {
     for pane in panes {
-      pane.presentation.videoIsVisible = expandedPaneID == nil || pane.id == expandedPaneID
+      pane.presentation.videoIsVisible = !isBrowsing && (expandedPaneID == nil || pane.id == expandedPaneID)
       if let expandedPaneID {
         pane.presentation.qualityTier = pane.id == expandedPaneID ? .source : .hidden
       } else if layout == .spotlight {
@@ -249,6 +253,20 @@ final class MultiviewController {
       } else {
         pane.presentation.qualityTier = controlledAuto ? (panes.count <= 4 ? .grid1080 : .grid720) : .grid
       }
+    }
+  }
+
+  func setBrowsing(_ browsing: Bool) {
+    guard isBrowsing != browsing else { return }
+    isBrowsing = browsing
+    for pane in panes {
+      pane.presentation.isBrowsing = browsing
+      if browsing { pane.player.pause() }
+    }
+    refreshQuality()
+    if !browsing {
+      restoredPaneID = audiblePaneID ?? panes.first?.id
+      focusRestoreRequest = UUID()
     }
   }
 

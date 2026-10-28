@@ -233,7 +233,7 @@ extension PlayerView {
 
   var shouldPlayAltSource: Bool {
     !isUserPaused && !isScrubbing && !isSleeping && backgroundedAt == nil && channelPageTarget == nil
-      && !model.multiviewSleepSuspended
+      && !model.multiviewSleepSuspended && !isMultiviewBrowsing
       && !model.audioInterrupted && !model.mediaServicesUnavailable && !model.audioSessionActivationFailed
   }
 
