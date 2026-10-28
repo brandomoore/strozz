@@ -282,6 +282,14 @@ iOS SDK. Provider availability and stream formats can change.
   cushion; synchronization adds only excess delay, not total encoder/live-edge
   latency. Rewind uses retained chat/replay behavior, not a second live delay.
 
+### Chat text wrapping
+
+Chat text uses width-constrained token measurement on both TV and mobile.
+Long URLs and usernames wrap within the available pane instead of extending
+beyond its edge. Wrapping changes layout only, not the original message or URL;
+ordinary tokens, emotes and the atomic flow layout used by settings retain
+their existing behavior.
+
 ### Multiview selection and chrome
 
 TV multiview uses one `MultiviewLineup` owned by Home and passed through an optional

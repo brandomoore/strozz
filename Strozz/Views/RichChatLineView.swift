@@ -40,8 +40,8 @@ struct RichChatLineView: View {
     var showPlatformBadges: Bool = ChatAppearance.defaultShowPlatformBadges
     /// Overrides the default white body color (used by the light side-chat).
     var bodyColorOverride: Color? = nil
-    /// Mobile panes can be narrower than a URL or username, especially with Dynamic Type.
-    var wrapsOversizedTokens: Bool = false
+    /// Constrain long links and usernames to the chat pane on every platform.
+    var wrapsOversizedTokens: Bool = true
     var onInspectEmote: ((String, URL) -> Void)? = nil
     var scalesCustomFont: Bool = true
 

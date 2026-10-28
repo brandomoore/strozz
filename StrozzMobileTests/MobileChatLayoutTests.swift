@@ -21,7 +21,7 @@ final class MobileChatLayoutTests: XCTestCase {
     XCTAssertTrue(state.followsLatest)
   }
 
-  func testOversizedMobileTokensWrapWithoutChangingTVDefault() {
+  func testOversizedTokensWrapWithoutChangingAtomicControlLayoutDefault() {
     let token = String(repeating: "LongUnbrokenURL", count: 12)
     for width in [180.0, 296, 356] {
       for fontSize in [16.0, 32] {
