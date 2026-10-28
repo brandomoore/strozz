@@ -67,6 +67,9 @@ struct MultiviewShortcutFixture: View {
   @State private var nested = false
   @State private var automaticPrompt = false
   @State private var query = "example"
+  @State private var showingDirectory = false
+  @State private var homeFrame = CGRect.zero
+  @State private var homeScrollGeometry: [CGFloat] = []
   @FocusState private var focusedCard: String?
   @Namespace private var cardNamespace
   @Environment(\.colorScheme) private var scheme
@@ -88,22 +91,7 @@ struct MultiviewShortcutFixture: View {
 
   var body: some View {
     ZStack {
-      surface("home") {
-        if let cardMode {
-          cardBrowser(mode: cardMode)
-        } else {
-          Button("Open sheet") { sheet = true }.accessibilityIdentifier("shortcut-open-sheet")
-          Button("Open cover") { directCover = true }.accessibilityIdentifier("shortcut-open-cover")
-          selectionButtons
-          Button("Context actions") { model.contextActions += 1 }
-            .accessibilityIdentifier("shortcut-context")
-            .contextMenu {
-              Button("Ordinary context action") { model.contextActions += 1 }
-                .accessibilityIdentifier("shortcut-context-action")
-            }
-          TextField("Search", text: $query).accessibilityIdentifier("shortcut-search")
-        }
-      }
+      browsingSurface
       .opacity(model.lineup.isShowingPlayback ? 0 : 1)
       .disabled(model.lineup.isShowingPlayback)
       .accessibilityHidden(model.lineup.isShowingPlayback)
@@ -129,6 +117,7 @@ struct MultiviewShortcutFixture: View {
     .environment(\.multiviewLineup, model.lineup)
     .environment(\.streamPreviewsEnabled, false)
     .environment(\.themePalette, palette)
+    .environment(\.glassDisabled, opaque)
     .alert("Multiview", isPresented: Binding(
       get: { cardMode != nil && model.lineup.notice != nil },
       set: { if !$0 { model.lineup.notice = nil } }
@@ -168,6 +157,96 @@ struct MultiviewShortcutFixture: View {
         Button("Dismiss prompt") { automaticPrompt = false }.accessibilityIdentifier("shortcut-close-prompt")
       }
     }
+  }
+
+  @ViewBuilder
+  private var browsingSurface: some View {
+    if cardMode == "home" {
+      homeBrowser
+    } else {
+      surface("home") {
+        if let cardMode {
+          cardBrowser(mode: cardMode)
+        } else {
+          Button("Open sheet") { sheet = true }.accessibilityIdentifier("shortcut-open-sheet")
+          Button("Open cover") { directCover = true }.accessibilityIdentifier("shortcut-open-cover")
+          selectionButtons
+          Button("Context actions") { model.contextActions += 1 }
+            .accessibilityIdentifier("shortcut-context")
+            .contextMenu {
+              Button("Ordinary context action") { model.contextActions += 1 }
+                .accessibilityIdentifier("shortcut-context-action")
+            }
+          TextField("Search", text: $query).accessibilityIdentifier("shortcut-search")
+        }
+      }
+    }
+  }
+
+  private var homeBrowser: some View {
+    let style = HomeRailStyle(focusHorizontalInset: CardMetrics.cardInset,
+      focusVerticalInset: CardMetrics.cardInset, cardCornerRadius: CardMetrics.cardCornerRadius,
+      mediaCornerRadius: CardMetrics.mediaCornerRadius)
+    return GeometryReader { proxy in
+      let rail = ChannelRailLayout.metrics(availableWidth: proxy.size.width, visibleCardCount: 3)
+      ScrollView(.vertical, showsIndicators: false) {
+        VStack(alignment: .leading, spacing: 72) {
+          HomeFollowingSection(channels: model.cards, rail: rail, style: style,
+            isLoading: false, isRestoringAccount: false, isUsingDemoData: false,
+            errorMessage: nil, showingFollowingDirectory: $showingDirectory,
+            onRefresh: {}, onWatch: { _ in model.navigations += 1 },
+            onGoToChannel: { _ in model.navigations += 1 }, focusedItemID: $focusedCard)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { homeFrame = $0 }
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Recommended for you").font(.system(size: 32, weight: .bold))
+              .accessibilityIdentifier("shortcut-home-next-title")
+            HomeRailScrollView(rail: rail, style: style) {
+              ForEach(model.cards.prefix(3), id: \.channelKey) { channel in
+                HomeRailStreamCard(channel: channel, itemID: "recommended-\(channel.channelKey)",
+                  layout: style.cardLayout(for: rail), onTap: { model.navigations += 1 },
+                  focusedItemID: $focusedCard)
+              }
+            }
+          }
+        }
+        .padding(.horizontal, AppLayout.horizontalPadding)
+        .padding(.top, 32)
+        .padding(.bottom, 12)
+      }
+      .scrollClipDisabled()
+      .onScrollGeometryChange(for: [CGFloat].self) {
+        [$0.contentOffset.x, $0.contentOffset.y, $0.contentSize.width, $0.contentSize.height,
+         $0.containerSize.width, $0.containerSize.height]
+      } action: { _, value in homeScrollGeometry = value }
+    }
+    .background(palette.cardOpaqueSurface)
+    .preferredColorScheme(theme.preferredColorScheme)
+    .overlay(alignment: .bottomLeading) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Shortcut home").accessibilityIdentifier("shortcut-surface-home")
+        Text("Home layout verification")
+          .accessibilityIdentifier("shortcut-home-state")
+          .accessibilityValue(homeState)
+      }
+      .font(.system(size: 12))
+      .allowsHitTesting(false)
+    }
+    .task {
+      await Task.yield()
+      focusedCard = HomeFollowingFocus.card(model.cards[0].channelKey)
+    }
+  }
+
+  private var homeState: String {
+    let data: [String: Any] = [
+      "count": model.lineup.entries.count, "requests": model.requests,
+      "navigations": model.navigations, "focused": focusedCard ?? "",
+      "opening": model.lineup.isOpeningPlayback, "showing": model.lineup.isShowingPlayback,
+      "controller": model.lineup.controller != nil,
+      "section": [homeFrame.minX, homeFrame.minY, homeFrame.width, homeFrame.height],
+      "scroll": homeScrollGeometry,
+    ]
+    return String(decoding: try! JSONSerialization.data(withJSONObject: data, options: [.sortedKeys]), as: UTF8.self)
   }
 
   private func cardBrowser(mode: String) -> some View {

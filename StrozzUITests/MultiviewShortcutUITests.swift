@@ -8,6 +8,156 @@ final class MultiviewShortcutUITests: XCTestCase {
     continueAfterFailure = false
   }
 
+  func testActualHomeLineupGeometryFocusAndEmptyManagerDismissal() throws {
+    let app = launchFixture(count: 0, cards: "home")
+    defer { app.terminate() }
+    let first = app.descendants(matching: .any)["following-twitch"].firstMatch
+    let second = app.descendants(matching: .any)["following-kick:kick"].firstMatch
+    let lineup = app.buttons["multiview-lineup"]
+    let nextTitle = app.staticTexts["shortcut-home-next-title"]
+    focusHomeElement(first, app: app)
+    let initialCard = first.frame
+    let initialNextTitle = nextTitle.frame
+    let initialState = try homeState(app)
+    XCTAssertFalse(lineup.exists, "The empty lineup must not be actionable in accessibility.")
+
+    for count in [1, 0] {
+      press(.playPause, app: app, name: "actual Home quick toggle to \(count)")
+      try expectHomeState(app, count: count)
+      XCTAssertTrue(first.hasFocus, "Membership changes must retain the exact focused Home card.")
+      assertFrame(first.frame, equals: initialCard, name: "Focused Home card")
+      assertFrame(nextTitle.frame, equals: initialNextTitle, name: "Following section's next sibling")
+      let state = try homeState(app)
+      for key in ["section", "scroll"] {
+        let expected = try XCTUnwrap(initialState[key] as? [Double])
+        let actual = try XCTUnwrap(state[key] as? [Double])
+        XCTAssertFalse(expected.isEmpty)
+        XCTAssertEqual(actual.count, expected.count)
+        for (old, new) in zip(expected, actual) {
+          XCTAssertEqual(new, old, accuracy: 0.01, "\(key) must not move or resize.")
+        }
+      }
+      XCTAssertEqual(lineup.exists, count != 0)
+    }
+
+    let directory = app.buttons["following-directory"]
+    let refresh = app.buttons["following-refresh"]
+    focusHomeElement(directory, app: app)
+    press(.right, app: app, name: "empty header right reaches Refresh")
+    XCTAssertTrue(refresh.hasFocus)
+    press(.left, app: app, name: "empty header left reaches See All")
+    XCTAssertTrue(directory.hasFocus)
+    press(.left, app: app, name: "empty lineup has no invisible focus stop")
+    XCTAssertTrue(directory.hasFocus)
+    XCTAssertFalse(lineup.exists)
+
+    focusHomeElement(first, app: app)
+    press(.playPause, app: app, name: "add single entry before manager removal")
+    try expectHomeState(app, count: 1)
+    focusHomeElement(lineup, app: app)
+    XCTAssertTrue(lineup.hasFocus)
+    press(.select, app: app, name: "open native single-entry lineup manager")
+    let removeFirst = app.buttons["multiview-remove-twitch"]
+    XCTAssertTrue(removeFirst.waitForExistence(timeout: 5))
+    focusHomeElement(removeFirst, app: app)
+    press(.select, app: app, name: "remove final manager entry")
+    XCTAssertTrue(app.buttons["multiview-start"].waitForNonExistence(timeout: 5))
+    XCTAssertFalse(removeFirst.exists)
+    XCTAssertFalse(lineup.exists)
+    try expectHomeState(app, count: 0)
+
+    focusHomeElement(first, app: app)
+    press(.playPause, app: app, name: "add again after last-entry dismissal")
+    try expectHomeState(app, count: 1)
+    let singleWidth = lineup.frame.width
+    XCTAssertEqual(lineup.value as? String, "1 streams")
+    focusHomeElement(second, app: app)
+    press(.playPause, app: app, name: "second avatar grows real Home button")
+    try expectHomeState(app, count: 2)
+    XCTAssertEqual(lineup.value as? String, "2 streams")
+    XCTAssertGreaterThan(lineup.frame.width, singleWidth + 25)
+    let widths = XCTAttachment(string: "One avatar: \(singleWidth)pt; two: \(lineup.frame.width)pt; delta: \(lineup.frame.width - singleWidth)pt")
+    widths.name = "Actual Home lineup avatar width"
+    widths.lifetime = .keepAlways
+    add(widths)
+    focusHomeElement(lineup, app: app)
+    XCTAssertTrue(lineup.hasFocus)
+    press(.select, app: app, name: "open native two-entry lineup manager")
+    XCTAssertTrue(app.buttons["multiview-remove-kick:kick"].waitForExistence(timeout: 5))
+    focusHomeElement(app.buttons["Clear"], app: app)
+    press(.select, app: app, name: "Clear dismisses native lineup manager")
+    XCTAssertTrue(app.buttons["multiview-start"].waitForNonExistence(timeout: 5))
+    XCTAssertFalse(lineup.exists)
+    try expectHomeState(app, count: 0)
+    focusHomeElement(first, app: app)
+    press(.playPause, app: app, name: "add again after Clear")
+    try expectHomeState(app, count: 1)
+    XCTAssertTrue(first.hasFocus)
+    assertFrame(first.frame, equals: initialCard, name: "Home card after manager round trips")
+    assertFrame(nextTitle.frame, equals: initialNextTitle, name: "Next section after manager round trips")
+    focusHomeElement(lineup, app: app)
+    press(.select, app: app, name: "reopen manager after Clear")
+    XCTAssertTrue(removeFirst.waitForExistence(timeout: 5))
+    press(.menu, app: app, name: "dismiss reopened manager normally")
+    XCTAssertTrue(app.buttons["multiview-start"].waitForNonExistence(timeout: 5))
+    try expectHomeState(app, count: 1)
+  }
+
+  private func homeState(_ app: XCUIApplication) throws -> [String: Any] {
+    let element = app.staticTexts["shortcut-home-state"]
+    let value = try XCTUnwrap(element.value as? String)
+    let attachment = XCTAttachment(string: value)
+    attachment.name = "Actual Home geometry and playback state"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+    return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any])
+  }
+
+  private func expectHomeState(_ app: XCUIApplication, count: Int) throws {
+    let state = try homeState(app)
+    XCTAssertEqual(state["count"] as? Int, count)
+    XCTAssertEqual(state["requests"] as? Int, 0, "Membership changes must not start a wall.")
+    XCTAssertEqual(state["navigations"] as? Int, 0)
+    for key in ["opening", "showing", "controller"] {
+      XCTAssertEqual(state[key] as? Bool, false, "Unexpected playback state: \(state)")
+    }
+  }
+
+  private func assertFrame(_ actual: CGRect, equals expected: CGRect, name: String) {
+    for (old, new) in zip([expected.minX, expected.minY, expected.width, expected.height],
+                          [actual.minX, actual.minY, actual.width, actual.height]) {
+      XCTAssertEqual(new, old, accuracy: 0.01, name)
+    }
+  }
+
+  private func focusHomeElement(_ target: XCUIElement, app: XCUIApplication) {
+    XCTAssertTrue(target.waitForExistence(timeout: 5))
+    for step in 0..<8 {
+      if target.hasFocus { return }
+      let cards = ["following-twitch", "following-kick:kick", "following-selectedoffline",
+        "following-offline", "following-youtube:youtube", "following-extra"]
+        .map { app.descendants(matching: .any)[$0].firstMatch }
+      let focused = (app.buttons.allElementsBoundByIndex + cards)
+        .first { $0.exists && $0.hasFocus }
+      let current = focused?.frame ?? .zero
+      let direction: XCUIRemote.Button
+      if target.frame.maxY < current.minY,
+         focused?.identifier.hasPrefix("following-") == true,
+         focused?.identifier != "following-directory",
+         focused?.identifier != "following-refresh",
+         target.frame.midX > current.maxX {
+        // Native directional focus needs a card beneath the right-aligned header.
+        direction = .right
+      } else {
+        direction = abs(target.frame.midY - current.midY) > 80
+          ? (target.frame.midY < current.midY ? .up : .down)
+          : (target.frame.midX < current.midX ? .left : .right)
+      }
+      press(direction, app: app, name: "native focus \(target.identifier) step \(step)")
+    }
+    XCTAssertTrue(target.hasFocus, app.debugDescription)
+  }
+
   func testProductionCardPressMembershipInAllFocusWrappers() {
     continueAfterFailure = true
     for mode in ["rail", "grid", "tile"] {

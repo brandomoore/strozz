@@ -54,7 +54,6 @@ struct SearchView: View {
 
 private struct SearchResultsView: View {
   @Environment(PlaybackReturnRefreshCoordinator.self) private var playbackReturnRefresh
-  @Environment(\.multiviewLineup) private var lineup
   @Binding var query: String
   let service: SearchService
   let onSelectChannel: (FollowedChannel) -> Void
@@ -79,7 +78,7 @@ private struct SearchResultsView: View {
   var body: some View {
     ScrollView(.vertical, showsIndicators: false) {
       VStack(alignment: .leading, spacing: 32) {
-        if service.channelResults.isEmpty, lineup?.entries.isEmpty == false {
+        if service.channelResults.isEmpty {
           HStack {
             Text("Search").font(.title3.weight(.bold))
             Spacer()

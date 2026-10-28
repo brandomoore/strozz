@@ -366,6 +366,11 @@ A short Play/Pause press on a focused browsing stream card toggles its lineup
 membership through the existing selection path, including the six-stream limit.
 Only live Twitch/Kick cards or an already-selected card enable this command.
 The existing selection badge updates without opening a player or menu.
+
+The inline lineup button retains its native height when empty, but has zero
+width and no focus or accessibility target, so adding or removing the first/last
+stream cannot shift page content. Avatar additions still animate only its width.
+
 `MultiviewCardShortcut` belongs on the browsing card's focusable wrapper;
 placing the command inside `StreamChannelCard` leaves it below the focused
 responder and drops the remote press.
