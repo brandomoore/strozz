@@ -21,7 +21,7 @@ from typing import Any, Iterable
 SCHEMA_VERSION = 1
 TOOL_SCHEMA_VERSION = 1
 DEFAULT_BUNDLE = "com.thatcube.Strozz"
-REMOTE_SOURCE = "Library/Application Support/PlaybackDiagnostics"
+REMOTE_SOURCE = "Library/Caches/PlaybackDiagnostics"
 KINDS = {"event", "sample", "summary", "access_log", "error_log"}
 LEVELS = {"debug", "info", "warning", "error"}
 CUMULATIVE_COUNTERS = {
@@ -984,7 +984,7 @@ def pull(device: str | None, bundle: str, output: Path, *,
     output.parent.mkdir(parents=True, exist_ok=True)
     remote = REMOTE_SOURCE
     if mobile:
-        remote = remote.replace("PlaybackDiagnostics", "MobilePlaybackDiagnostics")
+        remote = "Library/Application Support/MobilePlaybackDiagnostics"
     if legacy_cache:
         remote = remote.replace("Application Support", "Caches")
     domain = ["--device", device, "--domain-type", "appDataContainer", "--domain-identifier", bundle]

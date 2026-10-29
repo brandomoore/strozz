@@ -79,6 +79,7 @@ class PlaybackDiagnosticsTests(unittest.TestCase):
 
         def run(command, **kwargs):
             if "files" in command:
+                self.assertIn("Library/Caches/PlaybackDiagnostics", command)
                 listing = {"result": {"files": [{"relativePath": path} for path in [
                     log_name, "latest-session.json", incident_name, "../secret", "unrelated.json",
                 ]]}}
@@ -120,6 +121,16 @@ class PlaybackDiagnosticsTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn("Library/Caches/MobilePlaybackDiagnostics", calls[0])
         self.assertFalse((output / "latest-session.json").exists())
+
+    def test_mobile_pull_defaults_to_application_support(self):
+        response = mock.Mock(returncode=0, stderr="", stdout=json.dumps({
+            "result": {"files": []}}))
+        with mock.patch.object(playback_diagnostics.shutil, "which", return_value="/usr/bin/xcrun"), \
+             mock.patch.object(playback_diagnostics.subprocess, "run", return_value=response) as run:
+            with self.assertRaisesRegex(playback_diagnostics.DiagnosticsError, "no diagnostic files"):
+                playback_diagnostics.pull("device", "com.thatcube.Strozz",
+                                          self.directory / "capture", mobile=True)
+            self.assertIn("Library/Application Support/MobilePlaybackDiagnostics", run.call_args.args[0])
 
     def test_analysis_keeps_collection_failure_visible(self):
         self.write_incident(self.session_one)

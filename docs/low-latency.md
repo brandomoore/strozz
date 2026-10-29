@@ -407,8 +407,10 @@ is read-only; restarting playback or taking over hardware is not.
 
 ### Collect scoped evidence
 
-TV retains JSONL under `Library/Application Support/PlaybackDiagnostics`, excluded
-from backup. The verbose log budget is **128 MiB** shared across panes (32 parts
+TV retains JSONL under `Library/Caches/PlaybackDiagnostics`, excluded
+from backup. tvOS does not guarantee persistent local file storage; moving these
+files to Application Support would not make them durable. The verbose log budget
+is **128 MiB** shared across panes (32 parts
 of 4 MiB). Active pane files are protected from retention eviction; tracked and
 enumerated file URLs must use the same canonical form, including `/var` aliases.
 Local storage can still fail or be removed; it is not
@@ -441,8 +443,9 @@ the pinned checkpoint without mixing sparse historical samples into full-log
 statistics. Checkpoint-only analysis explicitly reports sparse evidence.
 Mobile uses the same budgets and format under
 `Library/Application Support/MobilePlaybackDiagnostics`; pass `--mobile` to pull.
-For older builds (including TV build 2145), use `--legacy-cache` to read the
-previous `Library/Caches` location. Existing cached evidence is not deleted or
+For older mobile builds, use `--mobile --legacy-cache` to read the previous
+`Library/Caches` location. TV uses Caches in both versions, so its default pull
+also reads older builds. Existing cached evidence is not deleted or
 silently treated as current evidence.
 
 Check build/session/time and file completeness before interpreting a capture.

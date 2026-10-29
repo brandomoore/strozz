@@ -169,8 +169,12 @@ final class PlaybackTelemetryTests: XCTestCase {
     await recorder.flush()
   }
 
-  func testDefaultVerboseRetentionHasThirtyTwoPartsOutsideCaches() async throws {
+  func testDefaultVerboseRetentionHasThirtyTwoPartsInPlatformStorage() async throws {
+    #if os(tvOS)
+    XCTAssertTrue(PlaybackTelemetryWriter.defaultDirectory.path.contains("/Caches/"))
+    #else
     XCTAssertTrue(PlaybackTelemetryWriter.defaultDirectory.path.contains("/Application Support/"))
+    #endif
     let directory = temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let recorder = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(

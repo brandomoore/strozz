@@ -42,8 +42,13 @@ final class PlaybackTelemetryWriter: @unchecked Sendable {
   private var incidentDirty = false
   private let maximumIncidentFiles: Int
   static let maximumIncidentBytes = 256 * 1024
+  #if os(tvOS)
+  static let defaultDirectory = URL.cachesDirectory
+    .appendingPathComponent("PlaybackDiagnostics", isDirectory: true)
+  #else
   static let defaultDirectory = URL.applicationSupportDirectory
     .appendingPathComponent("PlaybackDiagnostics", isDirectory: true)
+  #endif
 
   private struct Incident: Encodable {
     let schemaVersion = 1
