@@ -4,6 +4,18 @@ import Foundation
 /// Brief network/timeline failures get fresh native attempts, not an immediate downgrade.
 struct NativePlaybackRecovery {
   private(set) var attempts: [Date] = []
+  static let maximumAttempts = 2
+  static let windowSeconds: TimeInterval = 60
+
+  func attemptsInWindow(at now: Date = Date()) -> Int {
+    attempts.filter { now.timeIntervalSince($0) <= Self.windowSeconds }.count
+  }
+
+  func retryDelay(at now: Date = Date()) -> TimeInterval {
+    let active = attempts.filter { now.timeIntervalSince($0) <= Self.windowSeconds }
+    guard active.count >= Self.maximumAttempts, let first = active.first else { return 0 }
+    return max(0, Self.windowSeconds - now.timeIntervalSince(first))
+  }
 
   mutating func takeResolutionRetry(for error: Error, at now: Date = Date()) -> Bool {
     guard let error = error as? URLError else { return false }
@@ -26,8 +38,8 @@ struct NativePlaybackRecovery {
       break
     }
 
-    attempts.removeAll { now.timeIntervalSince($0) > 60 }
-    guard attempts.count < 2 else { return false }
+    attempts.removeAll { now.timeIntervalSince($0) > Self.windowSeconds }
+    guard attempts.count < Self.maximumAttempts else { return false }
     attempts.append(now)
     return true
   }

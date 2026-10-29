@@ -21,7 +21,7 @@ from typing import Any, Iterable
 SCHEMA_VERSION = 1
 TOOL_SCHEMA_VERSION = 1
 DEFAULT_BUNDLE = "com.thatcube.Strozz"
-REMOTE_SOURCE = "Library/Caches/PlaybackDiagnostics"
+REMOTE_SOURCE = "Library/Application Support/PlaybackDiagnostics"
 KINDS = {"event", "sample", "summary", "access_log", "error_log"}
 LEVELS = {"debug", "info", "warning", "error"}
 CUMULATIVE_COUNTERS = {
@@ -50,6 +50,11 @@ INTERVENTION_EVENTS = {
     "stability_mode_entered",
 }
 FILE_PATTERN = re.compile(r"^playback-(?P<session>.+)-(?P<part>\d+)\.jsonl$")
+INCIDENT_PATTERN = re.compile(r"^incident-(?P<session>[0-9a-fA-F-]{36})\.json$")
+INCIDENT_RECORD_KEYS = (
+    "sessionStarted", "firstIncident", "firstFailure", "latestIncident",
+    "latestFailure", "latestRecovery", "latestSample", "sessionEnded",
+)
 TIMESTAMP_PATTERN = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+(?:Z|[+-]\d{2}:\d{2})$"
 )
@@ -228,19 +233,49 @@ def discover_files(source: Path) -> tuple[list[Path], list[tuple[Path, dict[str,
     if not source.exists():
         raise DiagnosticsError(f"input does not exist: {source}")
     if source.is_file():
-        if source.suffix != ".jsonl":
-            raise DiagnosticsError("file input must be a .jsonl playback log")
+        if source.suffix != ".jsonl" and not INCIDENT_PATTERN.fullmatch(source.name):
+            raise DiagnosticsError("file input must be a .jsonl playback log or incident-UUID.json checkpoint")
         return [source], []
-    files = sorted(source.rglob("playback-*.jsonl"))
+    files = sorted(source.rglob("playback-*.jsonl")) + sorted(source.rglob("incident-*.json"))
     manifests = [(path, read_manifest(path)) for path in sorted(source.rglob("latest-session.json"))]
     if not files:
-        raise DiagnosticsError(f"no playback-*.jsonl files found under {source}")
+        raise DiagnosticsError(f"no playback logs or incident checkpoints found under {source}")
     return files, manifests
 
 
 def session_from_filename(path: Path) -> str | None:
-    match = FILE_PATTERN.match(path.name)
+    match = FILE_PATTERN.match(path.name) or INCIDENT_PATTERN.fullmatch(path.name)
     return match.group("session") if match else None
+
+
+def read_incident(path: Path) -> dict[str, Any]:
+    try:
+        if path.stat().st_size > 256 * 1024:
+            raise DiagnosticsError(f"{path}: incident checkpoint exceeds size limit")
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise DiagnosticsError(f"cannot read incident checkpoint {path}: {error}") from error
+    if not isinstance(value, dict) or value.get("schemaVersion") != 1:
+        raise DiagnosticsError(f"{path}: unsupported incident checkpoint")
+    session_id = value.get("sessionID")
+    if session_id != session_from_filename(path) or not isinstance(session_id, str):
+        raise DiagnosticsError(f"{path}: incident session does not match its filename")
+    history = value.get("precedingEvents", [])
+    if not isinstance(history, list):
+        raise DiagnosticsError(f"{path}: precedingEvents must be an array")
+    if value.get("firstIncident") is None:
+        raise DiagnosticsError(f"{path}: missing firstIncident")
+    records = [value[key] for key in INCIDENT_RECORD_KEYS if value.get(key) is not None] + history
+    by_sequence = {}
+    for record in records:
+        validate_record(record, str(path))
+        if record["sessionID"] != session_id:
+            raise DiagnosticsError(f"{path}: checkpoint mixes stream sessions")
+        previous = by_sequence.get(record["sequence"])
+        if previous is not None and previous != record:
+            raise DiagnosticsError(f"{path}: conflicting checkpoint records share a sequence")
+        by_sequence[record["sequence"]] = record
+    return value
 
 
 def load_records(
@@ -251,6 +286,7 @@ def load_records(
     dict[str, list[str]],
     list[str],
     str,
+    dict[str, dict[str, Any]],
 ]:
     files, manifest_entries = discover_files(source)
     manifests = {manifest["sessionID"]: manifest for _, manifest in manifest_entries}
@@ -280,9 +316,17 @@ def load_records(
             candidate_files = named
 
     loaded: list[dict[str, Any]] = []
+    incidents: dict[str, dict[str, Any]] = {}
     warnings_by_session: dict[str, list[str]] = defaultdict(list)
     global_warnings: list[str] = []
     for path in candidate_files:
+        if INCIDENT_PATTERN.fullmatch(path.name):
+            checkpoint = read_incident(path)
+            session = checkpoint["sessionID"]
+            if session in incidents and incidents[session] != checkpoint:
+                raise DiagnosticsError(f"{path}: conflicting checkpoints for session {session}")
+            incidents[session] = checkpoint
+            continue
         records, file_warnings = read_jsonl(path)
         loaded.extend(records)
         warning_session = session_from_filename(path)
@@ -294,6 +338,17 @@ def load_records(
             global_warnings.extend(file_warnings)
         else:
             warnings_by_session[warning_session].extend(file_warnings)
+    raw_sessions = {record["sessionID"] for record in loaded}
+    for session, checkpoint in incidents.items():
+        if session not in raw_sessions:
+            # A small failure-only pull is useful, but not a continuous playback trace.
+            records = [checkpoint[key] for key in INCIDENT_RECORD_KEYS if checkpoint.get(key) is not None]
+            records += checkpoint.get("precedingEvents", [])
+            unique = {record["sequence"]: record for record in records}
+            loaded.extend(unique.values())
+            warnings_by_session[session].append(
+                "Only a sparse incident checkpoint is available; counts and timing are not a complete session."
+            )
     if not loaded:
         raise DiagnosticsError("no complete playback records found")
 
@@ -315,7 +370,7 @@ def load_records(
             grouped[record["sessionID"]].append(record)
     if session_id and session_id not in grouped:
         raise DiagnosticsError(f"session {session_id} was not found in {source}")
-    return dict(grouped), manifests, dict(warnings_by_session), global_warnings, selection
+    return dict(grouped), manifests, dict(warnings_by_session), global_warnings, selection, incidents
 
 
 def percentile(values: Iterable[float], fraction: float) -> float:
@@ -712,7 +767,7 @@ def summarize_session(
         "warnings": list(dict.fromkeys(warnings)),
         "interpretation_notes": [
             "Stalls are counted only from explicit stall_started events; loading, pause, seek, "
-            "background, recovery, idle, and offline flags are not reclassified as stalls.",
+            "background, recovery, idle, offline, and terminal errors are not reclassified as stalls.",
             "Stall notifications and reset-aware AVPlayer stall-counter deltas are reported "
             "separately from clock-classified episodes. Zero episodes does not mean uninterrupted "
             "playback; repeated short hiccups can fall below the four-second clock threshold.",
@@ -751,9 +806,17 @@ def summarize_session(
 def analyze(
     source: Path, requested_session: str | None = None, all_sessions: bool = False
 ) -> dict[str, Any]:
-    grouped, manifests, warnings_by_session, global_warnings, selection = load_records(
+    grouped, manifests, warnings_by_session, global_warnings, selection, incidents = load_records(
         source, requested_session, all_sessions
     )
+    capture = source / "capture-manifest.json" if source.is_dir() else source.parent / "capture-manifest.json"
+    if capture.exists():
+        try:
+            collection = json.loads(capture.read_text(encoding="utf-8"))
+            if collection.get("failed"):
+                global_warnings.append("Device capture was incomplete; see capture-manifest.json for failed files.")
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, AttributeError) as error:
+            raise DiagnosticsError(f"invalid capture manifest {capture}: {error}") from error
     sessions = [
         summarize_session(
             session_id,
@@ -763,6 +826,8 @@ def analyze(
         )
         for session_id in sorted(grouped)
     ]
+    for session in sessions:
+        session["failure_evidence"] = incidents.get(session["session_id"])
     return {
         "tool_schema_version": TOOL_SCHEMA_VERSION,
         "source": str(source),
@@ -825,6 +890,16 @@ def print_text(report: dict[str, Any]) -> None:
             f"Stream errors: {counts['stream_errors']}  "
             f"Controller interventions: {counts['controller_interventions']}"
         )
+        if evidence := session.get("failure_evidence"):
+            print("  Pinned failure evidence (independent of verbose log rotation):")
+            for key in ["firstIncident", "firstFailure", "latestFailure", "latestRecovery"]:
+                if record := evidence.get(key):
+                    print(f"    {key}: {record['timestamp']} {record['name']} {record['attributes']}")
+            if sample := evidence.get("latestSample"):
+                print(f"    Last state: {sample['timestamp']} phase={sample['attributes'].get('phase', 'unknown')} "
+                      f"recovery_blocked_by={sample['attributes'].get('recovery_blocked_by', 'unknown')}")
+            if evidence.get("oversizedRecordsOmitted"):
+                print(f"    Oversized checkpoint records omitted: {evidence['oversizedRecordsOmitted']}")
         if counts["stalls_by_kind"]:
             print(
                 "  Stall kinds: "
@@ -898,7 +973,8 @@ def default_output_path() -> Path:
     return candidate
 
 
-def pull(device: str | None, bundle: str, output: Path) -> Path:
+def pull(device: str | None, bundle: str, output: Path, *,
+         incidents_only: bool = False, mobile: bool = False, legacy_cache: bool = False) -> Path:
     if not device:
         raise DiagnosticsError("pass --device <device-id> or set STROZZ_DEVICE_ID")
     if shutil.which("xcrun") is None:
@@ -906,32 +982,62 @@ def pull(device: str | None, bundle: str, output: Path) -> Path:
     if output.exists():
         raise DiagnosticsError(f"refusing to overwrite existing pull destination: {output}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        "xcrun",
-        "devicectl",
-        "device",
-        "copy",
-        "from",
-        "--device",
-        device,
-        "--source",
-        REMOTE_SOURCE,
-        "--destination",
-        str(output),
-        "--domain-type",
-        "appDataContainer",
-        "--domain-identifier",
-        bundle,
-    ]
-    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    remote = REMOTE_SOURCE
+    if mobile:
+        remote = remote.replace("PlaybackDiagnostics", "MobilePlaybackDiagnostics")
+    if legacy_cache:
+        remote = remote.replace("Application Support", "Caches")
+    domain = ["--device", device, "--domain-type", "appDataContainer", "--domain-identifier", bundle]
+    result = subprocess.run([
+        "xcrun", "devicectl", "device", "info", "files", *domain,
+        "--subdirectory", remote, "--recurse", "--timeout", "60", "--json-output", "-",
+    ], text=True, capture_output=True, check=False)
     if result.returncode != 0:
         details = result.stderr.strip() or result.stdout.strip() or "no diagnostic output"
+        raise DiagnosticsError(f"device diagnostic listing failed:\n{details}")
+    try:
+        entries = json.loads(result.stdout)["result"]["files"]
+        if not isinstance(entries, list):
+            raise TypeError("files is not an array")
+    except (ValueError, KeyError, TypeError) as error:
+        raise DiagnosticsError(f"invalid device file listing: {error}") from error
+    names = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("relativePath"), str):
+            raise DiagnosticsError("invalid device file listing entry")
+        name = entry.get("relativePath", "")
+        parts = Path(name).parts
+        is_incident = len(parts) == 2 and parts[0] == "Incidents" and INCIDENT_PATTERN.fullmatch(parts[1])
+        is_log = len(parts) == 1 and FILE_PATTERN.fullmatch(name)
+        if (name == "latest-session.json" and not incidents_only) or is_incident or (is_log and not incidents_only):
+            names.append(name)
+    if not names or (incidents_only and not any(name.startswith("Incidents/") for name in names)):
+        raise DiagnosticsError(f"no {'incident checkpoints' if incidents_only else 'diagnostic files'} in {remote}")
+    output.mkdir()
+    copied, failed = [], []
+    # Preserve the small failure checkpoints first. A large live directory copy
+    # can fail midway through a rotating file and lose the useful evidence.
+    for name in sorted(set(names), key=lambda name: (not name.startswith("Incidents/"), name)):
+        destination = output / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run([
+            "xcrun", "devicectl", "device", "copy", "from", *domain,
+            "--source", f"{remote}/{name}", "--destination", str(destination), "--timeout", "60",
+        ], text=True, capture_output=True, check=False)
+        if result.returncode != 0 or not destination.is_file() or destination.stat().st_size == 0:
+            failed.append({"file": name, "error": result.stderr.strip() or result.stdout.strip()
+                           or "copy did not produce a nonempty file"})
+        else:
+            copied.append(name)
+    (output / "capture-manifest.json").write_text(json.dumps({
+        "source": remote, "incidents_only": incidents_only,
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "copied": copied, "failed": failed,
+    }, indent=2), encoding="utf-8")
+    if failed:
         raise DiagnosticsError(
-            f"device copy failed with exit code {result.returncode}:\n{details}"
-        )
-    if not output.exists():
-        raise DiagnosticsError(
-            f"device copy reported success but did not create destination {output}"
+            f"partial capture: {len(copied)} files copied, {len(failed)} failed; "
+            f"see {output / 'capture-manifest.json'}. Retained files can still be analyzed."
         )
     return output
 
@@ -953,19 +1059,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     analyze_parser = subparsers.add_parser(
-        "analyze", help="analyze a local pulled directory or JSONL file"
+        "analyze", help="analyze a local directory, JSONL log, or incident checkpoint"
     )
-    analyze_parser.add_argument("path", type=Path, help="log directory or .jsonl file")
+    analyze_parser.add_argument("path", type=Path, help="log directory, .jsonl file, or incident-<UUID>.json")
     add_selection_arguments(analyze_parser)
 
     pull_parser = subparsers.add_parser(
-        "pull", help="copy PlaybackDiagnostics from a paired Apple TV, then analyze it"
+        "pull", help="copy scoped diagnostics from a paired device, then analyze them"
     )
     pull_parser.add_argument(
         "--device", default=os.environ.get("STROZZ_DEVICE_ID") or os.environ.get("TWOZZ_DEVICE_ID"),
         help="paired device identifier (or set STROZZ_DEVICE_ID)",
     )
     pull_parser.add_argument("--bundle", default=DEFAULT_BUNDLE, help="app bundle identifier")
+    pull_parser.add_argument("--incidents-only", action="store_true",
+                             help="copy small pinned failure checkpoints, not the verbose playback logs")
+    pull_parser.add_argument("--mobile", action="store_true", help="select mobile playback diagnostics")
+    pull_parser.add_argument("--legacy-cache", action="store_true",
+                             help="read the old Library/Caches location used by earlier builds")
     pull_parser.add_argument(
         "--output",
         type=Path,
@@ -980,7 +1091,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "pull":
             output = args.output or default_output_path()
-            source = pull(args.device, args.bundle, output)
+            source = pull(args.device, args.bundle, output, incidents_only=args.incidents_only,
+                          mobile=args.mobile, legacy_cache=args.legacy_cache)
             print(f"Pulled playback diagnostics to {source}", file=sys.stderr)
         else:
             source = args.path

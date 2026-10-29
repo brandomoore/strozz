@@ -3,6 +3,18 @@ import XCTest
 @testable import Strozz
 
 final class NativePlaybackRecoveryTests: XCTestCase {
+  func testDiagnosticRetryWindowExpiresWithoutSpendingAnotherAttempt() {
+    var policy = NativePlaybackRecovery()
+    let start = Date(timeIntervalSince1970: 100)
+    XCTAssertTrue(policy.takeRetry(for: .timeout, at: start))
+    XCTAssertTrue(policy.takeRetry(for: .unavailable, at: start.addingTimeInterval(5)))
+    XCTAssertEqual(policy.attemptsInWindow(at: start.addingTimeInterval(10)), 2)
+    XCTAssertEqual(policy.retryDelay(at: start.addingTimeInterval(10)), 50)
+    XCTAssertEqual(policy.attemptsInWindow(at: start.addingTimeInterval(61)), 1)
+    XCTAssertEqual(policy.retryDelay(at: start.addingTimeInterval(61)), 0)
+    XCTAssertEqual(policy.attempts.count, 2, "Reading diagnostics cannot consume or reset recovery policy")
+  }
+
   func testTransientFailuresRetryWithinOneSharedRollingBudget() {
     var policy = NativePlaybackRecovery()
     let start = Date(timeIntervalSince1970: 100)

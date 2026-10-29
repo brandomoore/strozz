@@ -265,7 +265,7 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
     snapshot.flags["external_playback"] = model.isExternalPlayback
     snapshot.flags["background"] = phase != .active
     snapshot.flags["playback_requested"] = model.isActive
-    model.diagnostics.recordSnapshot(snapshot)
+    model.recordDiagnostics(snapshot)
   }
   #endif
 

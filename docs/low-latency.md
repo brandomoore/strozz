@@ -407,25 +407,50 @@ is read-only; restarting playback or taking over hardware is not.
 
 ### Collect scoped evidence
 
-TV retains JSONL under `Library/Caches/PlaybackDiagnostics`. Use the existing
-tool rather than copying the full app container:
+TV retains JSONL under `Library/Application Support/PlaybackDiagnostics`, excluded
+from backup. The verbose log budget is **128 MiB** shared across panes (32 parts
+of 4 MiB). Active pane files are protected from retention eviction; tracked and
+enumerated file URLs must use the same canonical form, including `/var` aliases.
+Local storage can still fail or be removed; it is not
+a substitute for capturing an incident promptly.
+
+Each failed session also keeps a separate atomic `Incidents/incident-<UUID>.json`
+checkpoint: session/build metadata, the first incident and first error, six
+preceding non-debug events, latest error/recovery, and latest sampled state.
+Routine segment/frame traces cannot rotate this evidence away. Checkpoints
+refresh at most every 15 seconds during routine playback and immediately for
+failure/recovery/end events, with a separate cap of 32 files × 256 KiB (8 MiB).
+Failed writes back off for five seconds while retaining pending evidence in memory.
+Active failed sessions are protected; old closed sessions are evicted first.
+Oversized records and persistence failures are reported, not silently discarded.
+Failures have 16 reserved queue slots beyond normal bounded trace admission.
+
+Use the existing tool rather than copying the full app container. For a stalled
+wall, collect the small checkpoints first:
 
 ```bash
-python3 tools/playback-diagnostics.py pull --device <device-id>
+python3 tools/playback-diagnostics.py pull --device <device-id> --incidents-only --all
+python3 tools/playback-diagnostics.py pull --device <device-id> --all
 python3 tools/playback-diagnostics.py analyze <capture-directory> --all --json
 ```
 
 `pull` accepts `--bundle`, `--output` (a new directory), `--session` and `--all`.
-Default analysis follows `latest-session.json`; `--all` reports each session
-separately, never combines concurrent panes. Mobile Debug writes the same
-telemetry format under `Library/Caches/MobilePlaybackDiagnostics`; the TV pull
-helper does not select that directory. Copy that scoped directory using
-`devicectl`/Xcode, then use `analyze`.
+Default full-log analysis follows `latest-session.json`; `--all` reports each
+session separately, never combines concurrent panes. `failure_evidence` exposes
+the pinned checkpoint without mixing sparse historical samples into full-log
+statistics. Checkpoint-only analysis explicitly reports sparse evidence.
+Mobile uses the same budgets and format under
+`Library/Application Support/MobilePlaybackDiagnostics`; pass `--mobile` to pull.
+For older builds (including TV build 2145), use `--legacy-cache` to read the
+previous `Library/Caches` location. Existing cached evidence is not deleted or
+silently treated as current evidence.
 
 Check build/session/time and file completeness before interpreting a capture.
-If directory transfer fails, obtain the small latest-session marker and its
-individual rotated log parts. A successful command or empty destination is not
-proof of a complete transfer. The parser reports corrupt/partial data, sequence
+The pull tool lists only diagnostic files and copies checkpoints before individual
+log parts, avoiding fragile whole-directory transfers. `capture-manifest.json`
+records copied/failed files; a partial transfer exits with an error but leaves
+captured evidence available for analysis. A successful command or empty destination
+is not proof of a complete transfer. The parser reports corrupt/partial data, sequence
 gaps, dropped records and reclaimed rotations; do not discard those warnings.
 Logs contain public channel names and viewing times. Keep captures private and
 out of commits; never add signed URLs, tokens, headers or chat bodies.
@@ -456,6 +481,14 @@ out of commits; never add signed URLs, tokens, headers or chat bodies.
   only that loading returned. Require subsequent fresh frames and clock
   progress. Zero classified stall episodes does not exclude short hiccups below
   the parser's clock threshold.
+- **Distinguish terminal errors from buffering.** Samples with `error_present`
+  use phase `failed`, not `waiting`, and emit a bounded error-state transition.
+  TV samples record `recovery_blocked_by`, playback intent, watchdog/refresh task
+  presence, Native refresh state, current retry-window count/limit and retry delay.
+  Task presence does not prove execution. The pinned first failure preserves
+  numeric error domains/codes and up to three underlying error domains/codes;
+  SDK descriptions, signed URLs, headers, tokens and chat bodies are excluded.
+  A retry delay of zero does not itself restart a terminal error.
 - **Explain unexpected stops.** `avplayer_rate_changed` records the framework's
   rate-change reason and automatic-wait setting; `avplayer_reached_end` separates
   an end notification from ordinary buffering. Correlate those with viewer intent

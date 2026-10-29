@@ -151,14 +151,16 @@ enum PlaybackTelemetrySentry {
         "incidents_coalesced": report.incidentsCoalesced,
         "remote_queue_records_omitted": record.counters["remote_queue_records_omitted"] ?? 0,
       ]
-      for key in ["source", "phase", "presentation", "quality", "resolved_quality", "playback_profile"] {
+      for key in ["source", "phase", "presentation", "quality", "resolved_quality", "playback_profile",
+                  "recovery_blocked_by", "native_failure_reason"] {
         attributes[key] = record.attributes[key]
       }
       for key in ["buffer_ahead_seconds", "playhead_seconds", "clock_not_advancing_seconds",
                   "video_frame_age_seconds", "duration_seconds", "wall_clock_latency_seconds"] {
         attributes[key] = record.metrics[key]
       }
-      for key in ["user_paused", "background", "loading", "offline", "decode_frozen"] {
+      for key in ["user_paused", "background", "loading", "offline", "decode_frozen", "error_present",
+                  "native_needs_refresh", "playback_watchdog_task_present", "playback_intent_allowed"] {
         attributes[key] = record.flags[key]
       }
       SentrySDK.logger.info("Strozz playback health", attributes: attributes)

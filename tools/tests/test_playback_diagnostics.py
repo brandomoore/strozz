@@ -15,6 +15,118 @@ SPEC.loader.exec_module(playback_diagnostics)
 
 
 class PlaybackDiagnosticsTests(unittest.TestCase):
+    def write_incident(self, session_id, **changes):
+        error = self.record(session_id, 2, kind="event", name="native_hls_resume_failed",
+                            level="error", attributes={"error_domain": "NSURLErrorDomain", "error_code": "-1001"})
+        value = {"schemaVersion": 1, "sessionID": session_id,
+                 "sessionStarted": self.record(session_id, 1, kind="event", name="session_started"),
+                 "firstIncident": error, "firstFailure": error, "latestFailure": error,
+                 "precedingEvents": [], "oversizedRecordsOmitted": 0}
+        value.update(changes)
+        path = self.directory / "Incidents" / f"incident-{session_id}.json"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(json.dumps(value))
+        return path
+
+    def test_pinned_failure_is_available_after_raw_rotation_without_polluting_raw_metrics(self):
+        self.write_incident(self.session_one)
+        self.write_records(f"playback-{self.session_one}-0003.jsonl", [
+            self.record(self.session_one, 40), self.record(self.session_one, 41),
+        ])
+        session = playback_diagnostics.analyze(self.directory)["sessions"][0]
+        self.assertEqual(session["counts"]["records"], 2)
+        self.assertEqual(session["failure_evidence"]["firstFailure"]["attributes"]["error_code"], "-1001")
+        self.assertEqual(session["sequence"]["first"], 40)
+        self.assertTrue(session["partial_evidence"])
+
+    def test_incident_only_analysis_is_explicitly_sparse_and_separates_panes(self):
+        self.write_incident(self.session_one)
+        self.write_incident(self.session_two)
+        report = playback_diagnostics.analyze(self.directory, all_sessions=True)
+        self.assertEqual(len(report["sessions"]), 2)
+        for session in report["sessions"]:
+            self.assertTrue(any("sparse incident" in warning for warning in session["warnings"]))
+            self.assertEqual(session["counts"]["records"], 2)
+            self.assertEqual(session["session_id"], session["failure_evidence"]["sessionID"])
+        single = playback_diagnostics.analyze(self.directory, requested_session=self.session_two)
+        self.assertEqual(len(single["sessions"]), 1)
+        self.assertEqual(single["sessions"][0]["session_id"], self.session_two)
+
+    def test_incident_rejects_cross_session_or_malformed_records(self):
+        path = self.write_incident(self.session_one, latestFailure=self.record(self.session_two, 3))
+        with self.assertRaisesRegex(playback_diagnostics.DiagnosticsError, "mixes stream sessions"):
+            playback_diagnostics.analyze(path)
+        self.write_incident(self.session_one, firstIncident=None)
+        with self.assertRaisesRegex(playback_diagnostics.DiagnosticsError, "missing firstIncident"):
+            playback_diagnostics.analyze(path)
+        self.write_incident(self.session_one, latestFailure=self.record(self.session_one, 2))
+        with self.assertRaisesRegex(playback_diagnostics.DiagnosticsError, "conflicting checkpoint"):
+            playback_diagnostics.analyze(path)
+
+    def test_pull_rejects_malformed_file_listing(self):
+        response = mock.Mock(returncode=0, stderr="", stdout=json.dumps({
+            "result": {"files": ["not a file entry"]}}))
+        with mock.patch.object(playback_diagnostics.shutil, "which", return_value="/usr/bin/xcrun"), \
+             mock.patch.object(playback_diagnostics.subprocess, "run", return_value=response):
+            with self.assertRaisesRegex(playback_diagnostics.DiagnosticsError, "invalid device file listing entry"):
+                playback_diagnostics.pull("device", "com.thatcube.Strozz", self.directory / "capture")
+
+    def test_pull_copies_incidents_first_and_reports_partial_transfers(self):
+        output = self.directory / "capture"
+        incident_name = f"Incidents/incident-{self.session_one}.json"
+        log_name = f"playback-{self.session_one}-0001.jsonl"
+        requested = []
+
+        def run(command, **kwargs):
+            if "files" in command:
+                listing = {"result": {"files": [{"relativePath": path} for path in [
+                    log_name, "latest-session.json", incident_name, "../secret", "unrelated.json",
+                ]]}}
+                return mock.Mock(returncode=0, stdout=json.dumps(listing), stderr="")
+            name = command[command.index("--source") + 1]
+            requested.append(name)
+            if name.endswith(log_name):
+                return mock.Mock(returncode=1, stderr="connection closed", stdout="")
+            Path(command[command.index("--destination") + 1]).write_text("{}")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(playback_diagnostics.shutil, "which", return_value="/usr/bin/xcrun"), \
+             mock.patch.object(playback_diagnostics.subprocess, "run", side_effect=run):
+            with self.assertRaisesRegex(playback_diagnostics.DiagnosticsError, "partial capture"):
+                playback_diagnostics.pull("device", "com.thatcube.Strozz", output)
+        self.assertTrue(requested[0].endswith(incident_name))
+        self.assertEqual(len(requested), 3)
+        manifest = json.loads((output / "capture-manifest.json").read_text())
+        self.assertEqual(len(manifest["copied"]), 2)
+        self.assertEqual(manifest["failed"][0]["file"], log_name)
+
+    def test_small_pull_uses_mobile_legacy_path_without_unrelated_latest_marker(self):
+        output = self.directory / "capture"
+        name = f"Incidents/incident-{self.session_one}.json"
+        calls = []
+
+        def run(command, **kwargs):
+            calls.append(command)
+            if "files" in command:
+                return mock.Mock(returncode=0, stderr="", stdout=json.dumps({
+                    "result": {"files": [{"relativePath": "latest-session.json"}, {"relativePath": name}]}}))
+            Path(command[command.index("--destination") + 1]).write_text("{}")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(playback_diagnostics.shutil, "which", return_value="/usr/bin/xcrun"), \
+             mock.patch.object(playback_diagnostics.subprocess, "run", side_effect=run):
+            playback_diagnostics.pull("device", "com.thatcube.StrozzMobile", output,
+                                      incidents_only=True, mobile=True, legacy_cache=True)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("Library/Caches/MobilePlaybackDiagnostics", calls[0])
+        self.assertFalse((output / "latest-session.json").exists())
+
+    def test_analysis_keeps_collection_failure_visible(self):
+        self.write_incident(self.session_one)
+        (self.directory / "capture-manifest.json").write_text(json.dumps({"failed": [{"file": "missing"}]}))
+        session = playback_diagnostics.analyze(self.directory)["sessions"][0]
+        self.assertTrue(any("capture was incomplete" in warning for warning in session["warnings"]))
+
     def test_diagnostic_stage_timings_preserve_queue_delay_without_mixing_sample_metrics(self):
         self.write_records(f"playback-{self.session_one}-0001.jsonl", [
             self.record(self.session_one, 1),

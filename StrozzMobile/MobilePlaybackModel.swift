@@ -122,8 +122,8 @@ final class MobilePlaybackModel {
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "mobile-playback")
 
   @ObservationIgnored let diagnostics = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(
-    directory: URL.cachesDirectory.appendingPathComponent("MobilePlaybackDiagnostics", isDirectory: true),
-    maximumFileBytes: 512 * 1024, maximumFiles: 2, maximumPending: 32, mirrorToSystemLog: false))
+    directory: URL.applicationSupportDirectory.appendingPathComponent("MobilePlaybackDiagnostics", isDirectory: true),
+    maximumPending: 32, mirrorToSystemLog: false))
   #if DEBUG
   @ObservationIgnored private var isLayoutFixture = false
 
@@ -843,6 +843,9 @@ final class MobilePlaybackModel {
     resetPosition = nil
     errorMessage = message
     releaseAudioSession()
+    recordDiagnostics(PlaybackTelemetrySnapshot(
+      attributes: ["source": source.platform.rawValue, "quality": qualityLabel, "presentation": "mobile"],
+      flags: ["loading": isLoading, "playback_requested": isActive && !isPaused, "user_paused": isPaused]))
     Self.logger.error("Mobile playback failed: \(message, privacy: .public)")
   }
 
@@ -915,6 +918,26 @@ final class MobilePlaybackModel {
     catchUpRateChange = nil
   }
 
+  func recordDiagnostics(_ input: PlaybackTelemetrySnapshot) {
+    var snapshot = input
+    snapshot.flags["error_present"] = errorMessage != nil
+    snapshot.flags["playback_watchdog_task_present"] = monitorTask != nil
+    snapshot.flags["load_task_present"] = loadTask != nil
+    snapshot.flags["audio_interrupted"] = interruptedPosition != nil
+    snapshot.flags["media_services_unavailable"] = mediaServicesUnavailable
+    snapshot.flags["playback_intent_allowed"] = isActive && !isPaused
+      && suspendedPosition == nil && interruptedPosition == nil && !mediaServicesUnavailable
+    snapshot.flags["native_failure"] = nativeFailure != nil
+    snapshot.attributes["recovery_blocked_by"] = errorMessage != nil ? "terminal_error" :
+      isLoading ? "loading" : snapshot.flags["playback_intent_allowed"] != true ? "playback_intent" :
+      monitorTask == nil ? "watchdog_absent" : "none"
+    let recoveryTime = Date()
+    snapshot.counters["native_attempts_in_window"] = nativeRecovery.attemptsInWindow(at: recoveryTime)
+    snapshot.counters["native_attempt_limit"] = NativePlaybackRecovery.maximumAttempts
+    snapshot.metrics["native_retry_delay_seconds"] = nativeRecovery.retryDelay(at: recoveryTime)
+    diagnostics.recordSnapshot(snapshot)
+  }
+
   private func startMonitor(item: AVPlayerItem, request: UUID) {
     monitorTask = Task { [weak self] in
       var bufferedStallRecovery = NativeBufferedStallRecovery()
@@ -956,7 +979,7 @@ final class MobilePlaybackModel {
         if uptime - lastDiagnostics >= 2 {
           lastDiagnostics = uptime
           diagnostics.recordItemLogs()
-          diagnostics.recordSnapshot(PlaybackTelemetrySnapshot(
+          recordDiagnostics(PlaybackTelemetrySnapshot(
             attributes: [
               "time_control_status": playing ? "playing" : paused ? "paused" : "waiting",
               "item_status": item.status == .readyToPlay ? "ready" : "loading",

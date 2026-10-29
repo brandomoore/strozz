@@ -16,6 +16,211 @@ private final class TelemetryTestClock: @unchecked Sendable {
 
 @MainActor
 final class PlaybackTelemetryTests: XCTestCase {
+  func testFailureCheckpointSurvivesVerboseRotationAndKeepsOriginalCause() async throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let recorder = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(
+      directory: directory, maximumFileBytes: 1_024, maximumFiles: 2,
+      mirrorToSystemLog: false, remote: nil))
+    recorder.beginSession(channel: "fixture", playbackMode: "live", attributes: ["app_build": "fixture"])
+    recorder.recordEvent("native_hls_resume_failed", level: .error,
+      attributes: ["error_domain": NSURLErrorDomain, "error_code": "-1001",
+                   "error": "must never be saved", "token": "private",
+                   "reason": "https://example.com/?token=private"])
+    await recorder.flush()
+    for _ in 0..<20 {
+      recorder.recordEvent("native_hls_delivery_timing", level: .debug,
+        attributes: ["detail": String(repeating: "x", count: 300)])
+      await recorder.flush()
+    }
+    var snapshot = waitingSnapshot()
+    snapshot.flags["error_present"] = true
+    snapshot.attributes["recovery_blocked_by"] = "terminal_error"
+    recorder.recordSnapshot(snapshot)
+    await recorder.flush()
+    XCTAssertFalse(try records(in: directory).contains { $0.name == "native_hls_resume_failed" })
+    let id = try XCTUnwrap(recorder.sessionID)
+    let file = directory.appendingPathComponent("Incidents/incident-\(id).json")
+    let data = try Data(contentsOf: file)
+    let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+    attachment.name = "incident-\(id).json"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+    let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let first = try XCTUnwrap(saved["firstFailure"] as? [String: Any])
+    let attributes = try XCTUnwrap(first["attributes"] as? [String: String])
+    XCTAssertEqual(first["name"] as? String, "native_hls_resume_failed")
+    XCTAssertEqual(attributes["error_code"], "-1001")
+    XCTAssertNil(attributes["error"])
+    XCTAssertNil(attributes["token"])
+    XCTAssertEqual(attributes["reason"], "<url>")
+    XCTAssertNotNil(saved["sessionStarted"])
+    let latest = try XCTUnwrap(saved["latestSample"] as? [String: Any])
+    XCTAssertEqual((latest["attributes"] as? [String: String])?["phase"], "failed")
+    XCTAssertEqual((latest["attributes"] as? [String: String])?["recovery_blocked_by"], "terminal_error")
+    XCTAssertLessThanOrEqual(data.count, PlaybackTelemetryWriter.maximumIncidentBytes)
+    XCTAssertEqual(try directory.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+    recorder.endSession(reason: "test")
+    await recorder.flush()
+  }
+
+  func testFailuresHaveBoundedReservedAdmissionAndIndependentPersistence() async throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let queue = DispatchQueue(label: "incident-priority-test")
+    let recorder = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(
+      directory: directory, maximumFileBytes: 1_024, maximumFiles: 1, maximumPending: 2,
+      mirrorToSystemLog: false, remote: nil, queue: queue))
+    queue.suspend()
+    recorder.beginSession(channel: "fixture", playbackMode: "live")
+    recorder.recordEvent("trace", level: .debug)
+    recorder.recordEvent("trace_dropped", level: .debug)
+    recorder.recordEvent("original_failure", level: .error,
+      attributes: ["error_code": "-1009"])
+    for _ in 0..<30 { recorder.recordEvent("repeated_failure", level: .error) }
+    queue.resume()
+    await recorder.flush()
+    let id = try XCTUnwrap(recorder.sessionID)
+    let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf:
+      directory.appendingPathComponent("Incidents/incident-\(id).json"))) as? [String: Any])
+    let original = try XCTUnwrap(saved["firstFailure"] as? [String: Any])
+    XCTAssertEqual(original["name"] as? String, "original_failure")
+    let latest = try XCTUnwrap(saved["latestFailure"] as? [String: Any])
+    XCTAssertLessThanOrEqual(try XCTUnwrap(latest["sequence"] as? Int), 19,
+      "Reserved priority admission must still be bounded")
+    recorder.endSession(reason: "test")
+    await recorder.flush()
+  }
+
+  func testIncidentRetentionProtectsActivePanesAndBoundsClosedSessions() async throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let active = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(
+      directory: directory, maximumFiles: 2, maximumIncidentFiles: 2,
+      mirrorToSystemLog: false, remote: nil))
+    let rotating = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(
+      directory: directory, maximumFileBytes: 1_024, maximumFiles: 2, maximumIncidentFiles: 2,
+      mirrorToSystemLog: false, remote: nil))
+    active.beginSession(channel: "still-failed", playbackMode: "live")
+    active.recordEvent("original_failure", level: .error)
+    await active.flush()
+    let activeID = try XCTUnwrap(active.sessionID)
+    for index in 0..<8 {
+      rotating.beginSession(channel: "other-\(index)", playbackMode: "live")
+      rotating.recordEvent("other_failure", level: .error)
+      rotating.endSession(reason: "test")
+      await rotating.flush()
+      let files = try FileManager.default.contentsOfDirectory(
+        at: directory.appendingPathComponent("Incidents"), includingPropertiesForKeys: nil)
+      XCTAssertEqual(files.count, 2)
+      XCTAssertTrue(files.contains { $0.lastPathComponent == "incident-\(activeID).json" })
+    }
+    active.endSession(reason: "test")
+    await active.flush()
+  }
+
+  func testIncidentPersistsWhenAnotherPaneOccupiesRawFileCapacity() async throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let active = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(
+      directory: directory, maximumFiles: 1, mirrorToSystemLog: false, remote: nil))
+    let failed = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(
+      directory: directory, maximumFiles: 1, mirrorToSystemLog: false, remote: nil))
+    active.beginSession(channel: "active", playbackMode: "live")
+    await active.flush()
+    failed.beginSession(channel: "failed", playbackMode: "live")
+    failed.recordEvent("original_failure", level: .error)
+    await failed.flush()
+    let id = try XCTUnwrap(failed.sessionID)
+    XCTAssertFalse(try records(in: directory).contains { $0.sessionID == id })
+    let data = try Data(contentsOf: directory.appendingPathComponent("Incidents/incident-\(id).json"))
+    let checkpoint = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    XCTAssertEqual((checkpoint["firstFailure"] as? [String: Any])?["name"] as? String, "original_failure")
+    active.endSession(reason: "test")
+    failed.endSession(reason: "test")
+    await active.flush()
+    await failed.flush()
+  }
+
+  func testIncidentWriteFailureBacksOffWithoutLosingOriginalCause() async throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    XCTAssertTrue(FileManager.default.createFile(atPath: directory.path, contents: Data()))
+    let clock = TelemetryTestClock()
+    let recorder = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(
+      directory: directory, mirrorToSystemLog: false, remote: nil, uptime: { clock.now }))
+    recorder.beginSession(channel: "fixture", playbackMode: "live")
+    recorder.recordEvent("original_failure", level: .error)
+    await recorder.flush()
+    try FileManager.default.removeItem(at: directory)
+    clock.advance(1)
+    recorder.recordEvent("repeated_failure", level: .error)
+    await recorder.flush()
+    XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    clock.advance(5)
+    recorder.recordEvent("after_backoff")
+    await recorder.flush()
+    let id = try XCTUnwrap(recorder.sessionID)
+    let data = try Data(contentsOf: directory.appendingPathComponent("Incidents/incident-\(id).json"))
+    let checkpoint = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    XCTAssertEqual((checkpoint["firstFailure"] as? [String: Any])?["name"] as? String, "original_failure")
+    XCTAssertEqual((checkpoint["latestFailure"] as? [String: Any])?["name"] as? String, "repeated_failure")
+    recorder.endSession(reason: "test")
+    await recorder.flush()
+  }
+
+  func testDefaultVerboseRetentionHasThirtyTwoPartsOutsideCaches() async throws {
+    XCTAssertTrue(PlaybackTelemetryWriter.defaultDirectory.path.contains("/Application Support/"))
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let recorder = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(
+      directory: directory, maximumFileBytes: 1_024, mirrorToSystemLog: false, remote: nil))
+    recorder.beginSession(channel: "fixture", playbackMode: "live")
+    for _ in 0..<70 {
+      recorder.recordEvent("trace", level: .debug, attributes: ["detail": String(repeating: "x", count: 400)])
+      await recorder.flush()
+    }
+    let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+      .filter { $0.pathExtension == "jsonl" }
+    XCTAssertEqual(files.count, 32)
+    recorder.endSession(reason: "test")
+    await recorder.flush()
+  }
+
+  func testTerminalErrorIsNotReportedAsAnEndlessBufferingStall() async throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let recorder = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(
+      directory: directory, mirrorToSystemLog: false, remote: nil))
+    recorder.beginSession(channel: "fixture", playbackMode: "live")
+    let start = ProcessInfo.processInfo.systemUptime
+    var snapshot = waitingSnapshot()
+    snapshot.flags["error_present"] = true
+    snapshot.attributes["recovery_blocked_by"] = "terminal_error"
+    for second in stride(from: 0, through: 12, by: 2) {
+      recorder.recordSnapshot(snapshot, uptime: start + Double(second))
+    }
+    await recorder.flush()
+    let saved = try records(in: directory)
+    XCTAssertEqual(saved.filter { $0.name == "playback_error_presented" }.count, 1)
+    XCTAssertFalse(saved.contains { $0.name == "stall_started" })
+    XCTAssertTrue(saved.filter { $0.kind == "sample" }.allSatisfy { $0.attributes["phase"] == "failed" })
+    recorder.endSession(reason: "test")
+    await recorder.flush()
+  }
+
+  func testUnderlyingErrorCodesAreRetainedWithoutFreeformDescriptions() {
+    let underlying = NSError(domain: NSURLErrorDomain, code: -1001,
+      userInfo: [NSLocalizedDescriptionKey: "private-token", NSURLErrorFailingURLErrorKey: "https://secret.example"])
+    let error = NSError(domain: AVFoundationErrorDomain, code: -11800,
+      userInfo: [NSUnderlyingErrorKey: underlying])
+    let attributes = PlaybackTelemetryRecorder.errorAttributes(error)
+    XCTAssertEqual(attributes["underlying_error_domain_1"], NSURLErrorDomain)
+    XCTAssertEqual(attributes["underlying_error_code_1"], "-1001")
+    XCTAssertFalse(attributes.values.joined().contains("private"))
+    XCTAssertFalse(attributes.values.joined().contains("secret"))
+  }
+
   func testAnActiveLogRecoversWhenItsCacheFileDisappears() async throws {
     let directory = temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -496,7 +701,8 @@ final class PlaybackTelemetryTests: XCTestCase {
       for index in writers.indices {
         writers[index].append(PlaybackTelemetryRecord(schemaVersion: 1, timestamp: Date(),
           uptimeSeconds: Double(sequence), sessionID: sessions[index], sequence: sequence,
-          kind: "event", name: "pane_sample", level: .info, channel: "fixture\(index)",
+          kind: "event", name: sequence == 1 ? "pane_failure" : "pane_sample",
+          level: sequence == 1 ? .error : .info, channel: "fixture\(index)",
           playbackMode: "live", attributes: ["detail": String(repeating: "x", count: 300)],
           metrics: [:], counters: [:], flags: [:]))
       }
@@ -506,6 +712,12 @@ final class PlaybackTelemetryTests: XCTestCase {
     for session in sessions {
       XCTAssertEqual(saved.filter { $0.sessionID == session }.map(\.sequence).max(), 40,
         "One pane rotating its log must not disable or unlink another pane's log")
+      let data = try Data(contentsOf: directory.appendingPathComponent("Incidents/incident-\(session).json"))
+      let checkpoint = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+      let failure = try XCTUnwrap(checkpoint["firstFailure"] as? [String: Any])
+      XCTAssertEqual(failure["sessionID"] as? String, session)
+      XCTAssertEqual(failure["sequence"] as? Int, 1)
+      XCTAssertLessThanOrEqual(data.count, PlaybackTelemetryWriter.maximumIncidentBytes)
     }
     let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
       .filter { $0.pathExtension == "jsonl" }

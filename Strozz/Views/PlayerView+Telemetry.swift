@@ -159,6 +159,27 @@ extension PlayerView {
 
     snapshot.flags["loading"] = isLoading
     snapshot.flags["offline"] = isOffline
+    snapshot.flags["error_present"] = errorMessage != nil
+    snapshot.flags["native_needs_refresh"] = model.nativeNeedsRefresh
+    snapshot.flags["native_refresh_task_present"] = model.nativeRefreshTask != nil
+    snapshot.flags["playback_watchdog_task_present"] = playbackWatchdogTask != nil
+    snapshot.flags["latency_monitor_task_present"] = latencyTask != nil
+    snapshot.flags["playback_intent_allowed"] = shouldPlayAltSource
+    snapshot.flags["multiview_browsing"] = isMultiviewBrowsing
+    snapshot.flags["sleeping"] = isSleeping || model.multiviewSleepSuspended
+    snapshot.flags["channel_page_presented"] = channelPageTarget != nil
+    snapshot.attributes["native_failure_reason"] = model.nativeFallbackReason
+    snapshot.attributes["recovery_blocked_by"] =
+      isUsingAltSource ? "alternate_source" : isVOD ? "vod" :
+      isLoading ? "loading" : errorMessage != nil ? "terminal_error" :
+      isOffline ? "offline" : !shouldPlayAltSource ? "playback_intent" :
+      playbackWatchdogTask == nil ? "watchdog_absent" :
+      model.nativeNeedsRefresh ? "native_refresh_pending" :
+      isRecoveringPlayback ? "recovery_in_progress" : "none"
+    let recoveryTime = Date()
+    snapshot.counters["native_attempts_in_window"] = model.nativeRecovery.attemptsInWindow(at: recoveryTime)
+    snapshot.counters["native_attempt_limit"] = NativePlaybackRecovery.maximumAttempts
+    snapshot.metrics["native_retry_delay_seconds"] = model.nativeRecovery.retryDelay(at: recoveryTime)
     snapshot.flags["playback_active"] = player.currentItem != nil && isPlaybackActive
     snapshot.flags["playback_requested"] = player.currentItem != nil && didRequestPlayback
     snapshot.flags["user_paused"] = isUserPaused
