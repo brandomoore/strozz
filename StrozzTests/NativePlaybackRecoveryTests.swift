@@ -70,6 +70,7 @@ final class NativePlaybackRecoveryTests: XCTestCase {
 final class NativeRecoveryIntegrationTests: XCTestCase {
   private func withModel(
     loadStreamStatus: @escaping @Sendable (String) async -> StreamLiveStatus = { _ in .unknown },
+    creatorSession: CreatorLiveSession? = nil,
     _ body: (PlayerModel, PlayerView) async throws -> Void
   ) async rethrows {
     let defaults = UserDefaults.standard
@@ -77,7 +78,7 @@ final class NativeRecoveryIntegrationTests: XCTestCase {
     let saved = keys.map { defaults.object(forKey: $0) }
     defaults.set("Auto", forKey: PersistenceKey.preferredQuality)
     defaults.set(LivePlaybackProfile.nativeLowLatency.rawValue, forKey: PersistenceKey.livePlaybackProfile)
-    let model = PlayerModel(loadStreamStatus: loadStreamStatus)
+    let model = PlayerModel(loadStreamStatus: loadStreamStatus, creatorSession: creatorSession)
     model.activeChannel = "fixture"
     model.isUsingNativeHLS = true
     model.isUserPaused = true
@@ -98,6 +99,111 @@ final class NativeRecoveryIntegrationTests: XCTestCase {
       }
     }
     try await body(model, view)
+  }
+
+  private func broadcastSession() -> CreatorLiveSession {
+    let session = CreatorLiveSession(resolve: { CreatorLiveSources(root: $0) },
+      loadTwitch: { _ in .unknown }, defaults: nil)
+    session.start(.init(platform: .twitch, channel: "fixture"))
+    session.hermes.prepareBroadcastFixture(channel: "fixture")
+    return session
+  }
+
+  func testStreamDownReplacesTerminalErrorWithoutWaitingForAnotherProbe() async {
+    let session = broadcastSession()
+    defer { session.stop() }
+    await withModel(creatorSession: session) { model, view in
+      model.isUserPaused = false
+      view.failNativeHLS(.unavailable)
+      await model.offlineProbeTask?.value
+      XCTAssertNotNil(model.errorMessage)
+      session.hermes.handle(HermesBroadcastTests.frame("stream-down"))
+      view.handleBroadcastStatus(session.twitchBroadcastStatus)
+      XCTAssertTrue(model.isOffline)
+      XCTAssertNil(model.errorMessage)
+      XCTAssertNil(model.nativeHLS)
+      XCTAssertNil(model.nativeFallbackReason)
+      XCTAssertNil(model.nativeRefreshTask)
+    }
+  }
+
+  func testStreamDownPreservesPausedItemAndDoesNotStopLinkedKickVideo() async {
+    let session = broadcastSession()
+    defer { session.stop() }
+    await withModel(creatorSession: session) { model, view in
+      let item = AVPlayerItem(asset: AVMutableComposition())
+      model.player.replaceCurrentItem(with: item)
+      session.hermes.handle(HermesBroadcastTests.frame("stream-down"))
+      view.handleBroadcastStatus(session.twitchBroadcastStatus)
+      XCTAssertFalse(model.isOffline)
+      XCTAssertTrue(model.player.currentItem === item)
+      model.isUserPaused = false
+      model.livePlatform = .kick
+      model.kickPlaybackTarget = "fixture-kick"
+      view.handleBroadcastStatus(session.twitchBroadcastStatus)
+      XCTAssertFalse(model.isOffline)
+      XCTAssertTrue(model.player.currentItem === item)
+      model.livePlatform = .twitch
+      XCTAssertTrue(view.presentConfirmedBroadcastEndIfNeeded(reachedEnd: true))
+      XCTAssertTrue(model.isOffline)
+    }
+  }
+
+  func testConnectionLossDoesNotTurnNativeFailureIntoOffline() async {
+    let session = broadcastSession()
+    defer { session.stop() }
+    await withModel(creatorSession: session) { model, view in
+      model.isUserPaused = false
+      view.failNativeHLS(.unavailable)
+      await model.offlineProbeTask?.value
+      session.hermes.invalidateBroadcastStatus()
+      view.handleBroadcastStatus(session.twitchBroadcastStatus)
+      XCTAssertFalse(model.isOffline)
+      XCTAssertNotNil(model.errorMessage)
+    }
+  }
+
+  func testRaidKeepsPrecedenceAndCancelRestoresConfirmedOfflineWithoutAnItem() async {
+    let session = broadcastSession()
+    defer { session.stop() }
+    await withModel(creatorSession: session) { model, view in
+      model.isUserPaused = false
+      view.beginOutgoingRaidFollow(.init(toLogin: "target", toDisplayName: "Target",
+        toBroadcasterID: "42", viewerCount: 1))
+      session.hermes.handle(HermesBroadcastTests.frame("stream-down"))
+      view.handleBroadcastStatus(session.twitchBroadcastStatus)
+      XCTAssertFalse(model.isOffline)
+      XCTAssertTrue(view.isFollowingOutgoingRaid)
+      view.cancelOutgoingRaid()
+      XCTAssertTrue(model.isOffline)
+      XCTAssertFalse(view.isFollowingOutgoingRaid)
+    }
+  }
+
+  func testBroadcastEndInvalidatesPendingNativeRefresh() async {
+    let session = broadcastSession()
+    defer { session.stop() }
+    await withModel(creatorSession: session) { model, view in
+      model.isUserPaused = false
+      var reply: CheckedContinuation<StreamPlayback, Never>?
+      view.suspendNativePlayback()
+      view.refreshNativeAfterSuspension {
+        await withCheckedContinuation { reply = $0 }
+      }
+      let refresh = model.nativeRefreshTask
+      for _ in 0..<100 {
+        if reply != nil { break }
+        await Task.yield()
+      }
+      XCTAssertNotNil(reply)
+      session.hermes.handle(HermesBroadcastTests.frame("stream-down"))
+      view.handleBroadcastStatus(session.twitchBroadcastStatus)
+      XCTAssertTrue(model.isOffline)
+      reply?.resume(returning: .init(master: URL(string: "https://example.invalid/stale.m3u8")!, qualities: []))
+      await refresh?.value
+      XCTAssertNil(model.player.currentItem)
+      XCTAssertTrue(model.isOffline)
+    }
   }
 
   func testTerminalNativeFailureConfirmsOfflineAfterRemovingThePlayerItem() async {

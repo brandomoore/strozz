@@ -108,7 +108,19 @@ extension PlayerView {
 
   func loadCurrentStreamStatus(_ channel: String) async -> StreamLiveStatus {
     let target = currentLiveTarget
-    if target.platform == .twitch { return await model.loadStreamStatus(target.channel) }
+    if let update = model.creatorSession.twitchBroadcastStatus,
+      update.target == target, update.reason == "twitch_event",
+      (0..<10).contains(Date().timeIntervalSince(update.observedAt)) {
+      return update.status
+    }
+    if target.platform == .twitch {
+      let revision = model.creatorSession.hermes.broadcast.revision
+      let status = await model.loadStreamStatus(target.channel)
+      if revision != model.creatorSession.hermes.broadcast.revision {
+        return model.creatorSession.hermes.broadcast.status
+      }
+      return status
+    }
     guard target.platform == .kick else { return .unknown }
     do {
       return try await KickPlaybackService.channel(target.channel).isLive ? .live : .offline

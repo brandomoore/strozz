@@ -83,6 +83,7 @@ targets:
           - "AltSourceService.swift"
           - "Kick*.swift"
           - "LiveStreamSource.swift"
+          - "LiveBroadcastStatus.swift"
           - "CreatorLiveSession.swift"
           - "HermesEventService.swift"
           - "Native*.swift"
@@ -163,6 +164,8 @@ targets:
       - path: StrozzTests/KickSharedPlayerTests.swift
       - path: StrozzTests/KickFollowingTests.swift
       - path: StrozzTests/CreatorLiveSessionTests.swift
+      - path: StrozzTests/LiveBroadcastStatusTests.swift
+      - path: StrozzTests/HermesBroadcastTests.swift
       - path: StrozzTests/NativeAdaptiveRenditionPolicyTests.swift
       - path: StrozzTests/NativeBufferedStallRecoveryTests.swift
       - path: StrozzTests/NativeHLSChunkReaderTests.swift

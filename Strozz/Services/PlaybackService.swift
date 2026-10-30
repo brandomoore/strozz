@@ -60,16 +60,6 @@ struct ChannelMetadata {
     let streamStartedAt: Date?
 }
 
-/// Authoritative live state for a channel, used to decide whether to surface the
-/// "offline" empty state. `.unknown` means the lookup itself failed (network,
-/// parse, throttling) and must NOT be treated as offline — only `.offline`
-/// positively confirms the broadcast has ended.
-enum StreamLiveStatus: String {
-    case live
-    case offline
-    case unknown
-}
-
 struct PlaybackService {
     private static let clientID = TwitchConfig.webPublicClientID
     private static let accessTokenHash = "ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9"

@@ -520,6 +520,7 @@ extension PlayerView {
 
   func failNativeHLS(_ reason: NativeHLSError) {
     guard model.isUsingNativeHLS, !model.nativeNeedsRefresh, backgroundedAt == nil else { return }
+    if presentConfirmedBroadcastEndIfNeeded(terminalFailure: true) { return }
     recordPlaybackEvent("native_hls_failed", level: .error, attributes: ["reason": reason.rawValue])
     replacePlaybackItem(with: nil)
     playerItemVideoOutput = nil
@@ -541,12 +542,13 @@ extension PlayerView {
     resolve: (@MainActor () async throws -> StreamPlayback)? = nil
   ) {
     guard model.isUsingNativeHLS, !model.nativeNeedsRefresh,
-      backgroundedAt == nil, !isUsingAltSource, !isVOD else { return }
+      backgroundedAt == nil, !isUsingAltSource, !isVOD, !isOffline else { return }
     if PlaybackAudioSession.isMediaServicesReset(player.error)
       || PlaybackAudioSession.isMediaServicesReset(player.currentItem?.error) {
       handleMediaServicesReset(resolve: resolve)
       return
     }
+    if presentConfirmedBroadcastEndIfNeeded(terminalFailure: true) { return }
     guard model.nativeRecovery.takeRetry(for: reason) else {
       failNativeHLS(reason)
       return
@@ -1074,6 +1076,7 @@ extension PlayerView {
       resetPlaybackHealth()
       return
     }
+    if presentConfirmedBroadcastEndIfNeeded() { return }
 
     // Early, predictive stability trip from the proxy's manifest analysis — acts
     // before the behavioral stall/jump counters below ever fire.
@@ -1144,6 +1147,8 @@ extension PlayerView {
     }
 
     guard item === player.currentItem else { return }
+    let clockStopped = lastObservedPlaybackTimeSeconds.map { currentSeconds - $0 < 0.05 } ?? false
+    if presentConfirmedBroadcastEndIfNeeded(stalled: clockStopped) { return }
     lastObservedPlaybackTimeSeconds = currentSeconds
 
     let bufferedRecovery = model.nativeBufferedStallRecovery.observe(
@@ -1356,6 +1361,15 @@ extension PlayerView {
         attributes: ["status": status.rawValue, "reason": "offline_probe"]
       )
       if status == .offline {
+        let atEdge = item.flatMap { item in
+          liveSeekableEdgeSeconds(item).map { $0 - item.currentTime().seconds <= 0.15 }
+        } ?? false
+        guard BroadcastEndPolicy.shouldPresentOffline(
+          playbackAllowed: shouldPlayAltSource, hasItem: item != nil,
+          terminalFailure: errorMessage != nil || item?.status == .failed || player.status == .failed,
+          atLiveEdge: pinnedToLive || atEdge, bufferAhead: bufferAheadSeconds(item),
+          stalled: player.timeControlStatus != .playing || liveStallWaitingSince != nil, reachedEnd: false)
+        else { return }
         if showLatencyDiagnostics { logDiagnosticsEvent("offline confirmed (stream ended)") }
         presentOfflineState()
       }
@@ -1456,6 +1470,34 @@ extension PlayerView {
 
   // MARK: - Offline empty state
 
+  func handleBroadcastStatus(_ update: CreatorBroadcastStatus?) {
+    guard let update, update.target == currentLiveTarget, !isVOD, !isUsingAltSource else { return }
+    recordPlaybackEvent("broadcast_status_updated",
+      attributes: ["status": update.status.rawValue, "reason": update.reason])
+    if update.status == .offline { _ = presentConfirmedBroadcastEndIfNeeded() }
+  }
+
+  @discardableResult
+  func presentConfirmedBroadcastEndIfNeeded(
+    stalled: Bool = false, terminalFailure: Bool = false, reachedEnd: Bool = false
+  ) -> Bool {
+    guard !isOffline, !isVOD, !isUsingAltSource, !isFollowingOutgoingRaid,
+      let update = model.creatorSession.twitchBroadcastStatus,
+      update.target == currentLiveTarget, update.status == .offline else { return false }
+    let item = player.currentItem
+    let atEdge = item.flatMap { item in
+      liveSeekableEdgeSeconds(item).map { $0 - item.currentTime().seconds <= 0.15 }
+    } ?? false
+    guard BroadcastEndPolicy.shouldPresentOffline(
+      playbackAllowed: shouldPlayAltSource, hasItem: item != nil,
+      terminalFailure: terminalFailure || errorMessage != nil || item?.status == .failed || player.status == .failed,
+      atLiveEdge: pinnedToLive || atEdge, bufferAhead: bufferAheadSeconds(item),
+      stalled: stalled || (!isLoading && player.timeControlStatus != .playing), reachedEnd: reachedEnd)
+    else { return false }
+    presentOfflineState()
+    return true
+  }
+
   /// Switches the player into the clean "offline / stream ended" empty state.
   /// Tears down the live machinery and drops the current item so the frozen last
   /// frame is replaced by the empty-state backdrop.
@@ -1472,6 +1514,17 @@ extension PlayerView {
     guard !isFollowingOutgoingRaid else { return }
     recordPlaybackEvent("offline_state_presented", level: .warning)
     resetAltSourceWork()
+    cancelNativeStartup()
+    cancelNativeCatchUp(reason: "broadcast_ended")
+    model.nativeRefreshTask?.cancel()
+    model.nativeRefreshTask = nil
+    model.fallbackRestoreTask?.cancel()
+    model.fallbackRestoreTask = nil
+    model.nativeGeneration = UUID()
+    model.nativeNeedsRefresh = false
+    model.nativeFallbackReason = nil
+    model.nativeHLS?.stop()
+    model.nativeHLS = nil
     stopPlaybackWatchdog()
     stopLatencyMonitor()
     audioLevelMonitor.stop()

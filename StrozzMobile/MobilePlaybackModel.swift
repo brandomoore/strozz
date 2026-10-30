@@ -48,6 +48,7 @@ final class MobilePlaybackModel {
   private(set) var nativeFailure: String?
   private(set) var recoveryNotice: String?
   private(set) var errorMessage: String?
+  private(set) var isOffline = false
   private(set) var isLoading = false
   private(set) var extraChatDelay: Double?
   private(set) var isActive = false
@@ -90,6 +91,7 @@ final class MobilePlaybackModel {
   @ObservationIgnored private var monitorTask: Task<Void, Never>?
   @ObservationIgnored private var metadataTask: Task<Void, Never>?
   @ObservationIgnored private var jumpObserver: NSObjectProtocol?
+  @ObservationIgnored private var endObserver: NSObjectProtocol?
   @ObservationIgnored private var rateObserver: NSKeyValueObservation?
   @ObservationIgnored private var routeObserver: NSKeyValueObservation?
   @ObservationIgnored private var baseline = LiveChatSyncBaseline()
@@ -157,6 +159,9 @@ final class MobilePlaybackModel {
     self.resolve = resolve
     self.resolveKick = resolveKick
     player.isMuted = isMuted
+    self.creatorSession.onBroadcastStatus = { [weak self] update in
+      self?.handleBroadcastStatus(update)
+    }
   }
 
   var qualityLabel: String {
@@ -601,6 +606,8 @@ final class MobilePlaybackModel {
     routeObserver = nil
     if let jumpObserver { NotificationCenter.default.removeObserver(jumpObserver) }
     jumpObserver = nil
+    if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+    endObserver = nil
     player.currentItem?.cancelPendingSeeks()
     player.pause()
     diagnostics.trackItem(nil)
@@ -625,6 +632,7 @@ final class MobilePlaybackModel {
     guard mode != .chatOnly, isActive, suspendedPosition == nil, interruptedPosition == nil,
       !mediaServicesUnavailable else { return }
     invalidate()
+    isOffline = false
     #if DEBUG
     if isLayoutFixture {
       errorMessage = nil
@@ -816,13 +824,15 @@ final class MobilePlaybackModel {
 
   private func failNative(_ reason: String) {
     guard requestsNativePlayback else { return }
+    if presentConfirmedBroadcastEndIfNeeded(terminalFailure: true) { return }
     nativeFailure = reason
     fail(String(localized: "Native playback failed. \(reason) Try Again to reconnect."))
   }
 
   func recoverNative(_ reason: NativeHLSError, detail: String? = nil, position: Position? = nil) {
     guard isActive, suspendedPosition == nil, interruptedPosition == nil,
-      !mediaServicesUnavailable, requestsNativePlayback else { return }
+      !mediaServicesUnavailable, requestsNativePlayback, !isOffline else { return }
+    if presentConfirmedBroadcastEndIfNeeded(terminalFailure: true) { return }
     diagnostics.recordEvent("native_hls_retry", level: .warning,
       attributes: ["reason": reason.rawValue], counters: ["attempts_in_window": nativeRecovery.attempts.count])
     guard nativeRecovery.takeRetry(for: reason) else {
@@ -836,6 +846,7 @@ final class MobilePlaybackModel {
   }
 
   private func fail(_ message: String) {
+    if presentConfirmedBroadcastEndIfNeeded(terminalFailure: true) { return }
     diagnostics.recordEvent("playback_failed", level: .error)
     invalidate()
     recoveryNotice = nil
@@ -870,6 +881,18 @@ final class MobilePlaybackModel {
   }
 
   private func installIntentObservers(item: AVPlayerItem, request: UUID) {
+    endObserver = NotificationCenter.default.addObserver(
+      forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let self, self.isCurrent(request), self.player.currentItem === item else { return }
+        self.diagnostics.recordEvent("avplayer_reached_end", flags: ["viewer_paused": self.isPaused])
+        if !self.presentConfirmedBroadcastEndIfNeeded(reachedEnd: true) {
+          let epoch = self.creatorSession.generation
+          Task { [weak self] in await self?.creatorSession.refreshStatistics(epoch: epoch) }
+        }
+      }
+    }
     routeObserver = player.observe(\.isExternalPlaybackActive, options: [.initial, .new]) { [weak self] _, _ in
       Task { @MainActor [weak self] in
         guard let self, self.isCurrent(request) else { return }
@@ -905,6 +928,11 @@ final class MobilePlaybackModel {
     // not become a viewer pause; system PiP/AirPlay controls still own theirs.
     guard !requestsNativePlayback || isAudioOnly || usesPictureInPictureControls
       || player.isExternalPlaybackActive else { return }
+    if paused, let item = player.currentItem {
+      let duration = item.duration.seconds
+      // AVPlayer also pauses at a final ENDLIST; that is not viewer intent.
+      if duration.isFinite, duration > 0, item.currentTime().seconds >= duration - 0.15 { return }
+    }
     isPaused = paused
     if paused { stopFollowingLive() }
   }
@@ -918,8 +946,48 @@ final class MobilePlaybackModel {
     catchUpRateChange = nil
   }
 
+  func handleBroadcastStatus(_ update: CreatorBroadcastStatus) {
+    guard isActive, update.target == source else { return }
+    diagnostics.recordEvent("broadcast_status_updated",
+      attributes: ["status": update.status.rawValue, "reason": update.reason])
+    if update.status == .offline { _ = presentConfirmedBroadcastEndIfNeeded() }
+  }
+
+  @discardableResult
+  func presentConfirmedBroadcastEndIfNeeded(
+    stalled: Bool = false, terminalFailure: Bool = false, reachedEnd: Bool = false
+  ) -> Bool {
+    guard !isOffline, let update = creatorSession.twitchBroadcastStatus,
+      update.target == source, update.status == .offline else { return false }
+    let item = player.currentItem
+    let clock = item?.currentTime().seconds ?? .nan
+    let buffer = item?.loadedTimeRanges.map(\.timeRangeValue)
+      .filter { $0.start.seconds <= clock && $0.end.seconds >= clock }
+      .map { $0.end.seconds - clock }.max() ?? 0
+    let edge = item?.seekableTimeRanges.map(\.timeRangeValue.end.seconds).max()
+    guard BroadcastEndPolicy.shouldPresentOffline(
+      playbackAllowed: isActive && mode != .chatOnly && !isPaused && suspendedPosition == nil
+        && interruptedPosition == nil && !mediaServicesUnavailable && !isExternalPlayback,
+      hasItem: item != nil,
+      terminalFailure: terminalFailure || errorMessage != nil || item?.status == .failed || player.status == .failed,
+      atLiveEdge: followsLive || edge.map { $0 - clock <= 0.15 } == true,
+      bufferAhead: clock.isFinite ? buffer : nil,
+      stalled: stalled || (!isLoading && player.timeControlStatus != .playing), reachedEnd: reachedEnd)
+    else { return false }
+    diagnostics.recordEvent("offline_state_presented")
+    invalidate()
+    isOffline = true
+    nativeFailure = nil
+    recoveryNotice = nil
+    errorMessage = String(localized: "The stream has ended.")
+    releaseAudioSession()
+    recordDiagnostics(.init(attributes: ["source": source.platform.rawValue, "presentation": "mobile"]))
+    return true
+  }
+
   func recordDiagnostics(_ input: PlaybackTelemetrySnapshot) {
     var snapshot = input
+    snapshot.flags["offline"] = isOffline
     snapshot.flags["error_present"] = errorMessage != nil
     snapshot.flags["playback_watchdog_task_present"] = monitorTask != nil
     snapshot.flags["load_task_present"] = loadTask != nil
@@ -928,7 +996,7 @@ final class MobilePlaybackModel {
     snapshot.flags["playback_intent_allowed"] = isActive && !isPaused
       && suspendedPosition == nil && interruptedPosition == nil && !mediaServicesUnavailable
     snapshot.flags["native_failure"] = nativeFailure != nil
-    snapshot.attributes["recovery_blocked_by"] = errorMessage != nil ? "terminal_error" :
+    snapshot.attributes["recovery_blocked_by"] = isOffline ? "offline" : errorMessage != nil ? "terminal_error" :
       isLoading ? "loading" : snapshot.flags["playback_intent_allowed"] != true ? "playback_intent" :
       monitorTask == nil ? "watchdog_absent" : "none"
     let recoveryTime = Date()
@@ -954,6 +1022,7 @@ final class MobilePlaybackModel {
           fail(MobilePlaybackError.unavailable.localizedDescription)
           return
         }
+        if presentConfirmedBroadcastEndIfNeeded() { return }
         if player.status == .failed || item.status == .failed {
           diagnostics.recordEvent("player_item_failed", level: .error,
             attributes: PlaybackTelemetryRecorder.errorAttributes(item.error ?? player.error))
@@ -976,6 +1045,7 @@ final class MobilePlaybackModel {
         let buffer = item.loadedTimeRanges.map(\.timeRangeValue)
           .filter { $0.start.seconds <= clock && $0.end.seconds >= clock }
           .map { $0.end.seconds - clock }.max() ?? 0
+        if presentConfirmedBroadcastEndIfNeeded(stalled: uptime - lastProgress >= 1) { return }
         if uptime - lastDiagnostics >= 2 {
           lastDiagnostics = uptime
           diagnostics.recordItemLogs()
@@ -994,6 +1064,7 @@ final class MobilePlaybackModel {
                     "decode_frozen": receivedVideoFrame && uptime - lastVideoFrame > 4
                       && !isAudioOnly && !isExternalPlayback && !isPaused]))
         }
+
         switch bufferedStallRecovery.observe(clock: clock, uptime: uptime, buffer: buffer,
           minimumBuffer: item.preferredForwardBufferDuration,
           waiting: player.timeControlStatus == .waitingToPlayAtSpecifiedRate,

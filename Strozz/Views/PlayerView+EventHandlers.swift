@@ -29,6 +29,9 @@ extension PlayerView {
   /// (channel-offline auto-sleep and the "still watching" focus pull).
   func raidAndSleepBannerHandlers(_ content: some View) -> some View {
     content
+    .onChange(of: model.creatorSession.twitchBroadcastStatus) { _, update in
+      handleBroadcastStatus(update)
+    }
     .onChange(of: chat.pendingRaid) { _, newRaid in
       // Incoming raids (someone raiding the channel you're watching) are purely
       // informational: show a passive banner and auto-dismiss it. We never steal
@@ -336,7 +339,9 @@ extension PlayerView {
       // A live HLS that ends with #EXT-X-ENDLIST plays to the very end and then
       // pauses here on a frozen final frame. Confirm with Twitch and surface the
       // offline empty state instead of leaving the viewer on a dead frame.
-      probeOfflineIfStreamEnded()
+      if !presentConfirmedBroadcastEndIfNeeded(reachedEnd: true) {
+        probeOfflineIfStreamEnded()
+      }
     }
     .onReceive(NotificationCenter.default.publisher(for: AVPlayer.rateDidChangeNotification)) {
       notification in

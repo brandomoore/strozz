@@ -143,6 +143,25 @@ pipeline immediately rather than trickling across another poll interval.
 `CreatorLiveSessionTests` covers video-switch continuity, explicit identity,
 persistence/reverse entry, independent counts, expiry, and stop/suspend fences.
 
+Twitch broadcast endings use the existing anonymous Hermes
+`video-playback-by-id` subscription: `stream-down` confirms an ending and
+`stream-up` confirms a new broadcast. Viewer-count updates and disconnected
+sockets are not offline evidence. Periodic creator status checks continue after
+terminal playback errors, and resubscribing requests a fresh check. Push events
+take precedence for ten seconds so briefly stale metadata cannot immediately
+undo them; subsequent checks still cover missed events. Old connection frames,
+out-of-order event timestamps, and queries begun before a newer event are fenced.
+
+TV and mobile apply this evidence only to the matching Twitch video source,
+never a linked Kick/YouTube video or its merged chat. Healthy buffered video and
+paused/rewound playback remain available. The offline state replaces an
+unplayable item, the drained live edge (at most 150 ms buffered), or a confirmed
+play-to-end notification, subject to playback intent; TV raid handling retains
+precedence. Pending source recovery is invalidated before presenting offline.
+`broadcast_status_updated` records the evidence separately from transport and
+decoder failures. This does not change retry limits or provide automatic fallback
+to the standard player.
+
 Kick chat negotiates its current anonymous Pusher application through Kick's
 public realtime connection endpoint. Do not bake in an application key:
 retired keys return Pusher error 4001 even when video and channel lookup work.

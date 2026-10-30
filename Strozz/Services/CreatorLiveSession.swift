@@ -135,6 +135,13 @@ enum CreatorViewerSnapshot: Equatable, Sendable {
   case live(Int?), offline, unknown
 }
 
+struct CreatorBroadcastStatus: Equatable, Sendable {
+  let target: PlatformLiveTarget
+  let status: StreamLiveStatus
+  let reason: String
+  let observedAt: Date
+}
+
 /// Chat and statistics belong to the creator. Video items/qualities never own
 /// or restart this session.
 @MainActor
@@ -146,6 +153,8 @@ final class CreatorLiveSession {
   private(set) var videoTarget: PlatformLiveTarget?
   private(set) var identityError: String?
   private(set) var generation = UUID()
+  private(set) var twitchBroadcastStatus: CreatorBroadcastStatus?
+  @ObservationIgnored var onBroadcastStatus: ((CreatorBroadcastStatus) -> Void)?
   @ObservationIgnored private var resolveTask: Task<Void, Never>?
   @ObservationIgnored private var statisticsTask: Task<Void, Never>?
   private var statisticsTwitch: String?
@@ -190,6 +199,15 @@ final class CreatorLiveSession {
     self.wait = wait
     self.now = now
     self.defaults = defaults
+    hermes.onBroadcastStatusChanged = { [weak self] channel, status in
+      guard let self, sources?.twitch == channel else { return }
+      publishTwitchStatus(status, reason: status == .unknown ? "event_connection_lost" : "twitch_event")
+    }
+    hermes.onSubscribed = { [weak self] channel in
+      guard let self, sources?.twitch == channel else { return }
+      let epoch = generation
+      Task { [weak self] in await self?.refreshStatistics(epoch: epoch) }
+    }
   }
 
   var twitchChannel: String? { sources?.twitch }
@@ -200,7 +218,8 @@ final class CreatorLiveSession {
   var viewerCounts: [PlatformViewerCount] {
     _ = statisticsRevision
     var values: [PlatformViewerCount] = []
-    if let date = twitchObservedAt, (0..<90).contains(now().timeIntervalSince(date)),
+    if twitchBroadcastStatus?.status != .offline,
+      let date = twitchObservedAt, (0..<90).contains(now().timeIntervalSince(date)),
       case .live(let snapshot) = twitchSnapshot,
       let count = hermes.viewerCountUpdatedAt.map({ (0..<90).contains(now().timeIntervalSince($0)) }) == true
         ? hermes.viewerCount ?? snapshot : snapshot {
@@ -309,6 +328,7 @@ final class CreatorLiveSession {
     suspended = true
     chat.disconnect()
     hermes.stop()
+    twitchBroadcastStatus = nil
     statisticsTwitch = nil
     statisticsKick = nil
     statisticsYoutube = nil
@@ -336,6 +356,7 @@ final class CreatorLiveSession {
     sources = nil
     videoTarget = nil
     twitchSnapshot = .unknown
+    twitchBroadcastStatus = nil
     kickSnapshot = .unknown
     twitchObservedAt = nil
     kickObservedAt = nil
@@ -379,6 +400,7 @@ final class CreatorLiveSession {
       hermes.stop()
       statisticsTwitch = sources.twitch
       twitchSnapshot = .unknown
+      twitchBroadcastStatus = nil
       twitchObservedAt = nil
       if let twitch = sources.twitch { hermes.start(forChannel: twitch) }
     }
@@ -428,12 +450,24 @@ final class CreatorLiveSession {
       }
     }
     if let twitch = links.twitch {
+      let broadcastRevision = hermes.broadcast.revision
       let result = await loadTwitch(twitch)
       guard epoch == generation, sources?.twitch == twitch, !Task.isCancelled, !suspended else { return }
       if result != .unknown {
         twitchSnapshot = result
         twitchObservedAt = now()
         if case .live(let count) = result { hermes.seedViewerCount(count) }
+      }
+      // A query begun before a push/reconnect cannot replace newer evidence.
+      // In particular, briefly stale "live" metadata must not undo stream-down.
+      if hermes.broadcast.acceptsStatusCheck(startedRevision: broadcastRevision, at: now()) {
+        let status: StreamLiveStatus
+        switch result {
+        case .live: status = .live
+        case .offline: status = .offline
+        case .unknown: status = .unknown
+        }
+        publishTwitchStatus(status, reason: "status_check")
       }
     }
     if let kick = links.kick {
@@ -459,6 +493,14 @@ final class CreatorLiveSession {
         }
       }
     }
+  }
+
+  private func publishTwitchStatus(_ status: StreamLiveStatus, reason: String) {
+    guard isActive, let channel = sources?.twitch else { return }
+    let update = CreatorBroadcastStatus(target: .init(platform: .twitch, channel: channel),
+      status: status, reason: reason, observedAt: now())
+    twitchBroadcastStatus = update
+    onBroadcastStatus?(update)
   }
 
   static func twitchViewers(_ channel: String) async -> CreatorViewerSnapshot {
