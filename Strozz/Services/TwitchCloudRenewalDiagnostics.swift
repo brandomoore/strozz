@@ -7,6 +7,7 @@ final class TwitchCloudRenewalDiagnostics {
   enum Stage: String, Codable, Sendable {
     case processStarted, reservationRequested, reservationSaved
     case applicationBackgrounded, applicationForegrounded
+    case renewalDeferred, renewalProtectionUnavailable, renewalProtectionExpired
     case exchangeRequested, exchangeReceived, credentialsJournaled
     case publicationRequested, publicationSaved, renewalCompleted
     case pendingPublicationFound, pendingPublicationSuperseded, pendingPublicationCompleted

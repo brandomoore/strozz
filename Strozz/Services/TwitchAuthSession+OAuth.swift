@@ -17,6 +17,7 @@ extension TwitchAuthSession {
     }
 
     private func runTokenRefresh(rejectedAccessToken: String?) async throws -> String {
+        try Task.checkCancellation()
         // Join an already-running refresh instead of starting a second one.
         // This is what stops the in-app services (followed channels, playback,
         // chat) from racing each other onto the same single-use refresh token.
@@ -24,10 +25,11 @@ extension TwitchAuthSession {
             return try await refreshInFlight.value
         }
 
-        let task = Task { () throws -> String in
-            try await performTokenRefresh(rejectedAccessToken: rejectedAccessToken)
-        }
         let generation = sessionGeneration
+        let task = Task { () throws -> String in
+            guard sessionGeneration == generation else { throw CancellationError() }
+            return try await performTokenRefresh(rejectedAccessToken: rejectedAccessToken)
+        }
         refreshInFlight = task
         defer { if sessionGeneration == generation { refreshInFlight = nil } }
         return try await task.value
@@ -52,6 +54,19 @@ extension TwitchAuthSession {
            storedAccessToken != rejectedAccessToken {
             return storedAccessToken
         }
+        let generation = sessionGeneration
+        return try await renewalExecution.run(onEvent: { [weak self] event in
+            self?.recordRenewalExecution(event)
+        }) { [self] in
+            guard sessionGeneration == generation else { throw CancellationError() }
+            return try await refreshLocalCredential(clientID: clientID,
+                rejectedAccessToken: rejectedAccessToken, generation: generation)
+        }
+    }
+
+    private func refreshLocalCredential(
+        clientID: String, rejectedAccessToken: String?, generation: UUID
+    ) async throws -> String {
         guard let currentRefreshToken = refreshToken else {
             throw TwitchAuthRefreshError.missingRefreshToken
         }
@@ -59,9 +74,11 @@ extension TwitchAuthSession {
         do {
             let token = try await requestRefreshToken(
                 clientID: clientID, refreshToken: currentRefreshToken)
-            try Task.checkCancellation()
+            guard sessionGeneration == generation else { throw CancellationError() }
             return try applyRefreshedTokens(token)
         } catch let error as TwitchAuthHTTPError where isInvalidRefreshError(error) {
+            try Task.checkCancellation()
+            guard sessionGeneration == generation else { throw CancellationError() }
             // A concurrent app request may have published a replacement while
             // this request was in flight. Reload once before declaring the
             // session dead.
@@ -75,7 +92,7 @@ extension TwitchAuthSession {
                 do {
                     let token = try await requestRefreshToken(
                         clientID: clientID, refreshToken: reloaded)
-                    try Task.checkCancellation()
+                    guard sessionGeneration == generation else { throw CancellationError() }
                     return try applyRefreshedTokens(token)
                 } catch let retryError as TwitchAuthHTTPError
                     where isInvalidRefreshError(retryError) {
@@ -84,10 +101,21 @@ extension TwitchAuthSession {
                 // A transient (e.g. network) failure on the retry propagates
                 // without wiping the session.
             }
+            guard sessionGeneration == generation else { throw CancellationError() }
             clearStoredAuthState()
             errorMessage = "Session expired. Sign in again to reconnect Twitch."
             throw TwitchAuthRefreshError.sessionExpired
         }
+    }
+
+    func recordRenewalExecution(_ event: TwitchRenewalExecution.Event) {
+        let stage: TwitchCloudRenewalDiagnostics.Stage
+        switch event {
+        case .deferred: stage = .renewalDeferred
+        case .protectionUnavailable: stage = .renewalProtectionUnavailable
+        case .protectionExpired: stage = .renewalProtectionExpired
+        }
+        cloudSync?.renewalDiagnostics.record(stage)
     }
 
     /// Saves the pair in private Keychain storage and mirrors only the access
@@ -111,15 +139,15 @@ extension TwitchAuthSession {
         }
     }
 
-    func startSessionValidation() {
-        guard clientIDValidationIssue == nil,
+    func startSessionValidation(validateImmediately: Bool = true) {
+        guard renewalExecution.canStart, clientIDValidationIssue == nil,
               isAuthenticated,
               accessToken != nil || refreshToken != nil else { return }
-        startValidationLoop(validateImmediately: true)
+        startValidationLoop(validateImmediately: validateImmediately)
     }
 
     func validateSessionIfNeeded(force: Bool = false) async {
-        guard clientIDValidationIssue == nil,
+        guard renewalExecution.canStart, clientIDValidationIssue == nil,
               isAuthenticated,
               let expectedClientID = clientID else { return }
 
@@ -146,6 +174,7 @@ extension TwitchAuthSession {
             guard generation == sessionGeneration, accessToken == currentAccessToken else { return }
             applyValidatedIdentity(identity, expectedClientID: expectedClientID)
         } catch let error as TwitchAuthHTTPError where error.status == 401 {
+            guard generation == sessionGeneration, renewalExecution.canStart else { return }
             do {
                 let recovered = try await recoverAccessToken(
                     afterUnauthorized: currentAccessToken)
@@ -420,7 +449,7 @@ extension TwitchAuthSession {
         let body = "client_id=\(percentEncode(clientID))&grant_type=\(percentEncode(grantType))&refresh_token=\(percentEncode(refreshToken))"
         req.httpBody = body.data(using: .utf8)
 
-        let (data, response) = try await loadAuthData(req)
+        let (data, response) = try await loadRefreshData(req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard (200...299).contains(status) else {
             throw makeHTTPError(context: "refreshing Twitch token", status: status, data: data)

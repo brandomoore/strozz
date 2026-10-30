@@ -625,6 +625,15 @@ may be necessary again. Expiry, revoked Twitch permission, or an unavailable
 iCloud account can also require attention; the UI reports these rather than
 claiming a permanent login.
 
+Automatic sync and validation defer new renewals while the app is inactive or
+backgrounded and resume when it becomes active. An admitted renewal holds a
+bounded system background task from reservation through credential journaling
+and publication; dismissing a caller does not cancel that worker. OAuth exchanges
+are single-shot, do not wait for connectivity, and have a 20-second total network
+deadline. System expiration, termination, or a lost response can still leave an
+ambiguous reservation: neither background protection nor a timeout makes it safe
+to reuse the old token.
+
 An unfinished renewal is reported without guessing which device started it.
 Following offers **Sign in with Twitch** when an expired connection cannot be
 renewed; the sign-in screen keeps retry and fresh Twitch approval separate. QR
@@ -639,7 +648,8 @@ TV keeps its device-local renewal history in
 storage. Mobile uses `Library/Application Support/AccountDiagnostics/renewal.json`.
 Both are bounded to 256 events and survive normal app restarts; tvOS may purge
 caches under storage pressure, so retrieve TV evidence promptly.
-The history records foreground/background transitions, reservation,
+The history records foreground/background transitions, deferred renewal,
+unavailable/expired background protection, reservation,
 token-exchange, Keychain-journal and cloud-publication stages, pending-publication
 recovery, cancellations and sanitized error categories/status codes. Known OAuth
 rejection reasons use a fixed allowlist, never arbitrary server text. Random reservation/process IDs correlate

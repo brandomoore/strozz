@@ -26,6 +26,16 @@ enum NetworkClient {
     return URLSession(configuration: config)
   }()
 
+  /// Single-use OAuth exchanges must not wait for connectivity across suspension.
+  /// This is single-shot, with a total deadline shorter than ordinary API traffic.
+  static let credentialExchange: URLSession = {
+    let config = URLSessionConfiguration.ephemeral
+    config.timeoutIntervalForRequest = 20
+    config.timeoutIntervalForResource = 20
+    config.waitsForConnectivity = false
+    return URLSession(configuration: config)
+  }()
+
   /// Larger / slower payloads where a longer ceiling is appropriate (playlists,
   /// snapshots, bulk catalogs). More forgiving than `api` but still bounded.
   static let media: URLSession = {
