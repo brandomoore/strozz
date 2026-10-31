@@ -9,6 +9,7 @@ final class SearchService {
     private(set) var isSearching = false
     private(set) var errorMessage: String?
     private(set) var query = ""
+    private(set) var platformFilter = BrowsePlatformFilter.all
     private var requestID = UUID()
     private let loadData: NetworkClient.DataLoader
     private let loadKick: @Sendable (String) async throws -> KickChannel
@@ -32,11 +33,15 @@ final class SearchService {
         isSearching = false
     }
 
-    func search(_ rawQuery: String, preservingResultsOnFailure: Bool = false) async {
+    func search(_ rawQuery: String, preservingResultsOnFailure: Bool = false,
+                filter: BrowsePlatformFilter = .all) async {
         let currentRequestID = UUID()
         requestID = currentRequestID
         let trimmed = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         query = trimmed
+        platformFilter = filter
+        channelResults = channelResults.filter { filter.includes($0.platform) }
+        if !filter.includes(.twitch) { categoryResults = [] }
 
         guard !trimmed.isEmpty else {
             channelResults = []
@@ -52,9 +57,10 @@ final class SearchService {
             if requestID == currentRequestID { isSearching = false }
         }
 
-        async let kick = kickResult(for: trimmed)
+        async let kick = kickResult(for: trimmed, enabled: filter.includes(.kick))
         do {
-            let results = try await fetchSearchResults(for: trimmed)
+            let results = filter.includes(.twitch) ? try await fetchSearchResults(for: trimmed)
+                : SearchResults(channels: [], categories: [])
             // Ignore stale responses if the query changed while in flight.
             guard !Task.isCancelled, requestID == currentRequestID, query == trimmed else { return }
             channelResults = results.channels
@@ -80,7 +86,8 @@ final class SearchService {
         if !hasResults, errorMessage == nil { errorMessage = "No results for \"\(trimmed)\"." }
     }
 
-    private func kickResult(for query: String) async -> Result<KickChannel?, Error> {
+    private func kickResult(for query: String, enabled: Bool) async -> Result<KickChannel?, Error> {
+        guard enabled else { return .success(nil) }
         guard let slug = try? KickPlaybackService.slug(from: query) else { return .success(nil) }
         do { return .success(try await loadKick(slug)) }
         catch KickPlaybackService.Failure.notFound { return .success(nil) }

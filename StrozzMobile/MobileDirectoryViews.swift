@@ -6,20 +6,58 @@ struct MobileBrowseView: View {
   @State private var search = SearchService()
   @State private var query = ""
   @State private var hasLoadedCategories = false
+  @State private var showsCategories = false
+  @AppStorage(BrowsePlatformFilter.storageKey) private var platformFilter = BrowsePlatformFilter.all
+  @AppStorage(StreamLanguagePreference.storageKey) private var language = StreamLanguagePreference.deviceDefault()
   @Environment(PlaybackReturnRefreshCoordinator.self) private var returnRefresh: PlaybackReturnRefreshCoordinator?
 
   var body: some View {
     ScrollView {
       VStack(spacing: 20) {
-        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-          if let error = service.categoryErrorMessage {
-            MobileStatusView(message: error) { Task { await service.loadCategories() } }
+        Picker("Platform", selection: $platformFilter) {
+          ForEach(BrowsePlatformFilter.allCases, id: \.self) { filter in
+            Text(filter.title).tag(filter)
           }
-          MobileCategoryGrid(categories: service.categories, onSelect: onSelect,
-                             isLoading: service.isLoadingCategories || !hasLoadedCategories)
+        }
+        .pickerStyle(.segmented)
+        .accessibilityIdentifier("browse-platform-filter")
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          HStack {
+            Text(showsCategories ? String(localized: "Categories") : String(localized: "Live streams"))
+              .font(.headline)
+            Spacer()
+            Button {
+              showsCategories.toggle()
+            } label: {
+              if showsCategories { Text("Live streams") } else { Text("Categories") }
+            }
+            .accessibilityIdentifier("browse-content-toggle")
+          }
+          if showsCategories {
+            if let error = service.categoryErrorMessage {
+              MobileStatusView(message: error) { Task { await refreshBrowse() } }
+            }
+            MobileCategoryGrid(categories: service.categories, onSelect: onSelect,
+                               isLoading: service.isLoadingCategories || !hasLoadedCategories)
+            if hasLoadedCategories && !service.isLoadingCategories && service.categories.isEmpty
+              && service.categoryErrorMessage == nil {
+              Text("No live categories found right now.").foregroundStyle(.secondary)
+            }
+          } else {
+            if let error = service.streamsErrorMessage {
+              MobileStatusView(message: error) { Task { await refreshBrowse() } }
+            }
+            MobileChannelGrid(channels: service.categoryStreams, onSelect: onSelect,
+                              isLoading: service.isLoadingStreams || !hasLoadedCategories)
+            if hasLoadedCategories && !service.isLoadingStreams && service.categoryStreams.isEmpty
+              && service.streamsErrorMessage == nil {
+              Text("No live streams found right now.").foregroundStyle(.secondary)
+            }
+            MobileBrowseMore(service: service)
+          }
         } else {
           MobileSearchResults(service: search, onSelect: onSelect) {
-            Task { await search.search(query) }
+            Task { await search.search(query, filter: platformFilter) }
           }
         }
       }
@@ -29,29 +67,36 @@ struct MobileBrowseView: View {
     .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                 prompt: "Channels and categories")
     .scrollDismissesKeyboard(.interactively)
-    .task(id: query) {
+    .task(id: "\(platformFilter.rawValue):\(query)") {
       let pending = query.trimmingCharacters(in: .whitespacesAndNewlines)
-      if search.query == pending, search.hasResults { return }
+      if search.query == pending, search.platformFilter == platformFilter, search.hasResults { return }
       search.clear()
       guard !pending.isEmpty else { return }
       do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
-      await search.search(pending)
+      await search.search(pending, filter: platformFilter)
     }
-    .task(id: returnRefresh?.thumbnailRevision) {
-      await service.loadCategories()
-      guard !Task.isCancelled else { return }
-      hasLoadedCategories = true
+    .task(id: "\(platformFilter.rawValue):\(showsCategories):\(language):\(returnRefresh?.thumbnailRevision.uuidString ?? "")") {
+      hasLoadedCategories = false
+      await refreshBrowse()
+    }
+    .onChange(of: returnRefresh?.thumbnailRevision) { _, _ in
       if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        await search.search(query, preservingResultsOnFailure: true)
+        Task { await search.search(query, preservingResultsOnFailure: true, filter: platformFilter) }
       }
     }
     .refreshable {
       if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        await service.loadCategories()
+        await refreshBrowse()
       } else {
-        await search.search(query)
+        await search.search(query, filter: platformFilter)
       }
     }
+  }
+
+  private func refreshBrowse() async {
+    if showsCategories { await service.loadCategories(filter: platformFilter) }
+    else { await service.loadStreams(filter: platformFilter) }
+    if !Task.isCancelled { hasLoadedCategories = true }
   }
 }
 
@@ -155,6 +200,7 @@ struct MobileCategoryStreamsView: View {
   let onSelect: (FollowedChannel) -> Void
   @State private var service = BrowseService()
   @State private var hasLoaded = false
+  @AppStorage(StreamLanguagePreference.storageKey) private var language = StreamLanguagePreference.deviceDefault()
   @Environment(PlaybackReturnRefreshCoordinator.self) private var returnRefresh: PlaybackReturnRefreshCoordinator?
 
   var body: some View {
@@ -165,6 +211,7 @@ struct MobileCategoryStreamsView: View {
         }
         MobileChannelGrid(channels: service.categoryStreams, onSelect: onSelect,
                           isLoading: service.isLoadingStreams || !hasLoaded)
+        MobileBrowseMore(service: service)
         if hasLoaded && !service.isLoadingStreams && service.categoryStreams.isEmpty && service.streamsErrorMessage == nil {
           Text("No live streams in this category right now.").foregroundStyle(.secondary)
         }
@@ -172,11 +219,27 @@ struct MobileCategoryStreamsView: View {
       .padding()
     }
     .navigationTitle(category.name)
-    .task(id: returnRefresh?.thumbnailRevision) {
+    .task(id: "\(language):\(returnRefresh?.thumbnailRevision.uuidString ?? "")") {
       await service.loadStreams(for: category)
       if !Task.isCancelled { hasLoaded = true }
     }
     .refreshable { await service.loadStreams(for: category) }
+  }
+}
+
+private struct MobileBrowseMore: View {
+  let service: BrowseService
+
+  var body: some View {
+    if let error = service.moreStreamsErrorMessage {
+      Text(error).font(.footnote).foregroundStyle(.secondary)
+    }
+    if service.isLoadingMore {
+      ProgressView("Loading streams")
+    } else if service.nextKickCursor != nil {
+      Button("Load more") { Task { await service.loadMoreStreams() } }
+        .accessibilityIdentifier("browse-load-more")
+    }
   }
 }
 
@@ -224,10 +287,14 @@ struct MobileCategoryCard: View {
         .overlay {
           CachedAsyncImage(url: category.boxArtURL) { image in
             image.resizable().scaledToFill()
-          } placeholder: { Color.clear }
+          } placeholder: {
+            Icon(glyph: .layoutGrid, size: 32).foregroundStyle(.secondary)
+          }
         }
         .clipShape(RoundedRectangle(cornerRadius: 6))
       Text(category.name).font(.subheadline.weight(.semibold)).lineLimit(2, reservesSpace: true)
+      Text(category.platform == .kick ? "Kick" : "Twitch")
+        .font(.caption2).foregroundStyle(.secondary)
       Text(category.viewerCount ?? 0, format: .number.notation(.compactName))
         .font(.caption).foregroundStyle(.secondary)
         .opacity(category.viewerCount == nil ? 0 : 1)

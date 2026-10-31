@@ -161,6 +161,7 @@ targets:
       - path: StrozzTests/NativeTransportRemuxTests.swift
       - path: StrozzTests/NativeCMAFRemuxTests.swift
       - path: StrozzTests/KickPlaybackTests.swift
+      - path: StrozzTests/KickBrowseTests.swift
       - path: StrozzTests/KickSharedPlayerTests.swift
       - path: StrozzTests/KickFollowingTests.swift
       - path: StrozzTests/CreatorLiveSessionTests.swift

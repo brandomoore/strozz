@@ -73,6 +73,9 @@ struct CategoryCardView: View {
 
   private var caption: some View {
     VStack(alignment: .leading, spacing: CardMetrics.captionLineSpacing) {
+      Text(category.platform == .kick ? "Kick" : "Twitch")
+        .font(.caption2)
+        .foregroundStyle(usesLiftFocusedText ? palette.liftSecondaryText : Color.secondary)
       Text(category.name)
         .font(.subheadline.weight(.semibold))
         .foregroundStyle(usesLiftFocusedText ? palette.liftPrimaryText : Color.primary)
@@ -99,6 +102,7 @@ struct CategoryCardView: View {
       img.resizable().scaledToFill()
     } placeholder: {
       Color.primary.opacity(0.08)
+        .overlay { Icon(glyph: .layoutGrid, size: 48).foregroundStyle(.secondary) }
     }
     .modifier(ArtSizing(width: width, artRatio: artRatio))
     .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -113,10 +117,11 @@ struct CategoryCardView: View {
   /// One spoken description per category tile: name plus the viewer count when
   /// present, so VoiceOver reads it as a single element.
   private var accessibilityLabel: Text {
+    let platform = category.platform == .kick ? "Kick" : "Twitch"
     if let viewers = category.viewerCount {
-      return Text("\(category.name), \(viewers) watching")
+      return Text("\(category.name), \(platform), \(viewers) watching")
     }
-    return Text(category.name)
+    return Text("\(category.name), \(platform)")
   }
 
   /// The corner radius callers should use for the focus/hit-test content shape so

@@ -9,15 +9,24 @@ struct BrowseView: View {
   @State private var service = BrowseService()
   @State private var path: [TwitchCategory] = []
   @State private var hasLoaded = false
+  @State private var showsCategories = false
+  @AppStorage(BrowsePlatformFilter.storageKey) private var platformFilter = BrowsePlatformFilter.all
+  @AppStorage(StreamLanguagePreference.storageKey) private var language = StreamLanguagePreference.deviceDefault()
   @Environment(PlaybackReturnRefreshCoordinator.self) private var playbackReturnRefresh
 
   var body: some View {
     NavigationStack(path: $path) {
-      BrowseCategoriesView(
-        service: service,
-        isLoading: service.isLoadingCategories || !hasLoaded,
-        onSelectCategory: { path.append($0) }
-      )
+      Group {
+        if showsCategories {
+          BrowseCategoriesView(
+            service: service, isLoading: service.isLoadingCategories || !hasLoaded,
+            onSelectCategory: { path.append($0) }, platformFilter: $platformFilter,
+            onShowStreams: { showsCategories = false })
+        } else {
+          CategoryStreamsView(selectedChannel: $selectedChannel, channelPageTarget: $channelPageTarget,
+            service: service, platformFilter: $platformFilter, onShowCategories: { showsCategories = true })
+        }
+      }
       .navigationDestination(for: TwitchCategory.self) { category in
         CategoryStreamsView(
           category: category,
@@ -25,9 +34,10 @@ struct BrowseView: View {
           channelPageTarget: $channelPageTarget
         )
       }
-      .task(id: path.isEmpty) {
-        guard path.isEmpty else { return }
-        await service.loadCategories()
+      .task(id: "\(path.isEmpty):\(showsCategories):\(platformFilter.rawValue):\(language)") {
+        guard path.isEmpty, showsCategories else { return }
+        hasLoaded = false
+        await service.loadCategories(filter: platformFilter)
         guard !Task.isCancelled else { return }
         hasLoaded = true
         playbackReturnRefresh.refreshThumbnails()
@@ -42,6 +52,17 @@ struct BrowseCategoriesView: View {
   let service: BrowseService
   let isLoading: Bool
   let onSelectCategory: (TwitchCategory) -> Void
+  @Binding var platformFilter: BrowsePlatformFilter
+  var onShowStreams: (() -> Void)?
+
+  init(service: BrowseService, isLoading: Bool, onSelectCategory: @escaping (TwitchCategory) -> Void,
+       platformFilter: Binding<BrowsePlatformFilter> = .constant(.twitch), onShowStreams: (() -> Void)? = nil) {
+    self.service = service
+    self.isLoading = isLoading
+    self.onSelectCategory = onSelectCategory
+    _platformFilter = platformFilter
+    self.onShowStreams = onShowStreams
+  }
 
   @FocusState private var focusedID: String?
   @Namespace private var browseFocusNamespace
@@ -65,10 +86,14 @@ struct BrowseCategoriesView: View {
 
             Spacer()
 
+            if let onShowStreams {
+              BrowsePlatformPicker(selection: $platformFilter)
+              Button("Live streams", action: onShowStreams)
+            }
             MultiviewLineupButton()
 
             Button("Refresh") {
-              Task { await service.loadCategories() }
+              Task { await service.loadCategories(filter: platformFilter) }
             }
           }
 
@@ -78,6 +103,9 @@ struct BrowseCategoriesView: View {
               .foregroundStyle(.orange)
           }
 
+          if !isLoading, service.categories.isEmpty, service.categoryErrorMessage == nil {
+            Text("No live categories found right now.").foregroundStyle(.secondary)
+          }
           LazyVGrid(columns: columns, spacing: 28) {
             if service.categories.isEmpty && isLoading {
               ForEach(LoadingSkeleton.categories) { category in
@@ -124,20 +152,22 @@ struct BrowseCategoriesView: View {
 
 // MARK: - Category Streams
 
-/// A category's live streams, pushed one level deep from any tab (Home, Search,
-/// or Browse). It owns its own `BrowseService` so it is fully self-contained as
-/// a `navigationDestination`, and relies on the native tvOS Menu button to pop.
+/// The root live directory or a category's streams. Category destinations own
+/// their service; the root shares its service with the categories grid.
 struct CategoryStreamsView: View {
-  let category: TwitchCategory
+  let category: TwitchCategory?
   @Binding var selectedChannel: FollowedChannel?
   @Binding var channelPageTarget: ChannelPageTarget?
   @Environment(PlaybackReturnRefreshCoordinator.self) private var playbackReturnRefresh
 
   @State private var service: BrowseService
   @State private var hasLoaded = false
+  @Binding private var platformFilter: BrowsePlatformFilter
+  private let onShowCategories: (() -> Void)?
   @FocusState private var focusedStreamID: String?
 
   @AppStorage(StreamCardSize.storageKey) private var streamCardSizeRaw = StreamCardSize.fallback.rawValue
+  @AppStorage(StreamLanguagePreference.storageKey) private var language = StreamLanguagePreference.deviceDefault()
 
   private var cardSpacing: CGFloat {
     let count = StreamCardSize.resolve(streamCardSizeRaw).visibleCardCount
@@ -152,20 +182,24 @@ struct CategoryStreamsView: View {
   private let gridBottomInset: CGFloat = 12
 
   init(
-    category: TwitchCategory,
+    category: TwitchCategory? = nil,
     selectedChannel: Binding<FollowedChannel?>,
     channelPageTarget: Binding<ChannelPageTarget?>,
-    service: BrowseService = BrowseService()
+    service: BrowseService = BrowseService(),
+    platformFilter: Binding<BrowsePlatformFilter> = .constant(.twitch),
+    onShowCategories: (() -> Void)? = nil
   ) {
     self.category = category
     self._selectedChannel = selectedChannel
     self._channelPageTarget = channelPageTarget
     self._service = State(initialValue: service)
+    self._platformFilter = platformFilter
+    self.onShowCategories = onShowCategories
   }
 
   private func preparePlaybackReturn() {
     playbackReturnRefresh.prepareOrigin {
-      await service.loadStreams(for: category)
+      await service.loadStreams(for: category, filter: platformFilter)
     }
   }
 
@@ -175,7 +209,7 @@ struct CategoryStreamsView: View {
         VStack(alignment: .leading, spacing: 20) {
           // Header (scrolls with content)
           HStack(spacing: 20) {
-            if let url = category.boxArtURL {
+            if let url = category?.boxArtURL {
               CachedAsyncImage(url: url) { img in
                 img.resizable().scaledToFill()
               } placeholder: {
@@ -186,12 +220,12 @@ struct CategoryStreamsView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-              Text(category.name)
+              Text(category?.name ?? String(localized: "Browse"))
                 .font(.title.weight(.bold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .accessibilityAddTraits(.isHeader)
-              if let viewers = category.viewerCount {
+              if let viewers = category?.viewerCount {
                 Text("\(viewers) watching")
                   .font(.footnote)
                   .foregroundStyle(.secondary)
@@ -203,7 +237,14 @@ struct CategoryStreamsView: View {
             }
 
             Spacer()
+            if let onShowCategories {
+              BrowsePlatformPicker(selection: $platformFilter)
+              Button("Categories", action: onShowCategories)
+            }
             MultiviewLineupButton()
+            Button("Refresh") {
+              Task { await service.loadStreams(for: category, filter: platformFilter) }
+            }
           }
           .focusSection()
 
@@ -216,7 +257,7 @@ struct CategoryStreamsView: View {
           if hasLoaded && !service.isLoadingStreams && service.categoryStreams.isEmpty
             && service.streamsErrorMessage == nil
           {
-            Text("No live streams found for \(category.name) right now.")
+            Text("No live streams found right now.")
               .foregroundStyle(.secondary)
               .frame(maxWidth: .infinity, alignment: .leading)
               .padding(.top, 8)
@@ -256,6 +297,15 @@ struct CategoryStreamsView: View {
             }
             .focusSection()
           }
+          if let error = service.moreStreamsErrorMessage {
+            Text(error).font(.footnote).foregroundStyle(.secondary)
+          }
+          if service.isLoadingMore {
+            ProgressView("Loading streams")
+          } else if service.nextKickCursor != nil {
+            Button("Load more") { Task { await service.loadMoreStreams() } }
+              .accessibilityIdentifier("browse-load-more")
+          }
         }
         .padding(.horizontal, AppLayout.horizontalPadding)
         .padding(.top, 16)
@@ -270,13 +320,15 @@ struct CategoryStreamsView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .navigationBarHidden(true)
-    .toolbar(.hidden, for: .tabBar)
-    .task(id: category.id) {
-      await service.loadStreams(for: category)
-      hasLoaded = true
+    .toolbar(category == nil ? .visible : .hidden, for: .tabBar)
+    .task(id: "\(category?.id ?? "directory"):\(platformFilter.rawValue):\(language)") {
+      hasLoaded = false
+      await service.loadStreams(for: category, filter: platformFilter)
+      if !Task.isCancelled { hasLoaded = true }
     }
+
     .onChange(of: service.categoryStreams) { previous, streams in
-      if previous.isEmpty, focusedStreamID == nil, let first = streams.first {
+      if category != nil, previous.isEmpty, focusedStreamID == nil, let first = streams.first {
         Task {
           try? await Task.sleep(for: .milliseconds(150))
           guard !Task.isCancelled, selectedChannel == nil, channelPageTarget == nil, focusedStreamID == nil,
@@ -285,5 +337,20 @@ struct CategoryStreamsView: View {
         }
       }
     }
+  }
+}
+
+private struct BrowsePlatformPicker: View {
+  @Binding var selection: BrowsePlatformFilter
+
+  var body: some View {
+    Picker("Platform", selection: $selection) {
+      ForEach(BrowsePlatformFilter.allCases, id: \.self) { filter in
+        Text(filter.title).tag(filter)
+      }
+    }
+    .pickerStyle(.segmented)
+    .frame(width: 380)
+    .accessibilityIdentifier("browse-platform-filter")
   }
 }

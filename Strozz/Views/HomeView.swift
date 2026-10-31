@@ -18,7 +18,12 @@ struct HomeView: View {
   /// few comparisons); the real cadence comes from the two intervals above.
   private let idleAutoRefreshTick: Duration = .seconds(60)
 
-  @State private var selectedSidebarTab: SidebarTab = .home
+  @State private var selectedSidebarTab: SidebarTab = {
+    #if DEBUG && targetEnvironment(simulator)
+    if ProcessInfo.processInfo.environment["STROZZ_BROWSE_UI_FIXTURE"] == "1" { return .browse }
+    #endif
+    return .home
+  }()
 
   /// App-level composition root: the long-lived, app-global services. Owned by
   /// `AppEnvironment` (instantiated once in `StrozzApp`) and injected here via

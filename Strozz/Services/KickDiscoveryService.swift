@@ -27,12 +27,16 @@ enum KickUnifiedFeed {
   }
 
   static func interleave(_ first: [FollowedChannel], _ second: [FollowedChannel]) -> [FollowedChannel] {
-    var result: [FollowedChannel] = []
+    interleave(first, second, id: \.channelKey)
+  }
+
+  static func interleave<Item>(_ first: [Item], _ second: [Item], id: KeyPath<Item, String>) -> [Item] {
+    var result: [Item] = []
     var seen = Set<String>()
     for index in 0..<max(first.count, second.count) {
       for list in [first, second] where index < list.count {
         let item = list[index]
-        if seen.insert(item.channelKey).inserted { result.append(item) }
+        if seen.insert(item[keyPath: id]).inserted { result.append(item) }
       }
     }
     return result

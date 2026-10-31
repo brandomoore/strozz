@@ -23,7 +23,7 @@ final class RecommendationsService {
         }
 
         do {
-            async let channelsTask = fetchRecommendedChannels(limit: 30)
+            async let channelsTask = Self.fetchRecommendedChannels(limit: 30)
             async let categoriesTask = fetchRecommendedCategories(limit: 20)
             let (loadedChannels, loadedCategories) = try await (channelsTask, categoriesTask)
             channels = loadedChannels
@@ -61,7 +61,9 @@ final class RecommendationsService {
     /// requires an integrity token the anonymous public client can't mint — so
     /// this is the full ranked page for the chosen language. "Top streams" then
     /// only hides channels the viewer marked "Not interested".
-    private func fetchRecommendedChannels(limit: Int) async throws -> [FollowedChannel] {
+    static func fetchRecommendedChannels(limit: Int,
+        loadData: NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) }
+    ) async throws -> [FollowedChannel] {
         struct StreamNode: Decodable {
             let id: String?
             let title: String?
@@ -119,9 +121,13 @@ final class RecommendationsService {
             }
             """
 
-        let responseData = try await performGQL(query: query, variables: ["first": limit])
+        var request = TwitchAPIClient.graphQLRequest(userAgent: TwitchConfig.apiUserAgent)
+        request.httpBody = try JSONSerialization.data(
+            withJSONObject: TwitchAPIClient.graphQLBody(query: query, variables: ["first": limit]))
+        let (data, response) = try await loadData(request)
+        let responseData = try TwitchAPIClient.validatedData(data, response)
         let decoded = try TwitchAPIClient.decode(GQLEnvelope.self, from: responseData)
-        let edges = decoded.data?.streams?.edges ?? []
+        guard let edges = decoded.data?.streams?.edges else { throw URLError(.badServerResponse) }
 
         return edges.compactMap { edge -> FollowedChannel? in
             guard let node = edge.node,

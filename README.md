@@ -90,8 +90,8 @@ The feature list below describes the Apple TV app. See
 - **Recommendations you control.** Optional personalized picks built from
   on-device watch history and your followed categories — or anonymous trending
   when you're signed out or have it turned off.
-- **Browse and search.** Explore top categories and their live streams, and
-  search channels and categories with live results.
+- **Browse and search.** Browse Twitch and Kick streams together or choose
+  **All**, **Twitch**, or **Kick**. Explore categories and search channels.
 - **Channel pages.** Top clips, past broadcasts, and similar channels for every
   channel.
 - **Top Shelf.** Your live follows and recommendations surface on the tvOS home
@@ -109,10 +109,21 @@ The feature list below describes the Apple TV app. See
 
 ## Kick playback (in development)
 
-Kick is part of the existing **Following**, recommendations, search, and Apple TV
+Kick is part of the existing **Browse**, **Following**, recommendations, search, and Apple TV
 multiview lineup, not a separate tab. Search for an exact Kick channel name or
 `kick.com` channel URL to open a live stream, including Kick-exclusive creators.
 Playback does not require a Twitch or Kick account.
+
+**Browse** opens a live-stream grid on Apple TV, iPhone, and iPad. **All** mixes
+Twitch and Kick; the platform filter also applies to **Categories** and mobile
+Browse search. The stream-language preference applies to both directories.
+**Load more** appends the next Kick page without moving existing cards. Twitch's
+anonymous directory supplies one ranked page rather than cursor pagination.
+Category cards identify their platform; Kick categories come from the current
+live-directory sample, without invented category totals or box art. Opening a
+Kick category requests that category's live streams. Directory access needs no
+extra sign-in, but uses Kick's undocumented website API and can be affected by
+provider changes. One platform's failure leaves the other available with an error.
 
 To bring in your real Kick follows, open **Account > Connect Kick** in Strozz on
 iPhone or iPad. Sign in on the Kick website shown inside the app; the complete
@@ -134,7 +145,8 @@ reconnecting or an app update.
 Confirmed Twitch/Kick creator links are merged into one card, with combined
 viewer counts when both streams are live. Matching usernames alone never merge
 accounts. Kick recommendation candidates come from confirmed links to creators
-in the existing discovery pools, not a new global Kick trending directory.
+in the existing discovery pools; Browse's global Kick directory is independent
+of those Home recommendations. Browse keeps the two platforms' streams distinct.
 
 While watching Twitch, choose **Kick** in the TV player's stream-source menu, or
 enter the Kick channel under **Quality > Stream source** on mobile. Verify the
@@ -512,8 +524,9 @@ to standard playback because a receiver cannot access the app's loopback
 media server; keep the app open while using it. System,
 Dark, OLED, and Light appearances are available in Account, and chat follows
 Dynamic Type and Reduce Motion. App panels use opaque theme-aware surfaces.
-Browse shows three categories across on iPhone (two at accessibility text sizes)
-and an adaptive grid on iPad. Typing in Browse's search field switches to compact
+Browse opens the mixed live-stream grid. **Categories** shows three cards across
+on iPhone (two at accessibility text sizes) and an adaptive grid on iPad.
+Typing in Browse's search field switches to compact
 channel and category results with artwork and viewer counts.
 
 TV and mobile share the stream loading view and a loading/ready/unavailable
