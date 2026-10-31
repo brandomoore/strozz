@@ -1,5 +1,22 @@
 import SwiftUI
 
+enum MultiviewMotion {
+  static func reflow(reduceMotion: Bool) -> Animation? {
+    .motionAware(.smooth(duration: 0.35), reduceMotion: reduceMotion)
+  }
+
+  static func anchor(for frame: CGRect, in size: CGSize) -> UnitPoint {
+    UnitPoint(x: frame.midX / size.width, y: frame.midY / size.height)
+  }
+
+  static func transition(anchor: UnitPoint, reduceMotion: Bool) -> AnyTransition {
+    .asymmetric(
+      insertion: .motionAware(.scale(scale: 0.94, anchor: anchor).combined(with: .opacity), reduceMotion: reduceMotion),
+      removal: .motionAware(.scale(scale: 0.05, anchor: anchor).combined(with: .opacity), reduceMotion: reduceMotion))
+      .animation(.easeInOut(duration: reduceMotion ? 0.18 : 0.25))
+  }
+}
+
 /// Layout changes only the bounds of identity-stable player subtrees.
 struct MultiviewVideoStage<Content: View>: View {
   let controller: MultiviewController
@@ -15,11 +32,14 @@ struct MultiviewVideoStage<Content: View>: View {
           ($0.id, $0.presentation.videoAspectRatio)
         }), bottomClearance: bottomClearance)
       ZStack(alignment: .topLeading) {
-        ForEach(controller.panes) { pane in
+        ForEach(controller.panes, id: \.viewID) { pane in
           if let frame = frames[pane.id] {
             content(pane)
               .frame(width: frame.width, height: frame.height)
               .position(x: frame.midX, y: frame.midY)
+              // Position fills the stage; normalize the pivot to the picture, not the wall.
+              .transition(MultiviewMotion.transition(
+                anchor: MultiviewMotion.anchor(for: frame, in: geometry.size), reduceMotion: reduceMotion))
               .opacity(pane.presentation.videoIsVisible ? 1 : 0)
               .allowsHitTesting(pane.presentation.videoIsVisible)
               .accessibilityHidden(!pane.presentation.videoIsVisible)
@@ -27,10 +47,7 @@ struct MultiviewVideoStage<Content: View>: View {
           }
         }
       }
-      .animation(.motionAware(.easeInOut(duration: 0.35), reduceMotion: reduceMotion), value: controller.expandedPaneID)
-      .animation(.motionAware(.easeInOut(duration: 0.35), reduceMotion: reduceMotion), value: controller.layout)
-      .animation(.motionAware(.easeInOut(duration: 0.35), reduceMotion: reduceMotion), value: controller.primaryPaneID)
-      .animation(.motionAware(.easeInOut(duration: 0.25), reduceMotion: reduceMotion), value: bottomClearance)
+      .animation(MultiviewMotion.reflow(reduceMotion: reduceMotion), value: frames)
     }
   }
 }

@@ -382,6 +382,11 @@ drives bottom clearance: leave fitting pictures unchanged, translate into unused
 space next, and only then recompute smaller frames with unchanged rows/columns
 and outside-outline gaps. Layout and clearance motion respects Reduce Motion;
 ordinary pane focus does not resize the wall.
+All pane-frame changes, including additions, removals and decoded aspect-ratio
+updates, smoothly interpolate without replacing surviving players. Removing a
+pane mutes it immediately, then shrinks and fades its picture before releasing
+the outgoing player. Rapid re-adds use a fresh view lifetime, not the outgoing
+pane's state. Reduce Motion disables movement and scaling.
 Controls use normal-sized labels and the shared
 theme-aware player button styles, including the native Reduce Transparency path.
 

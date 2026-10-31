@@ -852,6 +852,8 @@ needed to keep video unobscured. Back closes the native layout menu, then the
 controls, returning focus to the same stream. **Done** closes controls, not multiview.
 Videos have 16-point rounded corners. The channel/viewer overlay fades away within
 three seconds of inactivity; remote interaction brings it back.
+Removing a video shrinks and fades it out while the remaining videos smoothly
+move into place. Layout changes keep the same players running and respect Reduce Motion.
 
 Multiview also uses the normal native live player for every pane. Selecting a
 pane zooms that same player and video surface into the single-stream layout

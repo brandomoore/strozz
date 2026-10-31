@@ -68,6 +68,20 @@ struct MultiviewLayoutFixture: View {
       directory = nil
     }
 
+    func runRemovalProbe() async {
+      guard ProcessInfo.processInfo.environment["STROZZ_LAYOUT_AUTO_REMOVE"] == "1" else { return }
+      do {
+        try await Task.sleep(for: .seconds(6))
+        guard ready, let pane = controller.panes.last else { return }
+        if let lineup { lineup.remove(pane.channel.channelKey) }
+        else { controller.removePane(pane.id) }
+      } catch is CancellationError {
+        return
+      } catch {
+        failure = String(describing: error)
+      }
+    }
+
     private static func video(at url: URL, width: Int, height: Int) async throws -> URL {
       let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
       let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
@@ -162,7 +176,7 @@ struct MultiviewLayoutFixture: View {
     }
     .ignoresSafeArea()
     .preferredColorScheme(theme.preferredColorScheme)
-    .task { await model.prepare() }
+    .task { await model.prepare(); await model.runRemovalProbe() }
     .onDisappear { model.stop() }
   }
 }
@@ -197,6 +211,7 @@ private struct MultiviewLayoutDiagnostics: UIViewRepresentable {
     let logicalSize: CGSize
     weak var label: UILabel?
     var timer: Timer?
+    private var removalSamples: [[String: Any]] = []
 
     init(controller: MultiviewController, logicalSize: CGSize) {
       self.controller = controller
@@ -239,6 +254,17 @@ private struct MultiviewLayoutDiagnostics: UIViewRepresentable {
       ]
       if let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]),
         let text = String(data: data, encoding: .utf8) { label.accessibilityValue = text }
+      if ProcessInfo.processInfo.environment["STROZZ_LAYOUT_AUTO_REMOVE"] == "1", removalSamples.count < 40 {
+        removalSamples.append(["time": CACurrentMediaTime(), "state": state])
+        do {
+          let root = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask,
+            appropriateFor: nil, create: true)
+          try JSONSerialization.data(withJSONObject: removalSamples, options: [.sortedKeys])
+            .write(to: root.appendingPathComponent("multiview-removal-probe.json"), options: .atomic)
+        } catch {
+          NSLog("Cannot write multiview removal probe: %@", error.localizedDescription)
+        }
+      }
     }
   }
 }

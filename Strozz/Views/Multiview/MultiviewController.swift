@@ -83,6 +83,7 @@ final class MultiviewPlaybackContext {
 @Observable
 final class MultiviewPane: Identifiable {
   let id: String
+  var viewID: ObjectIdentifier { ObjectIdentifier(self) }
   var channel: FollowedChannel
   let model: PlayerModel
   let presentation: MultiviewPlaybackContext
@@ -168,6 +169,7 @@ final class MultiviewController {
   @ObservationIgnored private let muted: Bool
   @ObservationIgnored private let controlledAuto: Bool
   @ObservationIgnored private var sleepSuspendedPaneIDs = Set<String>()
+  @ObservationIgnored private var retiringPanes: [ObjectIdentifier: MultiviewPane] = [:]
 
   init(channels: [FollowedChannel], muted: Bool = false,
        controlledAuto: Bool = NativeLowLatencyHLS.controlledAutoEnabled) {
@@ -209,12 +211,22 @@ final class MultiviewController {
 
   func removePane(_ id: String) {
     guard panes.count > 1, let index = panes.firstIndex(where: { $0.id == id }) else { return }
-    panes[index].stop()
-    panes.remove(at: index)
-    if expandedPaneID == id { expandedPaneID = nil }
-    if primaryPaneID == id { primaryPaneID = panes.first?.id }
-    if audiblePaneID == id { setAudiblePane(panes.first?.id) }
-    refreshQuality()
+    let removed = panes[index]
+    removed.isAudible = false
+    removed.player.isMuted = true
+    removed.player.pause()
+    retiringPanes[removed.viewID] = removed
+    let animation = removed.presentation.videoIsVisible ? MultiviewMotion.reflow(reduceMotion: reduceMotion) : nil
+    withAnimation(animation, completionCriteria: .removed) {
+      panes.remove(at: index)
+      if expandedPaneID == id { expandedPaneID = nil }
+      if primaryPaneID == id { primaryPaneID = panes.first?.id }
+      if audiblePaneID == id { setAudiblePane(panes.first?.id) }
+      refreshQuality()
+    } completion: {
+      // Keep the decoded picture available until its outgoing transition finishes.
+      self.retiringPanes.removeValue(forKey: removed.viewID)?.stop()
+    }
   }
 
   func makePrimary(_ id: String) {
@@ -349,6 +361,8 @@ final class MultiviewController {
     isTransitioning = false
     sleepSuspendedPaneIDs.removeAll()
     for pane in panes { pane.stop() }
+    for pane in retiringPanes.values { pane.stop() }
+    retiringPanes.removeAll()
   }
 }
 
