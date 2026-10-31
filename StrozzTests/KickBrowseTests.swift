@@ -214,6 +214,96 @@ final class KickBrowseTests: XCTestCase {
     XCTAssertNil(service.nextKickCursor)
   }
 
+  func testConfirmedCostreamAppearsOnceWithBothPlatformsAndCombinedViewers() async throws {
+    let kick = directory(slugs: ["xqc"])
+    let twitch = twitchDirectory(logins: ["xqc"])
+    let service = BrowseService(creatorLinks: ["xqc": "xqc"]) { request in
+      Self.response(request, data: request.url?.host == "web.kick.com" ? kick : twitch)
+    }
+    await service.loadStreams(filter: .all)
+    XCTAssertEqual(service.categoryStreams.map(\.channelKey), ["xqc"])
+    let creator = try XCTUnwrap(service.categoryStreams.first)
+    XCTAssertEqual(creator.platform, .twitch)
+    XCTAssertEqual(creator.kick?.slug, "xqc")
+    XCTAssertEqual(creator.kick?.thumbnailURL?.absoluteString, "https://images.kick.com/xqc.webp")
+    XCTAssertEqual(creator.combinedViewerCount, 150)
+
+    await service.loadStreams(filter: .kick)
+    XCTAssertEqual(service.categoryStreams.map(\.channelKey), ["kick:xqc"])
+    XCTAssertEqual(service.categoryStreams.first?.combinedViewerCount, 100)
+    await service.loadStreams(filter: .twitch)
+    XCTAssertEqual(service.categoryStreams.map(\.channelKey), ["xqc"])
+    XCTAssertNil(service.categoryStreams.first?.kick)
+    XCTAssertEqual(service.categoryStreams.first?.combinedViewerCount, 50)
+  }
+
+  func testConfirmedDifferentHandlesMergeWithoutLosingOtherDirectoryMetadata() async {
+    let kick = directory(slugs: ["asmongold", "two"])
+    let twitch = twitchDirectory(logins: ["zackrawrr"])
+    let service = BrowseService(creatorLinks: ["zackrawrr": "asmongold"]) { request in
+      Self.response(request, data: request.url?.host == "web.kick.com" ? kick : twitch)
+    }
+    await service.loadStreams(filter: .all)
+    XCTAssertEqual(service.categoryStreams.map(\.channelKey), ["zackrawrr", "kick:two"])
+    XCTAssertEqual(service.categoryStreams.first?.kick?.slug, "asmongold")
+    XCTAssertEqual(service.categoryStreams.last?.isMature, true)
+    XCTAssertNil(service.categoryStreams.last?.viewerCount)
+    XCTAssertNotNil(service.categoryStreams.last?.thumbnailURL)
+  }
+
+  func testUnconfirmedSameNameAndAmbiguousCreatorLinksRemainSeparate() async {
+    let kick = directory(slugs: ["same"])
+    let twitch = twitchDirectory(logins: ["same", "another"])
+    let service = BrowseService(creatorLinks: [:]) { request in
+      Self.response(request, data: request.url?.host == "web.kick.com" ? kick : twitch)
+    }
+    await service.loadStreams(filter: .all)
+    XCTAssertEqual(service.categoryStreams.map(\.channelKey), ["same", "kick:same", "another"])
+    let ambiguous = BrowseService(creatorLinks: ["same": "same", "another": "same"]) { request in
+      Self.response(request, data: request.url?.host == "web.kick.com" ? kick : twitch)
+    }
+    await ambiguous.loadStreams(filter: .all)
+    XCTAssertEqual(ambiguous.categoryStreams.map(\.channelKey), ["same", "kick:same", "another"])
+  }
+
+  func testLaterPageEnrichesExistingCreatorWithoutDuplicatingOrMovingCards() async {
+    let first = directory(slugs: ["one"])
+    let second = directory(slugs: ["xqc", "three"], cursor: nil)
+    let twitch = twitchDirectory(logins: ["xqc", "another"])
+    let service = BrowseService(creatorLinks: ["xqc": "xqc"]) { request in
+      if request.url?.host != "web.kick.com" { return Self.response(request, data: twitch) }
+      let more = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?
+        .contains(where: { $0.name == "after" }) == true
+      return Self.response(request, data: more ? second : first)
+    }
+    await service.loadStreams(filter: .all)
+    let original = service.categoryStreams
+    XCTAssertEqual(original.map(\.channelKey), ["xqc", "kick:one", "another"])
+    await service.loadMoreStreams()
+    XCTAssertEqual(service.categoryStreams.map(\.channelKey), ["xqc", "kick:one", "another", "kick:three"])
+    XCTAssertEqual(service.categoryStreams.first?.id, original.first?.id)
+    XCTAssertEqual(service.categoryStreams.first?.combinedViewerCount, 150)
+    XCTAssertEqual(service.categoryStreams.first?.kick?.slug, "xqc")
+    XCTAssertEqual(service.categoryStreams[1], original[1])
+    XCTAssertEqual(service.categoryStreams[2], original[2])
+  }
+
+  func testBrowseSearchMergesConfirmedCreatorAndKeepsSinglePlatformFiltering() async {
+    let twitch = Data(#"{"data":{"searchFor":{"channels":{"edges":[{"item":{"id":"creator","login":"xqc","displayName":"xQc","stream":{"id":"live","title":"Live","viewersCount":50}}}]},"games":{"edges":[]}}}}"#.utf8)
+    let kick = KickChannel(slug: "xqc", displayName: "xQc", title: "Live", category: "",
+                           viewerCount: 100, isLive: true, chatroomID: nil, imageURL: nil)
+    let service = SearchService(creatorLinks: ["xqc": "xqc"],
+      loadData: { Self.response($0, data: twitch) }, loadKick: { _ in kick })
+    await service.search("xqc")
+    XCTAssertEqual(service.channelResults.map(\.channelKey), ["xqc"])
+    XCTAssertEqual(service.channelResults.first?.combinedViewerCount, 150)
+    await service.search("xqc", filter: .twitch)
+    XCTAssertNil(service.channelResults.first?.kick)
+    XCTAssertEqual(service.channelResults.first?.combinedViewerCount, 50)
+    await service.search("xqc", filter: .kick)
+    XCTAssertEqual(service.channelResults.map(\.channelKey), ["kick:xqc"])
+  }
+
   private func directory(slugs: [String] = ["one", "two"], cursor: String? = "next-page") -> Data {
     let streams = slugs.map { slug in
       """
@@ -227,8 +317,16 @@ final class KickBrowseTests: XCTestCase {
       """.utf8)
   }
 
-  private func twitchDirectory() -> Data {
-    Data(#"{"data":{"streams":{"edges":[{"node":{"id":"live","title":"Live","broadcaster":{"login":"twitch-one","displayName":"Twitch One"},"game":{"displayName":"Chatting"}}}]}}}"#.utf8)
+  private func twitchDirectory(logins: [String] = ["twitch-one"]) -> Data {
+    let rows = logins.map { login in
+      """
+      {"node":{"id":"live-\(login)","title":"Live","viewersCount":50,
+      "broadcaster":{"login":"\(login)","displayName":"\(login)"},"game":{"displayName":"Chatting"}}}
+      """
+    }.joined(separator: ",")
+    return Data("""
+      {"data":{"streams":{"edges":[\(rows)]}}}
+      """.utf8)
   }
 
   nonisolated private static func response(_ request: URLRequest, data: Data) -> (Data, URLResponse) {

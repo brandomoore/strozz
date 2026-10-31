@@ -3,6 +3,34 @@ import Observation
 import OSLog
 
 enum KickUnifiedFeed {
+  @MainActor
+  static func confirmedLinks(for twitch: [FollowedChannel]) -> [String: String] {
+    var links = KickAliasService().aliases
+    for channel in twitch where channel.platform == .twitch {
+      let login = channel.login.lowercased()
+      if let saved = CreatorLiveSession.savedSources(for: .init(platform: .twitch, channel: login)) {
+        links[login] = saved.kick
+      }
+    }
+    return links
+  }
+
+  static func mergeDirectory(twitch: [FollowedChannel], kick: [FollowedChannel],
+                             links: [String: String]) -> [FollowedChannel] {
+    let sources = kick.map { channel in
+      var source = KickChannel(slug: channel.login.lowercased(), displayName: channel.displayName,
+        title: channel.title, category: channel.gameName, viewerCount: channel.viewerCount,
+        isLive: channel.isLive, chatroomID: nil, imageURL: channel.profileImageURL)
+      source.thumbnailURL = channel.thumbnailURL
+      return source
+    }
+    let merged = merge(twitch: twitch, kick: sources, links: links)
+    let standalone = Set(merged.filter { $0.platform == .kick }.map(\.channelKey))
+    // Keep the original directory rows, including maturity flags and artwork.
+    return interleave(merged.filter { $0.platform == .twitch },
+                      kick.filter { standalone.contains($0.channelKey) })
+  }
+
   /// Links are explicit creator identities, never a match on display name.
   static func merge(twitch: [FollowedChannel], kick: [KickChannel], links: [String: String]) -> [FollowedChannel] {
     let bySlug = Dictionary(kick.map { ($0.slug, $0) }, uniquingKeysWith: { first, _ in first })

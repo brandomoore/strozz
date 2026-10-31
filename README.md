@@ -146,7 +146,11 @@ Confirmed Twitch/Kick creator links are merged into one card, with combined
 viewer counts when both streams are live. Matching usernames alone never merge
 accounts. Kick recommendation candidates come from confirmed links to creators
 in the existing discovery pools; Browse's global Kick directory is independent
-of those Home recommendations. Browse keeps the two platforms' streams distinct.
+of those Home recommendations. In **All**, Browse and search merge confirmed
+co-streaming creators into one card with both platforms and combined viewer
+counts, including when the second source arrives on a later page. Unrelated
+accounts with matching names stay separate. The single-platform filters show
+only that platform's streams.
 
 While watching Twitch, choose **Kick** in the TV player's stream-source menu, or
 enter the Kick channel under **Quality > Stream source** on mobile. Verify the

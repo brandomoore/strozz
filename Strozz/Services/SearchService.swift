@@ -13,11 +13,14 @@ final class SearchService {
     private var requestID = UUID()
     private let loadData: NetworkClient.DataLoader
     private let loadKick: @Sendable (String) async throws -> KickChannel
+    private let creatorLinks: [String: String]?
 
-    init(loadData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) },
+    init(creatorLinks: [String: String]? = nil,
+         loadData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) },
          loadKick: @escaping @Sendable (String) async throws -> KickChannel = { try await KickPlaybackService.channel($0) }) {
         self.loadData = loadData
         self.loadKick = loadKick
+        self.creatorLinks = creatorLinks
     }
 
     var hasResults: Bool { !channelResults.isEmpty || !categoryResults.isEmpty }
@@ -40,7 +43,11 @@ final class SearchService {
         let trimmed = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         query = trimmed
         platformFilter = filter
-        channelResults = channelResults.filter { filter.includes($0.platform) }
+        channelResults = channelResults.filter { filter.includes($0.platform) }.map { channel in
+            var channel = channel
+            if !filter.includes(.kick) { channel.kick = nil }
+            return channel
+        }
         if !filter.includes(.twitch) { categoryResults = [] }
 
         guard !trimmed.isEmpty else {
@@ -83,6 +90,10 @@ final class SearchService {
         case .failure(let error):
             errorMessage = String(localized: "Kick search is unavailable: \(error.localizedDescription)")
         }
+        let twitch = channelResults.filter { $0.platform == .twitch }
+        channelResults = KickUnifiedFeed.mergeDirectory(twitch: twitch,
+            kick: channelResults.filter { $0.platform == .kick },
+            links: creatorLinks ?? KickUnifiedFeed.confirmedLinks(for: twitch))
         if !hasResults, errorMessage == nil { errorMessage = "No results for \"\(trimmed)\"." }
     }
 

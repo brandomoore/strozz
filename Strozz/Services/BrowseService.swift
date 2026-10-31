@@ -23,10 +23,13 @@ final class BrowseService {
     private var streamsRequestID = UUID()
     private var categoriesRequestID = UUID()
     private let loadData: NetworkClient.DataLoader
+    private let creatorLinks: [String: String]?
     private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "browse")
 
-    init(loadData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) }) {
+    init(creatorLinks: [String: String]? = nil,
+         loadData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) }) {
         self.loadData = loadData
+        self.creatorLinks = creatorLinks
     }
 
     // MARK: - Public API
@@ -121,7 +124,7 @@ final class BrowseService {
         case .failure(let error):
             errors.append(failureMessage(error, platform: "Kick"))
         }
-        categoryStreams = KickUnifiedFeed.interleave(twitchStreams, kickStreams)
+        categoryStreams = mergedStreams()
         streamsErrorMessage = errors.isEmpty ? nil : errors.joined(separator: "\n")
         recordFixtureState()
     }
@@ -136,16 +139,26 @@ final class BrowseService {
             let page = try await KickBrowseService.page(categoryID: currentCategory?.sourceID,
                                                         after: cursor, load: loadData)
             guard !Task.isCancelled, streamsRequestID == requestID else { return }
-            var seen = Set(categoryStreams.map(\.channelKey))
+            var seen = Set(kickStreams.map(\.channelKey))
             let added = page.channels.filter { seen.insert($0.channelKey).inserted }
             kickStreams += added
-            // Append rather than re-interleave so existing focused cards don't move.
-            categoryStreams += added
+            let merged = mergedStreams()
+            let byID = Dictionary(merged.map { ($0.channelKey, $0) }, uniquingKeysWith: { first, _ in first })
+            let previousIDs = Set(categoryStreams.map(\.channelKey))
+            // Enrich existing cards in place when their second platform arrives on a later page.
+            categoryStreams = categoryStreams.compactMap { byID[$0.channelKey] }
+                + merged.filter { !previousIDs.contains($0.channelKey) }
             nextKickCursor = page.nextCursor == cursor ? nil : page.nextCursor
+            recordFixtureState()
         } catch {
             guard !Task.isCancelled, streamsRequestID == requestID else { return }
             moreStreamsErrorMessage = failureMessage(error, platform: "Kick")
         }
+    }
+
+    private func mergedStreams() -> [FollowedChannel] {
+        KickUnifiedFeed.mergeDirectory(twitch: twitchStreams, kick: kickStreams,
+                                       links: creatorLinks ?? KickUnifiedFeed.confirmedLinks(for: twitchStreams))
     }
 
     private func capture<Value>(_ operation: @MainActor () async throws -> Value) async -> Result<Value, Error> {
@@ -174,7 +187,9 @@ final class BrowseService {
         do {
             let state: [String: Any] = [
                 "request": streamsCategoryID ?? "",
-                "streams": categoryStreams.map { ["id": $0.channelKey, "platform": $0.platform.rawValue] },
+                "streams": categoryStreams.map {
+                    ["id": $0.channelKey, "platform": $0.platform.rawValue, "linkedKick": $0.kick?.slug ?? ""]
+                },
                 "categories": categories.map { ["id": $0.id, "platform": $0.platform.rawValue] },
                 "streamError": streamsErrorMessage ?? "", "categoryError": categoryErrorMessage ?? "",
                 "hasMore": nextKickCursor != nil,
