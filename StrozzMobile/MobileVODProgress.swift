@@ -16,7 +16,9 @@ struct MobileVODProgress: Codable, Identifiable {
   let updatedAt: Date
   var id: String { video.id }
   var selection: MobileVODSelection {
-    .init(video: video, channel: .init(login: login, displayName: displayName, profileImageURL: avatarURL))
+    var channel = ChannelPageTarget(login: login, displayName: displayName, profileImageURL: avatarURL)
+    channel.platform = video.platform
+    return .init(video: video, channel: channel)
   }
 }
 

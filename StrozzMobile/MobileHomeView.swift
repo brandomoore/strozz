@@ -24,7 +24,7 @@ enum MobileHomeFeed: Hashable {
   static func homeChannels(follows: [FollowedChannel], watched: [FollowedChannel],
                            recommendations: [FollowedChannel], history: [WatchHistoryEntry],
                            category: TwitchCategory?) -> [FollowedChannel] {
-    let counts = Dictionary(history.map { ($0.login.lowercased(), $0.watchCount) }, uniquingKeysWith: max)
+    let counts = Dictionary(history.map { ($0.channelKey, $0.watchCount) }, uniquingKeysWith: max)
     var seen = Set<String>()
     let familiar = (follows + watched).filter { $0.isLive && seen.insert($0.channelKey).inserted }
       .sorted {
@@ -93,6 +93,7 @@ struct MobileHomeView: View {
   @State private var selectedVideo: MobileVODSelection?
   @State private var personalRefreshID = UUID()
   @State private var personalLoading = true
+  @State private var personalError: String?
   @State private var hasAppeared = false
 
   private var shouldPreview: Bool { previewsEnabled && feed == .live && selectedVideo == nil }
@@ -102,13 +103,16 @@ struct MobileHomeView: View {
   }
   private var personalizationID: String {
     "\(auth.userID ?? "")|\(follows.lastUpdatedAt?.timeIntervalSinceReferenceDate ?? 0)|\(personalizedEnabled)|"
-      + history.entries.map { "\($0.login):\($0.watchCount)" }.joined(separator: ",")
+      + "\(kick.lastUpdatedAt?.timeIntervalSinceReferenceDate ?? 0)|"
+      + history.entries.map { "\($0.channelKey):\($0.watchCount)" }.joined(separator: ",")
   }
-  private var visibleFollows: [FollowedChannel] {
+  private var allLiveFollows: [FollowedChannel] {
     kick.mergedFollowing(
       MobileHomeFeed.visibleFollows(follows.channels, authenticated: auth.isAuthenticated,
         isDemo: follows.isUsingDemoData, category: nil), liveOnly: true)
-      .filter { channel in category.map {
+  }
+  private var visibleFollows: [FollowedChannel] {
+    allLiveFollows.filter { channel in category.map {
         channel.gameName.localizedCaseInsensitiveCompare($0.name) == .orderedSame
       } ?? true }
   }
@@ -119,9 +123,8 @@ struct MobileHomeView: View {
   private var homeChannels: [FollowedChannel] {
     let base = personalFeed ? personalChannels
       : category == nil ? recommendations.channels : categoryStreams.categoryStreams
-    let merged = KickUnifiedFeed.merge(twitch: base,
-      kick: kick.directory.filter(\.isLive) + kick.recommended, links: kick.links)
-    return KickUnifiedFeed.interleave(merged.filter { $0.platform != .kick }, merged.filter { $0.platform == .kick })
+    let merged = kick.mergedRecommendations(base, includeNew: false)
+    return (personalFeed ? merged : KickUnifiedFeed.sortedByViewers(merged))
       .filter { channel in
       category.map { channel.gameName.localizedCaseInsensitiveCompare($0.name) == .orderedSame } ?? true
     }
@@ -206,7 +209,7 @@ struct MobileHomeView: View {
                     && (follows.isRefreshing || (follows.lastUpdatedAt == nil && follows.errorMessage == nil))))
                     : (category == nil ? recommendations.isLoading || recommendations.lastUpdatedAt == nil
                       : categoryStreams.isLoadingStreams),
-                  errorMessage: personalFeed ? nil
+                  errorMessage: personalFeed ? personalError
                     : (category == nil ? recommendations.errorMessage : categoryStreams.streamsErrorMessage),
                   preview: preview, onSelect: onSelect, onRetry: { Task { await refreshLive() } })
                   .padding(.horizontal)
@@ -298,7 +301,9 @@ struct MobileHomeView: View {
       await refreshAfterReturn()
     }
     .task(id: liveCategoryID) {
-      if feed == .live, !personalFeed, let category { await categoryStreams.loadStreams(for: category) }
+      if feed == .live, !personalFeed, let category {
+        await categoryStreams.loadStreams(for: category, mixCategoryPlatforms: true)
+      }
     }
     .task(id: "\(auth.userID ?? "")-\(feed == .following)") {
       guard feed == .following else { return }
@@ -322,8 +327,11 @@ struct MobileHomeView: View {
   }
 
   private func refreshLive() async {
-    if personalFeed { await refreshPersonalized() }
-    else if let category { await categoryStreams.loadStreams(for: category) }
+    if personalFeed {
+      await recommendations.refresh()
+      await refreshPersonalized()
+    }
+    else if let category { await categoryStreams.loadStreams(for: category, mixCategoryPlatforms: true) }
     else { await recommendations.refresh() }
   }
 
@@ -332,25 +340,35 @@ struct MobileHomeView: View {
     personalRefreshID = refreshID
     let service = PersonalizedRecommendationsService()
     personalLoading = true
+    personalError = nil
     defer { if refreshID == personalRefreshID { personalLoading = false } }
     guard personalFeed else { return }
-    let logins = history.entries.sorted { ($0.watchCount, $0.lastWatchedAt) > ($1.watchCount, $1.lastWatchedAt) }
+    let logins = history.entries.filter { $0.platform == .twitch }
+      .sorted { ($0.watchCount, $0.lastWatchedAt) > ($1.watchCount, $1.lastWatchedAt) }
       .prefix(20).map(\.login)
     async let watched = SimilarChannelsEngine.liveChannels(forLogins: Array(logins))
+    let kickLogins = history.entries.filter { $0.platform == .kick }.prefix(20).map(\.login)
+    async let watchedKick = KickDiscoveryService.loadChannels(
+      kickLogins, load: { try await KickPlaybackService.channel($0) },
+      isCurrent: { personalRefreshID == refreshID })
     await affinity.refreshIfNeeded()
     guard !Task.isCancelled, refreshID == personalRefreshID else { return }
     await service.refresh(
-      follows: MobileHomeFeed.visibleFollows(follows.channels, authenticated: auth.isAuthenticated,
-        isDemo: follows.isUsingDemoData, category: nil),
+      follows: allLiveFollows,
       followedCategories: follows.isUsingDemoData ? [:] : follows.followedCategories,
-      followedLogins: follows.isUsingDemoData ? [] : follows.followedLogins,
+      followedLogins: (follows.isUsingDemoData ? [] : follows.followedLogins)
+        .union(kick.directory.map { $0.followedChannel.channelKey }),
       history: history, affinity: affinity.map)
     let loaded = await watched
+    let loadedKick = await watchedKick
     guard !Task.isCancelled, refreshID == personalRefreshID else { return }
     personalChannels = MobileHomeFeed.homeChannels(
-      follows: MobileHomeFeed.visibleFollows(follows.channels, authenticated: auth.isAuthenticated,
-        isDemo: follows.isUsingDemoData, category: nil),
-      watched: loaded, recommendations: service.channels, history: history.entries, category: nil)
+      follows: allLiveFollows,
+      watched: loaded + loadedKick.channels.values.map(\.followedChannel),
+      recommendations: service.channels, history: history.entries, category: nil)
+    if loadedKick.failures > 0 {
+      personalError = String(localized: "Some recently watched Kick channels couldn't be refreshed.")
+    }
   }
 }
 
@@ -402,16 +420,21 @@ struct MobileHomeFilters: View {
   @Binding var selection: TwitchCategory?
 
   var body: some View {
+    let uniqueCategories = categories.reduce(into: [TwitchCategory]()) { result, category in
+      if !result.contains(where: { $0.name.caseInsensitiveCompare(category.name) == .orderedSame }) {
+        result.append(category)
+      }
+    }
     ScrollView(.horizontal) {
       HStack(spacing: 8) {
         Button("All") { selection = nil }
           .tint(selection == nil ? .accentColor : .secondary)
           .accessibilityAddTraits(selection == nil ? .isSelected : [])
           .accessibilityIdentifier("home-filter-all")
-        ForEach(categories) { category in
+        ForEach(uniqueCategories) { category in
           Button(category.name) { selection = category }
-            .tint(selection?.id == category.id ? .accentColor : .secondary)
-            .accessibilityAddTraits(selection?.id == category.id ? .isSelected : [])
+            .tint(selection?.name.caseInsensitiveCompare(category.name) == .orderedSame ? .accentColor : .secondary)
+            .accessibilityAddTraits(selection?.name.caseInsensitiveCompare(category.name) == .orderedSame ? .isSelected : [])
             .accessibilityIdentifier("home-filter-\(category.id)")
         }
       }

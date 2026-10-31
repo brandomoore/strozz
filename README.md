@@ -52,7 +52,7 @@ The feature list below describes the Apple TV app. See
   watching?" check, a starry sleeping screen, and one press to snap back to the
   live edge.
 - **VODs and clips.** Watch past broadcasts and top clips from channel pages;
-  VODs include synced chat replay and variable speed (0.5×–2×).
+  VODs support variable speed (0.5×–2×), with synced chat replay for Twitch.
 - **Multi-view.** Watch several live channels at once, picked from your follows
   and recommendations.
 - **Live captions (beta).** Optional on-device captions for streams, with size,
@@ -110,8 +110,10 @@ The feature list below describes the Apple TV app. See
 ## Kick playback (in development)
 
 Kick is part of the existing **Browse**, **Following**, recommendations, search, and Apple TV
-multiview lineup, not a separate tab. Search for an exact Kick channel name or
-`kick.com` channel URL to open a live stream, including Kick-exclusive creators.
+multiview lineup, not a separate tab. Search channel names or category keywords;
+exact Kick channel names and `kick.com` channel URLs also work, including
+Kick-exclusive creators. Search results open channel profiles, including offline
+channels, rather than attempting to play an offline stream.
 Playback does not require a Twitch or Kick account.
 
 **Browse** opens a live-stream grid on Apple TV, iPhone, and iPad. **All** mixes
@@ -119,9 +121,10 @@ Twitch and Kick; the platform filter also applies to **Categories** and mobile
 Browse search. The stream-language preference applies to both directories.
 **Load more** appends the next Kick page without moving existing cards. Twitch's
 anonymous directory supplies one ranked page rather than cursor pagination.
-Category cards identify their platform; Kick categories come from the current
-live-directory sample, without invented category totals or box art. Opening a
-Kick category requests that category's live streams. Directory access needs no
+Category cards identify their platform; Kick's paginated catalogue supplies real
+category posters and viewer totals. Opening a Kick category requests that
+category's live streams. Mobile Home's category filters combine matching
+categories across platforms without duplicate filter labels. Directory access needs no
 extra sign-in, but uses Kick's undocumented website API and can be affected by
 provider changes. One platform's failure leaves the other available with an error.
 
@@ -144,13 +147,36 @@ reconnecting or an app update.
 
 Confirmed Twitch/Kick creator links are merged into one card, with combined
 viewer counts when both streams are live. Matching usernames alone never merge
-accounts. Kick recommendation candidates come from confirmed links to creators
-in the existing discovery pools; Browse's global Kick directory is independent
-of those Home recommendations. In **All**, Browse and search merge confirmed
+accounts. Home's **Top streams** includes both global directories, ranked by
+combined viewers. Personalized recommendations include live Kick candidates
+from matching categories, using followed categories and device-local watch
+history. History and feedback use provider-qualified identities; an unrelated
+same-named account cannot inherit another platform's history or rejection.
+Confirmed creators rejected with **Not interested** stay excluded across their
+linked accounts. Individual channel/category metadata requests go to the relevant
+platform; the stored history and watch counts are not uploaded.
+In **All**, Browse and search merge confirmed
 co-streaming creators into one card with both platforms and combined viewer
 counts, including when the second source arrives on a later page. Unrelated
 accounts with matching names stay separate. The single-platform filters show
 only that platform's streams.
+
+Kick channel profiles show identity, biography, live status, public clips with
+pagination, available past broadcasts, and related live channels. Clips use the
+native video player. Recorded broadcasts use the shared
+TV transport controls and the native mobile recorded-video player; mobile resume
+positions preserve the Kick broadcast identity. Playback resolves a fresh media
+URL rather than storing a temporary stream URL. Private, deleted, pruned, and
+still-live recordings are not offered as past broadcasts. Kick archive chat replay
+is not currently available in Strozz.
+Mobile archive verification has an unresolved video freeze in iOS 26.2 Simulator,
+also reproduced with a standalone Apple player. Physical-device Kick archive
+playback remains unverified; working clips and live streams do not establish it.
+
+Apple TV Top Shelf preserves each channel's provider, including deep links and
+independent live-status refreshes. Confirmed co-streamers stay one shelf item,
+including when a source goes offline. A Kick channel is never sent to Twitch's
+stream endpoint, and a Twitch connection failure does not block public Kick refreshes.
 
 While watching Twitch, choose **Kick** in the TV player's stream-source menu, or
 enter the Kick channel under **Quality > Stream source** on mobile. Verify the
@@ -552,8 +578,9 @@ keeps counting while playback is paused, and is omitted when the start time is
 unknown. Mobile fetches this optional metadata separately so it cannot delay
 playback startup.
 
-This is not full TV feature parity: VOD chat replay, clips, multiview,
+This is not full TV feature parity: VOD chat replay, Twitch clips, multiview,
 interactive reward redemption/polls, and advanced TV settings are not included.
+Public Kick clips are available from Kick channel profiles.
 Mobile supports background Picture in Picture and preserves the previous
 expanded or in-app mini-player layout on return. A suspended native session
 resolves fresh stream URLs instead of reviving an expired engine.

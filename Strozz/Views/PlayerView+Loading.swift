@@ -1838,7 +1838,7 @@ extension PlayerView {
           sessionID == model.playbackTelemetry.sessionID else { return }
         channelDisplayName = channel.displayName
         channelAvatarURL = channel.imageURL
-        streamTitle = channel.title
+        if !isVOD { streamTitle = channel.title }
         model.channelStreamStartedAt = channel.startedAt
       } catch {
         guard !Task.isCancelled, target == currentLiveTarget else { return }

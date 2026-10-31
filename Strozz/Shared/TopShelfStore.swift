@@ -19,11 +19,12 @@ enum TopShelf {
 
     /// Builds the deep link that launches Strozz straight into a channel.
     /// Example: `strozz://channel/pokimane`.
-    static func channelDeepLink(login: String) -> URL {
+    static func channelDeepLink(login: String, platform: String? = nil) -> URL {
         var components = URLComponents()
         components.scheme = deepLinkScheme
         components.host = channelHost
         components.path = "/" + login
+        if platform == "kick" { components.queryItems = [.init(name: "platform", value: "kick")] }
         return components.url ?? URL(string: "\(deepLinkScheme)://\(channelHost)/\(login)")!
     }
 
@@ -38,7 +39,21 @@ enum TopShelf {
         let login = url.path
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return login.isEmpty ? nil : login
+        let valid = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789_-")
+        guard !login.isEmpty, login.lowercased().unicodeScalars.allSatisfy(valid.contains) else { return nil }
+        return login
+    }
+
+    static func channelKey(from url: URL) -> String? {
+        guard let login = channelLogin(from: url) else { return nil }
+        let platforms = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.filter { $0.name == "platform" } ?? []
+        guard platforms.count <= 1 else { return nil }
+        switch platforms.first?.value {
+        case nil, "twitch": return login.lowercased()
+        case "kick": return "kick:\(login.lowercased())"
+        default: return nil
+        }
     }
 }
 

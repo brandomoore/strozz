@@ -1,6 +1,7 @@
 import Foundation
+import OSLog
 
-/// Fetches fresh, currently-live Twitch streams directly from the Top Shelf
+/// Fetches fresh Twitch and Kick live status directly from the Top Shelf
 /// extension process so the shelf reflects what is live *right now* instead of a
 /// snapshot the app cached the last time it was open.
 ///
@@ -11,26 +12,37 @@ enum TopShelfLiveFeed {
     private static let maxItemsPerSection = 12
     private static let helixBase = "https://api.twitch.tv/helix"
 
-    /// Builds fresh sections from live Twitch data, reusing the cached
-    /// "recommended" set to refresh its liveness and thumbnails. Returns `nil`
-    /// when no live content can be produced (the caller then falls back to the
-    /// cached snapshot).
+    /// Refreshes providers independently; one expired session must not prevent
+    /// public Kick status from updating. An empty result means confirmed offline,
+    /// while cancellation returns nil so the caller can retain its snapshot.
     static func run(
-        credentials: TopShelfCredentials,
-        recommended: TopShelfSnapshot.Section?
+        credentials: TopShelfCredentials?,
+        recommended: TopShelfSnapshot.Section?,
+        following: TopShelfSnapshot.Section? = nil
     ) async -> [TopShelfSnapshot.Section]? {
-        // Following · Live now — direct, personalised, always current.
-        guard let followingItems = try? await followedLive(credentials) else {
-            return nil
+        let cachedFollowing = TopShelfSnapshot.sourceItems(in: following?.items ?? [])
+        let cachedRecommended = TopShelfSnapshot.sourceItems(in: recommended?.items ?? [])
+        let knownItems = cachedFollowing + cachedRecommended
+        async let refreshedKickFollowing = refreshKick(cachedFollowing)
+        async let refreshedKickRecommended = refreshKick(cachedRecommended)
+        var followingItems = cachedFollowing.filter { $0.sourcePlatform != "kick" }
+        if let credentials {
+            do { followingItems = try await followedLive(credentials) }
+            catch {
+                Logger(subsystem: "com.thatcube.Strozz", category: "top-shelf")
+                    .warning("Twitch following refresh failed; preserving snapshot: \((error as NSError).code)")
+            }
         }
 
         var sections: [TopShelfSnapshot.Section] = []
-        let primaryItems = Array(followingItems.prefix(maxItemsPerSection))
+        let kickFollowing = await refreshedKickFollowing
+        let primaryItems = Array(TopShelfSnapshot.mergingCreators(followingItems + kickFollowing, knownItems: knownItems)
+            .sorted { ($0.viewerCount ?? 0) > ($1.viewerCount ?? 0) }.prefix(maxItemsPerSection))
         if !primaryItems.isEmpty {
             sections.append(
                 TopShelfSnapshot.Section(
-                    id: "following",
-                    title: "Following · Live now",
+                    id: following?.id ?? "following",
+                    title: following?.title ?? "Following · Live now",
                     items: primaryItems
                 )
             )
@@ -38,30 +50,86 @@ enum TopShelfLiveFeed {
 
         // Recommended — refresh the liveness/thumbnails of the last published
         // recommended set, dropping any channel that has since gone offline.
-        if let recommended {
-            let primaryLogins = Set(primaryItems.map { $0.login.lowercased() })
-            let ids = recommended.items.map(\.id)
-            if let liveStreams = try? await liveStreams(forUserIDs: ids, credentials) {
-                let items = liveStreams
-                    .filter { !primaryLogins.contains($0.userLogin.lowercased()) }
-                    .prefix(maxItemsPerSection)
-                    .map(item(from:))
-                if !items.isEmpty {
-                    sections.append(
-                        TopShelfSnapshot.Section(
-                            id: "recommended",
-                            title: "Recommended",
-                            items: Array(items)
-                        )
-                    )
+        if recommended != nil {
+            let primaryLogins = Set(primaryItems.map(\.identityKey))
+            var twitch = cachedRecommended.filter { $0.sourcePlatform != "kick" }
+            if let credentials {
+                do { twitch = try await liveStreams(forLogins: twitch.map(\.login), credentials).map(item(from:)) }
+                catch {
+                    Logger(subsystem: "com.thatcube.Strozz", category: "top-shelf")
+                        .warning("Twitch recommendations refresh failed; preserving snapshot: \((error as NSError).code)")
                 }
+            }
+            let kick = await refreshedKickRecommended
+            let items = TopShelfSnapshot.mergingCreators(twitch + kick, knownItems: knownItems)
+                .filter { !primaryLogins.contains($0.identityKey) }
+                .sorted { ($0.viewerCount ?? 0) > ($1.viewerCount ?? 0) }
+                .prefix(maxItemsPerSection)
+            if !items.isEmpty {
+                sections.append(
+                    TopShelfSnapshot.Section(
+                        id: "recommended",
+                        title: "Recommended",
+                        items: Array(items)
+                    )
+                )
             }
         }
 
-        return sections.isEmpty ? nil : sections
+        return Task.isCancelled ? nil : sections
     }
 
     // MARK: - Endpoints
+
+    private static func refreshKick(_ items: [TopShelfSnapshot.Item]) async -> [TopShelfSnapshot.Item] {
+        await withTaskGroup(of: TopShelfSnapshot.Item?.self) { group in
+            var iterator = items.filter { $0.sourcePlatform == "kick" }.prefix(maxItemsPerSection).makeIterator()
+            func enqueue(_ item: TopShelfSnapshot.Item) {
+                group.addTask {
+                    do {
+                        var components = URLComponents(string: "https://kick.com")!
+                        components.path = "/api/v1/channels/\(item.login)"
+                        var request = URLRequest(url: components.url!)
+                        request.timeoutInterval = 6
+                        request.setValue("application/json", forHTTPHeaderField: "Accept")
+                        request.setValue("Strozz tvOS TopShelf", forHTTPHeaderField: "User-Agent")
+                        let (data, response) = try await URLSession.shared.data(for: request)
+                        try Task.checkCancellation()
+                        guard (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 4 * 1024 * 1024,
+                              let document = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                              document["livestream"] != nil,
+                              (document["slug"] as? String)?.lowercased() == item.login.lowercased()
+                        else { throw URLError(.badServerResponse) }
+                        guard let live = document["livestream"] as? [String: Any] else {
+                            if document["livestream"] is NSNull { return nil }
+                            throw URLError(.badServerResponse)
+                        }
+                        var updated = item
+                        updated.title = live["session_title"] as? String ?? item.title
+                        updated.viewerCount = live["show_view_count"] as? Bool == false
+                            ? nil : live["viewer_count"] as? Int
+                        updated.gameName = (live["categories"] as? [[String: Any]])?.first?["name"] as? String ?? item.gameName
+                        updated.thumbnailURL = ((live["thumbnail"] as? [String: Any])?["url"] as? String)
+                            .flatMap(URL.init(string:)) ?? item.thumbnailURL
+                        return updated
+                    } catch {
+                        if Task.isCancelled { return nil }
+                        Logger(subsystem: "com.thatcube.Strozz", category: "top-shelf")
+                            .warning("Kick refresh failed; preserving snapshot: \((error as NSError).code)")
+                        return item
+                    }
+                }
+            }
+            for _ in 0..<4 { if let item = iterator.next() { enqueue(item) } }
+            var result: [TopShelfSnapshot.Item] = []
+            for await item in group {
+                if Task.isCancelled { group.cancelAll(); break }
+                if let item { result.append(item) }
+                if let next = iterator.next() { enqueue(next) }
+            }
+            return result
+        }
+    }
 
     private static func followedLive(
         _ credentials: TopShelfCredentials
@@ -77,7 +145,7 @@ enum TopShelfLiveFeed {
     }
 
     private static func liveStreams(
-        forUserIDs ids: [String],
+        forLogins ids: [String],
         _ credentials: TopShelfCredentials
     ) async throws -> [Stream] {
         let capped = Array(Set(ids)).prefix(100)
@@ -86,7 +154,7 @@ enum TopShelfLiveFeed {
         var components = URLComponents(string: "\(helixBase)/streams")!
         components.queryItems = [URLQueryItem(name: "first", value: "100")]
         components.queryItems?.append(
-            contentsOf: capped.map { URLQueryItem(name: "user_id", value: $0) }
+            contentsOf: capped.map { URLQueryItem(name: "user_login", value: $0) }
         )
 
         let streams = try await getStreams(url: components.url!, credentials)
@@ -129,7 +197,7 @@ enum TopShelfLiveFeed {
             .replacingOccurrences(of: "{height}", with: "360")
 
         return TopShelfSnapshot.Item(
-            id: stream.userID,
+            id: stream.userLogin.lowercased(),
             login: stream.userLogin.lowercased(),
             displayName: stream.userName,
             title: stream.title,

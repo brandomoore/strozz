@@ -6,7 +6,8 @@ import TVServices
 /// The Top Shelf extension is a separate process that cannot see the app's
 /// in-memory state, so the app publishes a small JSON snapshot into the shared
 /// App Group container whenever its data refreshes. The extension just renders
-/// whatever it finds — no networking or auth in the extension itself.
+/// the snapshot and refreshes live status through the provider's public or
+/// authorized API without sharing credentials between providers.
 @MainActor
 enum TopShelfPublisher {
     /// Maximum items per carousel. The Top Shelf has limited horizontal space
@@ -23,7 +24,8 @@ enum TopShelfPublisher {
     ) {
         var sections: [TopShelfSnapshot.Section] = []
 
-        let primaryItems = makeItems(from: followed.filter(\.isLive))
+        let links = KickUnifiedFeed.confirmedLinks(for: followed + recommended)
+        let primaryItems = makeItems(from: followed.filter(\.isLive), links: links)
         if !primaryItems.isEmpty {
             sections.append(
                 TopShelfSnapshot.Section(
@@ -35,10 +37,10 @@ enum TopShelfPublisher {
         }
 
         // Avoid duplicating channels already shown in the primary section.
-        let primaryLogins = Set(primaryItems.map(\.login))
-        let recommendedItems = makeItems(
-            from: recommended.filter { $0.isLive && !primaryLogins.contains($0.login.lowercased()) }
-        )
+        let primaryLogins = Set(primaryItems.map(\.identityKey))
+        let recommendedItems = makeItems(from: recommended.filter {
+            $0.isLive && KickUnifiedFeed.identityKeys(for: $0, links: links).isDisjoint(with: primaryLogins)
+        }, links: links)
         if !recommendedItems.isEmpty {
             sections.append(
                 TopShelfSnapshot.Section(
@@ -71,17 +73,30 @@ enum TopShelfPublisher {
         TVTopShelfContentProvider.topShelfContentDidChange()
     }
 
-    private static func makeItems(from channels: [FollowedChannel]) -> [TopShelfSnapshot.Item] {
-        channels.prefix(maxItemsPerSection).map { channel in
+    private static func makeItems(from channels: [FollowedChannel], links: [String: String]) -> [TopShelfSnapshot.Item] {
+        func item(_ channel: FollowedChannel, creatorKey: String?) -> TopShelfSnapshot.Item {
             TopShelfSnapshot.Item(
-                id: channel.id,
+                id: channel.channelKey,
                 login: channel.login.lowercased(),
                 displayName: channel.displayName,
                 title: channel.title,
                 gameName: channel.gameName,
                 thumbnailURL: channel.thumbnailURL,
-                viewerCount: channel.viewerCount
+                viewerCount: channel.viewerCount,
+                sourcePlatform: channel.platform.rawValue,
+                creatorKey: creatorKey
             )
         }
+        let sources = channels.flatMap { channel -> [TopShelfSnapshot.Item] in
+            let keys = KickUnifiedFeed.identityKeys(for: channel, links: links)
+            let creatorKey = keys.count > 1 ? keys.first { !$0.hasPrefix("kick:") } : nil
+            var result = [item(channel, creatorKey: creatorKey)]
+            if channel.platform == .twitch, let kick = channel.kick, kick.isLive,
+               keys.contains("kick:\(kick.slug)") {
+                result.append(item(kick.followedChannel, creatorKey: creatorKey))
+            }
+            return result
+        }
+        return Array(TopShelfSnapshot.mergingCreators(sources).prefix(maxItemsPerSection))
     }
 }

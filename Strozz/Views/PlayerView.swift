@@ -17,6 +17,7 @@ struct PlayerView: View {
   struct VODContext: Equatable {
     let id: String
     let title: String
+    var platform: LivePlatform = .twitch
   }
 
   let channel: String

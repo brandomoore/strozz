@@ -8,6 +8,9 @@ final class BrowseService {
     private(set) var categories: [TwitchCategory] = []
     private(set) var isLoadingCategories = false
     private(set) var categoryErrorMessage: String?
+    private(set) var nextKickCategoryPage: Int?
+    private(set) var isLoadingMoreCategories = false
+    private(set) var moreCategoriesErrorMessage: String?
 
     private(set) var categoryStreams: [FollowedChannel] = []
     private(set) var isLoadingStreams = false
@@ -17,7 +20,7 @@ final class BrowseService {
     private(set) var moreStreamsErrorMessage: String?
     private var streamsCategoryID: String?
     private var categoriesContext: String?
-    private var currentCategory: TwitchCategory?
+    private var currentKickCategoryID: String?
     private var twitchStreams: [FollowedChannel] = []
     private var kickStreams: [FollowedChannel] = []
     private var streamsRequestID = UUID()
@@ -39,6 +42,9 @@ final class BrowseService {
         categoriesRequestID = requestID
         isLoadingCategories = true
         categoryErrorMessage = nil
+        nextKickCategoryPage = nil
+        isLoadingMoreCategories = false
+        moreCategoriesErrorMessage = nil
         let context = "\(filter.rawValue):\(StreamLanguagePreference.current())"
         if categoriesContext != context { categories = [] }
         categoriesContext = context
@@ -49,19 +55,45 @@ final class BrowseService {
         }
         async let kick = capture {
             filter.includes(.kick)
-                ? try await KickBrowseService.page(limit: 100, load: self.loadData).categories : []
+                ? try await KickBrowseService.categories(load: self.loadData)
+                : KickBrowseService.CategoriesPage(categories: [], nextPage: nil)
         }
         let results = await (twitch, kick)
         guard !Task.isCancelled, categoriesRequestID == requestID else { return }
         var errors: [String] = []
         let twitchCategories = apply(results.0, previous: categories.filter { $0.platform == .twitch },
                                      platform: "Twitch", errors: &errors)
-        let kickCategories = apply(results.1, previous: categories.filter { $0.platform == .kick },
-                                   platform: "Kick", errors: &errors)
+        let kickCategories: [TwitchCategory]
+        switch results.1 {
+        case .success(let page):
+            kickCategories = page.categories
+            nextKickCategoryPage = page.nextPage
+        case .failure(let error):
+            kickCategories = categories.filter { $0.platform == .kick }
+            errors.append(failureMessage(error, platform: "Kick"))
+        }
         categories = KickUnifiedFeed.interleave(twitchCategories, kickCategories, id: \.id)
         categoryErrorMessage = errors.isEmpty ? nil : errors.joined(separator: "\n")
         prewarmBoxArt(categories)
         recordFixtureState()
+    }
+
+    func loadMoreCategories() async {
+        guard !isLoadingCategories, !isLoadingMoreCategories, let page = nextKickCategoryPage else { return }
+        let request = categoriesRequestID
+        isLoadingMoreCategories = true
+        moreCategoriesErrorMessage = nil
+        defer { if request == categoriesRequestID { isLoadingMoreCategories = false } }
+        do {
+            let result = try await KickBrowseService.categories(page: page, load: loadData)
+            guard !Task.isCancelled, request == categoriesRequestID else { return }
+            var seen = Set(categories.map(\.id))
+            categories += result.categories.filter { seen.insert($0.id).inserted }
+            nextKickCategoryPage = result.nextPage == page ? nil : result.nextPage
+        } catch {
+            guard !Task.isCancelled, request == categoriesRequestID else { return }
+            moreCategoriesErrorMessage = failureMessage(error, platform: "Kick")
+        }
     }
 
     /// Warm the decoded-image cache for category box art right after the grid
@@ -81,8 +113,10 @@ final class BrowseService {
         }
     }
 
-    func loadStreams(for category: TwitchCategory? = nil, filter: BrowsePlatformFilter = .twitch) async {
-        let filter = category.map { $0.platform == .kick ? BrowsePlatformFilter.kick : .twitch } ?? filter
+    func loadStreams(for category: TwitchCategory? = nil, filter: BrowsePlatformFilter = .twitch,
+                     mixCategoryPlatforms: Bool = false) async {
+        let filter = mixCategoryPlatforms ? .all
+            : category.map { $0.platform == .kick ? BrowsePlatformFilter.kick : .twitch } ?? filter
         let requestID = UUID()
         streamsRequestID = requestID
         isLoadingStreams = true
@@ -97,7 +131,7 @@ final class BrowseService {
             kickStreams = []
         }
         streamsCategoryID = key
-        currentCategory = category
+        currentKickCategoryID = nil
         defer {
             if streamsRequestID == requestID { isLoadingStreams = false }
         }
@@ -111,7 +145,16 @@ final class BrowseService {
             guard filter.includes(.kick) else {
                 return KickBrowseService.Page(channels: [], categories: [], nextCursor: nil)
             }
-            return try await KickBrowseService.page(categoryID: category?.sourceID, load: self.loadData)
+            var categoryID = category?.sourceID
+            if let category, category.platform != .kick {
+                let matches = try await KickBrowseService.searchCategories(category.name, load: self.loadData)
+                    .filter { $0.name.caseInsensitiveCompare(category.name) == .orderedSame }
+                guard matches.count == 1 else {
+                    return KickBrowseService.Page(channels: [], categories: [], nextCursor: nil)
+                }
+                categoryID = matches.first?.sourceID
+            }
+            return try await KickBrowseService.page(categoryID: categoryID, load: self.loadData)
         }
         let results = await (twitch, kick)
         guard !Task.isCancelled, streamsRequestID == requestID else { return }
@@ -121,6 +164,7 @@ final class BrowseService {
         case .success(let page):
             kickStreams = page.channels
             nextKickCursor = page.nextCursor
+            currentKickCategoryID = page.categoryID
         case .failure(let error):
             errors.append(failureMessage(error, platform: "Kick"))
         }
@@ -136,7 +180,7 @@ final class BrowseService {
         moreStreamsErrorMessage = nil
         defer { if streamsRequestID == requestID { isLoadingMore = false } }
         do {
-            let page = try await KickBrowseService.page(categoryID: currentCategory?.sourceID,
+            let page = try await KickBrowseService.page(categoryID: currentKickCategoryID,
                                                         after: cursor, load: loadData)
             guard !Task.isCancelled, streamsRequestID == requestID else { return }
             var seen = Set(kickStreams.map(\.channelKey))

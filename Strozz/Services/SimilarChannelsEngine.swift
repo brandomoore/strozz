@@ -61,6 +61,7 @@ struct SimilarChannelsEngine {
 
     // Fetch candidate pools for each seed category in parallel.
     var pool: [CandidateStream] = []
+    async let kick = KickBrowseService.recommendationCandidates(for: seeds)
     await withTaskGroup(of: [CandidateStream].self) { group in
       for category in seeds {
         group.addTask { await fetchCandidates(inCategory: category) }
@@ -69,12 +70,13 @@ struct SimilarChannelsEngine {
         pool.append(contentsOf: candidates)
       }
     }
+    pool += (await kick).map(Self.candidate(from:))
 
     // Dedupe by login, keeping the higher-viewer instance, and drop the channel
     // itself plus any channels the viewer marked "Not interested".
     var byLogin: [String: CandidateStream] = [:]
     for candidate in pool {
-      let key = candidate.login.lowercased()
+      let key = candidate.channelKey
       guard key != signals.login.lowercased() else { continue }
       guard !feedback.blockedLogins.contains(key) else { continue }
       if let existing = byLogin[key], existing.viewers >= candidate.viewers { continue }
@@ -96,7 +98,17 @@ struct SimilarChannelsEngine {
       .sorted { $0.score > $1.score }
 
     let selected = select(from: ranking, limit: resultLimit, maxPerCategory: maxPerCategory)
-    return selected.map { $0.candidate.asFollowedChannel }
+    let channels = selected.map { $0.candidate.asFollowedChannel }
+    return await mergedCreators(channels, excluding: feedback.blockedLogins.union([signals.login.lowercased()]))
+  }
+
+  @MainActor
+  private static func mergedCreators(_ channels: [FollowedChannel], excluding: Set<String>) -> [FollowedChannel] {
+    let links = KickUnifiedFeed.confirmedLinks(for: channels)
+    let merged = KickUnifiedFeed.mergeDirectory(twitch: channels.filter { $0.platform == .twitch },
+      kick: channels.filter { $0.platform == .kick }, links: links)
+      .filter { KickUnifiedFeed.identityKeys(for: $0, links: links).isDisjoint(with: excluding) }
+    return KickUnifiedFeed.preservingOrder(of: channels, merged: merged, links: links)
   }
 
   /// Applies the optional per-category diversity cap to a score-ranked list,
@@ -121,8 +133,8 @@ struct SimilarChannelsEngine {
     }
 
     if picked.count < limit {
-      let pickedLogins = Set(picked.map { $0.candidate.login.lowercased() })
-      for item in ranked where !pickedLogins.contains(item.candidate.login.lowercased()) {
+      let pickedLogins = Set(picked.map { $0.candidate.channelKey })
+      for item in ranked where !pickedLogins.contains(item.candidate.channelKey) {
         guard picked.count < limit else { break }
         picked.append(item)
       }
@@ -164,7 +176,7 @@ struct SimilarChannelsEngine {
   /// How central the candidate's current game is to the target's DNA (0...1).
   private static func categoryAffinity(_ candidate: CandidateStream, _ signals: ChannelSignals) -> Double {
     guard let game = candidate.gameName else { return 0 }
-    return signals.categoryWeights[game] ?? 0
+    return signals.categoryWeights.first { $0.key.caseInsensitiveCompare(game) == .orderedSame }?.value ?? 0
   }
 
   private static func languageMatch(_ candidate: CandidateStream, _ signals: ChannelSignals) -> Double {
@@ -324,9 +336,12 @@ struct SimilarChannelsEngine {
     let tags: [String]
     let thumbnailURL: URL?
     let profileImageURL: URL?
+    var original: FollowedChannel? = nil
+    var channelKey: String { original?.channelKey ?? login.lowercased() }
 
     var asFollowedChannel: FollowedChannel {
-      FollowedChannel(
+      if let original { return original }
+      return FollowedChannel(
         id: id,
         login: login,
         displayName: displayName,
@@ -339,6 +354,13 @@ struct SimilarChannelsEngine {
         isMature: false
       )
     }
+  }
+
+  private static func candidate(from channel: FollowedChannel) -> CandidateStream {
+    CandidateStream(id: channel.id, login: channel.login, displayName: channel.displayName,
+      title: channel.title, gameName: channel.gameName, gameDisplayName: channel.gameName,
+      viewers: channel.viewerCount ?? 0, language: channel.language, tags: [],
+      thumbnailURL: channel.thumbnailURL, profileImageURL: channel.profileImageURL, original: channel)
   }
 
   private struct CategoryEnvelope: Decodable { let data: CategoryData? }

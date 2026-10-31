@@ -12,14 +12,16 @@ final class SearchService {
     private(set) var platformFilter = BrowsePlatformFilter.all
     private var requestID = UUID()
     private let loadData: NetworkClient.DataLoader
-    private let loadKick: @Sendable (String) async throws -> KickChannel
+    private let loadKickSearch: @Sendable (String) async throws -> KickBrowseService.SearchPage
     private let creatorLinks: [String: String]?
 
     init(creatorLinks: [String: String]? = nil,
          loadData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) },
-         loadKick: @escaping @Sendable (String) async throws -> KickChannel = { try await KickPlaybackService.channel($0) }) {
+         loadKickSearch: @escaping @Sendable (String) async throws -> KickBrowseService.SearchPage = {
+             try await KickBrowseService.search($0)
+         }) {
         self.loadData = loadData
-        self.loadKick = loadKick
+        self.loadKickSearch = loadKickSearch
         self.creatorLinks = creatorLinks
     }
 
@@ -48,7 +50,9 @@ final class SearchService {
             if !filter.includes(.kick) { channel.kick = nil }
             return channel
         }
-        if !filter.includes(.twitch) { categoryResults = [] }
+        categoryResults = categoryResults.filter { filter.includes($0.platform) }
+        let previousKickChannels = channelResults.filter { $0.platform == .kick }
+        let previousKickCategories = categoryResults.filter { $0.platform == .kick }
 
         guard !trimmed.isEmpty else {
             channelResults = []
@@ -70,8 +74,8 @@ final class SearchService {
                 : SearchResults(channels: [], categories: [])
             // Ignore stale responses if the query changed while in flight.
             guard !Task.isCancelled, requestID == currentRequestID, query == trimmed else { return }
-            channelResults = results.channels
-            categoryResults = results.categories
+            channelResults = results.channels + (preservingResultsOnFailure ? previousKickChannels : [])
+            categoryResults = results.categories + (preservingResultsOnFailure ? previousKickCategories : [])
             prewarmStaticArtwork(channels: results.channels, categories: results.categories)
         } catch {
             guard !Task.isCancelled, requestID == currentRequestID, query == trimmed else { return }
@@ -84,11 +88,18 @@ final class SearchService {
         let kickResult = await kick
         guard !Task.isCancelled, requestID == currentRequestID, query == trimmed else { return }
         switch kickResult {
-        case .success(let channel):
+        case .success(let result):
             channelResults.removeAll { $0.platform == .kick }
-            if let channel { channelResults.append(channel.followedChannel) }
+            categoryResults.removeAll { $0.platform == .kick }
+            channelResults.append(contentsOf: result.channels)
+            categoryResults.append(contentsOf: result.categories)
+            if let warning = result.warning {
+                errorMessage = [errorMessage, warning].compactMap { $0 }.joined(separator: "\n")
+            }
         case .failure(let error):
-            errorMessage = String(localized: "Kick search is unavailable: \(error.localizedDescription)")
+            errorMessage = [errorMessage,
+                String(localized: "Kick search is unavailable: \(error.localizedDescription)")]
+                .compactMap { $0 }.joined(separator: "\n")
         }
         let twitch = channelResults.filter { $0.platform == .twitch }
         channelResults = KickUnifiedFeed.mergeDirectory(twitch: twitch,
@@ -97,11 +108,16 @@ final class SearchService {
         if !hasResults, errorMessage == nil { errorMessage = "No results for \"\(trimmed)\"." }
     }
 
-    private func kickResult(for query: String, enabled: Bool) async -> Result<KickChannel?, Error> {
-        guard enabled else { return .success(nil) }
-        guard let slug = try? KickPlaybackService.slug(from: query) else { return .success(nil) }
-        do { return .success(try await loadKick(slug)) }
-        catch KickPlaybackService.Failure.notFound { return .success(nil) }
+    private func kickResult(for query: String, enabled: Bool) async -> Result<KickBrowseService.SearchPage, Error> {
+        let empty = KickBrowseService.SearchPage(channels: [], categories: [])
+        guard enabled else { return .success(empty) }
+        let term = (try? KickPlaybackService.slug(from: query)) ?? query
+        do { return .success(try await loadKickSearch(term)) }
+        catch KickBrowseService.Failure.searchTooShort {
+            return .success(.init(channels: [], categories: [],
+                                  warning: KickBrowseService.Failure.searchTooShort.localizedDescription))
+        }
+        catch KickPlaybackService.Failure.notFound { return .success(empty) }
         catch { return .failure(error) }
     }
 

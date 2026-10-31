@@ -17,6 +17,7 @@ final class PersonalizedRecommendationsService {
   private(set) var channels: [FollowedChannel] = []
   private(set) var isLoading = false
   private(set) var lastUpdatedAt: Date?
+  private var refreshID = UUID()
 
   /// History is normalized independently and weighted more heavily than follows:
   /// what you actively choose to watch is a stronger, fresher taste signal than
@@ -47,16 +48,21 @@ final class PersonalizedRecommendationsService {
     feedback: RecommendationFeedback = .empty,
     affinity: StreamerAffinityMap = .empty
   ) async {
+    let request = UUID()
+    refreshID = request
     guard history.isEnabled else {
       channels = []
+      isLoading = false
       lastUpdatedAt = Date()
       return
     }
 
     isLoading = true
     defer {
-      isLoading = false
-      lastUpdatedAt = Date()
+      if refreshID == request {
+        isLoading = false
+        lastUpdatedAt = Date()
+      }
     }
 
     let profile = Self.buildProfile(
@@ -66,7 +72,7 @@ final class PersonalizedRecommendationsService {
     // belong in the rail. Combine the full follow list (online + offline) with
     // the currently-live follows so nothing they follow can slip in.
     let exclude = followedLogins
-      .union(follows.map { $0.login.lowercased() })
+      .union(follows.map(\.channelKey))
       .union(feedback.blockedLogins)
 
     // Two parallel sources:
@@ -93,14 +99,17 @@ final class PersonalizedRecommendationsService {
 
     let recommended = await categoryRecs
     let picks = await affinityRecs
+    guard !Task.isCancelled, refreshID == request else { return }
 
     // Lead with affinity picks (capped so they don't swamp the rail), then fill
     // with category-based peers, de-duplicating by login and dropping excludes.
+    let links = KickUnifiedFeed.confirmedLinks(for: follows + picks + recommended)
     var seen = exclude
     var merged: [FollowedChannel] = []
     for channel in picks.prefix(Self.maxAffinityPicks) + recommended {
-      let login = channel.login.lowercased()
-      guard seen.insert(login).inserted else { continue }
+      let keys = KickUnifiedFeed.identityKeys(for: channel, links: links)
+      guard keys.isDisjoint(with: seen) else { continue }
+      seen.formUnion(keys)
       merged.append(channel)
       if merged.count >= 18 { break }
     }
@@ -112,7 +121,7 @@ final class PersonalizedRecommendationsService {
   /// it gone via the blocklist.
   func remove(login: String) {
     let key = login.lowercased()
-    channels.removeAll { $0.login.lowercased() == key }
+    channels.removeAll { $0.channelKey == key }
   }
 
   // MARK: - Affinity expansion ("viewers of X also watch Y")
@@ -124,9 +133,11 @@ final class PersonalizedRecommendationsService {
     follows: [FollowedChannel], history: WatchHistoryService
   ) -> [String] {
     let watched = history.entries
+      .filter { $0.platform == .twitch }
       .sorted { ($0.watchCount, $0.lastWatchedAt) > ($1.watchCount, $1.lastWatchedAt) }
       .map { $0.login.lowercased() }
     let followed = follows
+      .filter { $0.platform == .twitch }
       .sorted { ($0.viewerCount ?? 0) > ($1.viewerCount ?? 0) }
       .map { $0.login.lowercased() }
 
@@ -201,6 +212,10 @@ final class PersonalizedRecommendationsService {
     // follows vs. watching is governed by the shares above, not by raw counts (a
     // category with 30 follows shouldn't automatically bury what you actually
     // watch).
+    for channel in follows where channel.platform == .kick && !followedCategories.isEmpty {
+      let game = channel.gameName.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !game.isEmpty { followRaw[game, default: 0] += 1 }
+    }
     let normalizedFollows = normalize(followRaw)
     let normalizedHistory = normalize(history.categoryAffinities())
 

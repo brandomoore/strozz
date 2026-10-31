@@ -207,6 +207,10 @@ struct HomeView: View {
       .onChange(of: kick.directory) { _, _ in recomputeTopStreams() }
       .onChange(of: kick.links) { _, _ in recomputeTopStreams() }
       .onChange(of: kick.recommended) { _, _ in recomputeTopStreams() }
+      .onChange(of: kick.lastUpdatedAt) { old, new in
+        publishTopShelfSnapshot()
+        if old == nil, new != nil { Task { await refreshPersonalizedIfNeeded(force: true) } }
+      }
   }
 
   private var homeContent: some View {
@@ -698,7 +702,8 @@ struct HomeView: View {
 
   private func recomputeTopStreams() {
     let blocked = feedback.blockedLogins
-    topStreams = kick.mergedRecommendations(recommendations.channels, blocked: blocked)
+    topStreams = KickUnifiedFeed.sortedByViewers(
+      kick.mergedRecommendations(recommendations.channels, blocked: blocked))
   }
 
   private func channelRailMetrics(for availableWidth: CGFloat, trailingSafeArea: CGFloat = 0) -> ChannelRailMetrics {
@@ -921,9 +926,9 @@ struct HomeView: View {
     guard force || shouldAutoRefreshPersonalized() else { return }
     await affinity.refreshIfNeeded()
     await personalized.refresh(
-      follows: follows.channels,
-      followedCategories: follows.followedCategories,
-      followedLogins: follows.followedLogins,
+      follows: kick.mergedFollowing(follows.isUsingDemoData ? [] : follows.channels),
+      followedCategories: follows.isUsingDemoData ? [:] : follows.followedCategories,
+      followedLogins: follows.followedLogins.union(kick.directory.map { $0.followedChannel.channelKey }),
       history: watchHistory,
       feedback: feedback.snapshot,
       affinity: affinity.snapshot
@@ -935,32 +940,34 @@ struct HomeView: View {
   /// signal so look-alikes stop resurfacing.
   private func markNotInterested(_ channel: FollowedChannel) {
     feedback.markNotInterested(channel)
-    if channel.platform == .twitch { personalized.remove(login: channel.login) }
+    personalized.remove(login: channel.channelKey)
     recomputeTopStreams()
   }
 
   private func publishTopShelfSnapshot() {
     TopShelfPublisher.publish(
-      followed: follows.channels,
-      isUsingDemoData: follows.isUsingDemoData,
-      recommended: recommendations.channels
+      followed: kick.mergedFollowing(follows.isUsingDemoData && kick.follows.isConnected ? [] : follows.channels),
+      isUsingDemoData: follows.isUsingDemoData && !kick.follows.isConnected,
+      recommended: KickUnifiedFeed.sortedByViewers(
+        kick.mergedRecommendations(recommendations.channels, blocked: feedback.blockedLogins))
     )
   }
 
   /// Presents the player for a channel requested via deep link (Top Shelf).
   /// Prefers a fully-populated channel from loaded data, otherwise builds a
   /// minimal placeholder — the player only needs the login to start playback.
-  private func openDeepLinkedChannelIfNeeded(_ login: String?) {
-    guard let login = login?.trimmingCharacters(in: .whitespacesAndNewlines),
-          !login.isEmpty
+  private func openDeepLinkedChannelIfNeeded(_ key: String?) {
+    guard let key, !key.isEmpty
     else { return }
+    let platform: LivePlatform = key.hasPrefix("kick:") ? .kick : .twitch
+    let login = platform == .kick ? String(key.dropFirst(5)) : key
 
-    let match = (follows.channels + recommendations.channels).first {
-      $0.login.caseInsensitiveCompare(login) == .orderedSame
+    let match = (follows.channels + recommendations.channels + kick.directory.map(\.followedChannel)).first {
+      $0.channelKey == key
     }
 
-    selectedChannel = match ?? FollowedChannel(
-      id: login,
+    var channel = match ?? FollowedChannel(
+      id: key,
       login: login,
       displayName: login,
       title: "",
@@ -970,6 +977,8 @@ struct HomeView: View {
       profileImageURL: nil,
       isLive: true
     )
+    channel.platform = platform
+    selectedChannel = channel
 
     deepLinkRouter.pendingChannelLogin = nil
   }
@@ -992,7 +1001,7 @@ struct HomeView: View {
     goLive.watch()
 
     let match = (follows.channels + recommendations.channels).first {
-      $0.login.caseInsensitiveCompare(event.login) == .orderedSame
+      $0.channelKey == event.login.lowercased()
     }
     selectedChannel = match ?? FollowedChannel(
       id: event.login,

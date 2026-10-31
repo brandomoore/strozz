@@ -116,6 +116,7 @@ targets:
       - path: Strozz/Views/RichChatLineView.swift
       - path: Strozz/Views/KickDirectoryView.swift
       - path: Strozz/Views/KickChannelDetailsView.swift
+      - path: Strozz/Views/ClipPlayerView.swift
       - path: Strozz/Views/CreatorChannelsView.swift
       - path: Strozz/Views/Chat/ChatColor.swift
     dependencies:
@@ -162,6 +163,7 @@ targets:
       - path: StrozzTests/NativeCMAFRemuxTests.swift
       - path: StrozzTests/KickPlaybackTests.swift
       - path: StrozzTests/KickBrowseTests.swift
+      - path: StrozzTests/KickContentTests.swift
       - path: StrozzTests/KickSharedPlayerTests.swift
       - path: StrozzTests/KickFollowingTests.swift
       - path: StrozzTests/CreatorLiveSessionTests.swift

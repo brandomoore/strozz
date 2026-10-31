@@ -138,6 +138,15 @@ struct BrowseCategoriesView: View {
           .padding(.vertical, 8)
           .focusSection()
           .focusScope(browseFocusNamespace)
+          if let error = service.moreCategoriesErrorMessage {
+            Text(error).font(.footnote).foregroundStyle(.secondary)
+          }
+          if service.isLoadingMoreCategories {
+            ProgressView("Loading categories")
+          } else if service.nextKickCategoryPage != nil {
+            Button("Load more") { Task { await service.loadMoreCategories() } }
+              .accessibilityIdentifier("browse-load-more-categories")
+          }
         }
         .padding(.horizontal, AppLayout.horizontalPadding)
         .padding(.bottom, 12)

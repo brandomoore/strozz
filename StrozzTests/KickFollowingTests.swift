@@ -385,9 +385,9 @@ final class KickFollowingTests: XCTestCase {
     let service = SearchService(loadData: { request in
       let data = Data(#"{"data":{"searchFor":{"channels":{"edges":[{"item":{"id":"1","login":"first","displayName":"First"}}]},"games":{"edges":[]}}}}"#.utf8)
       return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-    }, loadKick: { slug in
-      KickChannel(slug: slug, displayName: "First", title: "", category: "", viewerCount: 10,
-        isLive: true, chatroomID: nil, imageURL: nil)
+    }, loadKickSearch: { slug in
+      .init(channels: [KickChannel(slug: slug, displayName: "First", title: "", category: "", viewerCount: 10,
+        isLive: true, chatroomID: nil, imageURL: nil).followedChannel], categories: [])
     })
     await service.search("first")
     XCTAssertEqual(service.channelResults.map(\.channelKey), ["first", "kick:first"])
@@ -395,9 +395,9 @@ final class KickFollowingTests: XCTestCase {
   }
 
   func testKickSearchStillReturnsItsChannelWhenTwitchFails() async {
-    let service = SearchService(loadData: { _ in throw URLError(.timedOut) }, loadKick: { slug in
-      KickChannel(slug: slug, displayName: slug, title: "", category: "", viewerCount: nil,
-        isLive: false, chatroomID: nil, imageURL: nil)
+    let service = SearchService(loadData: { _ in throw URLError(.timedOut) }, loadKickSearch: { slug in
+      .init(channels: [KickChannel(slug: slug, displayName: slug, title: "", category: "", viewerCount: nil,
+        isLive: false, chatroomID: nil, imageURL: nil).followedChannel], categories: [])
     })
     await service.search("https://kick.com/first")
     XCTAssertEqual(service.channelResults.map(\.channelKey), ["kick:first"])

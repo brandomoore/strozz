@@ -25,7 +25,9 @@ struct MobileChannelProfileView: View {
       VStack(alignment: .leading, spacing: 24) {
         MobileChannelProfileHeader(channel: channel, profile: profile, onLive: onLive)
         if let errorMessage { MobileStatusView(message: errorMessage) { Task { await refresh() } } }
-        let resumable = progress.entries.filter { $0.login.caseInsensitiveCompare(channel.login) == .orderedSame }
+        let resumable = progress.entries.filter {
+          $0.video.platform == channel.platform && $0.login.caseInsensitiveCompare(channel.login) == .orderedSame
+        }
         if !resumable.isEmpty {
           MobileContinueWatchingSection(entries: resumable) { selectedVideo = $0 }
         }

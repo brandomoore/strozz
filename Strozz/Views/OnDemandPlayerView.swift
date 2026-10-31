@@ -57,68 +57,11 @@ struct OnDemandPlayerView: View {
       PlayerView(
         channel: channelLogin ?? "",
         auth: auth,
-        vod: PlayerView.VODContext(id: id, title: title)
+        vod: PlayerView.VODContext(id: id, title: title, platform: id.hasPrefix("kick:") ? .kick : .twitch),
+        initialPlatform: id.hasPrefix("kick:") ? .kick : .twitch
       )
     case .clip(let slug, let title):
       ClipPlayerView(slug: slug, title: title)
-    }
-  }
-}
-
-/// Minimal full-screen clip player: a native `AVPlayerViewController` (via
-/// SwiftUI's `VideoPlayer`) gives scrub/seek/play-pause for free, which is all a
-/// short clip needs.
-private struct ClipPlayerView: View {
-  let slug: String
-  let title: String
-
-  @Environment(\.dismiss) private var dismiss
-  @State private var player = AVPlayer()
-  @State private var phase: Phase = .loading
-  @FocusState private var backFocused: Bool
-
-  private enum Phase { case loading, playing, failed }
-
-  var body: some View {
-    ZStack {
-      Color.black.ignoresSafeArea()
-
-      switch phase {
-      case .loading:
-        StreamLoadingView(title: title)
-      case .failed:
-        VStack(spacing: 20) {
-          Text("Couldn't play this clip right now.")
-            .font(.title2)
-          Button("Back") { dismiss() }
-            .focused($backFocused)
-        }
-        .padding(40)
-      case .playing:
-        VideoPlayer(player: player)
-          .ignoresSafeArea()
-      }
-    }
-    .onExitCommand { dismiss() }
-    .task(id: slug) { await start() }
-    .onChange(of: phase) { _, newPhase in
-      if newPhase == .failed { backFocused = true }
-    }
-    .onDisappear {
-      player.pause()
-      player.replaceCurrentItem(with: nil)
-    }
-  }
-
-  private func start() async {
-    phase = .loading
-    do {
-      let url = try await PlaybackService.clipSourceURL(slug: slug)
-      player.replaceCurrentItem(with: AVPlayerItem(url: url))
-      player.play()
-      phase = .playing
-    } catch {
-      phase = .failed
     }
   }
 }

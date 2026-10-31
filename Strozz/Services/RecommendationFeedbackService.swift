@@ -57,7 +57,8 @@ final class RecommendationFeedbackService {
     let login = channel.channelKey
     guard !login.isEmpty else { return }
 
-    blockedLogins.insert(login)
+    blockedLogins.formUnion(KickUnifiedFeed.identityKeys(
+      for: channel, links: KickUnifiedFeed.confirmedLinks(for: [channel])))
     for token in Self.tokens(in: channel.title) {
       mutedTitleTokens[token, default: 0] += 1
     }

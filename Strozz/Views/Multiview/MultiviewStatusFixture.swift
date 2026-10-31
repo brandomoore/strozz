@@ -137,9 +137,9 @@ struct MultiviewBrowseFixture: View {
       ]},"games":{"edges":[{"item":{"id":"category","name":"Example category"}}]}}}}
       """#.utf8)
     return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-  }, loadKick: { _ in
-    KickChannel(slug: "example", displayName: "Example", title: "Kick live", category: "",
-      viewerCount: 20, isLive: true, chatroomID: nil, imageURL: nil)
+  }, loadKickSearch: { _ in
+    .init(channels: [KickChannel(slug: "example", displayName: "Example", title: "Kick live", category: "",
+      viewerCount: 20, isLive: true, chatroomID: nil, imageURL: nil).followedChannel], categories: [])
   })
   @FocusState private var focus: String?
   @Namespace private var focusScope

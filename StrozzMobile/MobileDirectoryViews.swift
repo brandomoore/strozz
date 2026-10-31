@@ -39,6 +39,15 @@ struct MobileBrowseView: View {
             }
             MobileCategoryGrid(categories: service.categories, onSelect: onSelect,
                                isLoading: service.isLoadingCategories || !hasLoadedCategories)
+            if let error = service.moreCategoriesErrorMessage {
+              Text(error).font(.footnote).foregroundStyle(.secondary)
+            }
+            if service.isLoadingMoreCategories {
+              ProgressView("Loading categories")
+            } else if service.nextKickCategoryPage != nil {
+              Button("Load more") { Task { await service.loadMoreCategories() } }
+                .accessibilityIdentifier("browse-load-more-categories")
+            }
             if hasLoadedCategories && !service.isLoadingCategories && service.categories.isEmpty
               && service.categoryErrorMessage == nil {
               Text("No live categories found right now.").foregroundStyle(.secondary)
@@ -112,11 +121,12 @@ struct MobileSearchResults: View {
         MobileStatusView(message: error, retry: retry)
       }
       ForEach(service.channelResults, id: \.channelKey) { channel in
-        Button { onSelect(channel) } label: {
+        NavigationLink {
+          MobileChannelProfileView(channel: channel, onLive: onSelect)
+        } label: {
           MobileChannelSearchRow(channel: channel)
         }
         .buttonStyle(.plain)
-        .disabled(!channel.isLive && channel.platform != .kick)
         .accessibilityIdentifier("stream-\(channel.channelKey)")
       }
       ForEach(service.categoryResults) { category in
@@ -158,7 +168,7 @@ struct MobileChannelSearchRow: View {
       if channel.isLive {
         VStack(alignment: .trailing, spacing: 2) {
           Text("LIVE").font(.caption2.bold())
-          if let count = channel.viewerCount {
+          if let count = channel.combinedViewerCount {
             Text(count, format: .number.notation(.compactName)).font(.caption.monospacedDigit())
           }
         }
@@ -181,6 +191,7 @@ struct MobileCategorySearchRow: View {
       .frame(width: 40, height: 54).clipShape(RoundedRectangle(cornerRadius: 3))
       VStack(alignment: .leading, spacing: 3) {
         Text(category.name).font(.subheadline.weight(.semibold)).lineLimit(2)
+        Text(category.platform == .kick ? "Kick" : "Twitch").font(.caption2).foregroundStyle(.secondary)
         if let count = category.viewerCount {
           Text("Category · \(count.formatted(.number.notation(.compactName))) viewers")
             .font(.caption).foregroundStyle(.secondary)
@@ -324,6 +335,9 @@ struct MobileChannelGrid: View {
         }
         .buttonStyle(.plain)
         .disabled(!channel.isLive)
+        .contextMenu {
+          NavigationLink("View channel") { MobileChannelProfileView(channel: channel, onLive: onSelect) }
+        }
         .accessibilityIdentifier("stream-\(channel.channelKey)")
         .accessibilityHint(channel.isLive ? "Watch live stream" : "Channel is offline")
       }

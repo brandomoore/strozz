@@ -3,13 +3,47 @@ import Observation
 import OSLog
 
 enum KickUnifiedFeed {
+  static func sortedByViewers(_ channels: [FollowedChannel]) -> [FollowedChannel] {
+    channels.sorted {
+      let first = $0.combinedViewerCount ?? 0, second = $1.combinedViewerCount ?? 0
+      return first == second ? $0.channelKey < $1.channelKey : first > second
+    }
+  }
+
+  static func preservingOrder(of original: [FollowedChannel], merged: [FollowedChannel],
+                              links: [String: String]) -> [FollowedChannel] {
+    let order = Dictionary(original.enumerated().map { ($0.element.channelKey, $0.offset) },
+                           uniquingKeysWith: min)
+    func position(_ channel: FollowedChannel) -> Int {
+      identityKeys(for: channel, links: links).compactMap { order[$0] }.min() ?? Int.max
+    }
+    return merged.sorted {
+      let first = position($0), second = position($1)
+      return first == second ? $0.channelKey < $1.channelKey : first < second
+    }
+  }
+
+  static func identityKeys(for channel: FollowedChannel, links: [String: String]) -> Set<String> {
+    var keys: Set<String> = [channel.channelKey]
+    let slug = channel.platform == .kick ? channel.login.lowercased()
+      : channel.kick?.slug ?? links[channel.login.lowercased()]
+    if let slug {
+      let owners = links.filter { $0.value == slug }.keys
+      if owners.count == 1, let owner = owners.first {
+        keys.formUnion([owner, "kick:\(slug)"])
+      }
+    }
+    return keys
+  }
+
   @MainActor
   static func confirmedLinks(for twitch: [FollowedChannel]) -> [String: String] {
     var links = KickAliasService().aliases
-    for channel in twitch where channel.platform == .twitch {
+    for channel in twitch where channel.platform != .youtube {
       let login = channel.login.lowercased()
-      if let saved = CreatorLiveSession.savedSources(for: .init(platform: .twitch, channel: login)) {
-        links[login] = saved.kick
+      if let saved = CreatorLiveSession.savedSources(for: .init(platform: channel.platform, channel: login)),
+         let owner = saved.twitch {
+        links[owner] = saved.kick
       }
     }
     return links
@@ -17,13 +51,7 @@ enum KickUnifiedFeed {
 
   static func mergeDirectory(twitch: [FollowedChannel], kick: [FollowedChannel],
                              links: [String: String]) -> [FollowedChannel] {
-    let sources = kick.map { channel in
-      var source = KickChannel(slug: channel.login.lowercased(), displayName: channel.displayName,
-        title: channel.title, category: channel.gameName, viewerCount: channel.viewerCount,
-        isLive: channel.isLive, chatroomID: nil, imageURL: channel.profileImageURL)
-      source.thumbnailURL = channel.thumbnailURL
-      return source
-    }
+    let sources = kick.map(kickSource(from:))
     let merged = merge(twitch: twitch, kick: sources, links: links)
     let standalone = Set(merged.filter { $0.platform == .kick }.map(\.channelKey))
     // Keep the original directory rows, including maturity flags and artwork.
@@ -33,7 +61,8 @@ enum KickUnifiedFeed {
 
   /// Links are explicit creator identities, never a match on display name.
   static func merge(twitch: [FollowedChannel], kick: [KickChannel], links: [String: String]) -> [FollowedChannel] {
-    let bySlug = Dictionary(kick.map { ($0.slug, $0) }, uniquingKeysWith: { first, _ in first })
+    let sources = kick + twitch.filter { $0.platform == .kick }.map(kickSource(from:))
+    let bySlug = Dictionary(sources.map { ($0.slug, $0) }, uniquingKeysWith: { first, _ in first })
     let owners = Dictionary(grouping: links, by: \.value)
     var consumed = Set<String>()
     var result = twitch.map { channel in
@@ -49,9 +78,20 @@ enum KickUnifiedFeed {
       merged.kick = linked
       return merged
     }
-    result += kick.filter { !consumed.contains($0.slug) }.map(\.followedChannel)
+    let linked = Set(result.filter { $0.platform == .twitch }.compactMap { $0.kick?.slug })
+      .intersection(consumed)
+    result.removeAll { $0.platform == .kick && linked.contains($0.login.lowercased()) }
+    result += sources.filter { !consumed.contains($0.slug) }.map(\.followedChannel)
     var seen = Set<String>()
     return result.filter { seen.insert($0.channelKey).inserted }
+  }
+
+  private static func kickSource(from channel: FollowedChannel) -> KickChannel {
+    var source = KickChannel(slug: channel.login.lowercased(), displayName: channel.displayName,
+      title: channel.title, category: channel.gameName, viewerCount: channel.viewerCount,
+      isLive: channel.isLive, chatroomID: nil, imageURL: channel.profileImageURL)
+    source.thumbnailURL = channel.thumbnailURL
+    return source
   }
 
   static func interleave(_ first: [FollowedChannel], _ second: [FollowedChannel]) -> [FollowedChannel] {
@@ -150,12 +190,21 @@ final class KickDiscoveryService {
       }
   }
 
-  func mergedRecommendations(_ twitch: [FollowedChannel], blocked: Set<String> = []) -> [FollowedChannel] {
-    let candidates = recommended.filter(\.isLive)
+  func mergedRecommendations(_ twitch: [FollowedChannel], blocked: Set<String> = [],
+                             includeNew: Bool = true) -> [FollowedChannel] {
+    let counterparts = Set(twitch.compactMap { links[$0.login.lowercased()] })
+    let candidates = (includeNew ? recommended : recommended + directory)
+      .filter { $0.isLive && (includeNew || counterparts.contains($0.slug)) }
     let merged = KickUnifiedFeed.merge(twitch: twitch, kick: candidates, links: links)
-      .filter { !blocked.contains($0.channelKey) }
+      .filter { Self.isAllowed($0, blocked: blocked, links: links) }
+    if !includeNew { return KickUnifiedFeed.preservingOrder(of: twitch, merged: merged, links: links) }
     return KickUnifiedFeed.interleave(
       merged.filter { $0.platform != .kick }, merged.filter { $0.platform == .kick })
+  }
+
+  private static func isAllowed(_ channel: FollowedChannel, blocked: Set<String>,
+                                links: [String: String]) -> Bool {
+    KickUnifiedFeed.identityKeys(for: channel, links: links).isDisjoint(with: blocked)
   }
 
   func refresh(twitch: [FollowedChannel], force: Bool = false, preservingRecommendations: Bool = false) async {
@@ -239,9 +288,9 @@ final class KickDiscoveryService {
     lastUpdatedAt = Date()
   }
 
-  private static func loadChannels(
+  static func loadChannels(
     _ slugs: [String], load: @escaping @Sendable (String) async throws -> KickChannel,
-    isCurrent: () -> Bool
+    isCurrent: @MainActor () -> Bool
   ) async -> (channels: [String: KickChannel], failures: Int) {
     await withTaskGroup(of: (String, KickChannel?).self) { group in
       var iterator = slugs.makeIterator()

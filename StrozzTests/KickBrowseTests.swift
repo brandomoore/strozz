@@ -119,10 +119,10 @@ final class KickBrowseTests: XCTestCase {
   }
 
   func testSameNumericCategoryIDsStayDistinctAcrossPlatforms() async {
-    let kick = directory()
+    let kick = Data(#"{"current_page":1,"data":[{"id":15,"name":"Chatting","viewers":100,"banner":{"url":"https://files.kick.com/poster.webp"}}],"next_page_url":null}"#.utf8)
     let twitch = Data(#"{"data":{"games":{"edges":[{"node":{"id":"15","name":"Chatting","viewersCount":200}}]}}}"#.utf8)
     let service = BrowseService { request in
-      Self.response(request, data: request.url?.host == "web.kick.com" ? kick : twitch)
+      Self.response(request, data: request.url?.host == "kick.com" ? kick : twitch)
     }
     await service.loadCategories(filter: .all)
     XCTAssertEqual(service.categories.map(\.id), ["15", "kick:15"])
@@ -153,7 +153,7 @@ final class KickBrowseTests: XCTestCase {
     let service = SearchService(loadData: { _ in
       XCTFail("Kick-only search must not query Twitch")
       throw URLError(.unsupportedURL)
-    }, loadKick: { _ in kick })
+    }, loadKickSearch: { _ in .init(channels: [kick.followedChannel], categories: []) })
     await service.search("example", filter: .kick)
     XCTAssertEqual(service.channelResults.map(\.platform), [.kick])
     XCTAssertTrue(service.categoryResults.isEmpty)
@@ -293,7 +293,8 @@ final class KickBrowseTests: XCTestCase {
     let kick = KickChannel(slug: "xqc", displayName: "xQc", title: "Live", category: "",
                            viewerCount: 100, isLive: true, chatroomID: nil, imageURL: nil)
     let service = SearchService(creatorLinks: ["xqc": "xqc"],
-      loadData: { Self.response($0, data: twitch) }, loadKick: { _ in kick })
+      loadData: { Self.response($0, data: twitch) },
+      loadKickSearch: { _ in .init(channels: [kick.followedChannel], categories: []) })
     await service.search("xqc")
     XCTAssertEqual(service.channelResults.map(\.channelKey), ["xqc"])
     XCTAssertEqual(service.channelResults.first?.combinedViewerCount, 150)
@@ -302,6 +303,180 @@ final class KickBrowseTests: XCTestCase {
     XCTAssertEqual(service.channelResults.first?.combinedViewerCount, 50)
     await service.search("xqc", filter: .kick)
     XCTAssertEqual(service.channelResults.map(\.channelKey), ["kick:xqc"])
+  }
+
+  func testRealCategoryCataloguePreservesArtworkTotalsAndSafePagination() throws {
+    let data = Data(#"{"current_page":2,"data":[{"id":15,"name":"Chatting","viewers":1234,"banner":{"url":"https://files.kick.com/art.webp"}}],"next_page_url":"https://untrusted.invalid/page"}"#.utf8)
+    let page = try KickBrowseService.decodeCategories(data)
+    XCTAssertEqual(page.nextPage, 3)
+    XCTAssertEqual(page.categories.first?.sourceID, "15")
+    XCTAssertEqual(page.categories.first?.viewerCount, 1234)
+    XCTAssertEqual(page.categories.first?.boxArtURL?.host, "files.kick.com")
+    XCTAssertThrowsError(try KickBrowseService.decodeCategories(Data(#"{"data":[]}"#.utf8)))
+  }
+
+  func testCategoryPaginationKeepsExistingCardsAndUsesOwnedEndpoint() async {
+    let service = BrowseService { request in
+      XCTAssertEqual(request.url?.host, "kick.com")
+      let page = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+        .queryItems?.first { $0.name == "page" }?.value ?? ""
+      let data = page == "1"
+        ? #"{"current_page":1,"data":[{"id":1,"name":"One"}],"next_page_url":"https://untrusted.invalid"}"#
+        : #"{"current_page":2,"data":[{"id":1,"name":"One"},{"id":2,"name":"Two"}],"next_page_url":null}"#
+      return Self.response(request, data: Data(data.utf8))
+    }
+    await service.loadCategories(filter: .kick)
+    await service.loadMoreCategories()
+    XCTAssertEqual(service.categories.map(\.id), ["kick:1", "kick:2"])
+    XCTAssertNil(service.nextKickCategoryPage)
+    XCTAssertNil(service.moreCategoriesErrorMessage)
+  }
+
+  func testLateCategoryPageCannotAppendAfterSwitchingProvider() async {
+    let started = expectation(description: "Category next page requested")
+    let pending = PendingBrowseResponse(started: started)
+    let service = BrowseService { request in
+      if request.url?.host == "gql.twitch.tv" {
+        return Self.response(request, data: Data(#"{"data":{"games":{"edges":[]}}}"#.utf8))
+      }
+      let page = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+        .queryItems?.first { $0.name == "page" }?.value
+      if page == "2" { return try await pending.load(request) }
+      return Self.response(request, data: Data(#"{"current_page":1,"data":[{"id":1,"name":"One"}],"next_page_url":"next"}"#.utf8))
+    }
+    await service.loadCategories(filter: .kick)
+    let more = Task { await service.loadMoreCategories() }
+    await fulfillment(of: [started], timeout: 2)
+    await service.loadCategories(filter: .twitch)
+    pending.finish(data: Data(#"{"current_page":2,"data":[{"id":2,"name":"Late"}],"next_page_url":null}"#.utf8))
+    await more.value
+    XCTAssertTrue(service.categories.isEmpty)
+    XCTAssertNil(service.nextKickCategoryPage)
+    XCTAssertFalse(service.isLoadingMoreCategories)
+  }
+
+  func testFailedCategoryNextPageRetainsCardsAndCanRetry() async {
+    let service = BrowseService { request in
+      let page = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+        .queryItems?.first { $0.name == "page" }?.value
+      if page == "2" { throw URLError(.timedOut) }
+      return Self.response(request, data: Data(#"{"current_page":1,"data":[{"id":1,"name":"One"}],"next_page_url":"next"}"#.utf8))
+    }
+    await service.loadCategories(filter: .kick)
+    await service.loadMoreCategories()
+    XCTAssertEqual(service.categories.map(\.id), ["kick:1"])
+    XCTAssertEqual(service.nextKickCategoryPage, 2)
+    XCTAssertNotNil(service.moreCategoriesErrorMessage)
+  }
+
+  func testFullTextSearchIncludesOfflineChannelsAndCategoryArtwork() throws {
+    let data = Data(#"{"channels":[{"slug":"one","user":{"username":"One"},"isLive":false},{"slug":"banned","user":{"username":"Banned"},"isLive":true,"is_banned":true}],"categories":[{"id":15,"name":"Chatting","banner":{"src":"https://files.kick.com/category.webp"}}],"livestreams":{"tags":[]}}"#.utf8)
+    let result = try KickBrowseService.decodeSearch(data)
+    XCTAssertEqual(result.channels.map(\.channelKey), ["kick:one"])
+    XCTAssertFalse(result.channels[0].isLive)
+    XCTAssertNil(result.channels[0].viewerCount)
+    XCTAssertEqual(result.categories.first?.boxArtURL?.host, "files.kick.com")
+  }
+
+  func testSearchEnrichmentFailureRetainsBasicRowAndReportsWarning() async throws {
+    let result = try await KickBrowseService.search("just chat") { request in
+      guard request.url?.path == "/api/search" else { throw URLError(.timedOut) }
+      XCTAssertEqual(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+        .queryItems?.first?.value, "just chat")
+      return Self.response(request, data: Data(#"{"channels":[{"slug":"one","user":{"username":"One"},"isLive":true}],"categories":[]}"#.utf8))
+    }
+    XCTAssertEqual(result.channels.map(\.channelKey), ["kick:one"])
+    XCTAssertNotNil(result.warning)
+    XCTAssertNil(result.channels.first?.viewerCount)
+  }
+
+  func testSearchReportsBothProviderFailures() async {
+    let service = SearchService(loadData: { _ in throw URLError(.timedOut) }, loadKickSearch: { _ in
+      .init(channels: [], categories: [], warning: "Kick details unavailable")
+    })
+    await service.search("some channel")
+    XCTAssertTrue(service.errorMessage?.contains("Could not search") == true)
+    XCTAssertTrue(service.errorMessage?.contains("Kick details unavailable") == true)
+  }
+
+  func testFailedKickReturnRefreshPreservesItsExistingResults() async {
+    let attempts = KickSearchAttempts()
+    let channel = KickChannel(slug: "one", displayName: "One", title: "Live", category: "",
+      viewerCount: 10, isLive: true, chatroomID: nil, imageURL: nil).followedChannel
+    let service = SearchService(loadKickSearch: { _ in
+      guard await attempts.next() == 1 else { throw URLError(.timedOut) }
+      return .init(channels: [channel], categories: [])
+    })
+    await service.search("one", filter: .kick)
+    await service.search("one", preservingResultsOnFailure: true, filter: .kick)
+    XCTAssertEqual(service.channelResults.map(\.channelKey), ["kick:one"])
+    XCTAssertNotNil(service.errorMessage)
+  }
+
+  func testShortKickSearchExplainsMinimumWithoutSendingInvalidRequest() async {
+    let service = SearchService(loadKickSearch: { term in
+      try await KickBrowseService.search(term) { _ in
+        XCTFail("Kick rejects queries shorter than three characters")
+        throw URLError(.badURL)
+      }
+    })
+    await service.search("xq", filter: .kick)
+    XCTAssertTrue(service.channelResults.isEmpty)
+    XCTAssertEqual(service.errorMessage, KickBrowseService.Failure.searchTooShort.localizedDescription)
+  }
+
+  func testHomeRecommendationsContainGlobalKickAndMergeCostreamers() async {
+    let kick = directory(slugs: ["xqc", "exclusive"])
+    let twitch = twitchDirectory(logins: ["xqc"])
+    let service = RecommendationsService(creatorLinks: ["xqc": "xqc"]) { request in
+      if request.url?.host == "web.kick.com" { return Self.response(request, data: kick) }
+      if request.url?.host == "kick.com" {
+        return Self.response(request, data: Data(#"{"current_page":1,"data":[{"id":15,"name":"Chatting"}],"next_page_url":null}"#.utf8))
+      }
+      let body = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+      return Self.response(request, data: body.contains("TopGames")
+        ? Data(#"{"data":{"games":{"edges":[]}}}"#.utf8) : twitch)
+    }
+    await service.refresh()
+    XCTAssertEqual(service.channels.map(\.channelKey), ["xqc", "kick:exclusive"])
+    XCTAssertEqual(service.channels.first?.combinedViewerCount, 150)
+    XCTAssertEqual(service.categories.first?.platform, .kick)
+    XCTAssertNil(service.errorMessage)
+  }
+
+  func testMixedHomeCategoryResolvesNativeKickIDAndKeepsItForPagination() async {
+    let body = directory()
+    let service = BrowseService { request in
+      if request.url?.path == "/api/search" {
+        return Self.response(request, data: Data(#"{"channels":[],"categories":[{"id":15,"name":"Chatting"}]}"#.utf8))
+      }
+      if request.url?.host == "web.kick.com" {
+        let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+        XCTAssertEqual(query.first { $0.name == "category_id" }?.value, "15")
+        return Self.response(request, data: body)
+      }
+      return Self.response(request, data: Data(#"{"data":{"game":{"streams":{"edges":[]}}}}"#.utf8))
+    }
+    let category = TwitchCategory(id: "509658", name: "Chatting", boxArtURL: nil, viewerCount: nil)
+    await service.loadStreams(for: category, mixCategoryPlatforms: true)
+    await service.loadMoreStreams()
+    XCTAssertEqual(service.categoryStreams.map(\.channelKey), ["kick:one", "kick:two"])
+    XCTAssertNil(service.streamsErrorMessage)
+  }
+
+  func testKickPersonalizedCandidatesUseExactCategoryMappings() async {
+    let body = directory()
+    let candidates = await KickBrowseService.recommendationCandidates(for: ["Chatting", "Unknown"]) { request in
+      if request.url?.path == "/api/search" {
+        let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first?.value
+        let categories = query?.lowercased() == "chatting" ? #"{"id":15,"name":"Chatting"}"# : #"{"id":2,"name":"Not the same category"}"#
+        return Self.response(request, data: Data("{\"channels\":[],\"categories\":[\(categories)]}".utf8))
+      }
+      let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+      XCTAssertEqual(query.first { $0.name == "category_id" }?.value, "15")
+      return Self.response(request, data: body)
+    }
+    XCTAssertEqual(candidates.map(\.channelKey), ["kick:one", "kick:two"])
   }
 
   private func directory(slugs: [String] = ["one", "two"], cursor: String? = "next-page") -> Data {
@@ -338,6 +513,11 @@ private actor BrowseRequestRecorder {
   private(set) var hosts: [String] = []
   func record(_ request: URLRequest) { hosts.append(request.url?.host ?? "") }
   func clear() { hosts = [] }
+}
+
+private actor KickSearchAttempts {
+  private var count = 0
+  func next() -> Int { count += 1; return count }
 }
 
 @MainActor

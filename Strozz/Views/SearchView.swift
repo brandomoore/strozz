@@ -178,8 +178,7 @@ private struct SearchResultsView: View {
           .focusEffectDisabled()
           .onTapGesture {
             preparePlaybackReturn()
-            if channel.platform == .kick, channel.isLive { onWatchChannel(channel) }
-            else { onSelectChannel(channel) }
+            onSelectChannel(channel)
           }
           .modifier(MultiviewCardShortcut(channel: channel))
           .zIndex(isFocused ? 2 : 0)

@@ -15,6 +15,7 @@ struct ChatMessagesColumn: View {
   var chat: ChatService? = nil
   /// VOD chat-replay source. Mutually exclusive with `chat`.
   var replay: VODChatReplayService? = nil
+  var replayUnavailableReason: String? = nil
   let channel: String
   var platform: LivePlatform = .twitch
   let replayStartMessageID: ChatMessage.ID?
@@ -86,7 +87,7 @@ struct ChatMessagesColumn: View {
       isConnected: isConnected,
       isReconnecting: chat != nil && !isConnected,
       connectionPlatform: platform,
-      connectionError: replay?.errorMessage,
+      connectionError: replayUnavailableReason ?? replay?.errorMessage,
       emoteURLs: emoteURLs,
       badgeURLs: badgeURLs,
       cheermotes: cheermotes,

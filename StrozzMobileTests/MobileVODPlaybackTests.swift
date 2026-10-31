@@ -11,14 +11,26 @@ final class MobileVODPlaybackTests: XCTestCase {
       let login = ProcessInfo.processInfo.environment["STROZZ_MOBILE_VOD_CHANNEL"] else {
       throw XCTSkip("Set STROZZ_MOBILE_VOD_TESTS=1 and STROZZ_MOBILE_VOD_CHANNEL for live VOD verification.")
     }
-    let content = await ChannelContentService.load(login: login)
-    let video = try XCTUnwrap(content?.videos.first { $0.lengthSeconds > 300 })
-    let selection = MobileVODSelection(video: video, channel: .init(login: login))
+    let videos: [ChannelVOD]
+    switch ProcessInfo.processInfo.environment["STROZZ_MOBILE_VOD_PLATFORM"] ?? "twitch" {
+    case "twitch":
+      videos = await ChannelContentService.load(login: login)?.videos ?? []
+    case "kick":
+      videos = try await KickChannelContentService.load(login).videos
+    default:
+      XCTFail("STROZZ_MOBILE_VOD_PLATFORM must be twitch or kick")
+      throw URLError(.badURL)
+    }
+    let video = try XCTUnwrap(videos.first { $0.lengthSeconds > 300 })
+    var channel = ChannelPageTarget(login: login)
+    channel.platform = video.platform
+    let selection = MobileVODSelection(video: video, channel: channel)
+    let resumeSeconds = 125.0
     let suite = "MobileVODPlayback.\(UUID())"
     let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
     let progress = MobileVODProgressStore(accountID: "fixture", defaults: defaults)
-    progress.save(selection, seconds: 60, duration: Double(video.lengthSeconds))
+    progress.save(selection, seconds: resumeSeconds, duration: Double(video.lengthSeconds))
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     let window = try XCTUnwrap(scene.keyWindow)
     let previous = window.rootViewController
@@ -28,28 +40,29 @@ final class MobileVODPlaybackTests: XCTestCase {
     window.rootViewController = first
     let firstPlayer = try await waitForVideo(in: first)
     XCTAssertTrue(firstPlayer.isMuted)
-    XCTAssertGreaterThanOrEqual(firstPlayer.currentTime().seconds, 59)
-    XCTAssertLessThan(firstPlayer.currentTime().seconds, 90)
+    XCTAssertGreaterThanOrEqual(firstPlayer.currentTime().seconds, resumeSeconds - 1)
+    XCTAssertLessThan(firstPlayer.currentTime().seconds, resumeSeconds + 30)
     let item = try XCTUnwrap(firstPlayer.currentItem)
     let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [:])
     item.add(output)
     var frames = 0
     for _ in 0..<10 {
       try await Task.sleep(for: .seconds(1))
-      if output.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) != nil { frames += 1 }
+      if output.hasNewPixelBuffer(forItemTime: item.currentTime()),
+        output.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) != nil { frames += 1 }
     }
     XCTAssertGreaterThanOrEqual(frames, 9)
     lifecycle.phase = .background
     try await Task.sleep(for: .milliseconds(300))
     XCTAssertEqual(firstPlayer.rate, 0, "Backgrounding must pause VOD playback")
-    XCTAssertGreaterThan(progress.progress(for: video.id), 65)
+    XCTAssertGreaterThan(progress.progress(for: video.id), resumeSeconds + 5)
     lifecycle.phase = .active
     _ = try await waitForVideo(in: first)
     window.rootViewController = previous
     try await Task.sleep(for: .milliseconds(500))
     XCTAssertEqual(firstPlayer.rate, 0)
     let saved = progress.progress(for: video.id)
-    XCTAssertGreaterThan(saved, 65)
+    XCTAssertGreaterThan(saved, resumeSeconds + 5)
     let second = UIHostingController(rootView: VODTestHost(selection: selection, progress: progress, lifecycle: lifecycle))
     window.rootViewController = second
     let secondPlayer = try await waitForVideo(in: second)

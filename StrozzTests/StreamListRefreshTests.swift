@@ -120,7 +120,7 @@ final class StreamListRefreshTests: XCTestCase {
     let started = (0..<2).map { expectation(description: "Request \($0)") }
     let loader = ListResponseLoader(started: started)
     let service = SearchService(loadData: { try await loader.load($0) },
-      loadKick: { _ in throw KickPlaybackService.Failure.notFound })
+      loadKickSearch: { _ in throw KickPlaybackService.Failure.notFound })
     let initial = Task { await service.search("example") }
     await fulfillment(of: [started[0]], timeout: 2)
     loader.succeed(0, json: searchJSON(title: "Original"))
@@ -143,7 +143,7 @@ final class StreamListRefreshTests: XCTestCase {
     let started = (0..<2).map { expectation(description: "Request \($0)") }
     let loader = ListResponseLoader(started: started)
     let service = SearchService(loadData: { try await loader.load($0) },
-      loadKick: { _ in throw KickPlaybackService.Failure.notFound })
+      loadKickSearch: { _ in throw KickPlaybackService.Failure.notFound })
     let old = Task { await service.search("example") }
     await fulfillment(of: [started[0]], timeout: 2)
     service.clear()
@@ -165,7 +165,7 @@ final class StreamListRefreshTests: XCTestCase {
     let started = [expectation(description: "Request")]
     let loader = ListResponseLoader(started: started)
     let service = SearchService(loadData: { try await loader.load($0) },
-      loadKick: { _ in throw KickPlaybackService.Failure.notFound })
+      loadKickSearch: { _ in throw KickPlaybackService.Failure.notFound })
     let request = Task { await service.search("example") }
     await fulfillment(of: started, timeout: 2)
     request.cancel()

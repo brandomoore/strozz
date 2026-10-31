@@ -4,7 +4,7 @@ import TVServices
 /// grid when Strozz is in the top row of the Home screen.
 ///
 /// This runs in a separate, short-lived process. It fetches the currently-live
-/// streams directly from Twitch at render time so the shelf always reflects
+/// streams directly from their providers at render time so the shelf reflects
 /// what is live *right now* — fixing stale/offline cards and missing
 /// thumbnails. If the fresh fetch fails (offline, signed out, expired session),
 /// it falls back to the snapshot the main app last published.
@@ -58,11 +58,12 @@ final class ContentProvider: TVTopShelfContentProvider {
     private static func freshSections(
         cached: TopShelfSnapshot?
     ) async -> [TopShelfSnapshot.Section]? {
-        guard let credentials = TopShelfCredentialStore.load() else { return nil }
+        let credentials = TopShelfCredentialStore.load()
         let recommended = cached?.sections.first { $0.id == "recommended" }
 
         return await withTimeout(seconds: fetchTimeout) {
-            await TopShelfLiveFeed.run(credentials: credentials, recommended: recommended)
+            await TopShelfLiveFeed.run(credentials: credentials, recommended: recommended,
+                                      following: cached?.sections.first { $0.id == "following" || $0.id == "trending" })
         }
     }
 
@@ -94,7 +95,7 @@ final class ContentProvider: TVTopShelfContentProvider {
             shelfItem.setImageURL(thumbnailURL, for: .screenScale2x)
         }
 
-        let deepLink = TopShelf.channelDeepLink(login: item.login)
+        let deepLink = TopShelf.channelDeepLink(login: item.login, platform: item.sourcePlatform)
         let action = TVTopShelfAction(url: deepLink)
         shelfItem.displayAction = action
         shelfItem.playAction = action
