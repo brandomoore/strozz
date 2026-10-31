@@ -342,14 +342,16 @@ their audio/video renderers while retaining the pane models, layout and audio
 owner. New selections join that same controller; no second active queue is
 created. Hidden browsing cards cannot run previews behind the wall.
 
-After ten idle seconds, the focused/audible pane's outside outline dims to 35%
+After 2.5 idle seconds and a 0.2-second fade, the focused/audible pane's outside outline dims to 35%
 of its active opacity instead of disappearing. The icon-only audio badge and
 focused metadata still hide; remote interaction restores full chrome without
 changing audio ownership. Both overlays use the shared native Liquid Glass
 HUD treatment, with theme-aware opaque surfaces when transparency is disabled.
 The outline switches instantly between panes; other chrome animations are unchanged.
 Pane frames match the video's presentation aspect ratio rather than a letterboxed
-layout cell. Pictures pack together with 10-point gaps, just enough for the
+layout cell. Compact videos have 16-point continuous rounded corners; metadata is
+clipped to the same shape and the outside outline follows its rounded edge.
+Pictures pack together with 10-point gaps, just enough for the
 outside outlines, and a 5-point screen-edge allowance. Unused aspect-ratio space
 stays around the wall instead of between rows. These bounds stay stable while
 chrome hides. Compact players do not ignore safe areas: doing so expands their
@@ -362,8 +364,10 @@ cue. Chrome cannot enlarge the picture's outside outline or spill into peers.
 Featured, Spotlight and Equal are explicit TV layout choices. Featured places
 the pinned primary beside a compact secondary grid; Spotlight uses a thumbnail
 strip; Equal uses common-height, aspect-correct pictures without a three-stream
-primary exception. `primaryPaneID` is independent of focus/audio and remains
-selected across layout changes. Promotion changes geometry, not pane order,
+primary exception. Choosing Featured or Spotlight promotes the pane focused before
+opening the toolbar, or the pane whose hold menu was opened. Later focus/audio
+changes do not move the primary; Equal and programmatic restoration preserve it.
+Promotion changes geometry, not pane order,
 player items or reload identifiers. Existing quality budgets remain unchanged:
 Featured and Equal use the grid tiers; Spotlight retains its source/thumbnail tiers.
 

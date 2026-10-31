@@ -843,12 +843,15 @@ the chosen layout, primary stream, or audio selection.
 Press Play/Pause on the wall for the bottom **Layout**, **Browse streams**, and
 **Done** controls. The native Layout menu offers **Featured** (a large primary
 beside smaller streams), **Spotlight** (a large primary above a thumbnail strip),
-or **Equal** (equal-sized streams with matching video proportions). Hold a secondary stream and choose
+or **Equal** (equal-sized streams with matching video proportions). Choosing Featured
+or Spotlight makes the currently focused stream primary. Hold a secondary stream and choose
 **Make primary** in Featured or Spotlight; moving focus changes audio, not the
 primary. The hold menu also offers a **Layout** submenu and **Full screen**.
 Controls use existing empty space first, moving or reducing the wall only when
 needed to keep video unobscured. Back closes the native layout menu, then the
 controls, returning focus to the same stream. **Done** closes controls, not multiview.
+Videos have 16-point rounded corners. The channel/viewer overlay fades away within
+three seconds of inactivity; remote interaction brings it back.
 
 Multiview also uses the normal native live player for every pane. Selecting a
 pane zooms that same player and video surface into the single-stream layout

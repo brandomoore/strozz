@@ -230,7 +230,10 @@ final class MultiviewController {
     refreshQuality()
   }
 
-  func setLayout(_ layout: MultiviewLayout) {
+  func setLayout(_ layout: MultiviewLayout, focusedPaneID: String? = nil) {
+    if layout.hasPrimary, let focusedPaneID, panes.contains(where: { $0.id == focusedPaneID }) {
+      primaryPaneID = focusedPaneID
+    }
     self.layout = layout
     refreshQuality()
   }
@@ -351,6 +354,7 @@ final class MultiviewController {
 
 enum MultiviewGeometry {
   static let defaultAspectRatio: CGFloat = 16 / 9
+  static let videoCornerRadius: CGFloat = 16
   static let maximumOutlineWidth: CGFloat = 5
   static let gap = maximumOutlineWidth * 2
 

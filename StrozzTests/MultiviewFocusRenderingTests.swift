@@ -6,13 +6,14 @@ import XCTest
 @MainActor
 final class MultiviewFocusRenderingTests: XCTestCase {
   func testChromeTimeoutCanBeRestartedAndCancelled() async throws {
-    XCTAssertEqual(MultiviewChrome.idleDelay, .seconds(10))
+    XCTAssertEqual(MultiviewChrome.idleDelay, .seconds(2.5))
+    XCTAssertLessThanOrEqual(MultiviewChrome.idleDelay + .seconds(MultiviewChrome.fadeDuration), .seconds(3))
     let started = (0..<3).map { expectation(description: "Timer \($0) started") }
     let finished = (0..<3).map { expectation(description: "Timer \($0) resumed") }
     var pending: [Int: CheckedContinuation<Void, Never>] = [:]
     var count = 0
     let chrome = MultiviewChrome { duration in
-      XCTAssertEqual(duration, .seconds(10))
+      XCTAssertEqual(duration, .seconds(2.5))
       let index = count
       count += 1
       await withCheckedContinuation { continuation in
@@ -139,6 +140,7 @@ final class MultiviewFocusRenderingTests: XCTestCase {
           for visible in [true, false] {
             let host = UIHostingController(rootView:
               Color(red: 1, green: 0, blue: 0).frame(width: size.width, height: size.height)
+                .clipShape(RoundedRectangle(cornerRadius: MultiviewGeometry.videoCornerRadius, style: .continuous))
                 .overlay {
                   MultiviewPaneTile(pane: pane, isFocused: true, isPrimary: false,
                     showsMetadata: false, showsChrome: visible, style: compact ? .compact : .full,
@@ -155,11 +157,14 @@ final class MultiviewFocusRenderingTests: XCTestCase {
             let center = CGPoint(x: host.view.bounds.midX, y: host.view.bounds.midY)
             for point in [
               CGPoint(x: center.x - size.width / 2 + 1, y: center.y),
-              CGPoint(x: center.x - size.width / 2 + 1, y: center.y - size.height / 2 + 1),
+              CGPoint(x: center.x, y: center.y - size.height / 2 + 1),
             ] {
               XCTAssertEqual(try pixel(image, at: point), [255, 0, 0],
                 "The outline cannot cover any video pixels: \(theme), opaque=\(opaque), compact=\(compact)")
             }
+            XCTAssertEqual(try pixel(image, at: .init(x: center.x - size.width / 2 + 1,
+              y: center.y - size.height / 2 + 1)), [0, 0, 0],
+              "The video and its outside outline must leave rounded corners clear")
             let outline = try pixel(image, at: .init(x: center.x - size.width / 2 - 2, y: center.y))
             for component in outline {
               XCTAssertEqual(component, visible ? 255 : 89, accuracy: 2,
@@ -250,6 +255,8 @@ final class MultiviewFocusRenderingTests: XCTestCase {
           host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
         }
         let active = try XCTUnwrap(expected[controller.panes[0].id])
+        XCTAssertEqual(try pixel(image, at: .init(x: active.minX + 1, y: active.minY + 1)), [0, 0, 0],
+          "The decoded AVKit picture itself must be clipped, not just its metadata")
         for point in [
           CGPoint(x: active.minX - 2, y: active.midY),
           CGPoint(x: active.maxX + 2, y: active.midY),
@@ -577,7 +584,9 @@ private struct MultiviewPicturePaneFixture: View {
   var body: some View {
     var player = PlayerView(channel: pane.channel.login, auth: TwitchAuthSession(), model: pane.model)
     player.inputTestContent = { AnyView($0.playerStack) }
-    return player.overlay {
+    return player.clipShape(RoundedRectangle(
+      cornerRadius: pane.presentation.isExpanded ? 0 : MultiviewGeometry.videoCornerRadius, style: .continuous))
+    .overlay {
       MultiviewPaneTile(pane: pane, isFocused: isFocused, isPrimary: false,
         showsMetadata: false, showsChrome: true, style: .full, palette: .dark, glassDisabled: true)
     }

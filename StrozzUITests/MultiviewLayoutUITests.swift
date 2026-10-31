@@ -51,6 +51,8 @@ final class MultiviewLayoutUITests: XCTestCase {
     press(.select, app: app, "select Spotlight")
     expectFocus("multiview-layout", app: app)
     XCTAssertEqual(try state(app)["layout"] as? String, "spotlight")
+    XCTAssertEqual(try state(app)["primary"] as? String, audio,
+      "The toolbar must remember the pane focused before the native menu opened")
     try assertIdentity(before, try state(app))
     try assertAudio(audio, app: app)
     press(.select, app: app, "reopen picker")
@@ -62,7 +64,7 @@ final class MultiviewLayoutUITests: XCTestCase {
     press(.up, app: app, "wall disabled above toolbar")
     XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'multiview-pane-' AND enabled == true")).firstMatch.exists)
     try assertAudio(audio, app: app)
-    Thread.sleep(forTimeInterval: 11)
+    Thread.sleep(forTimeInterval: 3)
     capture(app, "toolbar survives chrome idle timeout")
     XCTAssertTrue(control("multiview-layout", app: app).exists)
     press(.menu, app: app, "Back restores original pane")
@@ -113,6 +115,26 @@ final class MultiviewLayoutUITests: XCTestCase {
       NSPredicate(format: "identifier BEGINSWITH 'multiview-make-primary-'")).firstMatch.exists)
     capture(app, "Equal context excludes Make primary")
     press(.menu, app: app, "dismiss Equal context")
+    try assertIdentity(before, try state(app))
+  }
+
+  func testContextFeaturedPromotesThePaneThatOpenedTheMenu() throws {
+    let app = try launch(count: 4, layout: "grid")
+    defer { app.terminate() }
+    press(.right, app: app, "focus Equal secondary")
+    let before = try state(app)
+    let audio = try XCTUnwrap(before["audio"] as? String)
+    XCTAssertNotEqual(audio, "layout-0")
+    press(.select, duration: 1.2, app: app, "hold focused Equal pane")
+    let layout = app.cells.containing(.any, identifier: "multiview-context-layout").firstMatch
+    XCTAssertTrue(layout.waitForExistence(timeout: 5))
+    focusCell(layout, app: app)
+    press(.select, app: app, "open context layout submenu")
+    expectFocus("multiview-layout-featured", app: app)
+    press(.select, app: app, "choose Featured")
+    XCTAssertEqual(try state(app)["layout"] as? String, "featured")
+    XCTAssertEqual(try state(app)["primary"] as? String, audio)
+    try assertAudio(audio, app: app)
     try assertIdentity(before, try state(app))
   }
 

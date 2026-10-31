@@ -5,7 +5,8 @@ import SwiftUI
 @MainActor
 @Observable
 final class MultiviewChrome {
-  static let idleDelay: Duration = .seconds(10)
+  static let idleDelay: Duration = .seconds(2.5)
+  static let fadeDuration: TimeInterval = 0.2
   private(set) var isVisible = true
   private let delay: Duration
   private let sleep: @MainActor (Duration) async throws -> Void
@@ -28,7 +29,7 @@ final class MultiviewChrome {
         try Task.checkCancellation()
       } catch { return }
       guard let self else { return }
-      withAnimation(.easeOut(duration: 0.4)) { self.isVisible = false }
+      withAnimation(.easeOut(duration: Self.fadeDuration)) { self.isVisible = false }
     }
   }
 
@@ -130,7 +131,7 @@ struct MultiviewPlayerView: View {
             canBrowse: lineup != nil || (controller.canAddPane && !addableChannels.isEmpty),
             hasLineup: lineup != nil, focus: $focus,
             onSelectLayout: { layout in
-              controller.setLayout(layout)
+              controller.setLayout(layout, focusedPaneID: lastPaneID ?? controller.audiblePaneID)
               bumpChrome()
             }, onBrowse: {
               if let lineup { lineup.browse() } else { showingAddPicker = true }
@@ -321,6 +322,8 @@ struct MultiviewPlayerView: View {
   private func paneView(_ pane: MultiviewPane, style: MultiviewPaneTile.Style) -> some View {
     PlayerView(channel: pane.channel.login, auth: auth, goLive: goLive,
       posterURL: pane.channel.thumbnailURL, initialPlatform: pane.channel.platform, model: pane.model)
+    .clipShape(RoundedRectangle(
+      cornerRadius: pane.presentation.isExpanded ? 0 : MultiviewGeometry.videoCornerRadius, style: .continuous))
     .accessibilityElement(children: .contain)
     .accessibilityIdentifier(pane.presentation.isExpanded ? "expanded-stream-\(pane.id)" : "")
     .accessibilityValue(Text(pane.accessibilityStatus(isTransitioning: controller.isTransitioning)))
@@ -404,7 +407,7 @@ struct MultiviewPlayerView: View {
 
     Menu {
       MultiviewLayoutOptions(layout: controller.layout) { layout in
-        controller.setLayout(layout)
+        controller.setLayout(layout, focusedPaneID: pane.id)
         bumpChrome()
       }
     } label: {
@@ -488,6 +491,7 @@ struct MultiviewPlayerView: View {
   }
 
   private func revealControls() {
+    lastPaneID = focusedPaneID ?? lastPaneID
     hintHideTask?.cancel()
     withAnimation(.motionAware(.easeOut(duration: 0.25), reduceMotion: reduceMotion)) {
       hintVisible = false
@@ -626,10 +630,10 @@ struct MultiviewPaneTile: View {
         overlays(size: geometry.size)
       }
       .frame(width: geometry.size.width, height: geometry.size.height)
-      .clipped()
+      .clipShape(RoundedRectangle(cornerRadius: MultiviewGeometry.videoCornerRadius, style: .continuous))
     }
     .overlay {
-      Rectangle()
+      RoundedRectangle(cornerRadius: MultiviewGeometry.videoCornerRadius + borderWidth, style: .continuous)
         .strokeBorder(borderColor, lineWidth: borderWidth)
         .padding(-borderWidth)
         .opacity(showsChrome ? 1 : (isFocused || pane.isAudible ? 0.35 : 0))

@@ -66,6 +66,48 @@ final class MultiviewLayoutTests: XCTestCase {
     }
   }
 
+  func testSelectingPrimaryLayoutsPromotesFocusedPaneWithoutChangingPlayback() {
+    let controller = MultiviewController(channels: (0..<4).map(channel))
+    defer { controller.teardown() }
+    let panes = controller.panes
+    let players = panes.map(\.player)
+    let reloads = panes.map(\.presentation.reloadID)
+    let items = panes.map { pane in
+      let item = AVPlayerItem(url: URL(fileURLWithPath: "/dev/null"))
+      pane.player.replaceCurrentItem(with: item)
+      return item
+    }
+    controller.setAudiblePane(panes[1].id)
+    for layout in [MultiviewLayout.spotlight, .featured] {
+      controller.setLayout(.grid)
+      controller.setLayout(layout, focusedPaneID: panes[2].id)
+      XCTAssertEqual(controller.primaryPaneID, panes[2].id)
+      XCTAssertEqual(controller.layout, layout)
+      XCTAssertEqual(controller.audiblePaneID, panes[1].id)
+      controller.setAudiblePane(panes[3].id)
+      XCTAssertEqual(controller.primaryPaneID, panes[2].id, "Later focus changes must not move the primary")
+      controller.setLayout(layout, focusedPaneID: panes[3].id)
+      XCTAssertEqual(controller.primaryPaneID, panes[3].id)
+      controller.setLayout(.grid, focusedPaneID: panes[0].id)
+      XCTAssertEqual(controller.primaryPaneID, panes[3].id, "Equal must not change the remembered primary")
+      controller.setLayout(layout, focusedPaneID: "removed-pane")
+      XCTAssertEqual(controller.primaryPaneID, panes[3].id)
+      controller.setLayout(layout)
+      XCTAssertEqual(controller.primaryPaneID, panes[3].id, "Programmatic restoration preserves the primary")
+      for (index, pane) in controller.panes.enumerated() {
+        XCTAssertTrue(pane === panes[index])
+        XCTAssertTrue(pane.player === players[index])
+        XCTAssertTrue(pane.player.currentItem === items[index])
+        XCTAssertEqual(pane.presentation.reloadID, reloads[index])
+      }
+      controller.setAudiblePane(panes[1].id)
+    }
+  }
+
+  func testVideoCornerRadiusIsSixteenPoints() {
+    XCTAssertEqual(MultiviewGeometry.videoCornerRadius, 16)
+  }
+
   func testEqualLayoutDoesNotFeatureOneOfThreeStreams() throws {
     for size in [CGSize(width: 854, height: 480), .init(width: 1280, height: 720),
       .init(width: 1920, height: 1080), .init(width: 3840, height: 2160), .init(width: 1440, height: 1080)] {
