@@ -197,6 +197,50 @@ final class EmoteCatalogTests: XCTestCase {
         XCTAssertNil(result.urls["OriginalName"])
     }
 
+    func testExactPunctuationAliasesTakePrecedenceOverTrimmedNames() async throws {
+        let transport = EmoteCatalogTransport()
+        let names = ["!boost", "boost", "Huh?", "(cat)", "!!!"]
+        await transport.setNames(names)
+        let result = await catalog(transport).snapshot(for: "burn")
+        for name in names {
+            let url = try XCTUnwrap(result.urls[name])
+            let segments = ChatLineTokenizer.segments(
+                text: "\(name)  \(name)", twitchEmoteURLs: [:], youtubeEmoteURLs: [:],
+                globalEmoteURLs: result.urls, cheermotes: [], shouldRenderCheers: false)
+            XCTAssertEqual(segments, [
+                .emote(name: name, url: url), .text(" "), .text(" "), .emote(name: name, url: url),
+            ], "Keep punctuation belonging to the enabled alias, rather than stripping it")
+        }
+    }
+
+    func testExactPunctuationAliasesPreserveMessageScopedProviderPrecedence() throws {
+        let twitch = try XCTUnwrap(URL(string: "https://example.invalid/twitch.webp"))
+        let youtube = try XCTUnwrap(URL(string: "https://example.invalid/youtube.webp"))
+        let kick = try XCTUnwrap(URL(string: "https://example.invalid/kick.webp"))
+        let global = try XCTUnwrap(URL(string: "https://example.invalid/global.webp"))
+        for (twitchURLs, youtubeURLs, kickURLs, expected) in [
+            (["!boost": twitch], ["!boost": youtube], ["!boost": kick], twitch),
+            ([:], ["!boost": youtube], ["!boost": kick], youtube),
+            ([:], [:], ["!boost": kick], kick),
+        ] {
+            XCTAssertEqual(ChatLineTokenizer.segments(
+                text: "!boost", twitchEmoteURLs: twitchURLs, youtubeEmoteURLs: youtubeURLs,
+                kickEmoteURLs: kickURLs, globalEmoteURLs: ["!boost": global],
+                cheermotes: [], shouldRenderCheers: false), [.emote(name: "!boost", url: expected)])
+        }
+    }
+
+    func testUnmatchedPunctuationStillWrapsOrdinaryEmotesAndPreservesText() throws {
+        let url = try XCTUnwrap(URL(string: "https://example.invalid/kappa.webp"))
+        let segments = ChatLineTokenizer.segments(
+            text: "(Kappa) !unknown", twitchEmoteURLs: [:], youtubeEmoteURLs: [:],
+            globalEmoteURLs: ["Kappa": url], cheermotes: [], shouldRenderCheers: false)
+        XCTAssertEqual(segments, [
+            .text("("), .emote(name: "Kappa", url: url), .text(")"), .text(" "),
+            .text("!"), .text("unknown"),
+        ])
+    }
+
     func testLiveChatRefreshRetokenizesAlreadyVisibleWords() async throws {
         let transport = EmoteCatalogTransport()
         let service = catalog(transport)

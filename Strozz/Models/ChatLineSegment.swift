@@ -94,6 +94,16 @@ enum ChatLineTokenizer {
                 String(char).rangeOfCharacter(from: punctuation) != nil
             }
 
+            // Punctuation can be part of an emote's exact name, such as !boost.
+            if !leading.isEmpty || !trailing.isEmpty,
+               let url = scopedEmoteURLs[token] ?? globalEmoteURLs[token] {
+                output.append(.emote(name: token, url: url))
+                if idx < words.count - 1 {
+                    output.append(.text(" "))
+                }
+                continue
+            }
+
             let coreStart = token.index(token.startIndex, offsetBy: leading.count)
             let coreEnd = token.index(token.endIndex, offsetBy: -trailing.count)
             let core = coreStart <= coreEnd ? String(token[coreStart..<coreEnd]) : token
