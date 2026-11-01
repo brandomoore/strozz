@@ -6,10 +6,13 @@ import XCTest
 final class MultiviewLayoutTests: XCTestCase {
   func testSmallPanesUseCompactChromeRegardlessOfQualityTier() {
     for size in [CGSize(width: 124, height: 93), .init(width: 294, height: 221),
-      .init(width: 600, height: 200), .init(width: 400, height: 300)] {
+      .init(width: 600, height: 200), .init(width: 400, height: 300),
+      .init(width: 420, height: 260), .init(width: 500, height: 281),
+      .init(width: 600, height: 338), .init(width: 639, height: 360),
+      .init(width: 640, height: 359)] {
       XCTAssertEqual(MultiviewPaneTile.Style.fitting(size, preferred: .full), .compact)
     }
-    XCTAssertEqual(MultiviewPaneTile.Style.fitting(.init(width: 420, height: 260), preferred: .full), .full)
+    XCTAssertEqual(MultiviewPaneTile.Style.fitting(.init(width: 640, height: 360), preferred: .full), .full)
     XCTAssertEqual(MultiviewPaneTile.Style.fitting(.init(width: 800, height: 450), preferred: .compact), .compact)
   }
 

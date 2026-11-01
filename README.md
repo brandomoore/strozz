@@ -898,6 +898,9 @@ Videos have 16-point rounded corners. The channel/viewer overlay fades away with
 three seconds of inactivity; remote interaction brings it back.
 Removing a video shrinks and fades it out while the remaining videos smoothly
 move into place. Layout changes keep the same players running and respect Reduce Motion.
+When a stream goes offline, small panes use compact channel and remove icon
+buttons. Larger panes retain the text labels; both actions remain remote-focusable.
+The channel button opens its profile; Back returns to the same wall.
 
 Multiview also uses the normal native live player for every pane. Selecting a
 pane zooms that same player and video surface into the single-stream layout

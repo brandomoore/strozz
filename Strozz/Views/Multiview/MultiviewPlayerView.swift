@@ -118,6 +118,14 @@ struct MultiviewPlayerView: View {
       let bottomPadding = max(28, geometry.safeAreaInsets.bottom)
       ZStack(alignment: .bottom) {
         palette.videoControlScrim
+          // Keep the full-page route separate from the add-picker's presenter.
+          .fullScreenCover(item: $profilePane, onDismiss: finishProfile) { pane in
+            ChannelPageView(target: ChannelPageTarget(channel: pane.channel)) { channel in
+              profileWatchRequest = (pane, channel)
+              profilePane = nil
+            }
+            .environment(\.themePalette, palette)
+          }
         MultiviewVideoStage(controller: controller,
           bottomClearance: showingControls ? controlsHeight + bottomPadding + 24 : 0) { pane in
           paneView(pane, style: pane.qualityTier == .thumbnail || pane.qualityTier == .hidden ? .compact : .full)
@@ -256,13 +264,6 @@ struct MultiviewPlayerView: View {
         onPick: { add($0) },
         onCancel: { showingAddPicker = false }
       )
-    }
-    .sheet(item: $profilePane, onDismiss: finishProfile) { pane in
-      ChannelPageView(target: ChannelPageTarget(channel: pane.channel)) { channel in
-        profileWatchRequest = (pane, channel)
-        profilePane = nil
-      }
-      .environment(\.themePalette, palette)
     }
   }
 
@@ -537,7 +538,7 @@ struct MultiviewOfflineActions: View {
 
   // Keep the pane's retry focus target above, not overlapping, these controls.
   static func reservedHeight(for style: MultiviewPaneTile.Style) -> CGFloat {
-    style == .compact ? 82 : 106
+    style == .compact ? 64 : 106
   }
 
   var body: some View {
@@ -562,6 +563,8 @@ struct MultiviewOfflineActions: View {
       .accessibilityIdentifier("multiview-remove-\(paneID)")
     }
     .font(style == .compact ? .caption : .subheadline)
+    .lineLimit(1)
+    .controlSize(.small)
     .buttonStyle(.bordered)
     // The video surface stays dark even when the surrounding app uses Light.
     .environment(\.colorScheme, .dark)
@@ -594,7 +597,7 @@ struct MultiviewPaneTile: View {
     case compact
 
     static func fitting(_ size: CGSize, preferred: Style) -> Style {
-      preferred == .full && size.width >= 420 && size.height >= 260 ? .full : .compact
+      preferred == .full && size.width >= 640 && size.height >= 360 ? .full : .compact
     }
   }
 
@@ -618,6 +621,7 @@ struct MultiviewPaneTile: View {
             if pane.model.isOffline {
               Text("Channel offline")
                 .font(style == .compact ? .caption : .subheadline)
+                .lineLimit(1)
                 .foregroundStyle(palette.videoControlForeground.opacity(0.75))
             } else {
               Text("Couldn't load this stream")
