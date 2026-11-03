@@ -20,6 +20,11 @@ struct MobileAccountView: View {
     @Bindable var theme = theme
     Form {
       Section {
+        NavigationLink("Platforms") { StreamPlatformSettingsView() }
+          .accessibilityIdentifier("account-platforms")
+      }
+      if StreamPlatformPreferences.shared.selection.includesTwitch {
+      Section {
         if sync.isRestoringAccount {
           TwitchAccountLoadingView()
         } else if auth.isAuthenticated {
@@ -66,7 +71,9 @@ struct MobileAccountView: View {
       }
 
       MobileWatchRewardsSettings()
+      }
 
+      if StreamPlatformPreferences.shared.selection.includesKick {
       Section {
         if let account = kick.document?.account {
           Text(account.username).font(.headline)
@@ -101,6 +108,7 @@ struct MobileAccountView: View {
         Text("Kick")
       } footer: {
         Text("Connect once here to add your real Kick follows on every Strozz device using this Apple Account. Follows refresh while this app is open. Your Kick website session stays on this device.")
+      }
       }
 
       Section("Appearance") {

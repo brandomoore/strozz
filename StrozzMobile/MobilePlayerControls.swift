@@ -275,7 +275,9 @@ struct MobileQualitySheet: View {
             }
           }
           Picker("Platform", selection: $draftPlatform) {
-            ForEach(LivePlatform.allCases, id: \.self) { Text($0.title).tag($0) }
+            ForEach(LivePlatform.allCases.filter {
+              StreamPlatformPreferences.shared.selection.includes($0)
+            }, id: \.self) { Text($0.title).tag($0) }
           }
           .accessibilityIdentifier("player-source-platform")
           TextField("Channel name or URL", text: $draftChannel).autocorrectionDisabled()

@@ -22,6 +22,8 @@ enum TopShelfPublisher {
         isUsingDemoData: Bool,
         recommended: [FollowedChannel]
     ) {
+        let followed = StreamPlatformPreferences.shared.selection.filter(followed)
+        let recommended = StreamPlatformPreferences.shared.selection.filter(recommended)
         var sections: [TopShelfSnapshot.Section] = []
 
         let links = KickUnifiedFeed.confirmedLinks(for: followed + recommended)

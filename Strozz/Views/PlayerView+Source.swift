@@ -36,7 +36,7 @@ extension PlayerView {
   }
 
   func synchronizeCreatorServices() {
-    kickAutoResolvedTarget = model.creatorSession.sources?.kick ?? ""
+    kickAutoResolvedTarget = model.creatorSession.availableSources?.kick ?? ""
     youtubeAutoResolvedTarget = model.creatorSession.sources?.youtube ?? ""
     if youtubeAutoResolvedTarget.isEmpty {
       youtubeSourceAvailable = false
@@ -51,6 +51,10 @@ extension PlayerView {
   }
 
   func switchToKickSource(channel: String? = nil) {
+    guard StreamPlatformPreferences.shared.selection.includesKick else {
+      errorMessage = PlatformLiveTarget.Failure.disabledPlatform(.kick).localizedDescription
+      return
+    }
     let manual = experimentalKickMergeChannelOrURL.trimmingCharacters(in: .whitespacesAndNewlines)
     let input = channel ?? (manual.isEmpty ? kickMergeDefaultTarget : manual)
     let slug: String

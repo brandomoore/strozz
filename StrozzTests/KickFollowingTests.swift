@@ -10,6 +10,33 @@ import XCTest
 final class KickFollowingTests: XCTestCase {
   private let account = Data(#"{"id":42,"username":"Viewer"}"#.utf8)
 
+  func testPlatformChoicePreservesImportedAccountAndOfflineTwitchCounterpart() async throws {
+    let preferences = StreamPlatformPreferences.shared
+    let previous = preferences.selection
+    defer { preferences.selection = previous }
+    preferences.selection = .both
+    let store = KickFollowingStore(database: KickFollowingTestDatabase(), defaults: defaults())
+    try await store.publish(.init(account: imported().account, follows: [follow("xqc")]), interactive: true)
+    let discovery = KickDiscoveryService(follows: store, load: { slug in
+      KickChannel(slug: slug, displayName: "xQc", title: "", category: "", viewerCount: 20,
+        isLive: true, chatroomID: nil, imageURL: nil)
+    }, resolve: { CreatorLiveSources(root: $0) })
+    await discovery.refresh(twitch: [twitch("xqc")])
+    preferences.selection = .twitch
+    let offline = discovery.mergedFollowing([twitch("xqc", live: false)])
+    XCTAssertEqual(offline.map(\.platform), [.twitch])
+    XCTAssertFalse(offline[0].isLive)
+    XCTAssertNil(offline[0].kick)
+    await discovery.refresh(twitch: [], force: true)
+    XCTAssertFalse(discovery.isConnected)
+    XCTAssertTrue(store.isConnected)
+    XCTAssertEqual(store.document?.follows.map(\.slug), ["xqc"])
+    preferences.selection = .kick
+    await discovery.refresh(twitch: [], force: true)
+    XCTAssertTrue(discovery.isConnected)
+    XCTAssertEqual(discovery.mergedFollowing([twitch("xqc")]).map(\.channelKey), ["kick:xqc"])
+  }
+
   func testImportReadsEveryPageAndChecksAccountAgain() async throws {
     var paths: [String] = []
     let result = try await KickFollowImport.read { path in

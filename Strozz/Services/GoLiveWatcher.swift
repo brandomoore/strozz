@@ -136,6 +136,7 @@ final class GoLiveWatcher {
   /// `staleResumeThreshold`.
   func start(using auth: TwitchAuthSession) {
     stop()
+    guard StreamPlatformPreferences.shared.selection.includesTwitch else { return }
     self.auth = auth
     pollTask = Task { [weak self] in
       guard let self else { return }

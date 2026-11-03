@@ -14,7 +14,11 @@ import Observation
 @MainActor
 @Observable
 final class PersonalizedRecommendationsService {
-  private(set) var channels: [FollowedChannel] = []
+  private var storedChannels: [FollowedChannel] = []
+  private(set) var channels: [FollowedChannel] {
+    get { StreamPlatformPreferences.shared.selection.filter(storedChannels) }
+    set { storedChannels = newValue }
+  }
   private(set) var isLoading = false
   private(set) var lastUpdatedAt: Date?
   private var refreshID = UUID()

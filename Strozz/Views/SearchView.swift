@@ -36,7 +36,8 @@ struct SearchView: View {
         )
       }
     }
-    .task(id: "\(path.isEmpty)|\(query)") {
+    .onChange(of: StreamPlatformPreferences.shared.selection) { _, _ in path = [] }
+    .task(id: "\(path.isEmpty)|\(query)|\(StreamPlatformPreferences.shared.selection.rawValue)") {
       guard path.isEmpty else { return }
       // Debounce keystrokes from the on-screen keyboard before hitting the API.
       let pending = query

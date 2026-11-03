@@ -5,19 +5,53 @@ import OSLog
 @MainActor
 @Observable
 final class BrowseService {
-    private(set) var categories: [TwitchCategory] = []
+    private var storedCategories: [TwitchCategory] = []
+    private(set) var categories: [TwitchCategory] {
+        get { storedCategories.filter { StreamPlatformPreferences.shared.selection.includes($0.platform) } }
+        set { storedCategories = newValue }
+    }
     private(set) var isLoadingCategories = false
-    private(set) var categoryErrorMessage: String?
-    private(set) var nextKickCategoryPage: Int?
+    private var categoriesSelection = StreamPlatforms.both
+    private var storedCategoryError: String?
+    private(set) var categoryErrorMessage: String? {
+        get { categoriesSelection == StreamPlatformPreferences.shared.selection ? storedCategoryError : nil }
+        set { storedCategoryError = newValue }
+    }
+    private var storedKickCategoryPage: Int?
+    private(set) var nextKickCategoryPage: Int? {
+        get { StreamPlatformPreferences.shared.selection.includesKick ? storedKickCategoryPage : nil }
+        set { storedKickCategoryPage = newValue }
+    }
     private(set) var isLoadingMoreCategories = false
-    private(set) var moreCategoriesErrorMessage: String?
+    private var storedMoreCategoriesError: String?
+    private(set) var moreCategoriesErrorMessage: String? {
+        get { categoriesSelection == StreamPlatformPreferences.shared.selection ? storedMoreCategoriesError : nil }
+        set { storedMoreCategoriesError = newValue }
+    }
 
-    private(set) var categoryStreams: [FollowedChannel] = []
+    private var storedStreams: [FollowedChannel] = []
+    private(set) var categoryStreams: [FollowedChannel] {
+        get { StreamPlatformPreferences.shared.selection.filter(storedStreams) }
+        set { storedStreams = newValue }
+    }
     private(set) var isLoadingStreams = false
-    private(set) var streamsErrorMessage: String?
+    private var streamsSelection = StreamPlatforms.both
+    private var storedStreamsError: String?
+    private(set) var streamsErrorMessage: String? {
+        get { streamsSelection == StreamPlatformPreferences.shared.selection ? storedStreamsError : nil }
+        set { storedStreamsError = newValue }
+    }
     private(set) var isLoadingMore = false
-    private(set) var nextKickCursor: String?
-    private(set) var moreStreamsErrorMessage: String?
+    private var storedKickCursor: String?
+    private(set) var nextKickCursor: String? {
+        get { StreamPlatformPreferences.shared.selection.includesKick ? storedKickCursor : nil }
+        set { storedKickCursor = newValue }
+    }
+    private var storedMoreStreamsError: String?
+    private(set) var moreStreamsErrorMessage: String? {
+        get { streamsSelection == StreamPlatformPreferences.shared.selection ? storedMoreStreamsError : nil }
+        set { storedMoreStreamsError = newValue }
+    }
     private var streamsCategoryID: String?
     private var categoriesContext: String?
     private var currentKickCategoryID: String?
@@ -38,6 +72,9 @@ final class BrowseService {
     // MARK: - Public API
 
     func loadCategories(filter: BrowsePlatformFilter = .twitch) async {
+        let selection = StreamPlatformPreferences.shared.selection
+        categoriesSelection = selection
+        let filter = selection.resolve(filter)
         let requestID = UUID()
         categoriesRequestID = requestID
         isLoadingCategories = true
@@ -59,7 +96,8 @@ final class BrowseService {
                 : KickBrowseService.CategoriesPage(categories: [], nextPage: nil)
         }
         let results = await (twitch, kick)
-        guard !Task.isCancelled, categoriesRequestID == requestID else { return }
+        guard !Task.isCancelled, categoriesRequestID == requestID,
+              StreamPlatformPreferences.shared.selection == selection else { return }
         var errors: [String] = []
         let twitchCategories = apply(results.0, previous: categories.filter { $0.platform == .twitch },
                                      platform: "Twitch", errors: &errors)
@@ -79,19 +117,23 @@ final class BrowseService {
     }
 
     func loadMoreCategories() async {
-        guard !isLoadingCategories, !isLoadingMoreCategories, let page = nextKickCategoryPage else { return }
+        let selection = StreamPlatformPreferences.shared.selection
+        guard selection.includesKick,
+              !isLoadingCategories, !isLoadingMoreCategories, let page = nextKickCategoryPage else { return }
         let request = categoriesRequestID
         isLoadingMoreCategories = true
         moreCategoriesErrorMessage = nil
         defer { if request == categoriesRequestID { isLoadingMoreCategories = false } }
         do {
             let result = try await KickBrowseService.categories(page: page, load: loadData)
-            guard !Task.isCancelled, request == categoriesRequestID else { return }
+            guard !Task.isCancelled, request == categoriesRequestID,
+                  StreamPlatformPreferences.shared.selection == selection else { return }
             var seen = Set(categories.map(\.id))
             categories += result.categories.filter { seen.insert($0.id).inserted }
             nextKickCategoryPage = result.nextPage == page ? nil : result.nextPage
         } catch {
-            guard !Task.isCancelled, request == categoriesRequestID else { return }
+            guard !Task.isCancelled, request == categoriesRequestID,
+                  StreamPlatformPreferences.shared.selection == selection else { return }
             moreCategoriesErrorMessage = failureMessage(error, platform: "Kick")
         }
     }
@@ -115,8 +157,10 @@ final class BrowseService {
 
     func loadStreams(for category: TwitchCategory? = nil, filter: BrowsePlatformFilter = .twitch,
                      mixCategoryPlatforms: Bool = false) async {
-        let filter = mixCategoryPlatforms ? .all
-            : category.map { $0.platform == .kick ? BrowsePlatformFilter.kick : .twitch } ?? filter
+        let selection = StreamPlatformPreferences.shared.selection
+        streamsSelection = selection
+        let filter = selection.resolve(mixCategoryPlatforms ? .all
+            : category.map { $0.platform == .kick ? BrowsePlatformFilter.kick : .twitch } ?? filter)
         let requestID = UUID()
         streamsRequestID = requestID
         isLoadingStreams = true
@@ -157,7 +201,8 @@ final class BrowseService {
             return try await KickBrowseService.page(categoryID: categoryID, load: self.loadData)
         }
         let results = await (twitch, kick)
-        guard !Task.isCancelled, streamsRequestID == requestID else { return }
+        guard !Task.isCancelled, streamsRequestID == requestID,
+              StreamPlatformPreferences.shared.selection == selection else { return }
         var errors: [String] = []
         twitchStreams = apply(results.0, previous: twitchStreams, platform: "Twitch", errors: &errors)
         switch results.1 {
@@ -174,7 +219,9 @@ final class BrowseService {
     }
 
     func loadMoreStreams() async {
-        guard !isLoadingStreams, !isLoadingMore, let cursor = nextKickCursor else { return }
+        let selection = StreamPlatformPreferences.shared.selection
+        guard selection.includesKick,
+              !isLoadingStreams, !isLoadingMore, let cursor = nextKickCursor else { return }
         let requestID = streamsRequestID
         isLoadingMore = true
         moreStreamsErrorMessage = nil
@@ -182,7 +229,8 @@ final class BrowseService {
         do {
             let page = try await KickBrowseService.page(categoryID: currentKickCategoryID,
                                                         after: cursor, load: loadData)
-            guard !Task.isCancelled, streamsRequestID == requestID else { return }
+            guard !Task.isCancelled, streamsRequestID == requestID,
+                  StreamPlatformPreferences.shared.selection == selection else { return }
             var seen = Set(kickStreams.map(\.channelKey))
             let added = page.channels.filter { seen.insert($0.channelKey).inserted }
             kickStreams += added
@@ -195,7 +243,8 @@ final class BrowseService {
             nextKickCursor = page.nextCursor == cursor ? nil : page.nextCursor
             recordFixtureState()
         } catch {
-            guard !Task.isCancelled, streamsRequestID == requestID else { return }
+            guard !Task.isCancelled, streamsRequestID == requestID,
+                  StreamPlatformPreferences.shared.selection == selection else { return }
             moreStreamsErrorMessage = failureMessage(error, platform: "Kick")
         }
     }

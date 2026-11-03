@@ -61,9 +61,10 @@ struct SimilarChannelsEngine {
 
     // Fetch candidate pools for each seed category in parallel.
     var pool: [CandidateStream] = []
-    async let kick = KickBrowseService.recommendationCandidates(for: seeds)
+    let platforms = await StreamPlatformPreferences.shared.selection
+    async let kick = platforms.includesKick ? KickBrowseService.recommendationCandidates(for: seeds) : []
     await withTaskGroup(of: [CandidateStream].self) { group in
-      for category in seeds {
+      for category in seeds where platforms.includesTwitch {
         group.addTask { await fetchCandidates(inCategory: category) }
       }
       for await candidates in group {
@@ -108,7 +109,8 @@ struct SimilarChannelsEngine {
     let merged = KickUnifiedFeed.mergeDirectory(twitch: channels.filter { $0.platform == .twitch },
       kick: channels.filter { $0.platform == .kick }, links: links)
       .filter { KickUnifiedFeed.identityKeys(for: $0, links: links).isDisjoint(with: excluding) }
-    return KickUnifiedFeed.preservingOrder(of: channels, merged: merged, links: links)
+    return StreamPlatformPreferences.shared.selection.filter(
+      KickUnifiedFeed.preservingOrder(of: channels, merged: merged, links: links))
   }
 
   /// Applies the optional per-category diversity cap to a score-ranked list,
@@ -213,6 +215,7 @@ struct SimilarChannelsEngine {
   /// to surface a watched channel's similar streamers regardless of category.
   /// Applies the same hard `StreamLanguagePreference` filter as the main engine.
   static func liveChannels(forLogins logins: [String]) async -> [FollowedChannel] {
+    guard await StreamPlatformPreferences.shared.selection.includesTwitch else { return [] }
     let unique = Array(Set(logins.map { $0.lowercased() }.filter { !$0.isEmpty })).prefix(90)
     guard !unique.isEmpty else { return [] }
 

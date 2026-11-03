@@ -105,6 +105,7 @@ targets:
           - "TopShelfCredentialStore.swift"
           - "CredentialKeychain.swift"
           - "TopShelfSnapshot.swift"
+          - "StreamPlatforms.swift"
       - path: Strozz/Views/Icon.swift
       - path: Strozz/Views/StreamLoadingView.swift
       - path: Strozz/Views/BroadcastUptimeView.swift
@@ -118,6 +119,7 @@ targets:
       - path: Strozz/Views/KickChannelDetailsView.swift
       - path: Strozz/Views/ClipPlayerView.swift
       - path: Strozz/Views/CreatorChannelsView.swift
+      - path: Strozz/Views/StreamPlatformSelectionView.swift
       - path: Strozz/Views/Chat/ChatColor.swift
     dependencies:
       - package: Sentry
@@ -163,6 +165,7 @@ targets:
       - path: StrozzTests/NativeCMAFRemuxTests.swift
       - path: StrozzTests/KickPlaybackTests.swift
       - path: StrozzTests/KickBrowseTests.swift
+      - path: StrozzTests/StreamPlatformPreferencesTests.swift
       - path: StrozzTests/KickContentTests.swift
       - path: StrozzTests/KickSharedPlayerTests.swift
       - path: StrozzTests/KickFollowingTests.swift
@@ -249,6 +252,7 @@ targets:
       - path: TopShelfExtension/ContentProvider.swift
       - path: TopShelfExtension/TopShelfLiveFeed.swift
       - path: Strozz/Shared/TopShelfSnapshot.swift
+      - path: Strozz/Shared/StreamPlatforms.swift
       - path: Strozz/Shared/TopShelfStore.swift
       - path: Strozz/Shared/TopShelfCredentialStore.swift
       - path: Strozz/Shared/CredentialKeychain.swift

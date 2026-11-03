@@ -6,10 +6,23 @@ import Observation
 @MainActor
 @Observable
 final class RecommendationsService {
-    private(set) var channels: [FollowedChannel] = []
-    private(set) var categories: [TwitchCategory] = []
+    private var storedChannels: [FollowedChannel] = []
+    private var storedCategories: [TwitchCategory] = []
+    private(set) var channels: [FollowedChannel] {
+        get { StreamPlatformPreferences.shared.selection.filter(storedChannels) }
+        set { storedChannels = newValue }
+    }
+    private(set) var categories: [TwitchCategory] {
+        get { storedCategories.filter { StreamPlatformPreferences.shared.selection.includes($0.platform) } }
+        set { storedCategories = newValue }
+    }
     private(set) var isLoading = false
-    private(set) var errorMessage: String?
+    private var requestSelection = StreamPlatforms.both
+    private var storedErrorMessage: String?
+    private(set) var errorMessage: String? {
+        get { requestSelection == StreamPlatformPreferences.shared.selection ? storedErrorMessage : nil }
+        set { storedErrorMessage = newValue }
+    }
     private(set) var lastUpdatedAt: Date?
     private let browse: BrowseService
     private var refreshID = UUID()
@@ -21,6 +34,8 @@ final class RecommendationsService {
     }
 
     func refresh() async {
+        let selection = StreamPlatformPreferences.shared.selection
+        requestSelection = selection
         let request = UUID()
         refreshID = request
         let currentLanguage = StreamLanguagePreference.current()
@@ -38,7 +53,8 @@ final class RecommendationsService {
         async let streams: Void = browse.loadStreams(filter: .all)
         async let games: Void = browse.loadCategories(filter: .all)
         _ = await (streams, games)
-        guard !Task.isCancelled, refreshID == request else { return }
+        guard !Task.isCancelled, refreshID == request,
+              StreamPlatformPreferences.shared.selection == selection else { return }
         channels = KickUnifiedFeed.sortedByViewers(browse.categoryStreams)
         categories = browse.categories
         let failures = [browse.streamsErrorMessage, browse.categoryErrorMessage].compactMap { $0 }

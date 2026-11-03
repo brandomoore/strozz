@@ -22,6 +22,32 @@ final class MobileVODProgressTests: XCTestCase {
     XCTAssertTrue(MobileVODProgressStore(accountID: "first", defaults: defaults).entries.isEmpty)
   }
 
+  func testHiddenPlatformProgressSurvivesOtherPlatformCheckpoints() throws {
+    let preferences = StreamPlatformPreferences.shared
+    let previous = preferences.selection
+    let name = "MobileVODProgress.\(UUID())"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+    defer {
+      preferences.selection = previous
+      defaults.removePersistentDomain(forName: name)
+    }
+    preferences.selection = .both
+    let store = MobileVODProgressStore(accountID: "fixture", defaults: defaults)
+    store.save(selection, seconds: 120, duration: 3600)
+    preferences.selection = .kick
+    XCTAssertTrue(store.entries.isEmpty)
+    let video = ChannelVOD(id: "kick:456", title: "Kick broadcast", lengthSeconds: 3600,
+      thumbnailURL: nil, gameName: nil, publishedAt: nil, viewCount: 1)
+    let kick = MobileVODSelection(video: video, channel: .init(login: "fixture"))
+    store.save(kick, seconds: 180, duration: 3600)
+    XCTAssertEqual(store.entries.map(\.id), ["kick:456"])
+    preferences.selection = .both
+    let restored = MobileVODProgressStore(accountID: "fixture", defaults: defaults)
+    XCTAssertEqual(restored.progress(for: "123"), 120)
+    XCTAssertEqual(restored.progress(for: "kick:456"), 180)
+    XCTAssertEqual(restored.entries.count, 2)
+  }
+
   func testInvalidClockCannotOverwriteProgressAndCompletedBroadcastLeavesContinueWatching() throws {
     let name = "MobileVODProgress.\(UUID())"
     let defaults = try XCTUnwrap(UserDefaults(suiteName: name))

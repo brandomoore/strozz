@@ -8,6 +8,7 @@ struct StrozzApp: App {
   /// App-level composition root. Owns the app-global services once for the whole
   /// app and injects them into the view tree via `.environment(_:)`.
   @State private var environment = AppEnvironment()
+  @Environment(\.colorScheme) private var colorScheme
 
   init() {
     PlaybackTelemetrySentry.start()
@@ -40,10 +41,10 @@ struct StrozzApp: App {
         } else if ProcessInfo.processInfo.environment["STROZZ_HOME_ERROR_FIXTURE"] == "1" {
           HomeFollowingErrorFixture()
         } else {
-          HomeView(deepLinkRouter: deepLinkRouter)
+          home
         }
         #else
-        HomeView(deepLinkRouter: deepLinkRouter)
+        home
         #endif
       }
         .environment(environment)
@@ -59,6 +60,17 @@ struct StrozzApp: App {
         }
         .resolveGlassDisabled()
         .installNightShiftOverlay(environment.nightShift)
+    }
+  }
+
+  @ViewBuilder
+  private var home: some View {
+    if StreamPlatformPreferences.shared.hasChosen {
+      HomeView(deepLinkRouter: deepLinkRouter)
+    } else {
+      StreamPlatformOnboardingView()
+        .environment(\.themePalette, environment.themeManager.theme.palette(systemColorScheme: colorScheme))
+        .preferredColorScheme(environment.themeManager.theme.preferredColorScheme)
     }
   }
 }

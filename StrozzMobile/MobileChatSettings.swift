@@ -252,6 +252,7 @@ private struct MobileChatSourceSettings: View {
           Text(status).font(.caption).foregroundStyle(.secondary)
         }
       }
+      if StreamPlatformPreferences.shared.selection.includesKick {
       Toggle("Kick chat", isOn: $kick)
         .onChange(of: kick) { _, _ in applyTargets() }
       if let service, channel != nil, creatorSession == nil {
@@ -261,6 +262,9 @@ private struct MobileChatSourceSettings: View {
         if kick, let status = service.kickStatusMessage {
           Text(status).font(.caption).foregroundStyle(.secondary)
         }
+      }
+      }
+      if service != nil, channel != nil, creatorSession == nil {
         Button("Apply channel targets", action: applyTargets)
       }
       if let creatorSession {
@@ -276,7 +280,7 @@ private struct MobileChatSourceSettings: View {
       if channel == nil, creatorSession == nil {
         Text("Open a stream to edit its linked chat channels.")
       } else {
-        Text("Only linked creator channels are merged. Use Linked creator channels to edit the accounts. Sending uses their linked Twitch channel.")
+        Text("Only enabled, linked creator channels are merged. Use Linked creator channels to edit the accounts.")
       }
     }
   }

@@ -4,10 +4,22 @@ import Observation
 @MainActor
 @Observable
 final class SearchService {
-    private(set) var channelResults: [FollowedChannel] = []
-    private(set) var categoryResults: [TwitchCategory] = []
+    private var storedChannels: [FollowedChannel] = []
+    private var storedCategories: [TwitchCategory] = []
+    private(set) var channelResults: [FollowedChannel] {
+        get { StreamPlatformPreferences.shared.selection.filter(storedChannels) }
+        set { storedChannels = newValue }
+    }
+    private(set) var categoryResults: [TwitchCategory] {
+        get { storedCategories.filter { StreamPlatformPreferences.shared.selection.includes($0.platform) } }
+        set { storedCategories = newValue }
+    }
     private(set) var isSearching = false
-    private(set) var errorMessage: String?
+    private var storedErrorMessage: String?
+    private(set) var errorMessage: String? {
+        get { StreamPlatformPreferences.shared.selection.resolve(platformFilter) == platformFilter ? storedErrorMessage : nil }
+        set { storedErrorMessage = newValue }
+    }
     private(set) var query = ""
     private(set) var platformFilter = BrowsePlatformFilter.all
     private var requestID = UUID()
@@ -40,6 +52,8 @@ final class SearchService {
 
     func search(_ rawQuery: String, preservingResultsOnFailure: Bool = false,
                 filter: BrowsePlatformFilter = .all) async {
+        let selection = StreamPlatformPreferences.shared.selection
+        let filter = selection.resolve(filter)
         let currentRequestID = UUID()
         requestID = currentRequestID
         let trimmed = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -73,12 +87,14 @@ final class SearchService {
             let results = filter.includes(.twitch) ? try await fetchSearchResults(for: trimmed)
                 : SearchResults(channels: [], categories: [])
             // Ignore stale responses if the query changed while in flight.
-            guard !Task.isCancelled, requestID == currentRequestID, query == trimmed else { return }
+            guard !Task.isCancelled, requestID == currentRequestID, query == trimmed,
+                  StreamPlatformPreferences.shared.selection == selection else { return }
             channelResults = results.channels + (preservingResultsOnFailure ? previousKickChannels : [])
             categoryResults = results.categories + (preservingResultsOnFailure ? previousKickCategories : [])
             prewarmStaticArtwork(channels: results.channels, categories: results.categories)
         } catch {
-            guard !Task.isCancelled, requestID == currentRequestID, query == trimmed else { return }
+            guard !Task.isCancelled, requestID == currentRequestID, query == trimmed,
+                  StreamPlatformPreferences.shared.selection == selection else { return }
             if !preservingResultsOnFailure {
                 channelResults = []
                 categoryResults = []
@@ -86,7 +102,8 @@ final class SearchService {
             errorMessage = "Could not search right now."
         }
         let kickResult = await kick
-        guard !Task.isCancelled, requestID == currentRequestID, query == trimmed else { return }
+        guard !Task.isCancelled, requestID == currentRequestID, query == trimmed,
+              StreamPlatformPreferences.shared.selection == selection else { return }
         switch kickResult {
         case .success(let result):
             channelResults.removeAll { $0.platform == .kick }

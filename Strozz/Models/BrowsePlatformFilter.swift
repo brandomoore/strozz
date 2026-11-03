@@ -5,6 +5,12 @@ enum BrowsePlatformFilter: String, CaseIterable {
 
   static let storageKey = "browsePlatformFilter"
 
+  @MainActor
+  static var availableCases: [Self] {
+    let selection = StreamPlatformPreferences.shared.selection
+    return selection == .both ? allCases : [selection.resolve(.all)]
+  }
+
   var title: LocalizedStringResource {
     switch self {
     case .all: "All"

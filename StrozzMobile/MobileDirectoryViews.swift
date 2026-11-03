@@ -15,7 +15,7 @@ struct MobileBrowseView: View {
     ScrollView {
       VStack(spacing: 20) {
         Picker("Platform", selection: $platformFilter) {
-          ForEach(BrowsePlatformFilter.allCases, id: \.self) { filter in
+          ForEach(BrowsePlatformFilter.availableCases, id: \.self) { filter in
             Text(filter.title).tag(filter)
           }
         }
@@ -73,6 +73,9 @@ struct MobileBrowseView: View {
       .padding()
     }
     .navigationTitle("Browse")
+    .onChange(of: StreamPlatformPreferences.shared.selection, initial: true) { _, selection in
+      platformFilter = selection.resolve(platformFilter)
+    }
     .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                 prompt: "Channels and categories")
     .scrollDismissesKeyboard(.interactively)

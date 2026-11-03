@@ -26,7 +26,9 @@ final class ContentProvider: TVTopShelfContentProvider {
     }
 
     private static func makeContent() async -> TVTopShelfContent? {
-        let sections = await resolveSections()
+        let sections = await resolveSections().map {
+            TopShelfSnapshot(sections: $0).filtering(platforms).sections
+        }
         guard let sections, !sections.isEmpty else { return nil }
 
         let collections: [TVTopShelfItemCollection<TVTopShelfSectionedItem>] =
@@ -44,7 +46,7 @@ final class ContentProvider: TVTopShelfContentProvider {
 
     /// Returns fresh live sections when possible, otherwise the cached snapshot.
     private static func resolveSections() async -> [TopShelfSnapshot.Section]? {
-        let cached = TopShelfStore.load()
+        let cached = TopShelfStore.load()?.filtering(platforms)
 
         if let fresh = await freshSections(cached: cached) {
             // Keep the cached snapshot current so the fallback stays fresh too.
@@ -58,13 +60,19 @@ final class ContentProvider: TVTopShelfContentProvider {
     private static func freshSections(
         cached: TopShelfSnapshot?
     ) async -> [TopShelfSnapshot.Section]? {
-        let credentials = TopShelfCredentialStore.load()
+        let selection = platforms
+        let credentials = selection.includesTwitch ? TopShelfCredentialStore.load() : nil
         let recommended = cached?.sections.first { $0.id == "recommended" }
 
         return await withTimeout(seconds: fetchTimeout) {
             await TopShelfLiveFeed.run(credentials: credentials, recommended: recommended,
-                                      following: cached?.sections.first { $0.id == "following" || $0.id == "trending" })
+                                      following: cached?.sections.first { $0.id == "following" || $0.id == "trending" },
+                                      platforms: selection)
         }
+    }
+
+    private static var platforms: StreamPlatforms {
+        StreamPlatforms.load(from: UserDefaults(suiteName: TopShelf.appGroupID) ?? .standard)
     }
 
     /// Runs an async operation with a timeout. Returns `nil` if the operation

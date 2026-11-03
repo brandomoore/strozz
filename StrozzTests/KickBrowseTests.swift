@@ -8,6 +8,35 @@ import XCTest
 
 @MainActor
 final class KickBrowseTests: XCTestCase {
+  func testGlobalSelectionOverridesStaleBrowseFilterAndHidesCachedOtherPlatform() async {
+    let preferences = StreamPlatformPreferences.shared
+    let previous = preferences.selection
+    defer { preferences.selection = previous }
+    preferences.selection = .both
+    let kick = directory()
+    let twitch = twitchDirectory()
+    let recorder = BrowseRequestRecorder()
+    let service = BrowseService { request in
+      await recorder.record(request)
+      return Self.response(request, data: request.url?.host == "web.kick.com" ? kick : twitch)
+    }
+    await service.loadStreams(filter: .all)
+    XCTAssertEqual(service.categoryStreams.count, 3)
+    preferences.selection = .twitch
+    XCTAssertEqual(service.categoryStreams.map(\.platform), [.twitch])
+    await recorder.clear()
+    await service.loadStreams(filter: .kick)
+    let twitchHosts = await recorder.hosts
+    XCTAssertEqual(twitchHosts, ["gql.twitch.tv"])
+    preferences.selection = .kick
+    XCTAssertTrue(service.categoryStreams.isEmpty)
+    await recorder.clear()
+    await service.loadStreams(filter: .twitch)
+    let kickHosts = await recorder.hosts
+    XCTAssertEqual(kickHosts, ["web.kick.com"])
+    XCTAssertEqual(service.categoryStreams.map(\.platform), [.kick, .kick])
+  }
+
   func testDirectoryDecodingPreservesPlatformAndHiddenViewerCounts() throws {
     let page = try KickBrowseService.decode(directory())
     XCTAssertEqual(page.channels.map(\.channelKey), ["kick:one", "kick:two"])
@@ -19,6 +48,60 @@ final class KickBrowseTests: XCTestCase {
     XCTAssertEqual(page.categories.map(\.id), ["kick:15"])
     XCTAssertNil(page.categories[0].viewerCount, "A sampled directory cannot supply total category viewers")
     XCTAssertEqual(page.nextCursor, "next-page")
+  }
+
+  func testGlobalSearchChoiceSkipsDisabledProviderDespiteStalePageFilter() async {
+    let preferences = StreamPlatformPreferences.shared
+    let previous = preferences.selection
+    defer { preferences.selection = previous }
+    let recorder = BrowseRequestRecorder()
+    let page = try! KickBrowseService.decode(directory())
+    let service = SearchService(loadData: { request in
+      await recorder.record(request)
+      return Self.response(request, data: Data(#"{"data":{}}"#.utf8))
+    }, loadKickSearch: { _ in
+      await recorder.record(URLRequest(url: URL(string: "https://web.kick.com")!))
+      return .init(channels: page.channels, categories: page.categories)
+    })
+    preferences.selection = .kick
+    await service.search("creator", filter: .twitch)
+    let kickHosts = await recorder.hosts
+    XCTAssertEqual(kickHosts, ["web.kick.com"])
+    XCTAssertEqual(service.channelResults.map(\.platform), [.kick, .kick])
+    preferences.selection = .twitch
+    XCTAssertTrue(service.channelResults.isEmpty)
+    await recorder.clear()
+    await service.search("creator", filter: .kick)
+    let twitchHosts = await recorder.hosts
+    XCTAssertEqual(twitchHosts, ["gql.twitch.tv"])
+  }
+
+  func testLateKickPageCannotRepopulateAfterGlobalPlatformChange() async {
+    let preferences = StreamPlatformPreferences.shared
+    let previous = preferences.selection
+    defer { preferences.selection = previous }
+    preferences.selection = .both
+    let started = expectation(description: "Kick page started")
+    let pending = PendingBrowseResponse(started: started)
+    let kick = directory()
+    let twitch = twitchDirectory()
+    let service = BrowseService { request in
+      if request.url?.query?.contains("after=") == true {
+        return try await pending.load(request)
+      }
+      return Self.response(request, data: request.url?.host == "web.kick.com" ? kick : twitch)
+    }
+    await service.loadStreams(filter: .all)
+    let task = Task { await service.loadMoreStreams() }
+    await fulfillment(of: [started], timeout: 2)
+    preferences.selection = .twitch
+    pending.finish(data: directory(slugs: ["late"], cursor: nil))
+    await task.value
+    XCTAssertNil(service.nextKickCursor)
+    XCTAssertNil(service.moreStreamsErrorMessage)
+    XCTAssertEqual(service.categoryStreams.map(\.platform), [.twitch])
+    preferences.selection = .both
+    XCTAssertFalse(service.categoryStreams.contains { $0.login == "late" })
   }
 
   func testMissingDirectoryIsAnErrorRatherThanAnEmptySuccess() {

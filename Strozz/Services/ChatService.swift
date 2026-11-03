@@ -307,6 +307,7 @@ final class ChatService {
   }
 
   func configureExperimentalKickMerge(enabled: Bool, channelOrURL: String) {
+    let enabled = enabled && StreamPlatformPreferences.shared.selection.includesKick
     let target = channelOrURL.trimmingCharacters(in: .whitespacesAndNewlines)
     guard enabled != kickMergeEnabled || target != kickChannelOrURL
       || (enabled && kickReceiveTask == nil) else { return }
@@ -357,7 +358,7 @@ final class ChatService {
 
   func configureCreator(twitch: String?, kick: String?, youtube: String?,
                         kickEnabled: Bool = true, youtubeEnabled: Bool = true) {
-    let twitch = twitch?.lowercased()
+    let twitch = StreamPlatformPreferences.shared.selection.includesTwitch ? twitch?.lowercased() : nil
     if channel != nil, channel != twitch { disconnect() }
     if let twitch, channel != twitch { startTwitchTransport(to: twitch) }
     installLifecycleObservers()

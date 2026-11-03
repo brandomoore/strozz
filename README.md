@@ -82,6 +82,12 @@ The feature list below describes the Apple TV app. See
 
 ### Discover
 
+- **Choose your platforms.** On first launch, choose Twitch, Kick, or both on
+  Apple TV, iPhone, and iPad. Change this later in **Settings > Platforms**
+  (TV) or **Account > Platforms** (mobile). Disabled platforms are hidden from
+  browsing, recommendations, account prompts, video sources, and merged chat.
+  At least one stays enabled. The choice is local to each device; saved accounts,
+  creator links, and watch history are kept. Existing YouTube features are unchanged.
 - **Home built around your follows.** See the channels you follow that are live
   now, plus recommendations.
 - **Stable loading rows.** Home and Browse use card-sized skeletons while their

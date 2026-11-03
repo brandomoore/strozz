@@ -15,10 +15,13 @@ enum LivePlatform: String, CaseIterable, Codable, Sendable {
 struct PlatformLiveTarget: Identifiable, Equatable, Codable, Sendable {
   enum Failure: LocalizedError {
     case invalidChannel(LivePlatform)
+    case disabledPlatform(LivePlatform)
     var errorDescription: String? {
       switch self {
       case .invalidChannel(let platform):
         String(localized: "Enter a valid \(platform.title) channel name or channel URL.")
+      case .disabledPlatform(let platform):
+        String(localized: "Enable \(platform.title) in Settings to watch this channel.")
       }
     }
   }
@@ -47,7 +50,10 @@ struct PlatformLiveTarget: Identifiable, Equatable, Codable, Sendable {
   }
 
   func resolvePlayback() async throws -> StreamPlayback {
-    switch platform {
+    guard StreamPlatforms.load().includes(platform.rawValue) else {
+      throw Failure.disabledPlatform(platform)
+    }
+    return switch platform {
     case .twitch: try await PlaybackService.resolve(for: channel)
     case .kick: try await KickPlaybackService.resolve(channel).playback
     case .youtube:

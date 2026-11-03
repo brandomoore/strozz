@@ -354,12 +354,15 @@ private struct BrowsePlatformPicker: View {
 
   var body: some View {
     Picker("Platform", selection: $selection) {
-      ForEach(BrowsePlatformFilter.allCases, id: \.self) { filter in
+      ForEach(BrowsePlatformFilter.availableCases, id: \.self) { filter in
         Text(filter.title).tag(filter)
       }
     }
     .pickerStyle(.segmented)
     .frame(width: 380)
     .accessibilityIdentifier("browse-platform-filter")
+    .onChange(of: StreamPlatformPreferences.shared.selection, initial: true) { _, platforms in
+      selection = platforms.resolve(selection)
+    }
   }
 }

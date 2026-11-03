@@ -52,6 +52,18 @@ struct TopShelfSnapshot: Codable, Equatable {
         items.flatMap { $0.sources ?? [$0] }
     }
 
+    func filtering(_ platforms: StreamPlatforms) -> Self {
+        var snapshot = self
+        snapshot.sections = sections.compactMap { section in
+            let sources = Self.sourceItems(in: section.items).filter {
+                platforms.includes($0.sourcePlatform ?? "twitch")
+            }
+            let items = Self.mergingCreators(sources)
+            return items.isEmpty ? nil : Section(id: section.id, title: section.title, items: items)
+        }
+        return snapshot
+    }
+
     static func mergingCreators(_ items: [Item], knownItems: [Item] = []) -> [Item] {
         let knownCreators = Set(sourceItems(in: knownItems + items).compactMap(\.creatorKey))
         var groups: [String: [Item]] = [:]

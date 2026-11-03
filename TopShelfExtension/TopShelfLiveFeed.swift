@@ -18,15 +18,18 @@ enum TopShelfLiveFeed {
     static func run(
         credentials: TopShelfCredentials?,
         recommended: TopShelfSnapshot.Section?,
-        following: TopShelfSnapshot.Section? = nil
+        following: TopShelfSnapshot.Section? = nil,
+        platforms: StreamPlatforms = .both
     ) async -> [TopShelfSnapshot.Section]? {
         let cachedFollowing = TopShelfSnapshot.sourceItems(in: following?.items ?? [])
+            .filter { platforms.includes($0.sourcePlatform ?? "twitch") }
         let cachedRecommended = TopShelfSnapshot.sourceItems(in: recommended?.items ?? [])
+            .filter { platforms.includes($0.sourcePlatform ?? "twitch") }
         let knownItems = cachedFollowing + cachedRecommended
         async let refreshedKickFollowing = refreshKick(cachedFollowing)
         async let refreshedKickRecommended = refreshKick(cachedRecommended)
         var followingItems = cachedFollowing.filter { $0.sourcePlatform != "kick" }
-        if let credentials {
+        if platforms.includesTwitch, let credentials {
             do { followingItems = try await followedLive(credentials) }
             catch {
                 Logger(subsystem: "com.thatcube.Strozz", category: "top-shelf")
@@ -53,7 +56,7 @@ enum TopShelfLiveFeed {
         if recommended != nil {
             let primaryLogins = Set(primaryItems.map(\.identityKey))
             var twitch = cachedRecommended.filter { $0.sourcePlatform != "kick" }
-            if let credentials {
+            if platforms.includesTwitch, let credentials {
                 do { twitch = try await liveStreams(forLogins: twitch.map(\.login), credentials).map(item(from:)) }
                 catch {
                     Logger(subsystem: "com.thatcube.Strozz", category: "top-shelf")

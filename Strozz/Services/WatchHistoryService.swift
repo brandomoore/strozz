@@ -37,7 +37,10 @@ final class WatchHistoryService {
   /// Watches this old contribute half the weight of a fresh watch.
   private static let recencyHalfLife: TimeInterval = 14 * 24 * 3600
 
-  private(set) var entries: [WatchHistoryEntry] = []
+  private var storedEntries: [WatchHistoryEntry] = []
+  var entries: [WatchHistoryEntry] {
+    storedEntries.filter { StreamPlatformPreferences.shared.selection.includes($0.platform) }
+  }
 
   /// On-device personalization switch, mirrored from `UserDefaults` so the
   /// Settings toggle and this service always agree. Defaults to on.
@@ -58,8 +61,8 @@ final class WatchHistoryService {
     guard !login.isEmpty else { return }
 
     let now = Date()
-    if let index = entries.firstIndex(where: { $0.channelKey == channel.channelKey }) {
-      var entry = entries.remove(at: index)
+    if let index = storedEntries.firstIndex(where: { $0.channelKey == channel.channelKey }) {
+      var entry = storedEntries.remove(at: index)
       entry.lastWatchedAt = now
       entry.watchCount += 1
       entry.displayName = channel.displayName
@@ -67,9 +70,9 @@ final class WatchHistoryService {
         entry.gameName = channel.gameName
       }
       if let viewers = channel.combinedViewerCount { entry.viewerCount = viewers }
-      entries.insert(entry, at: 0)
+      storedEntries.insert(entry, at: 0)
     } else {
-      entries.insert(
+      storedEntries.insert(
         WatchHistoryEntry(
           login: login,
           displayName: channel.displayName,
@@ -83,15 +86,15 @@ final class WatchHistoryService {
       )
     }
 
-    if entries.count > Self.maxEntries {
-      entries = Array(entries.prefix(Self.maxEntries))
+    if storedEntries.count > Self.maxEntries {
+      storedEntries = Array(storedEntries.prefix(Self.maxEntries))
     }
     persist()
   }
 
   /// Permanently forgets all watch history from this device.
   func clear() {
-    entries = []
+    storedEntries = []
     persist()
   }
 
@@ -127,7 +130,7 @@ final class WatchHistoryService {
 
   private func load() {
     if let decoded: [WatchHistoryEntry] = Defaults.load(forKey: storageKey) {
-      entries = decoded
+      storedEntries = decoded
     }
   }
 
@@ -137,7 +140,7 @@ final class WatchHistoryService {
     label: "com.thatcube.Strozz.watchHistory.persist", qos: .utility)
 
   private func persist() {
-    let snapshot = entries
+    let snapshot = storedEntries
     let key = storageKey
     Self.persistQueue.async {
       Defaults.save(snapshot, forKey: key)

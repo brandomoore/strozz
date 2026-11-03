@@ -203,6 +203,10 @@ final class MobilePlaybackModel {
 
   func start(channel: String, platform: LivePlatform = .twitch) {
     guard !isActive else { return }
+    guard StreamPlatformPreferences.shared.selection.includes(platform) else {
+      fail(PlatformLiveTarget.Failure.disabledPlatform(platform).localizedDescription)
+      return
+    }
     source = PlatformLiveTarget(platform: platform, channel: channel)
     creatorSession.start(source)
     kickChannel = nil
@@ -220,6 +224,10 @@ final class MobilePlaybackModel {
   }
 
   func switchSource(_ target: PlatformLiveTarget) {
+    guard StreamPlatformPreferences.shared.selection.includes(target.platform) else {
+      creatorSession.selectVideo(target)
+      return
+    }
     guard target != source, isActive else { return }
     let shouldPlay = !isPaused
     let nextPosition = Position(shouldPlay: shouldPlay, date: nil)

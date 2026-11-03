@@ -54,6 +54,11 @@ extension PlayerView {
       }
     }
     guard !Task.isCancelled, backgroundedAt == nil, !isMultiviewBrowsing else { return }
+    guard StreamPlatformPreferences.shared.selection.includes(currentLiveTarget.platform) else {
+      errorMessage = PlatformLiveTarget.Failure.disabledPlatform(currentLiveTarget.platform).localizedDescription
+      recordPlaybackEvent("load_blocked", level: .warning, attributes: ["cause": "platform_disabled"])
+      return
+    }
     recordPlaybackEvent("initial_source_selected", attributes: ["source": "twitch"])
     await load(reason: reason)
   }
