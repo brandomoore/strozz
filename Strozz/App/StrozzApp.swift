@@ -8,7 +8,6 @@ struct StrozzApp: App {
   /// App-level composition root. Owns the app-global services once for the whole
   /// app and injects them into the view tree via `.environment(_:)`.
   @State private var environment = AppEnvironment()
-  @Environment(\.colorScheme) private var colorScheme
 
   init() {
     PlaybackTelemetrySentry.start()
@@ -68,9 +67,7 @@ struct StrozzApp: App {
     if StreamPlatformPreferences.shared.hasChosen {
       HomeView(deepLinkRouter: deepLinkRouter)
     } else {
-      StreamPlatformOnboardingView()
-        .environment(\.themePalette, environment.themeManager.theme.palette(systemColorScheme: colorScheme))
-        .preferredColorScheme(environment.themeManager.theme.preferredColorScheme)
+      StreamPlatformOnboardingView(theme: environment.themeManager.theme)
     }
   }
 }

@@ -14,7 +14,6 @@ struct StrozzMobileApp: App {
   @State private var kickDiscovery: KickDiscoveryService
   @State private var kickSignIn = MobileKickSignIn()
   @State private var showDisabledKickNotice = false
-  @Environment(\.colorScheme) private var colorScheme
 
   init() {
     let kickFollows = KickFollowingStore()
@@ -63,8 +62,7 @@ struct StrozzMobileApp: App {
         MobileRootView(accountID: auth.userID ?? "anonymous", initialTab: initialTab)
           .id(auth.userID ?? "anonymous")
       } else {
-        StreamPlatformOnboardingView()
-          .environment(\.themePalette, theme.theme.palette(systemColorScheme: colorScheme))
+        StreamPlatformOnboardingView(theme: theme.theme)
       }
     }
       .environment(auth)

@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 
 #if os(tvOS)
@@ -110,5 +111,73 @@ final class StreamPlatformPreferencesTests: XCTestCase {
     XCTAssertEqual(history.entries.map(\.platform), [.kick])
     preferences.selection = .both
     XCTAssertEqual(Set(history.entries.map(\.platform)), [.twitch, .kick])
+  }
+
+  func testOnboardingResolvesNativeAppearanceAndFillsSafeAreas() async throws {
+    let name = "platform-appearance-\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+    defer { defaults.removePersistentDomain(forName: name) }
+    let preferences = StreamPlatformPreferences(defaults: defaults, shelfDefaults: nil)
+    let scene = try XCTUnwrap(
+      UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let previousKeyWindow = scene.keyWindow
+    defer { previousKeyWindow?.makeKey() }
+
+    for theme in AppTheme.allCases {
+      for style in [UIUserInterfaceStyle.light, .dark] {
+        let window = UIWindow(windowScene: scene)
+        window.overrideUserInterfaceStyle = style
+        let host = UIHostingController(
+          rootView: StreamPlatformOnboardingView(preferences: preferences, theme: theme))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+          window.isHidden = true
+          window.rootViewController = nil
+        }
+        try await Task.sleep(for: .milliseconds(150))
+        host.view.layoutIfNeeded()
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: host.view.bounds.size, format: format).image {
+          _ in
+          host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "Platform onboarding \(theme.rawValue) native-\(style.rawValue)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        let light = theme == .light || (theme == .system && style == .light)
+        let bitmap = try XCTUnwrap(image.cgImage)
+        for x in [8, bitmap.width - 9] {
+          for y in [8, bitmap.height / 2, bitmap.height - 9] {
+            let pixel = try backgroundPixel(bitmap, x: x, y: y)
+            XCTAssertEqual(pixel[3], 255, "The backdrop must cover the entire screen")
+            for component in pixel.prefix(3) {
+              if light {
+                XCTAssertGreaterThan(component, 220)
+              } else {
+                XCTAssertLessThan(component, 70)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private func backgroundPixel(_ image: CGImage, x: Int, y: Int) throws -> [UInt8] {
+    let sample = try XCTUnwrap(image.cropping(to: CGRect(x: x, y: y, width: 1, height: 1)))
+    var pixel = [UInt8](repeating: 0, count: 4)
+    try pixel.withUnsafeMutableBytes { bytes in
+      let context = try XCTUnwrap(
+        CGContext(
+          data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+          space: CGColorSpaceCreateDeviceRGB(),
+          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+      context.draw(sample, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+    }
+    return pixel
   }
 }

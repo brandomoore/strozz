@@ -46,38 +46,68 @@ struct StreamPlatformSettingsView: View {
 
 struct StreamPlatformOnboardingView: View {
   var preferences: StreamPlatformPreferences = .shared
+  var theme: AppTheme = .system
   @State private var selection = StreamPlatforms.both
-  @Environment(\.themePalette) private var palette
+  // System appearance must be read inside the scene's view hierarchy, not on App.
+  @Environment(\.colorScheme) private var colorScheme
+
+  private var palette: ThemePalette { theme.palette(systemColorScheme: colorScheme) }
 
   var body: some View {
-    ScrollView {
-      VStack(spacing: 24) {
-        Text("Choose your platforms").font(.largeTitle.bold())
-        Text("Choose one or both. You can change this in Settings.")
-          .foregroundStyle(.secondary)
-          .multilineTextAlignment(.center)
-        VStack(spacing: 20) {
-          StreamPlatformSelectionControls(selection: $selection)
-        }
-        .padding(.vertical, 16)
-        Button("Continue") { preferences.completeOnboarding(selection) }
-          .platformSelectionButtonStyle(prominent: true)
-          .accessibilityIdentifier("platform-choice-continue")
-      }
-      .padding(32)
-      .frame(maxWidth: 640)
-      .frame(maxWidth: .infinity)
-    }
-    .defaultScrollAnchor(.center, for: .alignment)
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(
+    ZStack {
       LinearGradient(colors: palette.backgroundColors, startPoint: .top, endPoint: .bottom)
-    )
+        .ignoresSafeArea()
+
+      ScrollView {
+        VStack(spacing: 40) {
+          StreamPlatformOnboardingHeader()
+          VStack(spacing: 32) {
+            VStack(spacing: 20) {
+              StreamPlatformSelectionControls(selection: $selection)
+            }
+            Button {
+              preferences.completeOnboarding(selection)
+            } label: {
+              Text("Continue").frame(minWidth: 180)
+            }
+            .controlSize(.large)
+            .platformSelectionButtonStyle(prominent: true)
+            .accessibilityIdentifier("platform-choice-continue")
+          }
+          .frame(maxWidth: 600)
+        }
+        .padding(.horizontal, 32)
+        .padding(.vertical, 64)
+        .frame(maxWidth: 1000)
+        .frame(maxWidth: .infinity)
+      }
+      .defaultScrollAnchor(.center, for: .alignment)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .environment(\.themePalette, palette)
+    .preferredColorScheme(theme.preferredColorScheme)
     .onAppear { selection = preferences.selection }
     .accessibilityIdentifier("platform-onboarding")
     #if os(tvOS)
       .resolveGlassDisabled()
     #endif
+  }
+}
+
+private struct StreamPlatformOnboardingHeader: View {
+  @Environment(\.themePalette) private var palette
+
+  var body: some View {
+    VStack(spacing: 12) {
+      Text("Choose your platforms")
+        .font(.largeTitle.bold())
+        .foregroundStyle(palette.chromeOnOpaque)
+        .accessibilityIdentifier("platform-choice-title")
+      Text("Choose one or both.")
+        .foregroundStyle(palette.chromeOnOpaque.opacity(0.7))
+        .accessibilityIdentifier("platform-choice-description")
+    }
+    .multilineTextAlignment(.center)
   }
 }
 
