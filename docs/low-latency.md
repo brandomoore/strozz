@@ -143,6 +143,25 @@ pipeline immediately rather than trickling across another poll interval.
 `CreatorLiveSessionTests` covers video-switch continuity, explicit identity,
 persistence/reverse entry, independent counts, expiry, and stop/suspend fences.
 
+Twitch broadcast endings use the existing anonymous Hermes
+`video-playback-by-id` subscription: `stream-down` confirms an ending and
+`stream-up` confirms a new broadcast. Viewer-count updates and disconnected
+sockets are not offline evidence. Periodic creator status checks continue after
+terminal playback errors, and resubscribing requests a fresh check. Push events
+take precedence for ten seconds so briefly stale metadata cannot immediately
+undo them; subsequent checks still cover missed events. Old connection frames,
+out-of-order event timestamps, and queries begun before a newer event are fenced.
+
+TV and mobile apply this evidence only to the matching Twitch video source,
+never a linked Kick/YouTube video or its merged chat. Healthy buffered video and
+paused/rewound playback remain available. The offline state replaces an
+unplayable item, the drained live edge (at most 150 ms buffered), or a confirmed
+play-to-end notification, subject to playback intent; TV raid handling retains
+precedence. Pending source recovery is invalidated before presenting offline.
+`broadcast_status_updated` records the evidence separately from transport and
+decoder failures. This does not change retry limits or provide automatic fallback
+to the standard player.
+
 Kick chat negotiates its current anonymous Pusher application through Kick's
 public realtime connection endpoint. Do not bake in an application key:
 retired keys return Pusher error 4001 even when video and channel lookup work.
@@ -323,25 +342,71 @@ their audio/video renderers while retaining the pane models, layout and audio
 owner. New selections join that same controller; no second active queue is
 created. Hidden browsing cards cannot run previews behind the wall.
 
-After ten idle seconds, the focused/audible pane's outside outline dims to 35%
+After 2.5 idle seconds and a 0.2-second fade, the focused/audible pane's outside outline dims to 35%
 of its active opacity instead of disappearing. The icon-only audio badge and
 focused metadata still hide; remote interaction restores full chrome without
 changing audio ownership. Both overlays use the shared native Liquid Glass
 HUD treatment, with theme-aware opaque surfaces when transparency is disabled.
 The outline switches instantly between panes; other chrome animations are unchanged.
 Pane frames match the video's presentation aspect ratio rather than a letterboxed
-layout cell. Pictures pack together with 10-point gaps, just enough for the
+layout cell. Compact videos have 16-point continuous rounded corners; metadata is
+clipped to the same shape and the outside outline follows its rounded edge.
+Pictures pack together with 10-point gaps, just enough for the
 outside outlines, and a 5-point screen-edge allowance. Unused aspect-ratio space
 stays around the wall instead of between rows. These bounds stay stable while
 chrome hides. Compact players do not ignore safe areas: doing so expands their
 native video surfaces toward screen edges independently of the pane outlines.
 Expanded playback remains edge-to-edge with the same retained player.
+Metadata adapts to the actual pane bounds rather than its quality tier: smaller
+panes omit title/game details, and the smallest show only the channel and audio
+cue. Chrome cannot enlarge the picture's outside outline or spill into peers.
 
+Featured, Spotlight and Equal are explicit TV layout choices. Featured places
+the pinned primary beside a compact secondary grid; Spotlight uses a thumbnail
+strip; Equal uses common-height, aspect-correct pictures without a three-stream
+primary exception. Choosing Featured or Spotlight promotes the pane focused before
+opening the toolbar, or the pane whose hold menu was opened. Later focus/audio
+changes do not move the primary; Equal and programmatic restoration preserve it.
+Promotion changes geometry, not pane order,
+player items or reload identifiers. Existing quality budgets remain unchanged:
+Featured and Equal use the grid tiers; Spotlight retains its source/thumbnail tiers.
+
+Play/Pause reveals a compact bottom Liquid Glass toolbar with Layout, Browse streams
+(Add stream in the standalone picker flow), and Done. Layout uses a native menu
+with an inline single-selection picker, also shared by the pane's hold-menu
+submenu. Native menu dismissal handles Back before the toolbar closes.
+Only the toolbar reserves wall space; the system menu temporarily overlays content.
+Focus is contained in controls while open, preserving audio and the
+return pane. Controls never auto-dismiss under focus. Their measured height
+drives bottom clearance: leave fitting pictures unchanged, translate into unused
+space next, and only then recompute smaller frames with unchanged rows/columns
+and outside-outline gaps. Layout and clearance motion respects Reduce Motion;
+ordinary pane focus does not resize the wall.
+All pane-frame changes, including additions, removals and decoded aspect-ratio
+updates, smoothly interpolate without replacing surviving players. Removing a
+pane mutes it immediately, then shrinks and fades its picture before releasing
+the outgoing player. Rapid re-adds use a fresh view lifetime, not the outgoing
+pane's state. Reduce Motion disables movement and scaling.
+Controls use normal-sized labels and the shared
+theme-aware player button styles, including the native Reduce Transparency path.
+
+A short Play/Pause press on a focused browsing stream card toggles its lineup
+membership through the existing selection path, including the six-stream limit.
+Only live Twitch/Kick cards or an already-selected card enable this command.
+The existing selection badge updates without opening a player or menu.
+
+The inline lineup button retains its native height when empty, but has zero
+width and no focus or accessibility target, so adding or removing the first/last
+stream cannot shift page content. Avatar additions still animate only its width.
+
+`MultiviewCardShortcut` belongs on the browsing card's focusable wrapper;
+placing the command inside `StreamChannelCard` leaves it below the focused
+responder and drops the remote press.
 Holding Play/Pause for 0.7 seconds opens the shared lineup from browsing or a
 presented screen; holding it in an expanded pane returns to the wall. The
 window-scoped recognizer arbitrates with the normal Play/Pause command, so a
-hold must not also pause playback or toggle the wall HUD. Short presses keep
-their existing behavior. An insufficient lineup shows the existing toast pill
+hold must not also pause playback, toggle a browsing card, or toggle the wall HUD.
+Short presses inside playback keep their existing behavior. An insufficient lineup shows the existing toast pill
 above the current screen for three seconds without dismissing it. Recognizer
 and toast ownership follow the Home window and are removed when it detaches.
 The lineup marks the entire presentation handoff as busy, including UIKit
@@ -370,25 +435,53 @@ is read-only; restarting playback or taking over hardware is not.
 
 ### Collect scoped evidence
 
-TV retains JSONL under `Library/Caches/PlaybackDiagnostics`. Use the existing
-tool rather than copying the full app container:
+TV retains JSONL under `Library/Caches/PlaybackDiagnostics`, excluded
+from backup. tvOS does not guarantee persistent local file storage; moving these
+files to Application Support would not make them durable. The verbose log budget
+is **128 MiB** shared across panes (32 parts
+of 4 MiB). Active pane files are protected from retention eviction; tracked and
+enumerated file URLs must use the same canonical form, including `/var` aliases.
+Local storage can still fail or be removed; it is not
+a substitute for capturing an incident promptly.
+
+Each failed session also keeps a separate atomic `Incidents/incident-<UUID>.json`
+checkpoint: session/build metadata, the first incident and first error, six
+preceding non-debug events, latest error/recovery, and latest sampled state.
+Routine segment/frame traces cannot rotate this evidence away. Checkpoints
+refresh at most every 15 seconds during routine playback and immediately for
+failure/recovery/end events, with a separate cap of 32 files × 256 KiB (8 MiB).
+Failed writes back off for five seconds while retaining pending evidence in memory.
+Active failed sessions are protected; old closed sessions are evicted first.
+Oversized records and persistence failures are reported, not silently discarded.
+Failures have 16 reserved queue slots beyond normal bounded trace admission.
+
+Use the existing tool rather than copying the full app container. For a stalled
+wall, collect the small checkpoints first:
 
 ```bash
-python3 tools/playback-diagnostics.py pull --device <device-id>
+python3 tools/playback-diagnostics.py pull --device <device-id> --incidents-only --all
+python3 tools/playback-diagnostics.py pull --device <device-id> --all
 python3 tools/playback-diagnostics.py analyze <capture-directory> --all --json
 ```
 
 `pull` accepts `--bundle`, `--output` (a new directory), `--session` and `--all`.
-Default analysis follows `latest-session.json`; `--all` reports each session
-separately, never combines concurrent panes. Mobile Debug writes the same
-telemetry format under `Library/Caches/MobilePlaybackDiagnostics`; the TV pull
-helper does not select that directory. Copy that scoped directory using
-`devicectl`/Xcode, then use `analyze`.
+Default full-log analysis follows `latest-session.json`; `--all` reports each
+session separately, never combines concurrent panes. `failure_evidence` exposes
+the pinned checkpoint without mixing sparse historical samples into full-log
+statistics. Checkpoint-only analysis explicitly reports sparse evidence.
+Mobile uses the same budgets and format under
+`Library/Application Support/MobilePlaybackDiagnostics`; pass `--mobile` to pull.
+For older mobile builds, use `--mobile --legacy-cache` to read the previous
+`Library/Caches` location. TV uses Caches in both versions, so its default pull
+also reads older builds. Existing cached evidence is not deleted or
+silently treated as current evidence.
 
 Check build/session/time and file completeness before interpreting a capture.
-If directory transfer fails, obtain the small latest-session marker and its
-individual rotated log parts. A successful command or empty destination is not
-proof of a complete transfer. The parser reports corrupt/partial data, sequence
+The pull tool lists only diagnostic files and copies checkpoints before individual
+log parts, avoiding fragile whole-directory transfers. `capture-manifest.json`
+records copied/failed files; a partial transfer exits with an error but leaves
+captured evidence available for analysis. A successful command or empty destination
+is not proof of a complete transfer. The parser reports corrupt/partial data, sequence
 gaps, dropped records and reclaimed rotations; do not discard those warnings.
 Logs contain public channel names and viewing times. Keep captures private and
 out of commits; never add signed URLs, tokens, headers or chat bodies.
@@ -419,6 +512,14 @@ out of commits; never add signed URLs, tokens, headers or chat bodies.
   only that loading returned. Require subsequent fresh frames and clock
   progress. Zero classified stall episodes does not exclude short hiccups below
   the parser's clock threshold.
+- **Distinguish terminal errors from buffering.** Samples with `error_present`
+  use phase `failed`, not `waiting`, and emit a bounded error-state transition.
+  TV samples record `recovery_blocked_by`, playback intent, watchdog/refresh task
+  presence, Native refresh state, current retry-window count/limit and retry delay.
+  Task presence does not prove execution. The pinned first failure preserves
+  numeric error domains/codes and up to three underlying error domains/codes;
+  SDK descriptions, signed URLs, headers, tokens and chat bodies are excluded.
+  A retry delay of zero does not itself restart a terminal error.
 - **Explain unexpected stops.** `avplayer_rate_changed` records the framework's
   rate-change reason and automatic-wait setting; `avplayer_reached_end` separates
   an end notification from ordinary buffering. Correlate those with viewer intent

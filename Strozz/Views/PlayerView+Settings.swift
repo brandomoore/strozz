@@ -266,6 +266,7 @@ extension PlayerView {
         }
       }
 
+      if StreamPlatformPreferences.shared.selection.includesKick {
       settingsPill(
         title: "Merge with Kick Chat",
         isSelected: experimentalKickMergeEnabled,
@@ -329,9 +330,10 @@ extension PlayerView {
             .fixedSize(horizontal: false, vertical: true)
         }
       }
+      }
 
       Text(
-        "Merge a creator's YouTube and Kick chat into the Twitch feed. We auto-detect the matching channel; if it's wrong, enter the handle or URL above."
+        "Merge chat from this creator's enabled platforms. If a linked channel is wrong, enter its handle or URL above."
       )
       .font(.caption2)
       .foregroundStyle(chatSettingsForeground.opacity(0.6))

@@ -14,7 +14,7 @@ extension ChatService {
   func restartKickLoopIfNeeded() {
     stopKickLoop(clearStatus: false)
 
-    guard kickMergeEnabled else {
+    guard StreamPlatformPreferences.shared.selection.includesKick, kickMergeEnabled else {
       kickStatusMessage = nil
       return
     }

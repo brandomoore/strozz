@@ -36,17 +36,22 @@ final class TwitchAuthSession {
     @ObservationIgnored let secureService: String
     @ObservationIgnored let saveTopShelf: @MainActor (TopShelfCredentials?) throws -> Void
     @ObservationIgnored let loadAuthData: NetworkClient.DataLoader
+    @ObservationIgnored let loadRefreshData: NetworkClient.DataLoader
+    @ObservationIgnored let renewalExecution: TwitchRenewalExecution
 
     init(
         userDefaults: UserDefaults? = nil,
         secureService: String = TwitchAuthSession.credentialService,
         saveTopShelf: @escaping @MainActor (TopShelfCredentials?) throws -> Void = TopShelfCredentialStore.save,
-        loadAuthData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) }
+        loadAuthData: NetworkClient.DataLoader? = nil,
+        renewalExecution: TwitchRenewalExecution? = nil
     ) {
         self.userDefaults = userDefaults ?? Self.sharedDefaults()
         self.secureService = secureService
         self.saveTopShelf = saveTopShelf
-        self.loadAuthData = loadAuthData
+        self.loadAuthData = loadAuthData ?? { try await NetworkClient.api.data(for: $0) }
+        self.loadRefreshData = loadAuthData ?? { try await NetworkClient.credentialExchange.data(for: $0) }
+        self.renewalExecution = renewalExecution ?? .application()
     }
 
     private static func sharedDefaults() -> UserDefaults {

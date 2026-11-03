@@ -17,13 +17,17 @@ struct FollowingDirectoryView: View {
   @Environment(PlaybackReturnRefreshCoordinator.self) private var playbackReturnRefresh
   private var follows: FollowedChannelsService { environment.follows }
   private var auth: TwitchAuthSession { environment.auth }
+  private var isLoading: Bool {
+    (StreamPlatformPreferences.shared.selection.includesTwitch && follows.isLoadingDirectory)
+      || (StreamPlatformPreferences.shared.selection.includesKick && environment.kickDiscovery.isRefreshing)
+  }
   private var channels: [FollowedChannel] {
     environment.kickDiscovery.mergedFollowing(follows.directory)
   }
   private var errorMessage: String? {
-    (auth.isAuthenticated ? follows.directoryErrorMessage : nil)
+    (StreamPlatformPreferences.shared.selection.includesTwitch && auth.isAuthenticated ? follows.directoryErrorMessage : nil)
       ?? environment.kickDiscovery.errorMessage
-      ?? (environment.kickFollows.isConnected ? environment.kickFollows.errorMessage : nil)
+      ?? (environment.kickDiscovery.isConnected ? environment.kickFollows.errorMessage : nil)
   }
   @Binding var selectedChannel: FollowedChannel?
   @Binding var channelPageTarget: ChannelPageTarget?
@@ -85,7 +89,7 @@ struct FollowingDirectoryView: View {
             }
           }
 
-          if follows.isLoadingDirectory && channels.isEmpty {
+          if isLoading && channels.isEmpty {
             ProgressView().scaleEffect(0.85)
           }
 
@@ -100,7 +104,7 @@ struct FollowingDirectoryView: View {
             .foregroundStyle(.orange)
         }
 
-        if !follows.isLoadingDirectory && channels.isEmpty
+        if !isLoading && channels.isEmpty
           && errorMessage == nil
         {
           Text("You don't follow any channels yet.")
@@ -136,6 +140,7 @@ struct FollowingDirectoryView: View {
               .onTapGesture {
                 select(channel)
               }
+              .modifier(MultiviewCardShortcut(channel: channel))
               .zIndex(isFocused ? 2 : 0)
             }
           }

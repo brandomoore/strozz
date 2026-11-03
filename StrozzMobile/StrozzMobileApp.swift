@@ -13,6 +13,7 @@ struct StrozzMobileApp: App {
   @State private var kickFollows: KickFollowingStore
   @State private var kickDiscovery: KickDiscoveryService
   @State private var kickSignIn = MobileKickSignIn()
+  @State private var showDisabledKickNotice = false
 
   init() {
     let kickFollows = KickFollowingStore()
@@ -56,9 +57,14 @@ struct StrozzMobileApp: App {
 
   private var appContent: some View {
     @Bindable var signIn = kickSignIn
-    return MobileRootView(accountID: auth.userID ?? "anonymous",
-      initialTab: initialTab)
-      .id(auth.userID ?? "anonymous")
+    return Group {
+      if StreamPlatformPreferences.shared.hasChosen {
+        MobileRootView(accountID: auth.userID ?? "anonymous", initialTab: initialTab)
+          .id(auth.userID ?? "anonymous")
+      } else {
+        StreamPlatformOnboardingView(theme: theme.theme)
+      }
+    }
       .environment(auth)
       .environment(theme)
       .environment(rewards)
@@ -68,9 +74,15 @@ struct StrozzMobileApp: App {
       .environment(kickDiscovery)
       .environment(kickSignIn)
       .onOpenURL { url in
-        if url.scheme == "strozz", url.host == "connect", url.path == "/kick" {
+        guard url.scheme == "strozz", url.host == "connect", url.path == "/kick" else { return }
+        if StreamPlatformPreferences.shared.selection.includesKick {
           kickSignIn.connect(using: kickFollows)
-        }
+        } else { showDisabledKickNotice = true }
+      }
+      .alert("Kick is disabled", isPresented: $showDisabledKickNotice) {
+        Button("OK", role: .cancel) {}
+      } message: {
+        Text("Enable Kick in Account > Platforms to connect an account.")
       }
       .sheet(isPresented: $signIn.isPresented) { MobileKickSignInSheet(signIn: signIn) }
       .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in
@@ -157,8 +169,10 @@ struct MobileRootView: View {
     .environment(vodProgress)
     .environment(follows)
     .environment(returnRefresh)
-    .task(id: scenePhase == .active && playback.channel == nil) {
-      guard scenePhase == .active, playback.channel == nil else { return }
+    .task(id: scenePhase == .active && playback.channel == nil
+      && StreamPlatformPreferences.shared.selection.includesKick) {
+      guard scenePhase == .active, playback.channel == nil,
+        StreamPlatformPreferences.shared.selection.includesKick else { return }
       while !Task.isCancelled {
         await kickFollows.synchronize()
         await kickSignIn.refreshIfNeeded(using: kickFollows)
@@ -167,6 +181,18 @@ struct MobileRootView: View {
       }
     }
     .onChange(of: kickFollows.document) { _, _ in kick.applyRoster() }
+    .onChange(of: StreamPlatformPreferences.shared.selection) { _, selection in
+      preview.stop()
+      if playback.channel != nil, !selection.includes(playback.model.source.platform) {
+        playback.close()
+      } else {
+        playback.model.creatorSession.platformsChanged()
+      }
+      if let channel = homeProfile, !selection.includes(channel.platform) { homeProfile = nil }
+      if let channel = browseProfile, !selection.includes(channel.platform) { browseProfile = nil }
+      kick.accountChanged()
+      Task { await follows.refresh(using: auth) }
+    }
     .onChange(of: playerVisibility) { previous, current in
       if previous == .expanded && current != .expanded
         || previous == .miniPlayer && current == .closed {

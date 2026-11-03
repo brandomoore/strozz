@@ -24,7 +24,7 @@ enum MobileHomeFeed: Hashable {
   static func homeChannels(follows: [FollowedChannel], watched: [FollowedChannel],
                            recommendations: [FollowedChannel], history: [WatchHistoryEntry],
                            category: TwitchCategory?) -> [FollowedChannel] {
-    let counts = Dictionary(history.map { ($0.login.lowercased(), $0.watchCount) }, uniquingKeysWith: max)
+    let counts = Dictionary(history.map { ($0.channelKey, $0.watchCount) }, uniquingKeysWith: max)
     var seen = Set<String>()
     let familiar = (follows + watched).filter { $0.isLive && seen.insert($0.channelKey).inserted }
       .sorted {
@@ -93,35 +93,44 @@ struct MobileHomeView: View {
   @State private var selectedVideo: MobileVODSelection?
   @State private var personalRefreshID = UUID()
   @State private var personalLoading = true
+  @State private var personalError: String?
   @State private var hasAppeared = false
+  private var twitchAuthenticated: Bool {
+    StreamPlatformPreferences.shared.selection.includesTwitch && auth.isAuthenticated
+  }
+  private var restoringTwitch: Bool {
+    StreamPlatformPreferences.shared.selection.includesTwitch && sync.isRestoringAccount
+  }
 
   private var shouldPreview: Bool { previewsEnabled && feed == .live && selectedVideo == nil }
   private var liveCategoryID: String? { feed == .live ? category?.id : nil }
   private var personalFeed: Bool {
-    personalizedEnabled && (auth.isAuthenticated || kick.follows.isConnected || !history.entries.isEmpty)
+    personalizedEnabled && (twitchAuthenticated || kick.isConnected || !history.entries.isEmpty)
   }
   private var personalizationID: String {
     "\(auth.userID ?? "")|\(follows.lastUpdatedAt?.timeIntervalSinceReferenceDate ?? 0)|\(personalizedEnabled)|"
-      + history.entries.map { "\($0.login):\($0.watchCount)" }.joined(separator: ",")
+      + "\(kick.lastUpdatedAt?.timeIntervalSinceReferenceDate ?? 0)|\(StreamPlatformPreferences.shared.selection.rawValue)|"
+      + history.entries.map { "\($0.channelKey):\($0.watchCount)" }.joined(separator: ",")
+  }
+  private var allLiveFollows: [FollowedChannel] {
+    kick.mergedFollowing(
+      MobileHomeFeed.visibleFollows(follows.channels, authenticated: twitchAuthenticated,
+        isDemo: follows.isUsingDemoData, category: nil), liveOnly: true)
   }
   private var visibleFollows: [FollowedChannel] {
-    kick.mergedFollowing(
-      MobileHomeFeed.visibleFollows(follows.channels, authenticated: auth.isAuthenticated,
-        isDemo: follows.isUsingDemoData, category: nil), liveOnly: true)
-      .filter { channel in category.map {
+    allLiveFollows.filter { channel in category.map {
         channel.gameName.localizedCaseInsensitiveCompare($0.name) == .orderedSame
       } ?? true }
   }
   private var shortcutsLoading: Bool {
-    !kick.follows.isConnected
-      && (sync.isRestoringAccount || (auth.isAuthenticated && follows.lastUpdatedAt == nil && follows.errorMessage == nil))
+    !kick.isConnected
+      && (restoringTwitch || (twitchAuthenticated && follows.lastUpdatedAt == nil && follows.errorMessage == nil))
   }
   private var homeChannels: [FollowedChannel] {
     let base = personalFeed ? personalChannels
       : category == nil ? recommendations.channels : categoryStreams.categoryStreams
-    let merged = KickUnifiedFeed.merge(twitch: base,
-      kick: kick.directory.filter(\.isLive) + kick.recommended, links: kick.links)
-    return KickUnifiedFeed.interleave(merged.filter { $0.platform != .kick }, merged.filter { $0.platform == .kick })
+    let merged = kick.mergedRecommendations(base, includeNew: false)
+    return (personalFeed ? merged : KickUnifiedFeed.sortedByViewers(merged))
       .filter { channel in
       category.map { channel.gameName.localizedCaseInsensitiveCompare($0.name) == .orderedSame } ?? true
     }
@@ -153,18 +162,18 @@ struct MobileHomeView: View {
               MobileHomeFilters(categories: recommendations.categories, selection: $category)
               if feed == .following {
                 MobileFollowingContent(
-                  authenticated: auth.isAuthenticated || kick.follows.isConnected,
-                  isRestoringAccount: sync.isRestoringAccount && !kick.follows.isConnected,
+                  authenticated: twitchAuthenticated || kick.isConnected,
+                  isRestoringAccount: restoringTwitch && !kick.isConnected,
                   channels: MobileHomeFeed.directory(kick.mergedFollowing(follows.directory),
-                    authenticated: auth.isAuthenticated || kick.follows.isConnected, category: category),
-                  isLoading: auth.isAuthenticated && (follows.isLoadingDirectory
+                    authenticated: twitchAuthenticated || kick.isConnected, category: category),
+                  isLoading: twitchAuthenticated && (follows.isLoadingDirectory
                     || (follows.directoryLoadedAt == nil && follows.directoryErrorMessage == nil)),
-                  errorMessage: (auth.isAuthenticated ? follows.directoryErrorMessage : nil)
-                    ?? kick.errorMessage ?? (kick.follows.isConnected ? kick.follows.errorMessage : nil),
+                  errorMessage: (twitchAuthenticated ? follows.directoryErrorMessage : nil)
+                    ?? kick.errorMessage ?? (kick.isConnected ? kick.follows.errorMessage : nil),
                   filtered: category != nil, onAccount: onAccount,
                   onRetry: {
                     Task {
-                      if auth.isAuthenticated { await follows.loadDirectory(using: auth, force: true) }
+                      if twitchAuthenticated { await follows.loadDirectory(using: auth, force: true) }
                       await kick.follows.synchronize()
                       await kick.refresh(twitch: follows.directory + recommendations.channels, force: true)
                     }
@@ -181,8 +190,8 @@ struct MobileHomeView: View {
                   MobileFollowedShortcuts(channels: shortcutChannels, onSelect: onSelect,
                                          onSeeAll: { feed = .following },
                                          isLoading: shortcutsLoading,
-                                         authenticated: auth.isAuthenticated || kick.follows.isConnected,
-                                         isRestoringAccount: sync.isRestoringAccount && !kick.follows.isConnected,
+                                         authenticated: twitchAuthenticated || kick.isConnected,
+                                         isRestoringAccount: restoringTwitch && !kick.isConnected,
                                          skeletonCount: followedSkeletonCount)
                     .padding(.horizontal)
                 }
@@ -190,7 +199,7 @@ struct MobileHomeView: View {
                   Text(personalFeed ? "For you" : "Popular live channels")
                     .font(.title3.bold()).accessibilityAddTraits(.isHeader).padding(.horizontal)
                 }
-                if personalFeed, auth.isAuthenticated, let error = follows.errorMessage {
+                if personalFeed, twitchAuthenticated, let error = follows.errorMessage {
                   MobileStatusView(message: error) { Task { await follows.refresh(using: auth) } }
                     .padding(.horizontal)
                 }
@@ -202,11 +211,11 @@ struct MobileHomeView: View {
                 }
                 MobileLiveFeedContent(
                   channels: homeChannels,
-                  isLoading: personalFeed ? (personalLoading || (auth.isAuthenticated
+                  isLoading: personalFeed ? (personalLoading || (twitchAuthenticated
                     && (follows.isRefreshing || (follows.lastUpdatedAt == nil && follows.errorMessage == nil))))
                     : (category == nil ? recommendations.isLoading || recommendations.lastUpdatedAt == nil
                       : categoryStreams.isLoadingStreams),
-                  errorMessage: personalFeed ? nil
+                  errorMessage: personalFeed ? personalError
                     : (category == nil ? recommendations.errorMessage : categoryStreams.streamsErrorMessage),
                   preview: preview, onSelect: onSelect, onRetry: { Task { await refreshLive() } })
                   .padding(.horizontal)
@@ -237,10 +246,10 @@ struct MobileHomeView: View {
         .refreshable {
           async let kickSynced: Void = kick.follows.synchronize()
           if feed == .following {
-            if auth.isAuthenticated { await follows.loadDirectory(using: auth, force: true) }
+            if twitchAuthenticated { await follows.loadDirectory(using: auth, force: true) }
           } else {
             await refreshLive()
-            if auth.isAuthenticated { await follows.refresh(using: auth) }
+            if twitchAuthenticated { await follows.refresh(using: auth) }
           }
           await kickSynced
           await kick.refresh(twitch: (feed == .following ? follows.directory : follows.channels)
@@ -274,14 +283,17 @@ struct MobileHomeView: View {
       followedSkeletonCount = MobileFollowedShortcutCount.cached(for: accountID)
     }
     .onChange(of: follows.lastUpdatedAt) { _, updatedAt in
-      guard updatedAt != nil, auth.isAuthenticated,
+      guard updatedAt != nil, twitchAuthenticated,
             let count = MobileFollowedShortcutCount.remember(
               follows.channels, for: auth.userID, isDemo: follows.isUsingDemoData,
               errorMessage: follows.errorMessage)
       else { return }
       followedSkeletonCount = count
     }
-    .task { if recommendations.lastUpdatedAt == nil { await recommendations.refresh() } }
+    .task(id: StreamPlatformPreferences.shared.selection) {
+      category = nil
+      await recommendations.refresh()
+    }
     .task(id: KickRefreshIdentity(isActive: previewsEnabled, importedAt: kick.follows.document?.importedAt)) {
       guard previewsEnabled else { return }
       while !Task.isCancelled {
@@ -298,11 +310,13 @@ struct MobileHomeView: View {
       await refreshAfterReturn()
     }
     .task(id: liveCategoryID) {
-      if feed == .live, !personalFeed, let category { await categoryStreams.loadStreams(for: category) }
+      if feed == .live, !personalFeed, let category {
+        await categoryStreams.loadStreams(for: category, mixCategoryPlatforms: true)
+      }
     }
-    .task(id: "\(auth.userID ?? "")-\(feed == .following)") {
+    .task(id: "\(auth.userID ?? "")-\(feed == .following)-\(StreamPlatformPreferences.shared.selection.rawValue)") {
       guard feed == .following else { return }
-      if auth.isAuthenticated { await follows.loadDirectory(using: auth) }
+      if twitchAuthenticated { await follows.loadDirectory(using: auth) }
       await kick.refresh(twitch: follows.directory + recommendations.channels,
         force: true, preservingRecommendations: true)
     }
@@ -313,7 +327,7 @@ struct MobileHomeView: View {
   }
 
   private func refreshAfterReturn() async {
-    if auth.isAuthenticated {
+    if twitchAuthenticated {
       await follows.refresh(using: auth)
       if feed == .following { await follows.loadDirectory(using: auth, force: true) }
     }
@@ -322,8 +336,11 @@ struct MobileHomeView: View {
   }
 
   private func refreshLive() async {
-    if personalFeed { await refreshPersonalized() }
-    else if let category { await categoryStreams.loadStreams(for: category) }
+    if personalFeed {
+      await recommendations.refresh()
+      await refreshPersonalized()
+    }
+    else if let category { await categoryStreams.loadStreams(for: category, mixCategoryPlatforms: true) }
     else { await recommendations.refresh() }
   }
 
@@ -332,25 +349,35 @@ struct MobileHomeView: View {
     personalRefreshID = refreshID
     let service = PersonalizedRecommendationsService()
     personalLoading = true
+    personalError = nil
     defer { if refreshID == personalRefreshID { personalLoading = false } }
     guard personalFeed else { return }
-    let logins = history.entries.sorted { ($0.watchCount, $0.lastWatchedAt) > ($1.watchCount, $1.lastWatchedAt) }
+    let logins = history.entries.filter { $0.platform == .twitch }
+      .sorted { ($0.watchCount, $0.lastWatchedAt) > ($1.watchCount, $1.lastWatchedAt) }
       .prefix(20).map(\.login)
     async let watched = SimilarChannelsEngine.liveChannels(forLogins: Array(logins))
+    let kickLogins = history.entries.filter { $0.platform == .kick }.prefix(20).map(\.login)
+    async let watchedKick = KickDiscoveryService.loadChannels(
+      kickLogins, load: { try await KickPlaybackService.channel($0) },
+      isCurrent: { personalRefreshID == refreshID })
     await affinity.refreshIfNeeded()
     guard !Task.isCancelled, refreshID == personalRefreshID else { return }
     await service.refresh(
-      follows: MobileHomeFeed.visibleFollows(follows.channels, authenticated: auth.isAuthenticated,
-        isDemo: follows.isUsingDemoData, category: nil),
-      followedCategories: follows.isUsingDemoData ? [:] : follows.followedCategories,
-      followedLogins: follows.isUsingDemoData ? [] : follows.followedLogins,
+      follows: allLiveFollows,
+      followedCategories: follows.isUsingDemoData || !twitchAuthenticated ? [:] : follows.followedCategories,
+      followedLogins: (follows.isUsingDemoData || !twitchAuthenticated ? [] : follows.followedLogins)
+        .union(kick.isConnected ? kick.directory.map { $0.followedChannel.channelKey } : []),
       history: history, affinity: affinity.map)
     let loaded = await watched
+    let loadedKick = await watchedKick
     guard !Task.isCancelled, refreshID == personalRefreshID else { return }
     personalChannels = MobileHomeFeed.homeChannels(
-      follows: MobileHomeFeed.visibleFollows(follows.channels, authenticated: auth.isAuthenticated,
-        isDemo: follows.isUsingDemoData, category: nil),
-      watched: loaded, recommendations: service.channels, history: history.entries, category: nil)
+      follows: allLiveFollows,
+      watched: loaded + loadedKick.channels.values.map(\.followedChannel),
+      recommendations: service.channels, history: history.entries, category: nil)
+    if loadedKick.failures > 0 {
+      personalError = String(localized: "Some recently watched Kick channels couldn't be refreshed.")
+    }
   }
 }
 
@@ -402,16 +429,21 @@ struct MobileHomeFilters: View {
   @Binding var selection: TwitchCategory?
 
   var body: some View {
+    let uniqueCategories = categories.reduce(into: [TwitchCategory]()) { result, category in
+      if !result.contains(where: { $0.name.caseInsensitiveCompare(category.name) == .orderedSame }) {
+        result.append(category)
+      }
+    }
     ScrollView(.horizontal) {
       HStack(spacing: 8) {
         Button("All") { selection = nil }
           .tint(selection == nil ? .accentColor : .secondary)
           .accessibilityAddTraits(selection == nil ? .isSelected : [])
           .accessibilityIdentifier("home-filter-all")
-        ForEach(categories) { category in
+        ForEach(uniqueCategories) { category in
           Button(category.name) { selection = category }
-            .tint(selection?.id == category.id ? .accentColor : .secondary)
-            .accessibilityAddTraits(selection?.id == category.id ? .isSelected : [])
+            .tint(selection?.name.caseInsensitiveCompare(category.name) == .orderedSame ? .accentColor : .secondary)
+            .accessibilityAddTraits(selection?.name.caseInsensitiveCompare(category.name) == .orderedSame ? .isSelected : [])
             .accessibilityIdentifier("home-filter-\(category.id)")
         }
       }

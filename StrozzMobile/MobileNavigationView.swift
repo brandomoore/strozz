@@ -47,23 +47,26 @@ struct MobileRootSidebar: View {
   @Environment(TwitchAuthSession.self) private var auth
   @Environment(TwitchAccountSync.self) private var sync
   @Environment(KickDiscoveryService.self) private var kick
+  private var twitchAuthenticated: Bool {
+    StreamPlatformPreferences.shared.selection.includesTwitch && auth.isAuthenticated
+  }
 
   var body: some View {
     MobileBrowsingSidebar(
       selection: $selection,
       channels: kick.mergedFollowing(MobileHomeFeed.visibleFollows(
-        follows.channels, authenticated: auth.isAuthenticated, isDemo: follows.isUsingDemoData, category: nil), liveOnly: true),
-      authenticated: auth.isAuthenticated || kick.follows.isConnected,
-      restoring: sync.isRestoringAccount && !kick.follows.isConnected,
-      loading: auth.isAuthenticated && (follows.isLoading || (follows.lastUpdatedAt == nil && follows.errorMessage == nil)),
-      errorMessage: (auth.isAuthenticated ? follows.errorMessage : nil)
-        ?? kick.errorMessage ?? (kick.follows.isConnected ? kick.follows.errorMessage : nil), onSelect: onSelect,
+        follows.channels, authenticated: twitchAuthenticated, isDemo: follows.isUsingDemoData, category: nil), liveOnly: true),
+      authenticated: twitchAuthenticated || kick.isConnected,
+      restoring: StreamPlatformPreferences.shared.selection.includesTwitch && sync.isRestoringAccount && !kick.isConnected,
+      loading: twitchAuthenticated && (follows.isLoading || (follows.lastUpdatedAt == nil && follows.errorMessage == nil)),
+      errorMessage: (twitchAuthenticated ? follows.errorMessage : nil)
+        ?? kick.errorMessage ?? (kick.isConnected ? kick.follows.errorMessage : nil), onSelect: onSelect,
       onRetry: { Task { await refresh() } })
       .refreshable { await refresh() }
   }
 
   private func refresh() async {
-    if auth.isAuthenticated, !follows.isRefreshing { await follows.refresh(using: auth) }
+    if twitchAuthenticated, !follows.isRefreshing { await follows.refresh(using: auth) }
     await kick.follows.synchronize()
     await kick.refresh(twitch: follows.channels, force: true, preservingRecommendations: true)
   }
@@ -102,7 +105,7 @@ struct MobileBrowsingSidebar: View {
             .accessibilityIdentifier("sidebar-follows-loading")
         } else if !authenticated {
           Text("Sign in to see the channels you follow.").foregroundStyle(.secondary)
-          Button("Sign in to Twitch") { selection = 2 }
+          Button("Connect an account") { selection = 2 }
             .frame(minHeight: 44)
             .accessibilityIdentifier("sidebar-sign-in")
         } else {

@@ -16,6 +16,8 @@ extension PlayerView {
       ChatMessagesColumn(
         chat: isVOD ? nil : chat,
         replay: isVOD ? replay : nil,
+        replayUnavailableReason: activeVOD?.platform == .kick
+          ? String(localized: "Chat replay isn't available for this Kick broadcast.") : nil,
         channel: channel,
         platform: model.creatorSession.chatPlatform,
         replayStartMessageID: chatReplayStartMessageID,

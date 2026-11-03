@@ -12,6 +12,84 @@ final class CreatorLiveSessionTests: XCTestCase {
   private let kick = PlatformLiveTarget(platform: .kick, channel: "creator-kick")
   private let youtube = PlatformLiveTarget(platform: .youtube, channel: "@creator-video")
 
+  func testGlobalPlatformChoiceReconfiguresChatAndCountsWithoutErasingLinks() async throws {
+    let preferences = StreamPlatformPreferences.shared
+    let previous = preferences.selection
+    preferences.selection = .both
+    let session = makeSession()
+    defer {
+      session.stop()
+      preferences.selection = previous
+    }
+    session.start(twitch)
+    session.updateLinks([twitch, kick, youtube])
+    session.selectVideo(kick)
+    try await eventually { session.viewerCounts.count == 3 }
+    preferences.selection = .kick
+    session.platformsChanged()
+    try await eventually { session.viewerCounts.map(\.platform) == [.kick, .youtube] }
+    XCTAssertEqual(session.targets.map(\.platform), [.kick, .youtube])
+    XCTAssertNil(session.chat.channel)
+    XCTAssertEqual(session.chatPlatform, .kick)
+    XCTAssertEqual(session.sources?.twitch, twitch.channel)
+    XCTAssertEqual(session.videoTarget, kick)
+    session.selectVideo(twitch)
+    XCTAssertNotNil(session.identityError)
+    XCTAssertEqual(session.videoTarget, kick)
+
+    preferences.selection = .twitch
+    session.platformsChanged()
+    try await eventually { session.viewerCounts.map(\.platform) == [.twitch, .youtube] }
+    XCTAssertEqual(session.targets.map(\.platform), [.twitch, .youtube])
+    XCTAssertEqual(session.chat.channel, twitch.channel)
+    XCTAssertNil(session.chat.kickReceiveTask)
+    XCTAssertFalse(session.chat.kickMergeEnabled)
+    XCTAssertEqual(session.sources?.kick, kick.channel)
+    XCTAssertTrue(session.chat.youtubeMergeEnabled)
+  }
+
+  func testBroadcastPushOverridesLaggingMetadataAndKeepsLinkedChat() async throws {
+    let session = makeSession()
+    defer { session.stop() }
+    session.start(twitch)
+    session.updateLinks([twitch, kick])
+    try await eventually { session.viewerCounts.count == 2 }
+    session.hermes.prepareBroadcastFixture(channel: twitch.channel)
+    let chatID = session.chat.sessionID
+    session.hermes.handle(HermesBroadcastTests.frame("stream-down", extra: ",\"server_time\":100"))
+    XCTAssertEqual(session.twitchBroadcastStatus?.status, .offline)
+    XCTAssertEqual(session.twitchBroadcastStatus?.target, twitch)
+    XCTAssertEqual(session.twitchBroadcastStatus?.reason, "twitch_event")
+    await session.refreshStatistics(epoch: session.generation)
+    XCTAssertEqual(session.twitchBroadcastStatus?.status, .offline)
+    XCTAssertEqual(session.viewerCounts.map(\.platform), [.kick])
+    XCTAssertEqual(session.chat.sessionID, chatID)
+    session.selectVideo(kick)
+    XCTAssertEqual(session.twitchBroadcastStatus?.target, twitch)
+    XCTAssertEqual(session.videoTarget, kick)
+    session.hermes.invalidateBroadcastStatus()
+    XCTAssertEqual(session.twitchBroadcastStatus?.status, .unknown)
+    session.suspend()
+    XCTAssertNil(session.twitchBroadcastStatus)
+  }
+
+  func testStatusFallbackDetectsMissedEndAndNetworkFailureRemainsUnknown() async throws {
+    var status = CreatorViewerSnapshot.live(71)
+    let session = makeSession(loadTwitch: { _ in status })
+    defer { session.stop() }
+    session.start(twitch)
+    try await eventually { session.twitchBroadcastStatus?.status == .live }
+    status = .offline
+    await session.refreshStatistics(epoch: session.generation)
+    try await eventually { session.twitchBroadcastStatus?.status == .offline }
+    XCTAssertEqual(session.twitchBroadcastStatus?.reason, "status_check")
+    status = .unknown
+    await session.refreshStatistics(epoch: session.generation)
+    try await eventually { session.twitchBroadcastStatus?.status == .unknown }
+    session.selectVideo(.init(platform: .twitch, channel: "replacement"))
+    XCTAssertNil(session.twitchBroadcastStatus)
+  }
+
   func testVideoSwitchPreservesCreatorTransportsMessagesAndCounts() async throws {
     let session = makeSession()
     defer { session.stop() }

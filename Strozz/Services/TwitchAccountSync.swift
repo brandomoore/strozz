@@ -73,7 +73,11 @@ final class TwitchAccountSync {
     ]
     lifecycleObservers = transitions.map { name, stage in
       NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-        Task { @MainActor [weak self] in self?.renewalDiagnostics.record(stage) }
+        Task { @MainActor [weak self] in
+          guard let self else { return }
+          self.renewalDiagnostics.record(stage)
+          if stage == .applicationForegrounded { await self.applicationDidBecomeActive() }
+        }
       }
     }
     rewards.onCredentialChange = { [weak self] in
@@ -101,7 +105,7 @@ final class TwitchAccountSync {
       guard let self else { return }
       await self.synchronize()
       guard !Task.isCancelled else { return }
-      self.hasCompletedInitialSync = true
+      if auth.renewalExecution.canStart { self.hasCompletedInitialSync = true }
       auth.startSessionValidation()
     }
     initialSync = startup
@@ -113,6 +117,15 @@ final class TwitchAccountSync {
         await self?.synchronize()
       }
     }
+  }
+
+  func applicationDidBecomeActive() async {
+    guard let auth, auth.renewalExecution.canStart else { return }
+    await synchronize()
+    guard !Task.isCancelled, auth.renewalExecution.canStart else { return }
+    hasCompletedInitialSync = true
+    auth.startSessionValidation(validateImmediately: false)
+    await auth.validateSessionIfNeeded()
   }
 
   var shouldOfferInitialSignIn: Bool {
@@ -235,6 +248,7 @@ final class TwitchAccountSync {
   }
 
   func synchronize(preferCloud: Bool = false) async {
+    guard auth?.renewalExecution.canStart == true else { return }
     if isBusy {
       do { try await waitUntilIdle() } catch { return }
       // Join the active account update instead of reporting completion before it.
@@ -247,7 +261,8 @@ final class TwitchAccountSync {
       return
     }
     guard !Task.isCancelled else { return }
-    guard !isSignedOutLocally, !isBusy, let auth, !auth.isAuthenticating, auth.refreshInFlight == nil else { return }
+    guard !isSignedOutLocally, !isBusy, let auth, auth.renewalExecution.canStart,
+      !auth.isAuthenticating, auth.refreshInFlight == nil else { return }
     isBusy = true
     defer { isBusy = false }
     let generation = auth.sessionGeneration
@@ -329,10 +344,12 @@ final class TwitchAccountSync {
   }
 
   func renew(rejectedAccessToken: String?) async throws -> String {
+    guard auth?.renewalExecution.canStart == true else { throw CancellationError() }
     let expectedGeneration = auth?.sessionGeneration
     let expectedUserID = auth?.userID
     try await waitUntilIdle()
-    guard auth?.sessionGeneration == expectedGeneration, auth?.userID == expectedUserID else {
+    guard auth?.sessionGeneration == expectedGeneration, auth?.userID == expectedUserID,
+      auth?.renewalExecution.canStart == true else {
       throw CancellationError()
     }
     guard !isBusy, !isSignedOutLocally, let auth, let local = auth.storedCredential,
@@ -389,6 +406,16 @@ final class TwitchAccountSync {
   }
 
   private func rotate(snapshot: TwitchCloudSnapshot, generation: UUID) async throws -> TwitchCredential {
+    guard let auth else { throw CancellationError() }
+    try check(generation)
+    return try await auth.renewalExecution.run(onEvent: { [weak auth] event in
+      auth?.recordRenewalExecution(event)
+    }) { [self] in
+      try await rotateProtected(snapshot: snapshot, generation: generation)
+    }
+  }
+
+  private func rotateProtected(snapshot: TwitchCloudSnapshot, generation: UUID) async throws -> TwitchCredential {
     guard let auth else { throw CancellationError() }
     try check(generation)
     let id = UUID()

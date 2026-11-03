@@ -233,7 +233,9 @@ extension PlayerView {
     // ended its stream. Re-check immediately (bypassing the probe cooldown) so
     // the offline empty state surfaces instead of a frozen last frame.
     lastOfflineProbeAt = .distantPast
-    probeOfflineIfStreamEnded()
+    if !presentConfirmedBroadcastEndIfNeeded() {
+      probeOfflineIfStreamEnded(allowMissingItem: true)
+    }
   }
 
   /// Debug-only: inject a simulated outgoing raid so the auto-follow flow can be

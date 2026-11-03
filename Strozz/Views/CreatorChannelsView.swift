@@ -18,15 +18,19 @@ struct CreatorChannelsView: View {
   var body: some View {
     NavigationStack {
       Form {
+        if StreamPlatformPreferences.shared.selection.includesTwitch {
         Section("Twitch") {
           TextField("Twitch channel", text: $twitch)
             .disabled(session.sources?.root.platform == .twitch || session.videoTarget?.platform == .twitch)
             .accessibilityIdentifier("creator-twitch-target")
         }
+        }
+        if StreamPlatformPreferences.shared.selection.includesKick {
         Section("Kick") {
           TextField("Kick channel", text: $kick)
             .disabled(session.sources?.root.platform == .kick || session.videoTarget?.platform == .kick)
             .accessibilityIdentifier("creator-kick-target")
+        }
         }
         Section {
           TextField("YouTube channel or URL", text: $youtube)
@@ -35,7 +39,7 @@ struct CreatorChannelsView: View {
         } header: {
           Text("YouTube")
         } footer: {
-          Text("Link only this creator's accounts. Chat and live viewer counts stay shared across video sources. Sending uses Twitch.")
+          Text("Link only this creator's accounts. Chat and live viewer counts stay shared across enabled video sources.")
         }
         if let errorMessage { Text(errorMessage).foregroundStyle(.secondary) }
         if let error = session.identityError { Text(error).foregroundStyle(.secondary) }

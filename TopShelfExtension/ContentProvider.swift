@@ -4,7 +4,7 @@ import TVServices
 /// grid when Strozz is in the top row of the Home screen.
 ///
 /// This runs in a separate, short-lived process. It fetches the currently-live
-/// streams directly from Twitch at render time so the shelf always reflects
+/// streams directly from their providers at render time so the shelf reflects
 /// what is live *right now* — fixing stale/offline cards and missing
 /// thumbnails. If the fresh fetch fails (offline, signed out, expired session),
 /// it falls back to the snapshot the main app last published.
@@ -26,7 +26,9 @@ final class ContentProvider: TVTopShelfContentProvider {
     }
 
     private static func makeContent() async -> TVTopShelfContent? {
-        let sections = await resolveSections()
+        let sections = await resolveSections().map {
+            TopShelfSnapshot(sections: $0).filtering(platforms).sections
+        }
         guard let sections, !sections.isEmpty else { return nil }
 
         let collections: [TVTopShelfItemCollection<TVTopShelfSectionedItem>] =
@@ -44,7 +46,7 @@ final class ContentProvider: TVTopShelfContentProvider {
 
     /// Returns fresh live sections when possible, otherwise the cached snapshot.
     private static func resolveSections() async -> [TopShelfSnapshot.Section]? {
-        let cached = TopShelfStore.load()
+        let cached = TopShelfStore.load()?.filtering(platforms)
 
         if let fresh = await freshSections(cached: cached) {
             // Keep the cached snapshot current so the fallback stays fresh too.
@@ -58,12 +60,19 @@ final class ContentProvider: TVTopShelfContentProvider {
     private static func freshSections(
         cached: TopShelfSnapshot?
     ) async -> [TopShelfSnapshot.Section]? {
-        guard let credentials = TopShelfCredentialStore.load() else { return nil }
+        let selection = platforms
+        let credentials = selection.includesTwitch ? TopShelfCredentialStore.load() : nil
         let recommended = cached?.sections.first { $0.id == "recommended" }
 
         return await withTimeout(seconds: fetchTimeout) {
-            await TopShelfLiveFeed.run(credentials: credentials, recommended: recommended)
+            await TopShelfLiveFeed.run(credentials: credentials, recommended: recommended,
+                                      following: cached?.sections.first { $0.id == "following" || $0.id == "trending" },
+                                      platforms: selection)
         }
+    }
+
+    private static var platforms: StreamPlatforms {
+        StreamPlatforms.load(from: UserDefaults(suiteName: TopShelf.appGroupID) ?? .standard)
     }
 
     /// Runs an async operation with a timeout. Returns `nil` if the operation
@@ -94,7 +103,7 @@ final class ContentProvider: TVTopShelfContentProvider {
             shelfItem.setImageURL(thumbnailURL, for: .screenScale2x)
         }
 
-        let deepLink = TopShelf.channelDeepLink(login: item.login)
+        let deepLink = TopShelf.channelDeepLink(login: item.login, platform: item.sourcePlatform)
         let action = TVTopShelfAction(url: deepLink)
         shelfItem.displayAction = action
         shelfItem.playAction = action

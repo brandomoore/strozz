@@ -33,15 +33,17 @@ struct StrozzApp: App {
           MultiviewBrowseFixture()
         } else if ProcessInfo.processInfo.environment["STROZZ_MULTIVIEW_SHORTCUT_FIXTURE"] == "1" {
           MultiviewShortcutFixture()
+        } else if ProcessInfo.processInfo.environment["STROZZ_MULTIVIEW_LAYOUT_FIXTURE"] == "1" {
+          MultiviewLayoutFixture()
         } else if ProcessInfo.processInfo.environment["STROZZ_SIGN_IN_FIXTURE"] == "1" {
           TwitchSignInFixture()
         } else if ProcessInfo.processInfo.environment["STROZZ_HOME_ERROR_FIXTURE"] == "1" {
           HomeFollowingErrorFixture()
         } else {
-          HomeView(deepLinkRouter: deepLinkRouter)
+          home
         }
         #else
-        HomeView(deepLinkRouter: deepLinkRouter)
+        home
         #endif
       }
         .environment(environment)
@@ -57,6 +59,15 @@ struct StrozzApp: App {
         }
         .resolveGlassDisabled()
         .installNightShiftOverlay(environment.nightShift)
+    }
+  }
+
+  @ViewBuilder
+  private var home: some View {
+    if StreamPlatformPreferences.shared.hasChosen {
+      HomeView(deepLinkRouter: deepLinkRouter)
+    } else {
+      StreamPlatformOnboardingView(theme: environment.themeManager.theme)
     }
   }
 }

@@ -19,6 +19,10 @@ struct MultiviewStatusFixture: View {
     let theme = AppTheme(rawValue: settings["STROZZ_MULTIVIEW_STATUS_THEME"] ?? "dark") ?? .dark
     let palette = theme.palette(systemColorScheme: scheme)
     let compact = settings["STROZZ_MULTIVIEW_STATUS_COMPACT"] == "1"
+    let size = CGSize(
+      width: Double(settings["STROZZ_MULTIVIEW_STATUS_WIDTH"] ?? "") ?? (compact ? 300 : 800),
+      height: Double(settings["STROZZ_MULTIVIEW_STATUS_HEIGHT"] ?? "") ?? (compact ? 169 : 450))
+    let style = MultiviewPaneTile.Style.fitting(size, preferred: compact ? .compact : .full)
     let pane = controller.panes[0]
     VStack(spacing: 40) {
       ZStack {
@@ -26,7 +30,7 @@ struct MultiviewStatusFixture: View {
         else { palette.videoControlScrim }
         MultiviewPaneTile(pane: pane, isFocused: focused, isPrimary: false, showsMetadata: false,
           showsChrome: chrome.isVisible,
-          style: compact ? .compact : .full, palette: palette,
+          style: style, palette: palette,
           glassDisabled: settings["STROZZ_MULTIVIEW_STATUS_OPAQUE"] == "1")
           .allowsHitTesting(false)
           .accessibilityHidden(true)
@@ -34,23 +38,26 @@ struct MultiviewStatusFixture: View {
           if pane.hasError { controller.load(pane); retries += 1 }
         }
         .padding(.bottom, pane.model.isOffline
-          ? MultiviewOfflineActions.reservedHeight(for: compact ? .compact : .full) : 0)
+          ? MultiviewOfflineActions.reservedHeight(for: style) : 0)
         .focused($focused)
         .accessibilityIdentifier("multiview-status-pane")
         .accessibilityLabel(pane.channel.displayName)
         .accessibilityValue(Text(pane.accessibilityStatus(isTransitioning: false)))
         if pane.model.isOffline {
-          MultiviewOfflineActions(style: compact ? .compact : .full,
+          MultiviewOfflineActions(style: style,
             onProfile: { profileRequests += 1 }, onRemove: { removals += 1 },
             profileFocus: $actionFocus, paneID: pane.id)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .padding(compact ? 8 : 20)
+            .padding(style == .compact ? 8 : 20)
         }
       }
-      .frame(width: compact ? 300 : 800, height: compact ? 169 : 450)
+      .frame(width: size.width, height: size.height)
+      .accessibilityElement(children: .contain)
+      .accessibilityIdentifier("multiview-status-tile")
       Text("Retries: \(retries)")
         .accessibilityIdentifier("multiview-status-retries")
       Text("Profiles: \(profileRequests), removals: \(removals)")
+        .accessibilityIdentifier("multiview-status-actions")
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(palette.backgroundColors.last ?? palette.cardOpaqueSurface)
@@ -137,9 +144,9 @@ struct MultiviewBrowseFixture: View {
       ]},"games":{"edges":[{"item":{"id":"category","name":"Example category"}}]}}}}
       """#.utf8)
     return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-  }, loadKick: { _ in
-    KickChannel(slug: "example", displayName: "Example", title: "Kick live", category: "",
-      viewerCount: 20, isLive: true, chatroomID: nil, imageURL: nil)
+  }, loadKickSearch: { _ in
+    .init(channels: [KickChannel(slug: "example", displayName: "Example", title: "Kick live", category: "",
+      viewerCount: 20, isLive: true, chatroomID: nil, imageURL: nil).followedChannel], categories: [])
   })
   @FocusState private var focus: String?
   @Namespace private var focusScope

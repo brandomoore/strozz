@@ -36,7 +36,8 @@ struct SearchView: View {
         )
       }
     }
-    .task(id: "\(path.isEmpty)|\(query)") {
+    .onChange(of: StreamPlatformPreferences.shared.selection) { _, _ in path = [] }
+    .task(id: "\(path.isEmpty)|\(query)|\(StreamPlatformPreferences.shared.selection.rawValue)") {
       guard path.isEmpty else { return }
       // Debounce keystrokes from the on-screen keyboard before hitting the API.
       let pending = query
@@ -54,7 +55,6 @@ struct SearchView: View {
 
 private struct SearchResultsView: View {
   @Environment(PlaybackReturnRefreshCoordinator.self) private var playbackReturnRefresh
-  @Environment(\.multiviewLineup) private var lineup
   @Binding var query: String
   let service: SearchService
   let onSelectChannel: (FollowedChannel) -> Void
@@ -79,7 +79,7 @@ private struct SearchResultsView: View {
   var body: some View {
     ScrollView(.vertical, showsIndicators: false) {
       VStack(alignment: .leading, spacing: 32) {
-        if service.channelResults.isEmpty, lineup?.entries.isEmpty == false {
+        if service.channelResults.isEmpty {
           HStack {
             Text("Search").font(.title3.weight(.bold))
             Spacer()
@@ -179,9 +179,9 @@ private struct SearchResultsView: View {
           .focusEffectDisabled()
           .onTapGesture {
             preparePlaybackReturn()
-            if channel.platform == .kick, channel.isLive { onWatchChannel(channel) }
-            else { onSelectChannel(channel) }
+            onSelectChannel(channel)
           }
+          .modifier(MultiviewCardShortcut(channel: channel))
           .zIndex(isFocused ? 2 : 0)
         }
       }

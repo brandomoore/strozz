@@ -10,6 +10,33 @@ import XCTest
 final class KickFollowingTests: XCTestCase {
   private let account = Data(#"{"id":42,"username":"Viewer"}"#.utf8)
 
+  func testPlatformChoicePreservesImportedAccountAndOfflineTwitchCounterpart() async throws {
+    let preferences = StreamPlatformPreferences.shared
+    let previous = preferences.selection
+    defer { preferences.selection = previous }
+    preferences.selection = .both
+    let store = KickFollowingStore(database: KickFollowingTestDatabase(), defaults: defaults())
+    try await store.publish(.init(account: imported().account, follows: [follow("xqc")]), interactive: true)
+    let discovery = KickDiscoveryService(follows: store, load: { slug in
+      KickChannel(slug: slug, displayName: "xQc", title: "", category: "", viewerCount: 20,
+        isLive: true, chatroomID: nil, imageURL: nil)
+    }, resolve: { CreatorLiveSources(root: $0) })
+    await discovery.refresh(twitch: [twitch("xqc")])
+    preferences.selection = .twitch
+    let offline = discovery.mergedFollowing([twitch("xqc", live: false)])
+    XCTAssertEqual(offline.map(\.platform), [.twitch])
+    XCTAssertFalse(offline[0].isLive)
+    XCTAssertNil(offline[0].kick)
+    await discovery.refresh(twitch: [], force: true)
+    XCTAssertFalse(discovery.isConnected)
+    XCTAssertTrue(store.isConnected)
+    XCTAssertEqual(store.document?.follows.map(\.slug), ["xqc"])
+    preferences.selection = .kick
+    await discovery.refresh(twitch: [], force: true)
+    XCTAssertTrue(discovery.isConnected)
+    XCTAssertEqual(discovery.mergedFollowing([twitch("xqc")]).map(\.channelKey), ["kick:xqc"])
+  }
+
   func testImportReadsEveryPageAndChecksAccountAgain() async throws {
     var paths: [String] = []
     let result = try await KickFollowImport.read { path in
@@ -385,9 +412,9 @@ final class KickFollowingTests: XCTestCase {
     let service = SearchService(loadData: { request in
       let data = Data(#"{"data":{"searchFor":{"channels":{"edges":[{"item":{"id":"1","login":"first","displayName":"First"}}]},"games":{"edges":[]}}}}"#.utf8)
       return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-    }, loadKick: { slug in
-      KickChannel(slug: slug, displayName: "First", title: "", category: "", viewerCount: 10,
-        isLive: true, chatroomID: nil, imageURL: nil)
+    }, loadKickSearch: { slug in
+      .init(channels: [KickChannel(slug: slug, displayName: "First", title: "", category: "", viewerCount: 10,
+        isLive: true, chatroomID: nil, imageURL: nil).followedChannel], categories: [])
     })
     await service.search("first")
     XCTAssertEqual(service.channelResults.map(\.channelKey), ["first", "kick:first"])
@@ -395,9 +422,9 @@ final class KickFollowingTests: XCTestCase {
   }
 
   func testKickSearchStillReturnsItsChannelWhenTwitchFails() async {
-    let service = SearchService(loadData: { _ in throw URLError(.timedOut) }, loadKick: { slug in
-      KickChannel(slug: slug, displayName: slug, title: "", category: "", viewerCount: nil,
-        isLive: false, chatroomID: nil, imageURL: nil)
+    let service = SearchService(loadData: { _ in throw URLError(.timedOut) }, loadKickSearch: { slug in
+      .init(channels: [KickChannel(slug: slug, displayName: slug, title: "", category: "", viewerCount: nil,
+        isLive: false, chatroomID: nil, imageURL: nil).followedChannel], categories: [])
     })
     await service.search("https://kick.com/first")
     XCTAssertEqual(service.channelResults.map(\.channelKey), ["kick:first"])

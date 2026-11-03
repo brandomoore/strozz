@@ -55,6 +55,7 @@ private enum SettingsPane: String, CaseIterable, Hashable, Identifiable {
   case cards
   case nightShift
   case streamLanguage
+  case platforms
   case recommendations
   case watching
   case goLiveAlerts
@@ -69,6 +70,7 @@ private enum SettingsPane: String, CaseIterable, Hashable, Identifiable {
     case .cards: "Cards"
     case .nightShift: "Circadian Mode"
     case .streamLanguage: "Stream Language"
+    case .platforms: "Platforms"
     case .recommendations: "Recommendations"
     case .watching: "Watching"
     case .goLiveAlerts: "Go Live Alerts"
@@ -87,6 +89,8 @@ private enum SettingsPane: String, CaseIterable, Hashable, Identifiable {
       "Warms and dims the display at night to help you sleep."
     case .streamLanguage:
       "Only show live streams in the language you choose."
+    case .platforms:
+      "Choose at least one. Saved accounts are kept."
     case .recommendations:
       "Personalize Home using follows and watch history stored on this Apple TV."
     case .watching:
@@ -94,7 +98,7 @@ private enum SettingsPane: String, CaseIterable, Hashable, Identifiable {
     case .goLiveAlerts:
       "Choose when Strozz alerts you that a followed channel is live."
     case .accounts:
-      "Manage your Twitch, YouTube and Kick connections."
+      "Manage your connected accounts."
     case .about:
       nil
     }
@@ -117,7 +121,9 @@ private struct SettingsPaneRail: View {
 
       ScrollView(.vertical, showsIndicators: false) {
         VStack(spacing: 6) {
-          ForEach(SettingsPane.allCases) { pane in
+          ForEach(SettingsPane.allCases.filter {
+            $0 != .goLiveAlerts || StreamPlatformPreferences.shared.selection.includesTwitch
+          }) { pane in
             Button {
               selection = pane
             } label: {
@@ -245,6 +251,8 @@ private struct SettingsPaneDetail: View {
           SettingsPreferencesSection(
             group: .streamLanguage
           )
+        case .platforms:
+          SettingsPlatformControls()
         case .recommendations:
           SettingsPreferencesSection(
             group: .recommendations,
@@ -256,12 +264,16 @@ private struct SettingsPaneDetail: View {
         case .goLiveAlerts:
           SettingsPreferencesSection(group: .alerts)
         case .accounts:
-          SettingsAccountSection(
-            onRequestSignIn: onRequestSignIn,
-            onAccountChanged: onAccountChanged
-          )
-          TwitchWatchRewardsSection()
-          SettingsKickAccountSection()
+          if StreamPlatformPreferences.shared.selection.includesTwitch {
+            SettingsAccountSection(
+              onRequestSignIn: onRequestSignIn,
+              onAccountChanged: onAccountChanged
+            )
+            TwitchWatchRewardsSection()
+          }
+          if StreamPlatformPreferences.shared.selection.includesKick {
+            SettingsKickAccountSection()
+          }
           SettingsYouTubeAccountSection(
             onRequestYouTubeSignIn: onRequestYouTubeSignIn,
             onAccountChanged: onAccountChanged
@@ -269,6 +281,7 @@ private struct SettingsPaneDetail: View {
         case .about:
           SettingsAboutSection(showsTitle: false)
         }
+
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
       .padding(.top, 8)
@@ -278,5 +291,15 @@ private struct SettingsPaneDetail: View {
     .id(pane)
     .scrollClipDisabled()
     .focusSection()
+  }
+}
+
+private struct SettingsPlatformControls: View {
+  var body: some View {
+    @Bindable var preferences = StreamPlatformPreferences.shared
+    VStack(spacing: 24) {
+      StreamPlatformSelectionControls(selection: $preferences.selection)
+    }
+    .padding(28)
   }
 }

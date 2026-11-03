@@ -18,7 +18,12 @@ struct HomeView: View {
   /// few comparisons); the real cadence comes from the two intervals above.
   private let idleAutoRefreshTick: Duration = .seconds(60)
 
-  @State private var selectedSidebarTab: SidebarTab = .home
+  @State private var selectedSidebarTab: SidebarTab = {
+    #if DEBUG && targetEnvironment(simulator)
+    if ProcessInfo.processInfo.environment["STROZZ_BROWSE_UI_FIXTURE"] == "1" { return .browse }
+    #endif
+    return .home
+  }()
 
   /// App-level composition root: the long-lived, app-global services. Owned by
   /// `AppEnvironment` (instantiated once in `StrozzApp`) and injected here via
@@ -202,6 +207,10 @@ struct HomeView: View {
       .onChange(of: kick.directory) { _, _ in recomputeTopStreams() }
       .onChange(of: kick.links) { _, _ in recomputeTopStreams() }
       .onChange(of: kick.recommended) { _, _ in recomputeTopStreams() }
+      .onChange(of: kick.lastUpdatedAt) { old, new in
+        publishTopShelfSnapshot()
+        if old == nil, new != nil { Task { await refreshPersonalizedIfNeeded(force: true) } }
+      }
   }
 
   private var homeContent: some View {
@@ -434,6 +443,19 @@ struct HomeView: View {
         await refreshPersonalizedIfNeeded(force: true)
       }
     }
+    .onChange(of: StreamPlatformPreferences.shared.selection) { _, selection in
+      homePath = []
+      multiview.platformsChanged()
+      topStreams = selection.filter(topStreams)
+      kick.accountChanged()
+      if !selection.includesTwitch {
+        showSignIn = false
+        showGoLiveSetup = false
+      }
+      goLive.start(using: auth)
+      publishTopShelfSnapshot()
+      Task { await refreshHomeSections(force: true) }
+    }
     .fullScreenCover(item: $selectedChannel, onDismiss: {
       handlePlayerDismissal()
       startPendingMultiview()
@@ -534,12 +556,16 @@ struct HomeView: View {
             channels: followingRowChannels,
             rail: rail,
             style: railStyle,
-            isLoading: !environment.kickFollows.isConnected && (follows.isLoading || environment.accountSync.isRestoringAccount
+            isLoading: StreamPlatformPreferences.shared.selection.includesTwitch && !kick.isConnected
+              && (follows.isLoading || environment.accountSync.isRestoringAccount
               || (follows.lastUpdatedAt == nil && follows.errorMessage == nil)),
-            isRestoringAccount: environment.accountSync.isRestoringAccount && !environment.kickFollows.isConnected,
-            isUsingDemoData: follows.isUsingDemoData && !environment.kickFollows.isConnected,
-            errorMessage: auth.isAuthenticated || !environment.kickFollows.isConnected ? follows.errorMessage : nil,
-            onSignIn: environment.accountSync.needsRenewalSignIn ? { showSignIn = true } : nil,
+            isRestoringAccount: StreamPlatformPreferences.shared.selection.includesTwitch
+              && environment.accountSync.isRestoringAccount && !kick.isConnected,
+            isUsingDemoData: follows.isUsingDemoData && !kick.isConnected,
+            errorMessage: StreamPlatformPreferences.shared.selection.includesTwitch
+              && (auth.isAuthenticated || !kick.isConnected) ? follows.errorMessage : nil,
+            onSignIn: StreamPlatformPreferences.shared.selection.includesTwitch
+              && environment.accountSync.needsRenewalSignIn ? { showSignIn = true } : nil,
             showingFollowingDirectory: $showingFollowingDirectory,
             onRefresh: { performManualRefresh() },
             onWatch: { openFollowingChannel($0) },
@@ -553,7 +579,7 @@ struct HomeView: View {
             focusedItemID: $focusedItemID
           )
           if let error = kick.errorMessage ?? environment.kickFollows.errorMessage,
-            environment.kickFollows.isConnected {
+            kick.isConnected {
             Text(error).font(.callout).foregroundStyle(.secondary)
           }
           HomeRecommendedForYouSection(
@@ -566,7 +592,7 @@ struct HomeView: View {
             focusedItemID: $focusedItemID
           )
           HomeTopStreamsSection(
-            channels: topStreams,
+            channels: StreamPlatformPreferences.shared.selection.filter(topStreams),
             rail: rail,
             style: railStyle,
             onWatch: { selectedChannel = $0 },
@@ -580,9 +606,11 @@ struct HomeView: View {
             homePath: $homePath,
             focusedItemID: $focusedItemID
           )
-          HomeAuthBanner(isAuthenticated: auth.isAuthenticated,
-            isRestoringAccount: environment.accountSync.isRestoringAccount,
-            onSignIn: { showSignIn = true })
+          if StreamPlatformPreferences.shared.selection.includesTwitch {
+            HomeAuthBanner(isAuthenticated: auth.isAuthenticated,
+              isRestoringAccount: environment.accountSync.isRestoringAccount,
+              onSignIn: { showSignIn = true })
+          }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(.horizontal, AppLayout.horizontalPadding)
@@ -652,6 +680,7 @@ struct HomeView: View {
         isLive: true
       )
       channel.youtube = presence
+      channel.platform = .youtube
       return channel
     }
   }
@@ -660,7 +689,7 @@ struct HomeView: View {
   /// YouTube-only subscriptions.
   private var followingRowChannels: [FollowedChannel] {
     kick.mergedFollowing(
-      follows.isUsingDemoData && environment.kickFollows.isConnected ? [] : follows.channels, liveOnly: true)
+      follows.isUsingDemoData && kick.isConnected ? [] : follows.channels, liveOnly: true)
       + liveYouTubeSubscriptionCards
   }
 
@@ -693,7 +722,8 @@ struct HomeView: View {
 
   private func recomputeTopStreams() {
     let blocked = feedback.blockedLogins
-    topStreams = kick.mergedRecommendations(recommendations.channels, blocked: blocked)
+    topStreams = KickUnifiedFeed.sortedByViewers(
+      kick.mergedRecommendations(recommendations.channels, blocked: blocked))
   }
 
   private func channelRailMetrics(for availableWidth: CGFloat, trailingSafeArea: CGFloat = 0) -> ChannelRailMetrics {
@@ -710,6 +740,7 @@ struct HomeView: View {
   /// again, even if they skip signing in (they can still sign in via Settings
   /// or the Home banner).
   private func promptFirstLaunchSignInIfNeeded() {
+    guard StreamPlatformPreferences.shared.selection.includesTwitch else { return }
     let defaults = UserDefaults.standard
     guard environment.accountSync.hasCompletedInitialSync else { return }
     guard auth.isAuthenticated || environment.accountSync.shouldOfferInitialSignIn else { return }
@@ -721,7 +752,8 @@ struct HomeView: View {
   }
 
   private func promptGoLiveSetupIfNeeded() {
-    guard homeRefresh.hasCompletedInitialLoad, isForeground, auth.isAuthenticated,
+    guard StreamPlatformPreferences.shared.selection.includesTwitch,
+      homeRefresh.hasCompletedInitialLoad, isForeground, auth.isAuthenticated,
       selectedSidebarTab == .home, homePath.isEmpty, !showingFollowingDirectory,
       !isPresentingCover, pendingWatchChannel == nil,
       deepLinkRouter.pendingChannelLogin == nil, !goLiveSettings.hasPrompted else { return }
@@ -916,9 +948,11 @@ struct HomeView: View {
     guard force || shouldAutoRefreshPersonalized() else { return }
     await affinity.refreshIfNeeded()
     await personalized.refresh(
-      follows: follows.channels,
-      followedCategories: follows.followedCategories,
-      followedLogins: follows.followedLogins,
+      follows: kick.mergedFollowing(follows.isUsingDemoData ? [] : follows.channels),
+      followedCategories: follows.isUsingDemoData || !StreamPlatformPreferences.shared.selection.includesTwitch
+        ? [:] : follows.followedCategories,
+      followedLogins: (StreamPlatformPreferences.shared.selection.includesTwitch ? follows.followedLogins : [])
+        .union(kick.isConnected ? kick.directory.map { $0.followedChannel.channelKey } : []),
       history: watchHistory,
       feedback: feedback.snapshot,
       affinity: affinity.snapshot
@@ -930,32 +964,39 @@ struct HomeView: View {
   /// signal so look-alikes stop resurfacing.
   private func markNotInterested(_ channel: FollowedChannel) {
     feedback.markNotInterested(channel)
-    if channel.platform == .twitch { personalized.remove(login: channel.login) }
+    personalized.remove(login: channel.channelKey)
     recomputeTopStreams()
   }
 
   private func publishTopShelfSnapshot() {
     TopShelfPublisher.publish(
-      followed: follows.channels,
-      isUsingDemoData: follows.isUsingDemoData,
-      recommended: recommendations.channels
+      followed: kick.mergedFollowing(follows.isUsingDemoData && kick.isConnected ? [] : follows.channels),
+      isUsingDemoData: follows.isUsingDemoData && !kick.isConnected,
+      recommended: KickUnifiedFeed.sortedByViewers(
+        kick.mergedRecommendations(recommendations.channels, blocked: feedback.blockedLogins))
     )
   }
 
   /// Presents the player for a channel requested via deep link (Top Shelf).
   /// Prefers a fully-populated channel from loaded data, otherwise builds a
   /// minimal placeholder — the player only needs the login to start playback.
-  private func openDeepLinkedChannelIfNeeded(_ login: String?) {
-    guard let login = login?.trimmingCharacters(in: .whitespacesAndNewlines),
-          !login.isEmpty
+  private func openDeepLinkedChannelIfNeeded(_ key: String?) {
+    guard let key, !key.isEmpty
     else { return }
+    let platform: LivePlatform = key.hasPrefix("kick:") ? .kick : .twitch
+    guard StreamPlatformPreferences.shared.selection.includes(platform) else {
+      deepLinkRouter.pendingChannelLogin = nil
+      multiview.notice = PlatformLiveTarget.Failure.disabledPlatform(platform).localizedDescription
+      return
+    }
+    let login = platform == .kick ? String(key.dropFirst(5)) : key
 
-    let match = (follows.channels + recommendations.channels).first {
-      $0.login.caseInsensitiveCompare(login) == .orderedSame
+    let match = (follows.channels + recommendations.channels + kick.directory.map(\.followedChannel)).first {
+      $0.channelKey == key
     }
 
-    selectedChannel = match ?? FollowedChannel(
-      id: login,
+    var channel = match ?? FollowedChannel(
+      id: key,
       login: login,
       displayName: login,
       title: "",
@@ -965,6 +1006,8 @@ struct HomeView: View {
       profileImageURL: nil,
       isLive: true
     )
+    channel.platform = platform
+    selectedChannel = channel
 
     deepLinkRouter.pendingChannelLogin = nil
   }
@@ -987,7 +1030,7 @@ struct HomeView: View {
     goLive.watch()
 
     let match = (follows.channels + recommendations.channels).first {
-      $0.login.caseInsensitiveCompare(event.login) == .orderedSame
+      $0.channelKey == event.login.lowercased()
     }
     selectedChannel = match ?? FollowedChannel(
       id: event.login,

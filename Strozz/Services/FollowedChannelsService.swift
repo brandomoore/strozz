@@ -74,8 +74,12 @@ final class FollowedChannelsService {
     directoryLoadedAt = nil
   }
 
-  private(set) var channels: [FollowedChannel] = [] {
+  private var storedChannels: [FollowedChannel] = [] {
     didSet { avatarPrewarmer.prewarm(channels) }
+  }
+  private(set) var channels: [FollowedChannel] {
+    get { StreamPlatformPreferences.shared.selection.filter(storedChannels) }
+    set { storedChannels = newValue }
   }
   /// Category name -> number of followed channels (online **and** offline) whose
   /// last/current broadcast was in that category. Drives the personalized
@@ -104,8 +108,12 @@ final class FollowedChannelsService {
   /// **and** offline — sorted live-first. Populated lazily by `loadDirectory`
   /// when the directory screen opens, so its heavier multi-batch fetch never
   /// runs as part of the Home refresh.
-  private(set) var directory: [FollowedChannel] = [] {
+  private var storedDirectory: [FollowedChannel] = [] {
     didSet { avatarPrewarmer.prewarm(directory) }
+  }
+  private(set) var directory: [FollowedChannel] {
+    get { StreamPlatformPreferences.shared.selection.filter(storedDirectory) }
+    set { storedDirectory = newValue }
   }
   private(set) var isLoadingDirectory = false
   private(set) var directoryErrorMessage: String?
@@ -164,6 +172,13 @@ final class FollowedChannelsService {
 
   func refresh(using auth: TwitchAuthSession) async {
     guard !Task.isCancelled else { return }
+    guard StreamPlatformPreferences.shared.selection.includesTwitch else {
+      refreshID = UUID()
+      isLoading = false
+      isRefreshing = false
+      errorMessage = nil
+      return
+    }
     accountChanged(using: auth)
     let account = Account(auth)
     let request = UUID()
@@ -180,6 +195,7 @@ final class FollowedChannelsService {
     }
     func isCurrent() -> Bool {
       !Task.isCancelled && refreshID == request && Account(auth) == account
+        && StreamPlatformPreferences.shared.selection.includesTwitch
     }
 
     guard auth.isAuthenticated else {
@@ -270,6 +286,12 @@ final class FollowedChannelsService {
   /// result is reused unless `force` is set. Requires a real authenticated
   /// session (the directory has no demo/trending equivalent).
   func loadDirectory(using auth: TwitchAuthSession, force: Bool = false) async {
+    guard StreamPlatformPreferences.shared.selection.includesTwitch else {
+      directoryRequestID = UUID()
+      isLoadingDirectory = false
+      directoryErrorMessage = nil
+      return
+    }
     guard !Task.isCancelled else { return }
     accountChanged(using: auth)
     guard auth.isAuthenticated, let userID = auth.userID else { return }
@@ -291,6 +313,7 @@ final class FollowedChannelsService {
     defer { if directoryRequestID == request { isLoadingDirectory = false } }
     func isCurrent() -> Bool {
       !Task.isCancelled && directoryRequestID == request && Account(auth) == account
+        && StreamPlatformPreferences.shared.selection.includesTwitch
     }
 
     let accessToken: String

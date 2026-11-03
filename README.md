@@ -52,7 +52,7 @@ The feature list below describes the Apple TV app. See
   watching?" check, a starry sleeping screen, and one press to snap back to the
   live edge.
 - **VODs and clips.** Watch past broadcasts and top clips from channel pages;
-  VODs include synced chat replay and variable speed (0.5×–2×).
+  VODs support variable speed (0.5×–2×), with synced chat replay for Twitch.
 - **Multi-view.** Watch several live channels at once, picked from your follows
   and recommendations.
 - **Live captions (beta).** Optional on-device captions for streams, with size,
@@ -82,6 +82,12 @@ The feature list below describes the Apple TV app. See
 
 ### Discover
 
+- **Choose your platforms.** On first launch, choose Twitch, Kick, or both on
+  Apple TV, iPhone, and iPad. Change this later in **Settings > Platforms**
+  (TV) or **Account > Platforms** (mobile). Disabled platforms are hidden from
+  browsing, recommendations, account prompts, video sources, and merged chat.
+  At least one stays enabled. The choice is local to each device; saved accounts,
+  creator links, and watch history are kept. Existing YouTube features are unchanged.
 - **Home built around your follows.** See the channels you follow that are live
   now, plus recommendations.
 - **Stable loading rows.** Home and Browse use card-sized skeletons while their
@@ -90,8 +96,8 @@ The feature list below describes the Apple TV app. See
 - **Recommendations you control.** Optional personalized picks built from
   on-device watch history and your followed categories — or anonymous trending
   when you're signed out or have it turned off.
-- **Browse and search.** Explore top categories and their live streams, and
-  search channels and categories with live results.
+- **Browse and search.** Browse Twitch and Kick streams together or choose
+  **All**, **Twitch**, or **Kick**. Explore categories and search channels.
 - **Channel pages.** Top clips, past broadcasts, and similar channels for every
   channel.
 - **Top Shelf.** Your live follows and recommendations surface on the tvOS home
@@ -109,10 +115,24 @@ The feature list below describes the Apple TV app. See
 
 ## Kick playback (in development)
 
-Kick is part of the existing **Following**, recommendations, search, and Apple TV
-multiview lineup, not a separate tab. Search for an exact Kick channel name or
-`kick.com` channel URL to open a live stream, including Kick-exclusive creators.
+Kick is part of the existing **Browse**, **Following**, recommendations, search, and Apple TV
+multiview lineup, not a separate tab. Search channel names or category keywords;
+exact Kick channel names and `kick.com` channel URLs also work, including
+Kick-exclusive creators. Search results open channel profiles, including offline
+channels, rather than attempting to play an offline stream.
 Playback does not require a Twitch or Kick account.
+
+**Browse** opens a live-stream grid on Apple TV, iPhone, and iPad. **All** mixes
+Twitch and Kick; the platform filter also applies to **Categories** and mobile
+Browse search. The stream-language preference applies to both directories.
+**Load more** appends the next Kick page without moving existing cards. Twitch's
+anonymous directory supplies one ranked page rather than cursor pagination.
+Category cards identify their platform; Kick's paginated catalogue supplies real
+category posters and viewer totals. Opening a Kick category requests that
+category's live streams. Mobile Home's category filters combine matching
+categories across platforms without duplicate filter labels. Directory access needs no
+extra sign-in, but uses Kick's undocumented website API and can be affected by
+provider changes. One platform's failure leaves the other available with an error.
 
 To bring in your real Kick follows, open **Account > Connect Kick** in Strozz on
 iPhone or iPad. Sign in on the Kick website shown inside the app; the complete
@@ -133,8 +153,36 @@ reconnecting or an app update.
 
 Confirmed Twitch/Kick creator links are merged into one card, with combined
 viewer counts when both streams are live. Matching usernames alone never merge
-accounts. Kick recommendation candidates come from confirmed links to creators
-in the existing discovery pools, not a new global Kick trending directory.
+accounts. Home's **Top streams** includes both global directories, ranked by
+combined viewers. Personalized recommendations include live Kick candidates
+from matching categories, using followed categories and device-local watch
+history. History and feedback use provider-qualified identities; an unrelated
+same-named account cannot inherit another platform's history or rejection.
+Confirmed creators rejected with **Not interested** stay excluded across their
+linked accounts. Individual channel/category metadata requests go to the relevant
+platform; the stored history and watch counts are not uploaded.
+In **All**, Browse and search merge confirmed
+co-streaming creators into one card with both platforms and combined viewer
+counts, including when the second source arrives on a later page. Unrelated
+accounts with matching names stay separate. The single-platform filters show
+only that platform's streams.
+
+Kick channel profiles show identity, biography, live status, public clips with
+pagination, available past broadcasts, and related live channels. Clips use the
+native video player. Recorded broadcasts use the shared
+TV transport controls and the native mobile recorded-video player; mobile resume
+positions preserve the Kick broadcast identity. Playback resolves a fresh media
+URL rather than storing a temporary stream URL. Private, deleted, pruned, and
+still-live recordings are not offered as past broadcasts. Kick archive chat replay
+is not currently available in Strozz.
+Mobile archive verification has an unresolved video freeze in iOS 26.2 Simulator,
+also reproduced with a standalone Apple player. Physical-device Kick archive
+playback remains unverified; working clips and live streams do not establish it.
+
+Apple TV Top Shelf preserves each channel's provider, including deep links and
+independent live-status refreshes. Confirmed co-streamers stay one shelf item,
+including when a source goes offline. A Kick channel is never sent to Twitch's
+stream endpoint, and a Twitch connection failure does not block public Kick refreshes.
 
 While watching Twitch, choose **Kick** in the TV player's stream-source menu, or
 enter the Kick channel under **Quality > Stream source** on mobile. Verify the
@@ -512,8 +560,9 @@ to standard playback because a receiver cannot access the app's loopback
 media server; keep the app open while using it. System,
 Dark, OLED, and Light appearances are available in Account, and chat follows
 Dynamic Type and Reduce Motion. App panels use opaque theme-aware surfaces.
-Browse shows three categories across on iPhone (two at accessibility text sizes)
-and an adaptive grid on iPad. Typing in Browse's search field switches to compact
+Browse opens the mixed live-stream grid. **Categories** shows three cards across
+on iPhone (two at accessibility text sizes) and an adaptive grid on iPad.
+Typing in Browse's search field switches to compact
 channel and category results with artwork and viewer counts.
 
 TV and mobile share the stream loading view and a loading/ready/unavailable
@@ -535,8 +584,9 @@ keeps counting while playback is paused, and is omitted when the start time is
 unknown. Mobile fetches this optional metadata separately so it cannot delay
 playback startup.
 
-This is not full TV feature parity: VOD chat replay, clips, multiview,
+This is not full TV feature parity: VOD chat replay, Twitch clips, multiview,
 interactive reward redemption/polls, and advanced TV settings are not included.
+Public Kick clips are available from Kick channel profiles.
 Mobile supports background Picture in Picture and preserves the previous
 expanded or in-app mini-player layout on return. A suspended native session
 resolves fresh stream URLs instead of reviving an expired engine.
@@ -625,6 +675,15 @@ may be necessary again. Expiry, revoked Twitch permission, or an unavailable
 iCloud account can also require attention; the UI reports these rather than
 claiming a permanent login.
 
+Automatic sync and validation defer new renewals while the app is inactive or
+backgrounded and resume when it becomes active. An admitted renewal holds a
+bounded system background task from reservation through credential journaling
+and publication; dismissing a caller does not cancel that worker. OAuth exchanges
+are single-shot, do not wait for connectivity, and have a 20-second total network
+deadline. System expiration, termination, or a lost response can still leave an
+ambiguous reservation: neither background protection nor a timeout makes it safe
+to reuse the old token.
+
 An unfinished renewal is reported without guessing which device started it.
 Following offers **Sign in with Twitch** when an expired connection cannot be
 renewed; the sign-in screen keeps retry and fresh Twitch approval separate. QR
@@ -639,7 +698,8 @@ TV keeps its device-local renewal history in
 storage. Mobile uses `Library/Application Support/AccountDiagnostics/renewal.json`.
 Both are bounded to 256 events and survive normal app restarts; tvOS may purge
 caches under storage pressure, so retrieve TV evidence promptly.
-The history records foreground/background transitions, reservation,
+The history records foreground/background transitions, deferred renewal,
+unavailable/expired background protection, reservation,
 token-exchange, Keychain-journal and cloud-publication stages, pending-publication
 recovery, cancellations and sanitized error categories/status codes. Known OAuth
 rejection reasons use a fixed allowlist, never arbitrary server text. Random reservation/process IDs correlate
@@ -811,29 +871,48 @@ near live avoid an unnecessary reload. Deliberate pauses, rewinds, and VOD
 positions are preserved. "LIVE" means the source's playable live position,
 including its normal buffering margin, not zero broadcast/network latency.
 
-On Apple TV, hold a live Twitch or Kick card anywhere you browse and choose
-**Add to multiview**. Search shows channels before categories. The **Multiview**
+On Apple TV, press Play/Pause on a focused live Twitch or Kick card to add or
+remove it from multiview, or hold the card and choose **Add to multiview**.
+Search shows channels before categories. The **Multiview**
 button grows with your selected avatars alongside the page's scrolling controls;
 open it to remove streams or start watching once you have at least two. You can
 also start or return to multiview from a channel's hold menu. The normal player's
 controls let you add the stream you're watching. There is no separate multiview
 discovery tab.
 Hold Play/Pause from any screen to start or return to your multiview lineup.
-A normal press keeps its usual behavior. If more streams are needed, a toast
-reminds you to add them without leaving the current screen.
+A normal press inside playback keeps its usual behavior. If more streams are
+needed, a toast reminds you to add them without leaving the current screen.
 Back from the wall, or **Browse streams** in its controls, lets you add more
 through the same browsing and search actions. The wall pauses while you browse;
 **Return to multiview** resumes the same lineup.
 
 Multiview also pauses its wall when Strozz goes into the background. On return, it
 re-resolves each pane's live playlist and resumes all streams without changing
-the chosen grid/spotlight layout or audio selection.
+the chosen layout, primary stream, or audio selection.
+
+Press Play/Pause on the wall for the bottom **Layout**, **Browse streams**, and
+**Done** controls. The native Layout menu offers **Featured** (a large primary
+beside smaller streams), **Spotlight** (a large primary above a thumbnail strip),
+or **Equal** (equal-sized streams with matching video proportions). Choosing Featured
+or Spotlight makes the currently focused stream primary. Hold a secondary stream and choose
+**Make primary** in Featured or Spotlight; moving focus changes audio, not the
+primary. The hold menu also offers a **Layout** submenu and **Full screen**.
+Controls use existing empty space first, moving or reducing the wall only when
+needed to keep video unobscured. Back closes the native layout menu, then the
+controls, returning focus to the same stream. **Done** closes controls, not multiview.
+Videos have 16-point rounded corners. The channel/viewer overlay fades away within
+three seconds of inactivity; remote interaction brings it back.
+Removing a video shrinks and fades it out while the remaining videos smoothly
+move into place. Layout changes keep the same players running and respect Reduce Motion.
+When a stream goes offline, small panes use compact channel and remove icon
+buttons. Larger panes retain the text labels; both actions remain remote-focusable.
+The channel button opens its profile; Back returns to the same wall.
 
 Multiview also uses the normal native live player for every pane. Selecting a
 pane zooms that same player and video surface into the single-stream layout
 with normal chat and controls; Back returns it to the wall without reconnecting.
 Explicit source/quality changes and error recovery remain real playback changes.
-Play/Pause opens wall controls in the grid and controls playback when expanded.
+Play/Pause opens controls in any wall layout and controls playback when expanded.
 Other panes remain live and muted while expanded, with a lower bitrate and
 resolution preference: fully hidden peers target up to 360p / 800 kbps, while
 visible spotlight thumbnails retain their 480p / 800 kbps preference. Returning
@@ -886,6 +965,8 @@ cannot hold newer chat behind a sleeping task.
 
 While a channel is open, its 7TV emote set is rechecked every minute, including
 during VOD chat replay. Newly added emotes update messages already on screen.
+Exact emote names take priority over punctuation trimming, so channel aliases
+such as `!boost` render on both TV and mobile.
 Successful provider catalogs are cached separately; failed requests are retried
 without discarding known emotes or caching an outage as an empty catalog.
 Playback diagnostics include catalog size and pending-retry state, not emote

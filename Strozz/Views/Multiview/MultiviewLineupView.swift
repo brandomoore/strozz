@@ -1,5 +1,22 @@
 import SwiftUI
 
+/// Attach outside the card's focusable wrapper, not inside its visual content.
+struct MultiviewCardShortcut: ViewModifier {
+  let channel: FollowedChannel
+  @Environment(\.multiviewLineup) private var lineup
+
+  func body(content: Content) -> some View {
+    content.onPlayPauseCommand(perform: action)
+  }
+
+  private var action: (() -> Void)? {
+    guard let lineup,
+      lineup.contains(channel) || (channel.isLive && channel.platform != .youtube)
+    else { return nil }
+    return { lineup.toggle(channel) }
+  }
+}
+
 struct MultiviewSelectionAction: View {
   let channel: FollowedChannel
   @Environment(\.multiviewLineup) private var lineup
@@ -46,7 +63,8 @@ struct MultiviewLineupButton: View {
   @State private var startAfterDismissal = false
 
   var body: some View {
-    if let lineup, !lineup.entries.isEmpty {
+    if let lineup {
+      let isEmpty = lineup.entries.isEmpty
       let avatars = lineup.entries.filter { $0.offlineSince == nil }
       Button { showingLineup = true } label: {
         HStack(spacing: 16) {
@@ -63,9 +81,21 @@ struct MultiviewLineupButton: View {
         .frame(height: 40)
       }
       .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: avatars.map(\.id))
+      // Keep native button height in the row without reserving avatar width.
+      .frame(width: isEmpty ? 0 : nil)
+      .opacity(isEmpty ? 0 : 1)
+      .disabled(isEmpty)
+      .allowsHitTesting(!isEmpty)
+      .accessibilityHidden(isEmpty)
       .accessibilityIdentifier("multiview-lineup")
       .accessibilityLabel("Multiview")
       .accessibilityValue("\(lineup.liveChannels.count) streams")
+      .onChange(of: isEmpty) { _, empty in
+        if empty {
+          startAfterDismissal = false
+          showingLineup = false
+        }
+      }
       .sheet(isPresented: $showingLineup, onDismiss: {
         if startAfterDismissal {
           startAfterDismissal = false

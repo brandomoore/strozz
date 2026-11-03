@@ -9,13 +9,13 @@ import Observation
 @MainActor
 @Observable
 final class DeepLinkRouter {
-    /// Channel login requested by an incoming deep link, awaiting handling.
+    /// Platform-qualified channel key requested by an incoming deep link.
     var pendingChannelLogin: String?
 
     /// Handles a deep-link URL. Returns `true` if it was a recognised link.
     @discardableResult
     func handle(_ url: URL) -> Bool {
-        guard let login = TopShelf.channelLogin(from: url) else { return false }
+        guard let login = TopShelf.channelKey(from: url) else { return false }
         pendingChannelLogin = login
         return true
     }

@@ -618,6 +618,7 @@ struct ChannelPageView: View {
                 )
                 .accessibilityAddTraits(.isButton)
               }
+              .modifier(MultiviewCardShortcut(channel: channel))
             }
           }
           .padding(.horizontal, AppLayout.horizontalPadding)

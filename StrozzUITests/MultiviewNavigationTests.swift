@@ -30,16 +30,25 @@ final class MultiviewNavigationTests: XCTestCase {
       let ready = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: allLive, object: nil)], timeout: 60)
       capture(app, name: "\(count) grid playback readiness")
       XCTAssertEqual(ready, .completed, "Every pane must be live; placeholders cannot establish pixel alignment.")
-      for layout in ["grid", "spotlight"] {
-        if layout == "spotlight" {
+      for layout in ["featured", "grid", "spotlight"] {
+        if layout != "featured" {
           XCUIRemote.shared.press(.playPause)
-          let toggle = app.buttons["Spotlight"]
+          let toggle = app.buttons["multiview-layout"]
           XCTAssertTrue(toggle.waitForExistence(timeout: 5))
           capture(app, name: "\(count) layout HUD")
-          XCTAssertTrue(toggle.hasFocus)
+          XCTAssertTrue(toggle.hasFocus || toggle.descendants(matching: .any)
+            .allElementsBoundByIndex.contains(where: \.hasFocus))
           XCUIRemote.shared.press(.select)
-          XCTAssertTrue(app.buttons["Grid"].waitForExistence(timeout: 5))
-          capture(app, name: "\(count) spotlight HUD")
+          let titles = ["featured": "Featured", "spotlight": "Spotlight", "grid": "Equal"]
+          let choice = app.cells.containing(.any, identifier: titles[layout]!).firstMatch
+          XCTAssertTrue(choice.waitForExistence(timeout: 5))
+          for _ in 0..<3 {
+            if choice.hasFocus { break }
+            XCUIRemote.shared.press(layout == "grid" ? .down : .up)
+          }
+          XCTAssertTrue(choice.hasFocus)
+          XCUIRemote.shared.press(.select)
+          capture(app, name: "\(count) \(layout) HUD")
           XCUIRemote.shared.press(.menu)
         } else {
           XCUIRemote.shared.press(.left)
@@ -197,7 +206,7 @@ final class MultiviewNavigationTests: XCTestCase {
     expectation(for: NSPredicate(format: "value == %@", "Live"), evaluatedWith: pane)
     waitForExpectations(timeout: 5)
     XCUIRemote.shared.press(.playPause)
-    XCTAssertTrue(app.buttons["Spotlight"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["multiview-layout"].waitForExistence(timeout: 5))
   }
 
   private func capture(_ app: XCUIApplication, name: String) {

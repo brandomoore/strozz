@@ -35,6 +35,7 @@ struct HomeRailStreamCard: View {
     .onTapGesture {
       onTap()
     }
+    .modifier(MultiviewCardShortcut(channel: channel))
     .accessibilityAddTraits(.isButton)
     .accessibilityIdentifier(itemID)
     .zIndex(isFocused ? 2 : 0)

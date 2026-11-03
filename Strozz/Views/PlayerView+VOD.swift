@@ -21,11 +21,16 @@ extension PlayerView {
     isOffline = false
     streamTitle = vod.title
     player.automaticallyWaitsToMinimizeStalling = true
-    replay.start(vodID: vod.id, channelLogin: channel.isEmpty ? nil : channel)
+    if vod.platform == .twitch {
+      replay.start(vodID: vod.id, channelLogin: channel.isEmpty ? nil : channel)
+    } else {
+      replay.stop()
+    }
 
     async let metadataTask: Void = refreshChannelMetadata()
     do {
-      let url = try await PlaybackService.vodMasterURL(id: vod.id)
+      let url = try await (vod.platform == .kick
+        ? KickChannelContentService.broadcastURL(id: vod.id) : PlaybackService.vodMasterURL(id: vod.id))
       guard telemetrySessionID == model.playbackTelemetry.sessionID else { return }
       // Dismissed mid-resolve: don't resurrect playback on an orphaned AVPlayer.
       if Task.isCancelled {
@@ -34,7 +39,8 @@ extension PlayerView {
         return
       }
       let asset = AVURLAsset(
-        url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": PlaybackService.streamHeaders])
+        url: url, options: ["AVURLAssetHTTPHeaderFieldsKey":
+          vod.platform == .kick ? KickPlaybackService.headers : PlaybackService.streamHeaders])
       currentSourceURL = url
       replacePlaybackItem(with: AVPlayerItem(asset: asset))
       recordPlaybackEvent(

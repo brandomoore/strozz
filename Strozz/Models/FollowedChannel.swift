@@ -1,7 +1,7 @@
 import Foundation
 
 /// A channel shown in the Home -> Following carousel.
-struct FollowedChannel: Identifiable, Hashable {
+struct FollowedChannel: Identifiable, Hashable, Sendable {
     let id: String
     let login: String
     let displayName: String
@@ -13,6 +13,7 @@ struct FollowedChannel: Identifiable, Hashable {
     let isLive: Bool
     let isMature: Bool
     var platform: LivePlatform = .twitch
+    var language: String? = nil
     var kick: KickChannel?
 
     /// The same streamer's live YouTube presence, when they're a dual-platform

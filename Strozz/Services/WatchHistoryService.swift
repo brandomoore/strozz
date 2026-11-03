@@ -11,23 +11,24 @@ enum RecommendationPreferences {
 
 /// One channel the viewer has watched, used purely to personalize recommendations.
 struct WatchHistoryEntry: Codable, Identifiable, Sendable {
-  var id: String { login }
+  var id: String { channelKey }
   var login: String
   var displayName: String
   var gameName: String
   var viewerCount: Int?
   var lastWatchedAt: Date
   var watchCount: Int
+  var sourcePlatform: LivePlatform? = nil
+  var platform: LivePlatform { sourcePlatform ?? .twitch }
+  var channelKey: String { platform == .twitch ? login.lowercased() : "\(platform.rawValue):\(login.lowercased())" }
 }
 
 /// Records which channels the viewer watches so recommendations can reflect their
 /// actual taste — **entirely on-device**.
 ///
-/// Privacy: history is stored only in this device's `UserDefaults`, is never
-/// transmitted to Strozz, Twitch, or any third party, and can be turned off or
-/// wiped from Settings. Because nothing leaves the device, this requires no App
-/// Tracking Transparency prompt and counts as "Data Not Collected" on the App
-/// Store privacy label.
+/// History and watch counts stay in this device's `UserDefaults` and can be
+/// disabled or cleared in Settings. Discovery requests channel/category metadata
+/// from the respective platforms; it does not upload the stored history.
 @MainActor
 @Observable
 final class WatchHistoryService {
@@ -36,7 +37,10 @@ final class WatchHistoryService {
   /// Watches this old contribute half the weight of a fresh watch.
   private static let recencyHalfLife: TimeInterval = 14 * 24 * 3600
 
-  private(set) var entries: [WatchHistoryEntry] = []
+  private var storedEntries: [WatchHistoryEntry] = []
+  var entries: [WatchHistoryEntry] {
+    storedEntries.filter { StreamPlatformPreferences.shared.selection.includes($0.platform) }
+  }
 
   /// On-device personalization switch, mirrored from `UserDefaults` so the
   /// Settings toggle and this service always agree. Defaults to on.
@@ -52,50 +56,51 @@ final class WatchHistoryService {
   /// Records a watch of `channel`. No-op when personalization is disabled or the
   /// channel has no login. Existing channels are bumped to most-recent.
   func record(_ channel: FollowedChannel) {
-    guard isEnabled, channel.platform == .twitch else { return }
+    guard isEnabled, channel.platform == .twitch || channel.platform == .kick else { return }
     let login = channel.login.lowercased()
     guard !login.isEmpty else { return }
 
     let now = Date()
-    if let index = entries.firstIndex(where: { $0.login == login }) {
-      var entry = entries.remove(at: index)
+    if let index = storedEntries.firstIndex(where: { $0.channelKey == channel.channelKey }) {
+      var entry = storedEntries.remove(at: index)
       entry.lastWatchedAt = now
       entry.watchCount += 1
       entry.displayName = channel.displayName
       if !channel.gameName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         entry.gameName = channel.gameName
       }
-      if let viewers = channel.viewerCount { entry.viewerCount = viewers }
-      entries.insert(entry, at: 0)
+      if let viewers = channel.combinedViewerCount { entry.viewerCount = viewers }
+      storedEntries.insert(entry, at: 0)
     } else {
-      entries.insert(
+      storedEntries.insert(
         WatchHistoryEntry(
           login: login,
           displayName: channel.displayName,
           gameName: channel.gameName,
-          viewerCount: channel.viewerCount,
+          viewerCount: channel.combinedViewerCount,
           lastWatchedAt: now,
-          watchCount: 1
+          watchCount: 1,
+          sourcePlatform: channel.platform
         ),
         at: 0
       )
     }
 
-    if entries.count > Self.maxEntries {
-      entries = Array(entries.prefix(Self.maxEntries))
+    if storedEntries.count > Self.maxEntries {
+      storedEntries = Array(storedEntries.prefix(Self.maxEntries))
     }
     persist()
   }
 
   /// Permanently forgets all watch history from this device.
   func clear() {
-    entries = []
+    storedEntries = []
     persist()
   }
 
-  /// Logins (lowercased) the viewer has watched, most-recent first.
+  /// Twitch-only logins for callers of the Twitch affinity API.
   var recentLogins: [String] {
-    entries.map(\.login)
+    entries.filter { $0.platform == .twitch }.map(\.login)
   }
 
   /// Category name -> recency-weighted affinity (unnormalized). Recent, repeated
@@ -125,7 +130,7 @@ final class WatchHistoryService {
 
   private func load() {
     if let decoded: [WatchHistoryEntry] = Defaults.load(forKey: storageKey) {
-      entries = decoded
+      storedEntries = decoded
     }
   }
 
@@ -135,7 +140,7 @@ final class WatchHistoryService {
     label: "com.thatcube.Strozz.watchHistory.persist", qos: .utility)
 
   private func persist() {
-    let snapshot = entries
+    let snapshot = storedEntries
     let key = storageKey
     Self.persistQueue.async {
       Defaults.save(snapshot, forKey: key)

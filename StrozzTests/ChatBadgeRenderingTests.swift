@@ -125,7 +125,7 @@ final class ChatBadgeRenderingTests: XCTestCase {
       throw XCTSkip("Opt in to verify current provider assets.")
     }
     let catalog = await EmoteCatalogService().snapshot(for: "burn", refreshChannelEmotes: true)
-    let names = ["CAUGHT", "xdd"]
+    let names = ["CAUGHT", "xdd", "!boost"]
     let urls = try names.map { try XCTUnwrap(catalog.urls[$0], "Missing \($0) from the assembled catalog") }
     let segments = ChatLineTokenizer.segments(text: names.joined(separator: " "),
       twitchEmoteURLs: [:], youtubeEmoteURLs: [:], globalEmoteURLs: catalog.urls,

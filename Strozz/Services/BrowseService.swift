@@ -1,42 +1,140 @@
 import Foundation
 import Observation
+import OSLog
 
 @MainActor
 @Observable
 final class BrowseService {
-    private(set) var categories: [TwitchCategory] = []
+    private var storedCategories: [TwitchCategory] = []
+    private(set) var categories: [TwitchCategory] {
+        get { storedCategories.filter { StreamPlatformPreferences.shared.selection.includes($0.platform) } }
+        set { storedCategories = newValue }
+    }
     private(set) var isLoadingCategories = false
-    private(set) var categoryErrorMessage: String?
+    private var categoriesSelection = StreamPlatforms.both
+    private var storedCategoryError: String?
+    private(set) var categoryErrorMessage: String? {
+        get { categoriesSelection == StreamPlatformPreferences.shared.selection ? storedCategoryError : nil }
+        set { storedCategoryError = newValue }
+    }
+    private var storedKickCategoryPage: Int?
+    private(set) var nextKickCategoryPage: Int? {
+        get { StreamPlatformPreferences.shared.selection.includesKick ? storedKickCategoryPage : nil }
+        set { storedKickCategoryPage = newValue }
+    }
+    private(set) var isLoadingMoreCategories = false
+    private var storedMoreCategoriesError: String?
+    private(set) var moreCategoriesErrorMessage: String? {
+        get { categoriesSelection == StreamPlatformPreferences.shared.selection ? storedMoreCategoriesError : nil }
+        set { storedMoreCategoriesError = newValue }
+    }
 
-    private(set) var categoryStreams: [FollowedChannel] = []
+    private var storedStreams: [FollowedChannel] = []
+    private(set) var categoryStreams: [FollowedChannel] {
+        get { StreamPlatformPreferences.shared.selection.filter(storedStreams) }
+        set { storedStreams = newValue }
+    }
     private(set) var isLoadingStreams = false
-    private(set) var streamsErrorMessage: String?
+    private var streamsSelection = StreamPlatforms.both
+    private var storedStreamsError: String?
+    private(set) var streamsErrorMessage: String? {
+        get { streamsSelection == StreamPlatformPreferences.shared.selection ? storedStreamsError : nil }
+        set { storedStreamsError = newValue }
+    }
+    private(set) var isLoadingMore = false
+    private var storedKickCursor: String?
+    private(set) var nextKickCursor: String? {
+        get { StreamPlatformPreferences.shared.selection.includesKick ? storedKickCursor : nil }
+        set { storedKickCursor = newValue }
+    }
+    private var storedMoreStreamsError: String?
+    private(set) var moreStreamsErrorMessage: String? {
+        get { streamsSelection == StreamPlatformPreferences.shared.selection ? storedMoreStreamsError : nil }
+        set { storedMoreStreamsError = newValue }
+    }
     private var streamsCategoryID: String?
+    private var categoriesContext: String?
+    private var currentKickCategoryID: String?
+    private var twitchStreams: [FollowedChannel] = []
+    private var kickStreams: [FollowedChannel] = []
     private var streamsRequestID = UUID()
     private var categoriesRequestID = UUID()
     private let loadData: NetworkClient.DataLoader
+    private let creatorLinks: [String: String]?
+    private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "browse")
 
-    init(loadData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) }) {
+    init(creatorLinks: [String: String]? = nil,
+         loadData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) }) {
         self.loadData = loadData
+        self.creatorLinks = creatorLinks
     }
 
     // MARK: - Public API
 
-    func loadCategories() async {
+    func loadCategories(filter: BrowsePlatformFilter = .twitch) async {
+        let selection = StreamPlatformPreferences.shared.selection
+        categoriesSelection = selection
+        let filter = selection.resolve(filter)
         let requestID = UUID()
         categoriesRequestID = requestID
         isLoadingCategories = true
         categoryErrorMessage = nil
+        nextKickCategoryPage = nil
+        isLoadingMoreCategories = false
+        moreCategoriesErrorMessage = nil
+        let context = "\(filter.rawValue):\(StreamLanguagePreference.current())"
+        if categoriesContext != context { categories = [] }
+        categoriesContext = context
         defer { if categoriesRequestID == requestID { isLoadingCategories = false } }
 
+        async let twitch = capture {
+            filter.includes(.twitch) ? try await self.fetchTopCategories(limit: 40) : []
+        }
+        async let kick = capture {
+            filter.includes(.kick)
+                ? try await KickBrowseService.categories(load: self.loadData)
+                : KickBrowseService.CategoriesPage(categories: [], nextPage: nil)
+        }
+        let results = await (twitch, kick)
+        guard !Task.isCancelled, categoriesRequestID == requestID,
+              StreamPlatformPreferences.shared.selection == selection else { return }
+        var errors: [String] = []
+        let twitchCategories = apply(results.0, previous: categories.filter { $0.platform == .twitch },
+                                     platform: "Twitch", errors: &errors)
+        let kickCategories: [TwitchCategory]
+        switch results.1 {
+        case .success(let page):
+            kickCategories = page.categories
+            nextKickCategoryPage = page.nextPage
+        case .failure(let error):
+            kickCategories = categories.filter { $0.platform == .kick }
+            errors.append(failureMessage(error, platform: "Kick"))
+        }
+        categories = KickUnifiedFeed.interleave(twitchCategories, kickCategories, id: \.id)
+        categoryErrorMessage = errors.isEmpty ? nil : errors.joined(separator: "\n")
+        prewarmBoxArt(categories)
+        recordFixtureState()
+    }
+
+    func loadMoreCategories() async {
+        let selection = StreamPlatformPreferences.shared.selection
+        guard selection.includesKick,
+              !isLoadingCategories, !isLoadingMoreCategories, let page = nextKickCategoryPage else { return }
+        let request = categoriesRequestID
+        isLoadingMoreCategories = true
+        moreCategoriesErrorMessage = nil
+        defer { if request == categoriesRequestID { isLoadingMoreCategories = false } }
         do {
-            let loaded = try await fetchTopCategories(limit: 40)
-            guard !Task.isCancelled, categoriesRequestID == requestID else { return }
-            categories = loaded
-            prewarmBoxArt(categories)
+            let result = try await KickBrowseService.categories(page: page, load: loadData)
+            guard !Task.isCancelled, request == categoriesRequestID,
+                  StreamPlatformPreferences.shared.selection == selection else { return }
+            var seen = Set(categories.map(\.id))
+            categories += result.categories.filter { seen.insert($0.id).inserted }
+            nextKickCategoryPage = result.nextPage == page ? nil : result.nextPage
         } catch {
-            guard !Task.isCancelled, categoriesRequestID == requestID else { return }
-            categoryErrorMessage = "Could not load categories."
+            guard !Task.isCancelled, request == categoriesRequestID,
+                  StreamPlatformPreferences.shared.selection == selection else { return }
+            moreCategoriesErrorMessage = failureMessage(error, platform: "Kick")
         }
     }
 
@@ -57,28 +155,146 @@ final class BrowseService {
         }
     }
 
-    func loadStreams(for category: TwitchCategory) async {
+    func loadStreams(for category: TwitchCategory? = nil, filter: BrowsePlatformFilter = .twitch,
+                     mixCategoryPlatforms: Bool = false) async {
+        let selection = StreamPlatformPreferences.shared.selection
+        streamsSelection = selection
+        let filter = selection.resolve(mixCategoryPlatforms ? .all
+            : category.map { $0.platform == .kick ? BrowsePlatformFilter.kick : .twitch } ?? filter)
         let requestID = UUID()
         streamsRequestID = requestID
         isLoadingStreams = true
         streamsErrorMessage = nil
-        if streamsCategoryID != category.id { categoryStreams = [] }
-        streamsCategoryID = category.id
+        isLoadingMore = false
+        moreStreamsErrorMessage = nil
+        nextKickCursor = nil
+        let key = "\(category?.id ?? "directory"):\(filter.rawValue):\(StreamLanguagePreference.current())"
+        if streamsCategoryID != key {
+            categoryStreams = []
+            twitchStreams = []
+            kickStreams = []
+        }
+        streamsCategoryID = key
+        currentKickCategoryID = nil
         defer {
             if streamsRequestID == requestID { isLoadingStreams = false }
         }
 
-        do {
-            // Twitch's anonymous GQL client rejects cursor pagination (integrity
-            // challenge), so fetch the full set in one request. 100 is the max
-            // the API allows for `first`.
-            let streams = try await fetchStreams(for: category, limit: 100)
-            guard !Task.isCancelled, streamsRequestID == requestID else { return }
-            categoryStreams = streams
-        } catch {
-            guard !Task.isCancelled, streamsRequestID == requestID else { return }
-            streamsErrorMessage = "Could not load streams for \(category.name)."
+        async let twitch = capture {
+            guard filter.includes(.twitch) else { return [FollowedChannel]() }
+            if let category { return try await self.fetchStreams(for: category, limit: 100) }
+            return try await RecommendationsService.fetchRecommendedChannels(limit: 30, loadData: self.loadData)
         }
+        async let kick = capture {
+            guard filter.includes(.kick) else {
+                return KickBrowseService.Page(channels: [], categories: [], nextCursor: nil)
+            }
+            var categoryID = category?.sourceID
+            if let category, category.platform != .kick {
+                let matches = try await KickBrowseService.searchCategories(category.name, load: self.loadData)
+                    .filter { $0.name.caseInsensitiveCompare(category.name) == .orderedSame }
+                guard matches.count == 1 else {
+                    return KickBrowseService.Page(channels: [], categories: [], nextCursor: nil)
+                }
+                categoryID = matches.first?.sourceID
+            }
+            return try await KickBrowseService.page(categoryID: categoryID, load: self.loadData)
+        }
+        let results = await (twitch, kick)
+        guard !Task.isCancelled, streamsRequestID == requestID,
+              StreamPlatformPreferences.shared.selection == selection else { return }
+        var errors: [String] = []
+        twitchStreams = apply(results.0, previous: twitchStreams, platform: "Twitch", errors: &errors)
+        switch results.1 {
+        case .success(let page):
+            kickStreams = page.channels
+            nextKickCursor = page.nextCursor
+            currentKickCategoryID = page.categoryID
+        case .failure(let error):
+            errors.append(failureMessage(error, platform: "Kick"))
+        }
+        categoryStreams = mergedStreams()
+        streamsErrorMessage = errors.isEmpty ? nil : errors.joined(separator: "\n")
+        recordFixtureState()
+    }
+
+    func loadMoreStreams() async {
+        let selection = StreamPlatformPreferences.shared.selection
+        guard selection.includesKick,
+              !isLoadingStreams, !isLoadingMore, let cursor = nextKickCursor else { return }
+        let requestID = streamsRequestID
+        isLoadingMore = true
+        moreStreamsErrorMessage = nil
+        defer { if streamsRequestID == requestID { isLoadingMore = false } }
+        do {
+            let page = try await KickBrowseService.page(categoryID: currentKickCategoryID,
+                                                        after: cursor, load: loadData)
+            guard !Task.isCancelled, streamsRequestID == requestID,
+                  StreamPlatformPreferences.shared.selection == selection else { return }
+            var seen = Set(kickStreams.map(\.channelKey))
+            let added = page.channels.filter { seen.insert($0.channelKey).inserted }
+            kickStreams += added
+            let merged = mergedStreams()
+            let byID = Dictionary(merged.map { ($0.channelKey, $0) }, uniquingKeysWith: { first, _ in first })
+            let previousIDs = Set(categoryStreams.map(\.channelKey))
+            // Enrich existing cards in place when their second platform arrives on a later page.
+            categoryStreams = categoryStreams.compactMap { byID[$0.channelKey] }
+                + merged.filter { !previousIDs.contains($0.channelKey) }
+            nextKickCursor = page.nextCursor == cursor ? nil : page.nextCursor
+            recordFixtureState()
+        } catch {
+            guard !Task.isCancelled, streamsRequestID == requestID,
+                  StreamPlatformPreferences.shared.selection == selection else { return }
+            moreStreamsErrorMessage = failureMessage(error, platform: "Kick")
+        }
+    }
+
+    private func mergedStreams() -> [FollowedChannel] {
+        KickUnifiedFeed.mergeDirectory(twitch: twitchStreams, kick: kickStreams,
+                                       links: creatorLinks ?? KickUnifiedFeed.confirmedLinks(for: twitchStreams))
+    }
+
+    private func capture<Value>(_ operation: @MainActor () async throws -> Value) async -> Result<Value, Error> {
+        do { return .success(try await operation()) }
+        catch { return .failure(error) }
+    }
+
+    private func apply<Value>(_ result: Result<Value, Error>, previous: Value,
+                              platform: String, errors: inout [String]) -> Value {
+        switch result {
+        case .success(let value): return value
+        case .failure(let error):
+            errors.append(failureMessage(error, platform: platform))
+            return previous
+        }
+    }
+
+    private func failureMessage(_ error: Error, platform: String) -> String {
+        Self.logger.warning("\(platform) browse failed: \((error as NSError).domain) \((error as NSError).code)")
+        return String(localized: "\(platform) couldn't be refreshed. \(error.localizedDescription)")
+    }
+
+    private func recordFixtureState() {
+        #if DEBUG && targetEnvironment(simulator)
+        guard ProcessInfo.processInfo.environment["STROZZ_BROWSE_UI_FIXTURE"] == "1" else { return }
+        do {
+            let state: [String: Any] = [
+                "request": streamsCategoryID ?? "",
+                "streams": categoryStreams.map {
+                    ["id": $0.channelKey, "platform": $0.platform.rawValue, "linkedKick": $0.kick?.slug ?? ""]
+                },
+                "categories": categories.map { ["id": $0.id, "platform": $0.platform.rawValue] },
+                "streamError": streamsErrorMessage ?? "", "categoryError": categoryErrorMessage ?? "",
+                "hasMore": nextKickCursor != nil,
+            ]
+            let root = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask,
+                                                   appropriateFor: nil, create: true)
+            try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
+                .write(to: root.appendingPathComponent("browse-fixture.json"), options: .atomic)
+        } catch {
+            Self.logger.error("Browse fixture export failed: \(error.localizedDescription)")
+        }
+        #endif
     }
 
     // MARK: - GQL: Top Categories
@@ -115,7 +331,7 @@ final class BrowseService {
         let responseData = try await performGQL(
             query: query, variables: ["first": limit])
         let decoded = try TwitchAPIClient.decode(GQLEnvelope.self, from: responseData)
-        let edges = decoded.data?.games?.edges ?? []
+        guard let edges = decoded.data?.games?.edges else { throw URLError(.badServerResponse) }
 
         return edges.compactMap { edge -> TwitchCategory? in
             guard let node = edge.node,

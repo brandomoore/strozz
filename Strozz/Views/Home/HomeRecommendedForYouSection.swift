@@ -16,7 +16,7 @@ struct HomeRecommendedForYouSection: View {
 
   var body: some View {
     let channels = environment.kickDiscovery.mergedRecommendations(
-      personalized.channels, blocked: environment.feedback.blockedLogins)
+      personalized.channels, blocked: environment.feedback.blockedLogins, includeNew: false)
 
     if personalizedEnabled {
       VStack(alignment: .leading, spacing: 2) {

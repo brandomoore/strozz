@@ -180,6 +180,10 @@ extension PlayerView {
 
   /// Restores the proxied Twitch source and its control loops.
   func switchToTwitchSource(refresh: Bool = false) {
+    guard StreamPlatformPreferences.shared.selection.includesTwitch else {
+      errorMessage = PlatformLiveTarget.Failure.disabledPlatform(.twitch).localizedDescription
+      return
+    }
     guard let twitch = model.creatorSession.twitchChannel
       ?? (model.primaryPlatform == .twitch ? activeChannel : nil) else {
       errorMessage = String(localized: "No Twitch channel is linked to this creator.")
@@ -324,9 +328,10 @@ extension PlayerView {
 
   /// YouTube needs a resolved simulcast; Kick also accepts a channel entered in-player.
   var streamSourceOptions: [String] {
-    (model.creatorSession.twitchChannel != nil
-      || (model.creatorSession.sources == nil && initialPlatform == .twitch) ? ["Twitch"] : [])
-      + (youtubeSourceAvailable || isUsingAltSource ? ["YouTube"] : []) + ["Kick"]
+    (StreamPlatformPreferences.shared.selection.includesTwitch && (model.creatorSession.twitchChannel != nil
+      || (model.creatorSession.sources == nil && initialPlatform == .twitch)) ? ["Twitch"] : [])
+      + (youtubeSourceAvailable || isUsingAltSource ? ["YouTube"] : [])
+      + (StreamPlatformPreferences.shared.selection.includesKick ? ["Kick"] : [])
   }
 
   var selectedStreamSourceIndex: Int {

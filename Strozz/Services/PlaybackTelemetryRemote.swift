@@ -84,12 +84,7 @@ struct PlaybackTelemetryReportState {
     session.fingerprints = session.fingerprints.filter { now - $0.value < 30 }
     session.incidents.removeAll { now - $0 >= 60 }
     incidents.removeAll { now - $0 >= 60 }
-    let significantWarning = record.level == .warning && [
-      "stall_started", "seek_deadline_exceeded", "playback_scheduler_delay",
-      "native_hls_resume_retry", "native_unrequested_pause_resume",
-    ].contains(record.name)
-    let unusedRendition = record.name == "native_hls_failure" && record.attributes["scope"] == "rendition"
-    if (record.level == .error || significantWarning) && !unusedRendition {
+    if Self.isIncident(record) {
       let fingerprint = Self.fingerprint(record).joined(separator: "|")
       if session.fingerprints[fingerprint] == nil && session.incidents.count < 12 && incidents.count < 120 {
         reports.append(PlaybackTelemetryReport(kind: .incident, record: record,
@@ -150,6 +145,14 @@ struct PlaybackTelemetryReportState {
       .map { record.attributes[$0] ?? "none" }
   }
 
+  static func isIncident(_ record: PlaybackTelemetryRecord) -> Bool {
+    if record.name == "native_hls_failure", record.attributes["scope"] == "rendition" { return false }
+    return record.level == .error || (record.level == .warning && [
+      "stall_started", "seek_deadline_exceeded", "playback_scheduler_delay",
+      "native_hls_resume_retry", "native_unrequested_pause_resume",
+    ].contains(record.name))
+  }
+
   static func encodedHistory(_ records: [PlaybackTelemetryRecord]) throws -> Data {
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601
@@ -166,6 +169,10 @@ struct PlaybackTelemetryReportState {
       "audio_codec", "native_generation", "counter", "item_id", "host", "asset_host", "stage",
       "audio_category", "audio_mode", "audio_route_reason", "audio_output_ports", "audio_input_ports",
       "route_change_reason", "audio_session_category", "audio_session_mode",
+      "recovery_blocked_by", "native_failure_reason",
+      "underlying_error_domain_1", "underlying_error_code_1",
+      "underlying_error_domain_2", "underlying_error_code_2",
+      "underlying_error_domain_3", "underlying_error_code_3",
       "connection_phase", "request_phase", "connection_reused", "network_protocol",
       "network_expensive", "network_constrained", "network_cellular",
     ]

@@ -75,10 +75,13 @@ struct MobileVODPlayerView: View {
     do {
       try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
       try AVAudioSession.sharedInstance().setActive(true)
-      let url = try await PlaybackService.vodMasterURL(id: selection.video.id)
+      let url = try await (selection.video.platform == .kick
+        ? KickChannelContentService.broadcastURL(id: selection.video.id)
+        : PlaybackService.vodMasterURL(id: selection.video.id))
       try Task.checkCancellation()
       let item = AVPlayerItem(asset: AVURLAsset(url: url,
-        options: ["AVURLAssetHTTPHeaderFieldsKey": PlaybackService.streamHeaders]))
+        options: ["AVURLAssetHTTPHeaderFieldsKey":
+          selection.video.platform == .kick ? KickPlaybackService.headers : PlaybackService.streamHeaders]))
       player.replaceCurrentItem(with: item)
       itemObservation = item.observe(\.status, options: [.new]) { [weak item] _, _ in
         Task { @MainActor in
@@ -91,7 +94,8 @@ struct MobileVODPlayerView: View {
       #if targetEnvironment(simulator)
       player.isMuted = true
       #endif
-      let deadline = ContinuousClock.now.advanced(by: .seconds(25))
+      let startupTimeout = Duration.seconds(25)
+      let deadline = ContinuousClock.now.advanced(by: startupTimeout)
       while item.status != .readyToPlay {
         try Task.checkCancellation()
         if item.status == .failed { throw item.error ?? URLError(.cannotDecodeContentData) }
@@ -100,15 +104,17 @@ struct MobileVODPlayerView: View {
       }
       let seconds = progress.progress(for: selection.id)
       if seconds > 0 {
+        var seekTimedOut = false
         let timeout = Task { @MainActor in
-          do { try await Task.sleep(for: .seconds(5)) } catch { return }
+          do { try await Task.sleep(for: startupTimeout) } catch { return }
+          seekTimedOut = true
           item.cancelPendingSeeks()
         }
         let restored = await item.seek(to: CMTime(seconds: seconds, preferredTimescale: 600),
                                       toleranceBefore: .zero, toleranceAfter: .zero)
         timeout.cancel()
         try Task.checkCancellation()
-        guard restored else { throw URLError(.cannotLoadFromNetwork) }
+        guard restored else { throw URLError(seekTimedOut ? .timedOut : .cannotLoadFromNetwork) }
       }
       try Task.checkCancellation()
       ready = true

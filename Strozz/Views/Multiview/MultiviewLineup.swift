@@ -41,6 +41,10 @@ final class MultiviewLineup {
   }
 
   func toggle(_ channel: FollowedChannel) {
+    guard StreamPlatformPreferences.shared.selection.includes(channel.platform) else {
+      notice = PlatformLiveTarget.Failure.disabledPlatform(channel.platform).localizedDescription
+      return
+    }
     if contains(channel) {
       remove(channel.channelKey)
       return
@@ -60,6 +64,21 @@ final class MultiviewLineup {
   func remove(_ key: String) {
     entries.removeAll { $0.channel.channelKey == key }
     synchronizePanes()
+  }
+
+  func platformsChanged() {
+    let selection = StreamPlatformPreferences.shared.selection
+    entries.removeAll { !selection.includes($0.channel.platform) }
+    for index in entries.indices {
+      if let channel = selection.filter([entries[index].channel]).first {
+        entries[index].channel = channel
+      }
+    }
+    synchronizePanes()
+    for pane in controller?.panes ?? [] {
+      if let channel = selection.filter([pane.channel]).first { pane.channel = channel }
+      pane.model.creatorSession.platformsChanged()
+    }
   }
 
   func clear() {

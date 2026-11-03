@@ -53,6 +53,28 @@ TV target but excludes the TV interface and Top Shelf extension. See the
 [mobile setup and scope](README.md#iphone-and-ipad) for supported features and
 simulator test commands. Use the build wrappers for both platforms.
 
+For simulator-only Kick content checks, launch a Debug build with
+`STROZZ_KICK_UI_FIXTURE=1`, `STROZZ_KICK_CONTENT_FIXTURE` set to `profile`,
+`clip`, `broadcast`, `categories`, or `search`, and `STROZZ_KICK_CHANNEL` set
+to the channel or search term. These routes use the real production views and
+public APIs; `clip` and `broadcast` play the first available public item.
+Set `STROZZ_KICK_BROADCAST_ID=kick:<uuid>` to pin an existing archive for
+repeatable resume checks instead of following a changing live catalogue.
+They let screenshot/hierarchy checks reach content without simulator input
+automation, but do not replace testing taps, remote focus, or navigation.
+The opt-in `MobileVODPlaybackTests` resume/reopen check accepts
+`STROZZ_MOBILE_VOD_TESTS=1`, `STROZZ_MOBILE_VOD_CHANNEL=<channel>`, and
+`STROZZ_MOBILE_VOD_PLATFORM=kick` (the default platform is Twitch).
+
+Some Kick archives advance their clock and captions while their picture freezes
+in iOS 26.2 Simulator. This also reproduces in a standalone
+`AVPlayerViewController`, without Strozz services or SwiftUI. A headless
+`AVPlayerItemVideoOutput` probe decodes the same archive correctly, so readiness,
+clock advancement, and pull-driven decoded frames do not prove rendered playback.
+Verify actual picture motion and resume on iPhone/iPad before releasing this path.
+Archive resume uses the same 25-second budget as readiness: a native rendered seek
+can take more than eight seconds, exceeding the former five-second deadline.
+
 ## Twitch auth setup (no committed secrets)
 
 Twitch device auth needs a Twitch app `client_id`, but you don't commit it to

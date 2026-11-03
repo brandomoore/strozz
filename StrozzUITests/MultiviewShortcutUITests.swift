@@ -8,6 +8,347 @@ final class MultiviewShortcutUITests: XCTestCase {
     continueAfterFailure = false
   }
 
+  func testActualHomeLineupGeometryFocusAndEmptyManagerDismissal() throws {
+    let app = launchFixture(count: 0, cards: "home")
+    defer { app.terminate() }
+    let first = app.descendants(matching: .any)["following-twitch"].firstMatch
+    let second = app.descendants(matching: .any)["following-kick:kick"].firstMatch
+    let lineup = app.buttons["multiview-lineup"]
+    let nextTitle = app.staticTexts["shortcut-home-next-title"]
+    focusHomeElement(first, app: app)
+    let initialCard = first.frame
+    let initialNextTitle = nextTitle.frame
+    let initialState = try homeState(app)
+    XCTAssertFalse(lineup.exists, "The empty lineup must not be actionable in accessibility.")
+
+    for count in [1, 0] {
+      press(.playPause, app: app, name: "actual Home quick toggle to \(count)")
+      try expectHomeState(app, count: count)
+      XCTAssertTrue(first.hasFocus, "Membership changes must retain the exact focused Home card.")
+      assertFrame(first.frame, equals: initialCard, name: "Focused Home card")
+      assertFrame(nextTitle.frame, equals: initialNextTitle, name: "Following section's next sibling")
+      let state = try homeState(app)
+      for key in ["section", "scroll"] {
+        let expected = try XCTUnwrap(initialState[key] as? [Double])
+        let actual = try XCTUnwrap(state[key] as? [Double])
+        XCTAssertFalse(expected.isEmpty)
+        XCTAssertEqual(actual.count, expected.count)
+        for (old, new) in zip(expected, actual) {
+          XCTAssertEqual(new, old, accuracy: 0.01, "\(key) must not move or resize.")
+        }
+      }
+      XCTAssertEqual(lineup.exists, count != 0)
+    }
+
+    let directory = app.buttons["following-directory"]
+    let refresh = app.buttons["following-refresh"]
+    focusHomeElement(directory, app: app)
+    press(.right, app: app, name: "empty header right reaches Refresh")
+    XCTAssertTrue(refresh.hasFocus)
+    press(.left, app: app, name: "empty header left reaches See All")
+    XCTAssertTrue(directory.hasFocus)
+    press(.left, app: app, name: "empty lineup has no invisible focus stop")
+    XCTAssertTrue(directory.hasFocus)
+    XCTAssertFalse(lineup.exists)
+
+    focusHomeElement(first, app: app)
+    press(.playPause, app: app, name: "add single entry before manager removal")
+    try expectHomeState(app, count: 1)
+    focusHomeElement(lineup, app: app)
+    XCTAssertTrue(lineup.hasFocus)
+    press(.select, app: app, name: "open native single-entry lineup manager")
+    let removeFirst = app.buttons["multiview-remove-twitch"]
+    XCTAssertTrue(removeFirst.waitForExistence(timeout: 5))
+    focusHomeElement(removeFirst, app: app)
+    press(.select, app: app, name: "remove final manager entry")
+    XCTAssertTrue(app.buttons["multiview-start"].waitForNonExistence(timeout: 5))
+    XCTAssertFalse(removeFirst.exists)
+    XCTAssertFalse(lineup.exists)
+    try expectHomeState(app, count: 0)
+
+    focusHomeElement(first, app: app)
+    press(.playPause, app: app, name: "add again after last-entry dismissal")
+    try expectHomeState(app, count: 1)
+    let singleWidth = lineup.frame.width
+    XCTAssertEqual(lineup.value as? String, "1 streams")
+    focusHomeElement(second, app: app)
+    press(.playPause, app: app, name: "second avatar grows real Home button")
+    try expectHomeState(app, count: 2)
+    XCTAssertEqual(lineup.value as? String, "2 streams")
+    XCTAssertGreaterThan(lineup.frame.width, singleWidth + 25)
+    let widths = XCTAttachment(string: "One avatar: \(singleWidth)pt; two: \(lineup.frame.width)pt; delta: \(lineup.frame.width - singleWidth)pt")
+    widths.name = "Actual Home lineup avatar width"
+    widths.lifetime = .keepAlways
+    add(widths)
+    focusHomeElement(lineup, app: app)
+    XCTAssertTrue(lineup.hasFocus)
+    press(.select, app: app, name: "open native two-entry lineup manager")
+    XCTAssertTrue(app.buttons["multiview-remove-kick:kick"].waitForExistence(timeout: 5))
+    focusHomeElement(app.buttons["Clear"], app: app)
+    press(.select, app: app, name: "Clear dismisses native lineup manager")
+    XCTAssertTrue(app.buttons["multiview-start"].waitForNonExistence(timeout: 5))
+    XCTAssertFalse(lineup.exists)
+    try expectHomeState(app, count: 0)
+    focusHomeElement(first, app: app)
+    press(.playPause, app: app, name: "add again after Clear")
+    try expectHomeState(app, count: 1)
+    XCTAssertTrue(first.hasFocus)
+    assertFrame(first.frame, equals: initialCard, name: "Home card after manager round trips")
+    assertFrame(nextTitle.frame, equals: initialNextTitle, name: "Next section after manager round trips")
+    focusHomeElement(lineup, app: app)
+    press(.select, app: app, name: "reopen manager after Clear")
+    XCTAssertTrue(removeFirst.waitForExistence(timeout: 5))
+    press(.menu, app: app, name: "dismiss reopened manager normally")
+    XCTAssertTrue(app.buttons["multiview-start"].waitForNonExistence(timeout: 5))
+    try expectHomeState(app, count: 1)
+  }
+
+  private func homeState(_ app: XCUIApplication) throws -> [String: Any] {
+    let element = app.staticTexts["shortcut-home-state"]
+    let value = try XCTUnwrap(element.value as? String)
+    let attachment = XCTAttachment(string: value)
+    attachment.name = "Actual Home geometry and playback state"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+    return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any])
+  }
+
+  private func expectHomeState(_ app: XCUIApplication, count: Int) throws {
+    let state = try homeState(app)
+    XCTAssertEqual(state["count"] as? Int, count)
+    XCTAssertEqual(state["requests"] as? Int, 0, "Membership changes must not start a wall.")
+    XCTAssertEqual(state["navigations"] as? Int, 0)
+    for key in ["opening", "showing", "controller"] {
+      XCTAssertEqual(state[key] as? Bool, false, "Unexpected playback state: \(state)")
+    }
+  }
+
+  private func assertFrame(_ actual: CGRect, equals expected: CGRect, name: String) {
+    for (old, new) in zip([expected.minX, expected.minY, expected.width, expected.height],
+                          [actual.minX, actual.minY, actual.width, actual.height]) {
+      XCTAssertEqual(new, old, accuracy: 0.01, name)
+    }
+  }
+
+  private func focusHomeElement(_ target: XCUIElement, app: XCUIApplication) {
+    XCTAssertTrue(target.waitForExistence(timeout: 5))
+    for step in 0..<8 {
+      if target.hasFocus { return }
+      let cards = ["following-twitch", "following-kick:kick", "following-selectedoffline",
+        "following-offline", "following-youtube:youtube", "following-extra"]
+        .map { app.descendants(matching: .any)[$0].firstMatch }
+      let focused = (app.buttons.allElementsBoundByIndex + cards)
+        .first { $0.exists && $0.hasFocus }
+      let current = focused?.frame ?? .zero
+      let direction: XCUIRemote.Button
+      if target.frame.maxY < current.minY,
+         focused?.identifier.hasPrefix("following-") == true,
+         focused?.identifier != "following-directory",
+         focused?.identifier != "following-refresh",
+         target.frame.midX > current.maxX {
+        // Native directional focus needs a card beneath the right-aligned header.
+        direction = .right
+      } else {
+        direction = abs(target.frame.midY - current.midY) > 80
+          ? (target.frame.midY < current.midY ? .up : .down)
+          : (target.frame.midX < current.midX ? .left : .right)
+      }
+      press(direction, app: app, name: "native focus \(target.identifier) step \(step)")
+    }
+    XCTAssertTrue(target.hasFocus, app.debugDescription)
+  }
+
+  func testProductionCardPressMembershipInAllFocusWrappers() {
+    continueAfterFailure = true
+    for mode in ["rail", "grid", "tile"] {
+      let app = launchFixture(count: 0, cards: mode)
+      defer { app.terminate() }
+      for key in ["twitch", "kick:kick"] {
+        let card = focusCard(key, mode: mode, app: app)
+        let durations: [TimeInterval?] = [nil, 0.3, 0.3, nil]
+        for (index, duration) in durations.enumerated() {
+          press(.playPause, duration: duration, app: app, name: "\(mode) \(key) toggle \(index)")
+          let selected = index.isMultiple(of: 2)
+          XCTAssertEqual(card.value as? String ?? "", selected ? "In multiview" : "")
+          expectCardState(app, "count=\(selected ? 1 : 0)")
+          expectCardState(app, "navigation=0")
+          expectState(app, "requests=0")
+          expectState(app, "short=0")
+          XCTAssertTrue(card.hasFocus)
+        }
+      }
+      app.terminate()
+    }
+  }
+
+  func testProductionCardEligibilityCapacityAndRemoval() {
+    let app = launchFixture(count: 3, cards: "grid")
+    defer { app.terminate() }
+    let offline = focusCard("selectedoffline", mode: "grid", app: app)
+    XCTAssertEqual(offline.value as? String, "In multiview")
+    press(.playPause, app: app, name: "remove selected offline card")
+    XCTAssertEqual(offline.value as? String ?? "", "")
+    expectCardState(app, "count=2")
+    for key in ["selectedoffline", "offline", "youtube:youtube"] {
+      _ = focusCard(key, mode: "grid", app: app)
+      press(.playPause, duration: 0.3, app: app, name: "ineligible \(key) preserves short command")
+      expectCardState(app, "count=2")
+      expectState(app, "short=0")
+      XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
+    focus("shortcut-non-card", app: app)
+    press(.playPause, app: app, name: "non-card preserves native short command")
+    expectState(app, "short=1")
+    expectCardState(app, "navigation=0")
+    app.terminate()
+
+    let full = launchFixture(count: 6, cards: "rail")
+    defer { full.terminate() }
+    _ = focusCard("extra", mode: "rail", app: full)
+    press(.playPause, app: full, name: "full lineup feedback")
+    let notice = full.alerts.firstMatch
+    XCTAssertTrue(notice.waitForExistence(timeout: 3))
+    XCTAssertTrue(notice.staticTexts["Multiview holds up to six streams."].exists)
+    expectCardState(full, "count=6")
+    press(.select, app: full, name: "acknowledge capacity")
+    XCTAssertFalse(notice.exists)
+    let selected = focusCard("twitch", mode: "rail", app: full)
+    press(.playPause, duration: 0.3, app: full, name: "remove selected while full")
+    XCTAssertEqual(selected.value as? String ?? "", "")
+    expectCardState(full, "count=5")
+    let extra = focusCard("extra", mode: "rail", app: full)
+    press(.playPause, app: full, name: "fill released slot")
+    XCTAssertEqual(extra.value as? String, "In multiview")
+    expectCardState(full, "count=6")
+    expectCardState(full, "navigation=0")
+    expectState(full, "short=0")
+  }
+
+  func testProductionCardCapacityNotice() {
+    let app = launchFixture(count: 6, cards: "tile")
+    defer { app.terminate() }
+    _ = focusCard("extra", mode: "tile", app: app)
+    press(.playPause, duration: 0.3, app: app, name: "full lineup rejects seventh focused stream")
+    XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 3), app.debugDescription)
+    XCTAssertTrue(app.alerts.firstMatch.staticTexts["Multiview holds up to six streams."].exists)
+  }
+
+  func testProductionSelectedLiveCardsRemoveInFocusWrappers() {
+    continueAfterFailure = true
+    for mode in ["rail", "grid", "tile"] {
+      let app = launchFixture(count: mode == "rail" ? 6 : 2, cards: mode)
+      defer { app.terminate() }
+      for key in ["twitch", "kick:kick"] {
+        let card = focusCard(key, mode: mode, app: app)
+        XCTAssertEqual(card.value as? String, "In multiview")
+        press(.playPause, duration: 0.3, app: app, name: "\(mode) remove selected live \(key)")
+        XCTAssertEqual(card.value as? String ?? "", "")
+        expectCardState(app, "navigation=0")
+      }
+      app.terminate()
+    }
+  }
+
+  func testProductionUnsupportedCardsAndNonCardControlRemainUnchanged() {
+    let app = launchFixture(count: 0, cards: "grid")
+    defer { app.terminate() }
+    for key in ["offline", "youtube:youtube"] {
+      _ = focusCard(key, mode: "grid", app: app)
+      press(.playPause, duration: 0.3, app: app, name: "unsupported \(key) remains unchanged")
+      expectCardState(app, "count=0")
+      expectCardState(app, "navigation=0")
+      XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
+    focus("shortcut-non-card", app: app)
+    press(.playPause, app: app, name: "non-card native command still delivered")
+    expectState(app, "short=1")
+    expectCardState(app, "count=0")
+  }
+
+  func testProductionCardHoldAndRealPlayerTransport() throws {
+    let single = launchFixture(count: 1, cards: "tile")
+    defer { single.terminate() }
+    let card = focusCard("twitch", mode: "tile", app: single)
+    press(.playPause, duration: 1.1, app: single, name: "one-card hold remains selected")
+    let toast = single.descendants(matching: .any)["multiview-shortcut-toast"].firstMatch
+    XCTAssertTrue(toast.waitForExistence(timeout: 2))
+    XCTAssertTrue(toast.label.contains("Add another stream"))
+    XCTAssertTrue(toast.isHittable)
+    XCTAssertEqual(card.value as? String, "In multiview")
+    expectCardState(single, "count=1")
+    expectState(single, "short=0")
+    expectState(single, "requests=0")
+    single.terminate()
+
+    let app = launchFixture(count: 2, cards: "rail")
+    defer { app.terminate() }
+    _ = focusCard("twitch", mode: "rail", app: app)
+    press(.playPause, duration: 1.1, app: app, name: "card hold opens real mounted wall")
+    let pane = app.buttons["multiview-pane-Twitch"]
+    XCTAssertTrue(pane.waitForExistence(timeout: 20), app.debugDescription)
+    let diagnostic = app.descendants(matching: .any)["layout-fixture-state"].firstMatch
+    XCTAssertTrue(diagnostic.waitForExistence(timeout: 10))
+    func state() throws -> [String: Any] {
+      let value = try XCTUnwrap(diagnostic.value as? String)
+      return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any])
+    }
+    let before = try state()
+    let original = try XCTUnwrap(before["panes"] as? [[String: Any]])
+    XCTAssertEqual(original.count, 2, "Hold release must not toggle the focused card.")
+    XCTAssertFalse(app.buttons["multiview-layout"].exists)
+    press(.playPause, app: app, name: "ordinary production wall short opens controls")
+    XCTAssertTrue(app.buttons["multiview-layout"].waitForExistence(timeout: 5))
+    press(.playPause, app: app, name: "ordinary production wall short closes controls")
+    XCTAssertFalse(app.buttons["multiview-layout"].exists)
+    press(.select, app: app, name: "expand real selected player")
+    XCTAssertFalse(try XCTUnwrap(try state()["expanded"] as? String).isEmpty)
+    press(.playPause, app: app, name: "ordinary expanded player pause")
+    var panes = try XCTUnwrap(try state()["panes"] as? [[String: Any]])
+    XCTAssertEqual(panes[0]["rate"] as? Double, 0)
+    press(.playPause, app: app, name: "ordinary expanded player resume")
+    panes = try XCTUnwrap(try state()["panes"] as? [[String: Any]])
+    XCTAssertGreaterThan(try XCTUnwrap(panes[0]["rate"] as? Double), 0)
+    press(.playPause, duration: 1.1, app: app, name: "hold collapses real player without pause")
+    XCTAssertEqual(try state()["expanded"] as? String, "")
+    panes = try XCTUnwrap(try state()["panes"] as? [[String: Any]])
+    for (old, new) in zip(original, panes) {
+      for key in ["id", "model", "player", "item", "surface"] {
+        XCTAssertEqual(old[key] as? String, new[key] as? String, "Hold retains \(key)")
+      }
+    }
+    press(.menu, app: app, name: "browse after real hold")
+    expectSurface(app, "home")
+    expectCardState(app, "count=2")
+    expectCardState(app, "navigation=0")
+    expectState(app, "short=0")
+    expectState(app, "requests=2")
+  }
+
+  private func expectCardState(_ app: XCUIApplication, _ value: String) {
+    let state = app.staticTexts["shortcut-card-state"].label
+    XCTAssertTrue(state.components(separatedBy: ";").contains(value), "Expected \(value): \(state)")
+  }
+
+  @discardableResult
+  private func focusCard(_ key: String, mode: String, app: XCUIApplication) -> XCUIElement {
+    let prefix = mode == "rail" ? "shortcut-card-" : "stream-card-"
+    let target = app.descendants(matching: .any)[prefix + key].firstMatch
+    XCTAssertTrue(target.waitForExistence(timeout: 5))
+    let candidates = ["twitch", "kick:kick", "selectedoffline", "offline", "youtube:youtube", "extra"]
+      .map { app.descendants(matching: .any)[prefix + $0].firstMatch }
+      + [app.buttons["shortcut-non-card"]]
+    for step in 0..<8 {
+      if target.hasFocus { return target }
+      let current = candidates.first(where: { $0.exists && $0.hasFocus })?.frame ?? .zero
+      let direction: XCUIRemote.Button = abs(target.frame.midY - current.midY) > 80
+        ? (target.frame.midY < current.midY ? .up : .down)
+        : (target.frame.midX < current.midX ? .left : .right)
+      press(direction, app: app, name: "\(mode) focus \(key) step \(step)")
+    }
+    XCTAssertTrue(target.hasFocus, app.debugDescription)
+    return target
+  }
+
   func testBriefAndSubthresholdPressDeliverOneShortCommandEach() {
     let app = launchFixture(count: 2)
     defer { app.terminate() }
@@ -235,7 +576,7 @@ final class MultiviewShortcutUITests: XCTestCase {
     XCTAssertEqual(panes.count, 2)
     let initialIDs = panes.allElementsBoundByIndex.map(\.identifier)
     press(.playPause, duration: 1.1, app: app, name: "hold on real wall")
-    XCTAssertFalse(app.buttons["Spotlight"].exists, "A long hold must not toggle the wall HUD.")
+    XCTAssertFalse(app.buttons["multiview-layout"].exists, "A long hold must not toggle the wall HUD.")
     XCTAssertEqual(panes.allElementsBoundByIndex.map(\.identifier), initialIDs)
     press(.right, app: app, name: "focus real pane")
     // The production pane's AX wrapper does not consistently expose UIKit focus;
@@ -250,7 +591,7 @@ final class MultiviewShortcutUITests: XCTestCase {
     XCTAssertFalse(expanded.exists)
     XCTAssertEqual(panes.allElementsBoundByIndex.map(\.identifier), initialIDs)
     press(.playPause, app: app, name: "real wall short press")
-    XCTAssertTrue(app.buttons["Spotlight"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["multiview-layout"].waitForExistence(timeout: 5))
   }
 
   func testProductionSettingsAndSearchShortcut() throws {
@@ -321,11 +662,12 @@ final class MultiviewShortcutUITests: XCTestCase {
   }
 
   private func launchFixture(count: Int, lightOpaque: Bool = false,
-                             automaticPrompt: Bool = false) -> XCUIApplication {
+                             automaticPrompt: Bool = false, cards: String? = nil) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["STROZZ_MULTIVIEW_SHORTCUT_FIXTURE"] = "1"
     app.launchEnvironment["STROZZ_MULTIVIEW_SHORTCUT_COUNT"] = String(count)
     app.launchEnvironment["STROZZ_MUTE_PLAYBACK"] = "1"
+    if let cards { app.launchEnvironment["STROZZ_MULTIVIEW_SHORTCUT_CARDS"] = cards }
     if lightOpaque {
       app.launchEnvironment["STROZZ_MULTIVIEW_SHORTCUT_THEME"] = "light"
       app.launchEnvironment["STROZZ_MULTIVIEW_SHORTCUT_OPAQUE"] = "1"

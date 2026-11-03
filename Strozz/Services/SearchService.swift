@@ -4,19 +4,37 @@ import Observation
 @MainActor
 @Observable
 final class SearchService {
-    private(set) var channelResults: [FollowedChannel] = []
-    private(set) var categoryResults: [TwitchCategory] = []
+    private var storedChannels: [FollowedChannel] = []
+    private var storedCategories: [TwitchCategory] = []
+    private(set) var channelResults: [FollowedChannel] {
+        get { StreamPlatformPreferences.shared.selection.filter(storedChannels) }
+        set { storedChannels = newValue }
+    }
+    private(set) var categoryResults: [TwitchCategory] {
+        get { storedCategories.filter { StreamPlatformPreferences.shared.selection.includes($0.platform) } }
+        set { storedCategories = newValue }
+    }
     private(set) var isSearching = false
-    private(set) var errorMessage: String?
+    private var storedErrorMessage: String?
+    private(set) var errorMessage: String? {
+        get { StreamPlatformPreferences.shared.selection.resolve(platformFilter) == platformFilter ? storedErrorMessage : nil }
+        set { storedErrorMessage = newValue }
+    }
     private(set) var query = ""
+    private(set) var platformFilter = BrowsePlatformFilter.all
     private var requestID = UUID()
     private let loadData: NetworkClient.DataLoader
-    private let loadKick: @Sendable (String) async throws -> KickChannel
+    private let loadKickSearch: @Sendable (String) async throws -> KickBrowseService.SearchPage
+    private let creatorLinks: [String: String]?
 
-    init(loadData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) },
-         loadKick: @escaping @Sendable (String) async throws -> KickChannel = { try await KickPlaybackService.channel($0) }) {
+    init(creatorLinks: [String: String]? = nil,
+         loadData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) },
+         loadKickSearch: @escaping @Sendable (String) async throws -> KickBrowseService.SearchPage = {
+             try await KickBrowseService.search($0)
+         }) {
         self.loadData = loadData
-        self.loadKick = loadKick
+        self.loadKickSearch = loadKickSearch
+        self.creatorLinks = creatorLinks
     }
 
     var hasResults: Bool { !channelResults.isEmpty || !categoryResults.isEmpty }
@@ -32,11 +50,23 @@ final class SearchService {
         isSearching = false
     }
 
-    func search(_ rawQuery: String, preservingResultsOnFailure: Bool = false) async {
+    func search(_ rawQuery: String, preservingResultsOnFailure: Bool = false,
+                filter: BrowsePlatformFilter = .all) async {
+        let selection = StreamPlatformPreferences.shared.selection
+        let filter = selection.resolve(filter)
         let currentRequestID = UUID()
         requestID = currentRequestID
         let trimmed = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         query = trimmed
+        platformFilter = filter
+        channelResults = channelResults.filter { filter.includes($0.platform) }.map { channel in
+            var channel = channel
+            if !filter.includes(.kick) { channel.kick = nil }
+            return channel
+        }
+        categoryResults = categoryResults.filter { filter.includes($0.platform) }
+        let previousKickChannels = channelResults.filter { $0.platform == .kick }
+        let previousKickCategories = categoryResults.filter { $0.platform == .kick }
 
         guard !trimmed.isEmpty else {
             channelResults = []
@@ -52,16 +82,19 @@ final class SearchService {
             if requestID == currentRequestID { isSearching = false }
         }
 
-        async let kick = kickResult(for: trimmed)
+        async let kick = kickResult(for: trimmed, enabled: filter.includes(.kick))
         do {
-            let results = try await fetchSearchResults(for: trimmed)
+            let results = filter.includes(.twitch) ? try await fetchSearchResults(for: trimmed)
+                : SearchResults(channels: [], categories: [])
             // Ignore stale responses if the query changed while in flight.
-            guard !Task.isCancelled, requestID == currentRequestID, query == trimmed else { return }
-            channelResults = results.channels
-            categoryResults = results.categories
+            guard !Task.isCancelled, requestID == currentRequestID, query == trimmed,
+                  StreamPlatformPreferences.shared.selection == selection else { return }
+            channelResults = results.channels + (preservingResultsOnFailure ? previousKickChannels : [])
+            categoryResults = results.categories + (preservingResultsOnFailure ? previousKickCategories : [])
             prewarmStaticArtwork(channels: results.channels, categories: results.categories)
         } catch {
-            guard !Task.isCancelled, requestID == currentRequestID, query == trimmed else { return }
+            guard !Task.isCancelled, requestID == currentRequestID, query == trimmed,
+                  StreamPlatformPreferences.shared.selection == selection else { return }
             if !preservingResultsOnFailure {
                 channelResults = []
                 categoryResults = []
@@ -69,21 +102,39 @@ final class SearchService {
             errorMessage = "Could not search right now."
         }
         let kickResult = await kick
-        guard !Task.isCancelled, requestID == currentRequestID, query == trimmed else { return }
+        guard !Task.isCancelled, requestID == currentRequestID, query == trimmed,
+              StreamPlatformPreferences.shared.selection == selection else { return }
         switch kickResult {
-        case .success(let channel):
+        case .success(let result):
             channelResults.removeAll { $0.platform == .kick }
-            if let channel { channelResults.append(channel.followedChannel) }
+            categoryResults.removeAll { $0.platform == .kick }
+            channelResults.append(contentsOf: result.channels)
+            categoryResults.append(contentsOf: result.categories)
+            if let warning = result.warning {
+                errorMessage = [errorMessage, warning].compactMap { $0 }.joined(separator: "\n")
+            }
         case .failure(let error):
-            errorMessage = String(localized: "Kick search is unavailable: \(error.localizedDescription)")
+            errorMessage = [errorMessage,
+                String(localized: "Kick search is unavailable: \(error.localizedDescription)")]
+                .compactMap { $0 }.joined(separator: "\n")
         }
+        let twitch = channelResults.filter { $0.platform == .twitch }
+        channelResults = KickUnifiedFeed.mergeDirectory(twitch: twitch,
+            kick: channelResults.filter { $0.platform == .kick },
+            links: creatorLinks ?? KickUnifiedFeed.confirmedLinks(for: twitch))
         if !hasResults, errorMessage == nil { errorMessage = "No results for \"\(trimmed)\"." }
     }
 
-    private func kickResult(for query: String) async -> Result<KickChannel?, Error> {
-        guard let slug = try? KickPlaybackService.slug(from: query) else { return .success(nil) }
-        do { return .success(try await loadKick(slug)) }
-        catch KickPlaybackService.Failure.notFound { return .success(nil) }
+    private func kickResult(for query: String, enabled: Bool) async -> Result<KickBrowseService.SearchPage, Error> {
+        let empty = KickBrowseService.SearchPage(channels: [], categories: [])
+        guard enabled else { return .success(empty) }
+        let term = (try? KickPlaybackService.slug(from: query)) ?? query
+        do { return .success(try await loadKickSearch(term)) }
+        catch KickBrowseService.Failure.searchTooShort {
+            return .success(.init(channels: [], categories: [],
+                                  warning: KickBrowseService.Failure.searchTooShort.localizedDescription))
+        }
+        catch KickPlaybackService.Failure.notFound { return .success(empty) }
         catch { return .failure(error) }
     }
 

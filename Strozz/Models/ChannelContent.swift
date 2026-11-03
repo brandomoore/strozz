@@ -1,7 +1,7 @@
 import Foundation
 
 /// A highlight clip from a channel, shown in the channel page's "Clips" row.
-/// Clips resolve to a direct MP4 and play in the native on-demand player.
+/// Clips resolve to MP4 or HLS and play in the native on-demand player.
 struct ChannelClip: Identifiable, Hashable {
   let slug: String
   let title: String
@@ -24,4 +24,5 @@ struct ChannelVOD: Identifiable, Hashable, Codable {
   let gameName: String?
   let publishedAt: Date?
   let viewCount: Int
+  var platform: LivePlatform { id.hasPrefix("kick:") ? .kick : .twitch }
 }

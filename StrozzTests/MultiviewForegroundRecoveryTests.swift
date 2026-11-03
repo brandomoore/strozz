@@ -168,7 +168,7 @@ final class MultiviewForegroundRecoveryTests: XCTestCase {
     XCTAssertTrue(peer.model.isVideoPresentationVisible)
     view.applyMultiviewBudget()
     XCTAssertEqual(items[1].preferredMaximumResolution.height, 480)
-    controller.toggleLayout()
+    controller.setLayout(.grid)
     view.applyMultiviewBudget()
     XCTAssertEqual(peer.qualityTier, .grid1080)
     XCTAssertEqual(items[1].preferredMaximumResolution.height, 1080)
@@ -320,7 +320,7 @@ final class MultiviewForegroundRecoveryTests: XCTestCase {
         let ids = (0..<count).map(String.init)
         let mixedRatios: [CGFloat] = [4 / 3, 16 / 9, 9 / 16, 2.4, 1, 16 / 9]
         for ratios in [[:], Dictionary(uniqueKeysWithValues: zip(ids, mixedRatios))] {
-          for layout in [MultiviewLayout.grid, .spotlight] {
+          for layout in MultiviewLayout.allCases {
             let frames = MultiviewGeometry.frames(ids: ids, size: size, layout: layout,
               primary: ids.last, expanded: nil, aspectRatios: ratios)
             XCTAssertEqual(Set(frames.keys), Set(ids))

@@ -42,6 +42,7 @@ struct CreatorLiveSources: Equatable, Codable, Sendable {
 @MainActor
 enum CreatorSourceResolver {
   static func resolve(_ root: PlatformLiveTarget) async throws -> CreatorLiveSources {
+    let selection = StreamPlatformPreferences.shared.selection
     let kickAliases = KickAliasService()
     let youtubeAliases = TwitchYouTubeAliasService()
     await kickAliases.refreshIfNeeded()
@@ -59,7 +60,7 @@ enum CreatorSourceResolver {
       if result.twitch == nil, let youtube = channel.youtubeTarget {
         result.twitch = uniqueKey(for: youtube, in: youtubeAliases.aliases, youtube: true)
       }
-      if result.twitch == nil {
+      if result.twitch == nil, selection.includesTwitch {
         // A same-name account is only a candidate: require an explicit reciprocal
         // link or a shared, explicitly published YouTube identity before joining it.
         if let profile = await ChannelProfileService.fetch(login: root.channel),
@@ -78,7 +79,7 @@ enum CreatorSourceResolver {
       if let alias = youtubeAliases.youtubeChannelID(forTwitchLogin: twitch), result.youtube == nil {
         result.youtube = alias
       }
-      if let profile = await ChannelProfileService.fetch(login: twitch) {
+      if selection.includesTwitch, let profile = await ChannelProfileService.fetch(login: twitch) {
         if result.kick == nil {
           let links = Set(profile.socialLinks.compactMap { kickTarget($0.url) })
           if links.count == 1 { result.kick = links.first }
@@ -135,6 +136,13 @@ enum CreatorViewerSnapshot: Equatable, Sendable {
   case live(Int?), offline, unknown
 }
 
+struct CreatorBroadcastStatus: Equatable, Sendable {
+  let target: PlatformLiveTarget
+  let status: StreamLiveStatus
+  let reason: String
+  let observedAt: Date
+}
+
 /// Chat and statistics belong to the creator. Video items/qualities never own
 /// or restart this session.
 @MainActor
@@ -146,6 +154,8 @@ final class CreatorLiveSession {
   private(set) var videoTarget: PlatformLiveTarget?
   private(set) var identityError: String?
   private(set) var generation = UUID()
+  private(set) var twitchBroadcastStatus: CreatorBroadcastStatus?
+  @ObservationIgnored var onBroadcastStatus: ((CreatorBroadcastStatus) -> Void)?
   @ObservationIgnored private var resolveTask: Task<Void, Never>?
   @ObservationIgnored private var statisticsTask: Task<Void, Never>?
   private var statisticsTwitch: String?
@@ -190,23 +200,42 @@ final class CreatorLiveSession {
     self.wait = wait
     self.now = now
     self.defaults = defaults
+    hermes.onBroadcastStatusChanged = { [weak self] channel, status in
+      guard let self, availableSources?.twitch == channel else { return }
+      publishTwitchStatus(status, reason: status == .unknown ? "event_connection_lost" : "twitch_event")
+    }
+    hermes.onSubscribed = { [weak self] channel in
+      guard let self, availableSources?.twitch == channel else { return }
+      let epoch = generation
+      Task { [weak self] in await self?.refreshStatistics(epoch: epoch) }
+    }
   }
 
-  var twitchChannel: String? { sources?.twitch }
+  var availableSources: CreatorLiveSources? { sources.map(StreamPlatformPreferences.shared.selection.filter) }
+  var twitchChannel: String? { availableSources?.twitch }
   var isActive: Bool { sources != nil && !suspended }
-  var chatPlatform: LivePlatform { twitchChannel == nil ? sources?.root.platform ?? .twitch : .twitch }
-  var targets: [PlatformLiveTarget] { sources?.targets ?? [] }
+  var chatPlatform: LivePlatform {
+    if twitchChannel != nil { return .twitch }
+    if let root = sources?.root, StreamPlatformPreferences.shared.selection.includes(root.platform) {
+      return root.platform
+    }
+    return targets.first?.platform ?? (StreamPlatformPreferences.shared.selection.includesTwitch ? .twitch : .kick)
+  }
+  var targets: [PlatformLiveTarget] { availableSources?.targets ?? [] }
 
   var viewerCounts: [PlatformViewerCount] {
     _ = statisticsRevision
     var values: [PlatformViewerCount] = []
-    if let date = twitchObservedAt, (0..<90).contains(now().timeIntervalSince(date)),
+    if StreamPlatformPreferences.shared.selection.includesTwitch,
+      twitchBroadcastStatus?.status != .offline,
+      let date = twitchObservedAt, (0..<90).contains(now().timeIntervalSince(date)),
       case .live(let snapshot) = twitchSnapshot,
       let count = hermes.viewerCountUpdatedAt.map({ (0..<90).contains(now().timeIntervalSince($0)) }) == true
         ? hermes.viewerCount ?? snapshot : snapshot {
       values.append(.init(platform: .twitch, count: count))
     }
-    if let date = kickObservedAt, (0..<90).contains(now().timeIntervalSince(date)),
+    if StreamPlatformPreferences.shared.selection.includesKick,
+      let date = kickObservedAt, (0..<90).contains(now().timeIntervalSince(date)),
       case .live(let count?) = kickSnapshot {
       values.append(.init(platform: .kick, count: count))
     }
@@ -241,6 +270,10 @@ final class CreatorLiveSession {
   /// A channel entered through Stream Source is an explicit creator link. A
   /// different channel on the creator's root platform is a different creator.
   func selectVideo(_ target: PlatformLiveTarget) {
+    guard StreamPlatformPreferences.shared.selection.includes(target.platform) else {
+      identityError = String(localized: "Enable \(target.platform.title) in Settings to watch this channel.")
+      return
+    }
     guard var links = sources else { start(target); return }
     if links.contains(target) { videoTarget = target; return }
     if links.targets.contains(where: { $0.platform == target.platform }) { start(target); return }
@@ -304,11 +337,30 @@ final class CreatorLiveSession {
     apply()
   }
 
+  func platformsChanged() {
+    generation = UUID()
+    statisticsTask?.cancel()
+    resolveTask?.cancel()
+    statisticsFlight = nil
+    statisticsRefreshPending = false
+    chat.disconnect()
+    hermes.stop()
+    statisticsTwitch = nil
+    statisticsKick = nil
+    statisticsYoutube = nil
+    apply()
+    if sources != nil, !suspended {
+      resolveLinks()
+      startStatistics()
+    }
+  }
+
   func suspend() {
     guard sources != nil, !suspended else { return }
     suspended = true
     chat.disconnect()
     hermes.stop()
+    twitchBroadcastStatus = nil
     statisticsTwitch = nil
     statisticsKick = nil
     statisticsYoutube = nil
@@ -336,6 +388,7 @@ final class CreatorLiveSession {
     sources = nil
     videoTarget = nil
     twitchSnapshot = .unknown
+    twitchBroadcastStatus = nil
     kickSnapshot = .unknown
     twitchObservedAt = nil
     kickObservedAt = nil
@@ -372,13 +425,14 @@ final class CreatorLiveSession {
   }
 
   private func apply() {
-    guard let sources, !suspended else { return }
+    guard let sources = availableSources, !suspended else { return }
     chat.configureCreator(twitch: sources.twitch, kick: sources.kick, youtube: sources.youtube,
       kickEnabled: kickChatEnabled, youtubeEnabled: youtubeChatEnabled)
     if statisticsTwitch != sources.twitch {
       hermes.stop()
       statisticsTwitch = sources.twitch
       twitchSnapshot = .unknown
+      twitchBroadcastStatus = nil
       twitchObservedAt = nil
       if let twitch = sources.twitch { hermes.start(forChannel: twitch) }
     }
@@ -410,7 +464,7 @@ final class CreatorLiveSession {
   }
 
   func refreshStatistics(epoch: UUID) async {
-    guard epoch == generation, let links = sources, !suspended else { return }
+    guard epoch == generation, let links = availableSources, !suspended else { return }
     guard statisticsFlight == nil else { statisticsRefreshPending = true; return }
     let flight = UUID()
     statisticsFlight = flight
@@ -428,12 +482,24 @@ final class CreatorLiveSession {
       }
     }
     if let twitch = links.twitch {
+      let broadcastRevision = hermes.broadcast.revision
       let result = await loadTwitch(twitch)
       guard epoch == generation, sources?.twitch == twitch, !Task.isCancelled, !suspended else { return }
       if result != .unknown {
         twitchSnapshot = result
         twitchObservedAt = now()
         if case .live(let count) = result { hermes.seedViewerCount(count) }
+      }
+      // A query begun before a push/reconnect cannot replace newer evidence.
+      // In particular, briefly stale "live" metadata must not undo stream-down.
+      if hermes.broadcast.acceptsStatusCheck(startedRevision: broadcastRevision, at: now()) {
+        let status: StreamLiveStatus
+        switch result {
+        case .live: status = .live
+        case .offline: status = .offline
+        case .unknown: status = .unknown
+        }
+        publishTwitchStatus(status, reason: "status_check")
       }
     }
     if let kick = links.kick {
@@ -459,6 +525,14 @@ final class CreatorLiveSession {
         }
       }
     }
+  }
+
+  private func publishTwitchStatus(_ status: StreamLiveStatus, reason: String) {
+    guard isActive, let channel = sources?.twitch else { return }
+    let update = CreatorBroadcastStatus(target: .init(platform: .twitch, channel: channel),
+      status: status, reason: reason, observedAt: now())
+    twitchBroadcastStatus = update
+    onBroadcastStatus?(update)
   }
 
   static func twitchViewers(_ channel: String) async -> CreatorViewerSnapshot {

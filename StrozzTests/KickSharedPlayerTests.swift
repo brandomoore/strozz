@@ -46,7 +46,9 @@ final class KickSharedPlayerTests: XCTestCase {
         slug: "fixture", displayName: "Creator", title: "Live",
         category: "Games", viewerCount: 42, isLive: true, chatroomID: 123, imageURL: nil
       ).followedChannel)
-    XCTAssertTrue(history.entries.isEmpty)
+    XCTAssertEqual(history.entries.map(\.channelKey), ["kick:fixture"])
+    XCTAssertEqual(history.entries.first?.platform, .kick)
+    XCTAssertTrue(history.recentLogins.isEmpty)
   }
 
   func testKickIdentityDoesNotAliasATwitchChannelOrViewerCount() throws {

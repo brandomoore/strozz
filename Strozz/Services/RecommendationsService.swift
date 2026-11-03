@@ -1,37 +1,65 @@
 import Foundation
 import Observation
 
-/// Powers the Home tab's "Recommended" rails. Twitch's personalized
-/// recommendations require a logged-in GQL session with integrity tokens, so
-/// this anonymously surfaces top live channels and top categories — the same
-/// public signals the web home page leans on for logged-out visitors.
+/// Anonymous live discovery for Home, sharing Browse's provider handling and
+/// confirmed creator identities rather than maintaining a Twitch-only pool.
 @MainActor
 @Observable
 final class RecommendationsService {
-    private(set) var channels: [FollowedChannel] = []
-    private(set) var categories: [TwitchCategory] = []
+    private var storedChannels: [FollowedChannel] = []
+    private var storedCategories: [TwitchCategory] = []
+    private(set) var channels: [FollowedChannel] {
+        get { StreamPlatformPreferences.shared.selection.filter(storedChannels) }
+        set { storedChannels = newValue }
+    }
+    private(set) var categories: [TwitchCategory] {
+        get { storedCategories.filter { StreamPlatformPreferences.shared.selection.includes($0.platform) } }
+        set { storedCategories = newValue }
+    }
     private(set) var isLoading = false
-    private(set) var errorMessage: String?
+    private var requestSelection = StreamPlatforms.both
+    private var storedErrorMessage: String?
+    private(set) var errorMessage: String? {
+        get { requestSelection == StreamPlatformPreferences.shared.selection ? storedErrorMessage : nil }
+        set { storedErrorMessage = newValue }
+    }
     private(set) var lastUpdatedAt: Date?
+    private let browse: BrowseService
+    private var refreshID = UUID()
+    private var language: String?
+
+    init(creatorLinks: [String: String]? = nil,
+         loadData: @escaping NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) }) {
+        browse = BrowseService(creatorLinks: creatorLinks, loadData: loadData)
+    }
 
     func refresh() async {
+        let selection = StreamPlatformPreferences.shared.selection
+        requestSelection = selection
+        let request = UUID()
+        refreshID = request
+        let currentLanguage = StreamLanguagePreference.current()
+        if language != currentLanguage { channels = []; categories = [] }
+        language = currentLanguage
         isLoading = true
         errorMessage = nil
         defer {
-            isLoading = false
-            lastUpdatedAt = Date()
+            if refreshID == request {
+                isLoading = false
+                lastUpdatedAt = Date()
+            }
         }
 
-        do {
-            async let channelsTask = fetchRecommendedChannels(limit: 30)
-            async let categoriesTask = fetchRecommendedCategories(limit: 20)
-            let (loadedChannels, loadedCategories) = try await (channelsTask, categoriesTask)
-            channels = loadedChannels
-            categories = loadedCategories
-            prewarmStaticArtwork(channels: loadedChannels, categories: loadedCategories)
-        } catch {
-            errorMessage = "Could not load recommendations right now."
-        }
+        async let streams: Void = browse.loadStreams(filter: .all)
+        async let games: Void = browse.loadCategories(filter: .all)
+        _ = await (streams, games)
+        guard !Task.isCancelled, refreshID == request,
+              StreamPlatformPreferences.shared.selection == selection else { return }
+        channels = KickUnifiedFeed.sortedByViewers(browse.categoryStreams)
+        categories = browse.categories
+        let failures = [browse.streamsErrorMessage, browse.categoryErrorMessage].compactMap { $0 }
+        errorMessage = failures.isEmpty ? nil : Array(Set(failures)).sorted().joined(separator: "\n")
+        prewarmStaticArtwork(channels: channels, categories: categories)
     }
 
     /// Warm the decoded-image cache for the *static* artwork the recommendation
@@ -61,7 +89,9 @@ final class RecommendationsService {
     /// requires an integrity token the anonymous public client can't mint — so
     /// this is the full ranked page for the chosen language. "Top streams" then
     /// only hides channels the viewer marked "Not interested".
-    private func fetchRecommendedChannels(limit: Int) async throws -> [FollowedChannel] {
+    static func fetchRecommendedChannels(limit: Int,
+        loadData: NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) }
+    ) async throws -> [FollowedChannel] {
         struct StreamNode: Decodable {
             let id: String?
             let title: String?
@@ -119,9 +149,13 @@ final class RecommendationsService {
             }
             """
 
-        let responseData = try await performGQL(query: query, variables: ["first": limit])
+        var request = TwitchAPIClient.graphQLRequest(userAgent: TwitchConfig.apiUserAgent)
+        request.httpBody = try JSONSerialization.data(
+            withJSONObject: TwitchAPIClient.graphQLBody(query: query, variables: ["first": limit]))
+        let (data, response) = try await loadData(request)
+        let responseData = try TwitchAPIClient.validatedData(data, response)
         let decoded = try TwitchAPIClient.decode(GQLEnvelope.self, from: responseData)
-        let edges = decoded.data?.streams?.edges ?? []
+        guard let edges = decoded.data?.streams?.edges else { throw URLError(.badServerResponse) }
 
         return edges.compactMap { edge -> FollowedChannel? in
             guard let node = edge.node,
@@ -152,67 +186,4 @@ final class RecommendationsService {
         }
     }
 
-    // MARK: - GQL: Recommended Categories (top games)
-
-    private func fetchRecommendedCategories(limit: Int) async throws -> [TwitchCategory] {
-        struct GameNode: Decodable {
-            let id: String?
-            let name: String?
-            let boxArtURL: String?
-            let viewersCount: Int?
-            let isMature: Bool?
-        }
-        struct GameEdge: Decodable { let node: GameNode? }
-        struct TopGamesConn: Decodable { let edges: [GameEdge]? }
-        struct GQLData: Decodable { let games: TopGamesConn? }
-        struct GQLEnvelope: Decodable { let data: GQLData? }
-
-        let query = """
-            query RecommendedGames($first: Int!) {
-              games(first: $first) {
-                edges {
-                  node {
-                    id
-                    name
-                    boxArtURL(width: 285, height: 380)
-                    viewersCount
-                    isMature
-                  }
-                }
-              }
-            }
-            """
-
-        let responseData = try await performGQL(query: query, variables: ["first": limit])
-        let decoded = try TwitchAPIClient.decode(GQLEnvelope.self, from: responseData)
-        let edges = decoded.data?.games?.edges ?? []
-
-        return edges.compactMap { edge -> TwitchCategory? in
-            guard let node = edge.node,
-                  let id = node.id,
-                  let name = node.name?.trimmingCharacters(in: .whitespaces),
-                  !name.isEmpty
-            else { return nil }
-
-            let boxArtURL = node.boxArtURL.flatMap { URL(string: $0) }
-            return TwitchCategory(
-                id: id,
-                name: name,
-                boxArtURL: boxArtURL,
-                viewerCount: node.viewersCount,
-                isMature: node.isMature ?? false
-            )
-        }
-    }
-
-    // MARK: - GQL Transport
-
-    private func performGQL(query: String, variables: [String: Any]) async throws -> Data {
-        var req = TwitchAPIClient.graphQLRequest(userAgent: TwitchConfig.apiUserAgent)
-        req.httpBody = try JSONSerialization.data(
-            withJSONObject: TwitchAPIClient.graphQLBody(query: query, variables: variables))
-
-        let (data, response) = try await NetworkClient.api.data(for: req)
-        return try TwitchAPIClient.validatedData(data, response)
-    }
 }

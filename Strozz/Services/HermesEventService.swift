@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OSLog
 
 // MARK: - Public moment models
 
@@ -102,6 +103,7 @@ enum InteractiveMoment: Equatable {
 @MainActor
 @Observable
 final class HermesEventService {
+  private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "broadcast-events")
   /// The single moment to display, chosen by priority. Nil when nothing is live.
   private(set) var currentMoment: InteractiveMoment?
 
@@ -111,6 +113,9 @@ final class HermesEventService {
   /// metadata so a number shows immediately on open.
   private(set) var viewerCount: Int?
   private(set) var viewerCountUpdatedAt: Date?
+  private(set) var broadcast = TwitchBroadcastState()
+  @ObservationIgnored var onBroadcastStatusChanged: ((String, StreamLiveStatus) -> Void)?
+  @ObservationIgnored var onSubscribed: ((String) -> Void)?
 
   // Per-kind displayable state (drives `currentMoment` via `recompute()`).
   private(set) var poll: LivePoll?
@@ -136,6 +141,7 @@ final class HermesEventService {
   private var channelLogin: String?
   private var broadcasterID: String?
   private var hasSubscribed = false
+  private var sessionGeneration = UUID()
 
   // Lifecycle timers.
   private var pollClearTask: Task<Void, Never>?
@@ -153,16 +159,22 @@ final class HermesEventService {
     stop()
     let normalized = login.lowercased()
     channelLogin = normalized
+    let generation = sessionGeneration
 
     connection.resetBackoff()
     connection.connect(to: endpoint)
 
     Task { [weak self] in
       guard let self else { return }
-      let resolved = try? await Self.resolveBroadcasterID(login: normalized)
-      guard self.channelLogin == normalized else { return }
-      self.broadcasterID = resolved
-      self.subscribeIfReady()
+      do {
+        let resolved = try await Self.resolveBroadcasterID(login: normalized)
+        guard self.sessionGeneration == generation, self.channelLogin == normalized else { return }
+        self.broadcasterID = resolved
+        self.subscribeIfReady()
+      } catch {
+        guard self.sessionGeneration == generation else { return }
+        Self.logger.warning("Broadcast subscription unavailable: \((error as NSError).domain) \((error as NSError).code)")
+      }
     }
 
     receiveTask = Task { [weak self] in await self?.receiveLoop() }
@@ -170,6 +182,7 @@ final class HermesEventService {
 
   /// Tear down the connection and clear all surfaced state.
   func stop() {
+    sessionGeneration = UUID()
     receiveTask?.cancel()
     receiveTask = nil
     connection.cancel()
@@ -189,6 +202,7 @@ final class HermesEventService {
     goal = nil
     viewerCount = nil
     viewerCountUpdatedAt = nil
+    broadcast.reset()
     currentMoment = nil
   }
 
@@ -208,6 +222,7 @@ final class HermesEventService {
       guard let currentSocket = connection.currentTask else { break }
       do {
         let frame = try await currentSocket.receive()
+        guard !Task.isCancelled, currentSocket === connection.currentTask else { return }
         connection.resetBackoff()
         switch frame {
         case .string(let text): handle(text)
@@ -215,7 +230,10 @@ final class HermesEventService {
         @unknown default: break
         }
       } catch {
-        guard !Task.isCancelled, let login = channelLogin else { break }
+        guard !Task.isCancelled, currentSocket === connection.currentTask,
+          let login = channelLogin else { break }
+        invalidateBroadcastStatus()
+        Self.logger.warning("Broadcast event connection lost: \((error as NSError).domain) \((error as NSError).code)")
         let delay = connection.nextBackoffDelay()
         try? await Task.sleep(for: .seconds(delay))
         guard !Task.isCancelled, channelLogin == login else { break }
@@ -227,7 +245,7 @@ final class HermesEventService {
     }
   }
 
-  private func handle(_ raw: String) {
+  func handle(_ raw: String) {
     guard let data = raw.data(using: .utf8),
       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
       let type = obj["type"] as? String
@@ -251,9 +269,15 @@ final class HermesEventService {
 
   private func reconnect() {
     receiveTask?.cancel()
+    invalidateBroadcastStatus()
     connection.connect(to: endpoint)
     hasSubscribed = false
     receiveTask = Task { [weak self] in await self?.receiveLoop() }
+  }
+
+  func invalidateBroadcastStatus() {
+    broadcast.reset()
+    if let channelLogin { onBroadcastStatusChanged?(channelLogin, .unknown) }
   }
 
   // MARK: - Subscriptions
@@ -286,13 +310,26 @@ final class HermesEventService {
       else { continue }
       connection.send(.string(text))
     }
+    if let channelLogin { onSubscribed?(channelLogin) }
   }
 
   // MARK: - Payload routing
 
   private func route(_ payload: [String: Any]) {
-    // `video-playback-by-id` pushes top-level typed messages (viewcount,
-    // stream-up/down, commercial); we only surface the live viewer count.
+    if let type = payload["type"] as? String, type == "stream-up" || type == "stream-down" {
+      guard hasSubscribed, let channelLogin else { return }
+      let timestamp = payload["server_time"] as? Double
+      guard payload["server_time"] == nil || timestamp != nil else {
+        Self.logger.warning("Ignored broadcast event with malformed timestamp")
+        return
+      }
+      if broadcast.receive(type: type, serverTime: timestamp) {
+        onBroadcastStatusChanged?(channelLogin, broadcast.status)
+      } else {
+        Self.logger.debug("Ignored stale or invalid broadcast event")
+      }
+      return
+    }
     if let type = payload["type"] as? String, type == "viewcount" {
       applyViewCount(payload)
       return
@@ -581,6 +618,14 @@ final class HermesEventService {
 private enum HermesError: Error { case resolveFailed }
 
 extension HermesEventService {
+  #if DEBUG
+  func prepareBroadcastFixture(channel: String) {
+    stop()
+    channelLogin = channel.lowercased()
+    hasSubscribed = true
+  }
+  #endif
+
   /// Debug-only: force a sample moment so the overlay can be exercised on-device
   /// without waiting for a broadcaster to run a real poll/prediction. Pass `nil`
   /// to clear. Stops the live listener so a real event can't immediately replace

@@ -14,6 +14,7 @@ struct PlaybackTelemetrySnapshot: Equatable, Sendable {
   var phase: String {
     if flags["background"] == true { return "background" }
     if flags["offline"] == true { return "offline" }
+    if flags["error_present"] == true { return "failed" }
     if flags["user_paused"] == true { return "paused" }
     if flags["scrubbing"] == true || flags["seek_pending"] == true { return "seeking" }
     if flags["recovering"] == true { return "recovering" }
@@ -445,6 +446,7 @@ final class PlaybackTelemetryRecorder {
     let uninterrupted = input.flags["loading"] != true && input.flags["user_paused"] != true
       && input.flags["scrubbing"] != true && input.flags["background"] != true
       && input.flags["recovering"] != true && !isSeekPending && input.flags["offline"] != true
+      && input.flags["error_present"] != true
     if let delta, delta >= 0.05, uninterrupted {
       if !hasStarted {
         recordEvent("first_clock_progress", metrics: ["since_item_seconds": uptime - itemStartedAt])
@@ -464,11 +466,16 @@ final class PlaybackTelemetryRecorder {
     if let lastSampleAt { snapshot.metrics["sample_interval_seconds"] = uptime - lastSampleAt }
     emit(kind: "sample", name: "playback_sample", level: .debug, attributes: snapshot.attributes,
          metrics: snapshot.metrics, counters: snapshot.counters, flags: snapshot.flags, uptime: uptime)
+    if snapshot.flags["error_present"] == true, previous?.flags["error_present"] != true {
+      emit(kind: "event", name: "playback_error_presented", level: .error,
+           attributes: snapshot.attributes, metrics: snapshot.metrics,
+           counters: snapshot.counters, flags: snapshot.flags, uptime: uptime)
+    }
 
     if let previous {
       var changes: [String: String] = [:]
       for key in ["source", "phase", "item_status", "time_control_status", "waiting_reason",
-                  "quality", "resolved_quality", "playback_profile", "thermal_state"] {
+                  "quality", "resolved_quality", "playback_profile", "thermal_state", "recovery_blocked_by"] {
         if previous.attributes[key] != snapshot.attributes[key] {
           changes["from_\(key)"] = previous.attributes[key] ?? "none"
           changes["to_\(key)"] = snapshot.attributes[key] ?? "none"
@@ -572,7 +579,17 @@ final class PlaybackTelemetryRecorder {
   static func errorAttributes(_ error: Error?) -> [String: String] {
     guard let error else { return ["error_domain": "unknown"] }
     let nsError = error as NSError
-    return ["error_domain": nsError.domain, "error_code": String(nsError.code)]
+    var attributes = ["error_domain": nsError.domain, "error_code": String(nsError.code)]
+    var seen: Set<ObjectIdentifier> = [ObjectIdentifier(nsError)]
+    var current = nsError
+    for depth in 1...3 {
+      guard let underlying = current.userInfo[NSUnderlyingErrorKey] as? NSError,
+        seen.insert(ObjectIdentifier(underlying)).inserted else { break }
+      attributes["underlying_error_domain_\(depth)"] = underlying.domain
+      attributes["underlying_error_code_\(depth)"] = String(underlying.code)
+      current = underlying
+    }
+    return attributes
   }
 
   static func host(_ uri: String?) -> String {

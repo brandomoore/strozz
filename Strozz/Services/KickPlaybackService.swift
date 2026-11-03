@@ -227,6 +227,7 @@ enum KickPlaybackService {
         let session_title: String?
         let viewer_count: Int?
         let viewers: Int?
+        let show_view_count: Bool?
         let created_at: String?
         let categories: [Category]?
         let thumbnail: Thumbnail?
@@ -253,13 +254,14 @@ enum KickPlaybackService {
       throw Failure.invalidResponse
     }
     guard try slug(from: payload.slug) == requestedSlug else { throw Failure.invalidResponse }
-    let playbackURL = payload.playback_url.flatMap(URL.init(string:))
+    let playbackURL = payload.livestream == nil ? nil : payload.playback_url.flatMap(URL.init(string:))
     if let playbackURL, !validMediaURL(playbackURL) { throw Failure.unsupportedMedia }
     var channel = KickChannel(
         slug: requestedSlug, displayName: payload.user?.username ?? requestedSlug,
         title: payload.livestream?.session_title ?? "",
         category: payload.livestream?.categories?.first?.name ?? "",
-        viewerCount: payload.livestream?.viewer_count ?? payload.livestream?.viewers,
+        viewerCount: payload.livestream?.show_view_count == false
+          ? nil : payload.livestream?.viewer_count ?? payload.livestream?.viewers,
         isLive: payload.livestream != nil,
         chatroomID: payload.chatroom?.id, imageURL: payload.user?.profile_pic)
     if let raw = payload.livestream?.created_at {
