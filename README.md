@@ -557,7 +557,10 @@ chat visibility, sharing the Twitch link, and Apple's AirPlay picker. Rendering
 still uses AVKit. Controls hide after inactivity and reappear on tap; they stay
 available when paused or using VoiceOver. AirPlay switches native low latency
 to standard playback because a receiver cannot access the app's loopback
-media server; keep the app open while using it. System,
+media server; keep the app open while using it. When running on a Mac, the speaker
+button in the bottom bar opens a volume slider and mute control for Strozz's
+audio, without changing system volume. The level is retained when changing
+streams and is also available in audio-only mode. System,
 Dark, OLED, and Light appearances are available in Account, and chat follows
 Dynamic Type and Reduce Motion. App panels use opaque theme-aware surfaces.
 Browse opens the mixed live-stream grid. **Categories** shows three cards across

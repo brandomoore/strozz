@@ -4,6 +4,61 @@ import XCTest
 
 @MainActor
 final class MobilePlaybackTests: XCTestCase {
+  func testPlayerVolumeAndMuteRestoreTheLastAudibleLevel() {
+    let model = MobilePlaybackModel()
+    defer { model.stop() }
+    model.setVolume(0.35)
+    XCTAssertEqual(model.volume, 0.35, accuracy: 0.001)
+    XCTAssertEqual(model.player.volume, model.volume)
+    XCTAssertFalse(model.isMuted)
+    model.toggleMute()
+    XCTAssertTrue(model.isMuted)
+    XCTAssertTrue(model.player.isMuted)
+    model.toggleMute()
+    XCTAssertFalse(model.isMuted)
+    XCTAssertEqual(model.player.volume, 0.35, accuracy: 0.001)
+    model.setVolume(0)
+    XCTAssertTrue(model.isMuted)
+    XCTAssertEqual(model.player.volume, 0)
+    model.toggleMute()
+    XCTAssertFalse(model.isMuted)
+    XCTAssertEqual(model.player.volume, 0.35, accuracy: 0.001)
+    model.toggleMute()
+    model.setVolume(0.6)
+    XCTAssertFalse(model.isMuted, "Moving the slider above zero explicitly unmutes")
+    XCTAssertEqual(model.player.volume, 0.6, accuracy: 0.001)
+  }
+
+  func testVolumeRejectsNonFiniteValuesAndClampsToPlayerRange() {
+    let model = MobilePlaybackModel()
+    defer { model.stop() }
+    model.setVolume(-1)
+    XCTAssertEqual(model.volume, 0)
+    model.setVolume(2)
+    XCTAssertEqual(model.volume, 1)
+    model.setVolume(0.4)
+    for invalid in [Float.nan, .infinity, -.infinity] {
+      model.setVolume(invalid)
+      XCTAssertEqual(model.volume, 0.4, accuracy: 0.001)
+      XCTAssertEqual(model.player.volume, model.volume)
+    }
+  }
+
+  func testNewStreamInheritsVolumeAndRemembersTheLevelBeforeSilencing() {
+    let previous = MobilePlaybackModel()
+    let next = MobilePlaybackModel()
+    defer { previous.stop(); next.stop() }
+    previous.setVolume(0.25)
+    previous.setVolume(0)
+    next.inheritVolume(from: previous)
+    XCTAssertTrue(next.isMuted)
+    XCTAssertTrue(next.player.isMuted)
+    XCTAssertEqual(next.player.volume, 0)
+    next.toggleMute()
+    XCTAssertEqual(next.player.volume, 0.25, accuracy: 0.001)
+    XCTAssertFalse(next.isMuted)
+  }
+
   func testNativeOutputDisconnectRequiresExplicitResume() {
     let model = MobilePlaybackModel(muted: true)
     model.activateAudioSession = {}
@@ -437,6 +492,8 @@ final class MobilePlaybackTests: XCTestCase {
       try await Task.sleep(for: .milliseconds(5))
     }
     let previousPlayer = model.player
+    model.setVolume(0.3)
+    model.toggleMute()
     NotificationCenter.default.post(name: AVAudioSession.mediaServicesWereLostNotification, object: nil)
     XCTAssertNil(model.player.currentItem)
     XCTAssertEqual(model.presentationState, .loading)
@@ -448,6 +505,8 @@ final class MobilePlaybackTests: XCTestCase {
     XCTAssertEqual(pending.count, 2)
     XCTAssertFalse(model.player === previousPlayer)
     XCTAssertTrue(model.player.isMuted)
+    XCTAssertEqual(model.player.volume, 0.3, accuracy: 0.001)
+    XCTAssertEqual(model.volume, 0.3, accuracy: 0.001)
     NotificationCenter.default.post(name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
     await Task.yield()
     XCTAssertEqual(pending.count, 2)

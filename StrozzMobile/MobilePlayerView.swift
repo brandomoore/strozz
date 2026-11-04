@@ -484,6 +484,7 @@ struct MobileVideoView: View {
   @State private var showShare = false
   @State private var showRoutes = false
   @State private var showModes = false
+  @State private var showVolume = false
   @State private var zoom = MobileVideoZoom()
   @State private var pinchStart: MobileVideoZoom?
   @State private var pinchAnchor = CGPoint.zero
@@ -505,7 +506,7 @@ struct MobileVideoView: View {
 
   var body: some View {
     let held = model.isPaused || model.presentationState != .ready
-      || voiceOver || showQuality || showShare || showRoutes || showModes || isManipulating
+      || voiceOver || showQuality || showShare || showRoutes || showModes || showVolume || isManipulating
     let showsControls = model.mode == .video && (controlsVisible || held)
     ZStack {
       palette.playerBackdrop
@@ -613,6 +614,11 @@ struct MobileVideoView: View {
           showsChatToggle: showsChatToggle, landscapeChannel: showsLandscapeDetails ? channel : nil,
           onModePresentation: { showing in
             showModes = showing
+            controlsVisible = true
+            interaction += 1
+          },
+          onVolumePresentation: { showing in
+            showVolume = showing
             controlsVisible = true
             interaction += 1
           })

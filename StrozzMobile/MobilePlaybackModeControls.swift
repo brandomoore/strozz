@@ -76,11 +76,7 @@ struct MobileChatOnlyControls: View {
                 .accessibilityLabel(model.isPaused ? "Play audio" : "Pause audio")
                 .accessibilityIdentifier("mobile-audio-play-pause")
                 .disabled(model.errorMessage != nil)
-                Button { model.toggleMute() } label: {
-                  Icon(glyph: model.isMuted ? .volumeOff : .volume, size: 22)
-                    .frame(width: 44, height: 44).contentShape(Rectangle())
-                }
-                .accessibilityLabel(model.isMuted ? "Unmute audio" : "Mute audio")
+                MobilePlayerAudioControl(model: model)
               }
             }
             MobilePlaybackModeButton(model: model)

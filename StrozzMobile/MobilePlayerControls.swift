@@ -16,6 +16,7 @@ struct MobilePlayerControls: View {
   var showsChatToggle = false
   var landscapeChannel: FollowedChannel? = nil
   var onModePresentation: (Bool) -> Void = { _ in }
+  var onVolumePresentation: (Bool) -> Void = { _ in }
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
   @AppStorage(PersistenceKey.showStreamDuration) private var showStreamDuration = true
 
@@ -81,15 +82,8 @@ struct MobilePlayerControls: View {
               }
             Spacer(minLength: 0)
             HStack(spacing: 8) {
-              Button {
-                onInteraction()
-                model.toggleMute()
-              } label: {
-                Icon(glyph: model.isMuted ? .volumeOff : .volume, size: 22)
-                  .frame(width: 44, height: 44).contentShape(Rectangle())
-              }
-              .accessibilityLabel(model.isMuted ? "Unmute" : "Mute")
-              .accessibilityIdentifier("mobile-mute")
+              MobilePlayerAudioControl(model: model, onInteraction: onInteraction,
+                onPresentation: onVolumePresentation)
               if showsChatToggle {
                 Button {
                   onInteraction()
@@ -130,6 +124,71 @@ struct MobilePlayerControls: View {
     .background {
       MobilePlayerControlScrim(hasBottomControls: model.presentationState == .ready,
                                reduceTransparency: reduceTransparency)
+    }
+  }
+}
+
+struct MobilePlayerAudioControl: View {
+  let model: MobilePlaybackModel
+  var onInteraction: () -> Void = {}
+  var onPresentation: (Bool) -> Void = { _ in }
+  @State private var isPresented = false
+  @Environment(\.themePalette) private var palette
+
+  var body: some View {
+    if MobilePlaybackModel.supportsVolumeAdjustment {
+      Button {
+        onInteraction()
+        isPresented = true
+      } label: {
+        Icon(glyph: model.isMuted ? .volumeOff : .volume, size: 22)
+          .frame(width: 44, height: 44).contentShape(Rectangle())
+      }
+      .accessibilityLabel("Volume")
+      .accessibilityValue(model.isMuted ? Text("Muted")
+        : Text(Double(model.volume), format: .percent.precision(.fractionLength(0))))
+      .accessibilityIdentifier("mobile-volume")
+      .popover(isPresented: $isPresented) {
+        HStack(spacing: 8) {
+          Button {
+            onInteraction()
+            model.toggleMute()
+          } label: {
+            Icon(glyph: model.isMuted ? .volumeOff : .volume, size: 22)
+              .frame(width: 44, height: 44).contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel(model.isMuted ? "Unmute" : "Mute")
+          .accessibilityIdentifier("mobile-volume-mute")
+          Slider(value: Binding(
+            get: { model.isMuted ? 0 : model.volume },
+            set: { model.setVolume($0); onInteraction() }), in: 0...1) {
+              Text("Volume")
+            }
+            .frame(width: 140)
+            .accessibilityValue(Text(Double(model.isMuted ? 0 : model.volume),
+              format: .percent.precision(.fractionLength(0))))
+            .accessibilityIdentifier("mobile-volume-slider")
+        }
+        .padding(12)
+        .foregroundStyle(palette.chromeOnOpaque)
+        .tint(palette.chromeOnOpaque)
+        .environment(\.colorScheme, palette.chromeColorScheme)
+        .presentationBackground(palette.chromeOpaqueSurface)
+        .presentationCompactAdaptation(.popover)
+      }
+      .onChange(of: isPresented) { _, showing in onPresentation(showing) }
+      .onDisappear { onPresentation(false) }
+    } else {
+      Button {
+        onInteraction()
+        model.toggleMute()
+      } label: {
+        Icon(glyph: model.isMuted ? .volumeOff : .volume, size: 22)
+          .frame(width: 44, height: 44).contentShape(Rectangle())
+      }
+      .accessibilityLabel(model.isMuted ? "Unmute" : "Mute")
+      .accessibilityIdentifier("mobile-mute")
     }
   }
 }

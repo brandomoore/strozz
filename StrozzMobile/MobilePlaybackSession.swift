@@ -116,7 +116,9 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
   private func begin(_ channel: FollowedChannel) {
     self.channel = channel
     errorMessage = nil
-    model = makeModel()
+    let nextModel = makeModel()
+    if MobilePlaybackModel.supportsVolumeAdjustment { nextModel.inheritVolume(from: model) }
+    model = nextModel
     videoController = MobileVideoController()
     videoController.player = model.player
     videoController.onReady = { [weak model] ready, player in
