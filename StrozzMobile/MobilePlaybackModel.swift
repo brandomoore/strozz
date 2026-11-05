@@ -55,6 +55,8 @@ final class MobilePlaybackModel {
   private(set) var isReadyForDisplay = false
   private(set) var isPaused = false
   private(set) var isMuted: Bool
+  private(set) var volume: Float = 1
+  @ObservationIgnored private var lastAudibleVolume: Float = 1
   private(set) var isExternalPlayback = false
   private(set) var livePosition = LivePlaybackPosition()
   private(set) var streamStartedAt: Date?
@@ -122,6 +124,13 @@ final class MobilePlaybackModel {
     try await KickPlaybackService.channel($0)
   }
   private static let logger = Logger(subsystem: "com.thatcube.Strozz", category: "mobile-playback")
+
+  static var supportsVolumeAdjustment: Bool {
+    #if DEBUG
+    if ProcessInfo.processInfo.environment["STROZZ_PLAYER_VOLUME_FIXTURE"] == "1" { return true }
+    #endif
+    return ProcessInfo.processInfo.isiOSAppOnMac || ProcessInfo.processInfo.isMacCatalystApp
+  }
 
   @ObservationIgnored let diagnostics = PlaybackTelemetryRecorder(writer: PlaybackTelemetryWriter(
     directory: URL.applicationSupportDirectory.appendingPathComponent("MobilePlaybackDiagnostics", isDirectory: true),
@@ -341,7 +350,31 @@ final class MobilePlaybackModel {
   }
 
   func toggleMute() {
+    if volume == 0 {
+      volume = lastAudibleVolume
+      player.volume = volume
+    }
     isMuted.toggle()
+    player.isMuted = isMuted || muteForTesting
+  }
+
+  func setVolume(_ value: Float) {
+    guard value.isFinite else {
+      Self.logger.error("Cannot set a non-finite player volume")
+      return
+    }
+    volume = min(1, max(0, value))
+    if volume > 0 { lastAudibleVolume = volume }
+    isMuted = volume == 0
+    player.volume = volume
+    player.isMuted = isMuted || muteForTesting
+  }
+
+  func inheritVolume(from previous: MobilePlaybackModel) {
+    volume = previous.volume
+    lastAudibleVolume = previous.lastAudibleVolume
+    isMuted = previous.isMuted
+    player.volume = volume
     player.isMuted = isMuted || muteForTesting
   }
 

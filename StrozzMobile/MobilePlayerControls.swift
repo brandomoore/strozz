@@ -16,6 +16,7 @@ struct MobilePlayerControls: View {
   var showsChatToggle = false
   var landscapeChannel: FollowedChannel? = nil
   var onModePresentation: (Bool) -> Void = { _ in }
+  var onVolumeInteraction: (Bool) -> Void = { _ in }
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
   @AppStorage(PersistenceKey.showStreamDuration) private var showStreamDuration = true
 
@@ -80,43 +81,43 @@ struct MobilePlayerControls: View {
                 model.goLive()
               }
             Spacer(minLength: 0)
-            HStack(spacing: 8) {
-              Button {
-                onInteraction()
-                model.toggleMute()
-              } label: {
-                Icon(glyph: model.isMuted ? .volumeOff : .volume, size: 22)
-                  .frame(width: 44, height: 44).contentShape(Rectangle())
+            HStack(spacing: 16) {
+              if MobilePlaybackModel.supportsVolumeAdjustment {
+                MobilePlayerAudioControl(model: model, onInteraction: onInteraction,
+                  onInteractionChanged: onVolumeInteraction)
               }
-              .accessibilityLabel(model.isMuted ? "Unmute" : "Mute")
-              .accessibilityIdentifier("mobile-mute")
-              if showsChatToggle {
-                Button {
-                  onInteraction()
-                  hideChat.toggle()
-                } label: {
-                  Icon(glyph: hideChat ? .messages : .messagesOff, size: 22).frame(
-                    width: 44, height: 44)
+              HStack(spacing: 8) {
+                if !MobilePlaybackModel.supportsVolumeAdjustment {
+                  MobilePlayerAudioControl(model: model, onInteraction: onInteraction)
+                }
+                if showsChatToggle {
+                  Button {
+                    onInteraction()
+                    hideChat.toggle()
+                  } label: {
+                    Icon(glyph: hideChat ? .messages : .messagesOff, size: 22).frame(
+                      width: 44, height: 44)
+                      .contentShape(Rectangle())
+                  }
+                  .accessibilityLabel(hideChat ? "Show chat" : "Hide chat")
+                  .accessibilityIdentifier("mobile-toggle-chat")
+                }
+                Button(action: onFullscreen) {
+                  Icon(glyph: isFullscreen ? .arrowsDiagonalMinimize : .arrowsDiagonal2, size: 22)
+                    .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
                 }
-                .accessibilityLabel(hideChat ? "Show chat" : "Hide chat")
-                .accessibilityIdentifier("mobile-toggle-chat")
+                .accessibilityLabel(
+                  UIDevice.current.userInterfaceIdiom == .phone
+                    ? (isFullscreen ? "Rotate to portrait" : "Rotate to landscape")
+                    : (isFullscreen ? "Exit fullscreen" : "Fullscreen")
+                )
+                .accessibilityIdentifier("mobile-rotate-player")
               }
-              Button(action: onFullscreen) {
-                Icon(glyph: isFullscreen ? .arrowsDiagonalMinimize : .arrowsDiagonal2, size: 22)
-                  .frame(width: 44, height: 44)
-                  .contentShape(Rectangle())
-              }
-              .accessibilityLabel(
-                UIDevice.current.userInterfaceIdiom == .phone
-                  ? (isFullscreen ? "Rotate to portrait" : "Rotate to landscape")
-                  : (isFullscreen ? "Exit fullscreen" : "Fullscreen")
-              )
-              .accessibilityIdentifier("mobile-rotate-player")
+              .modifier(MobilePlayerGroupSurface())
+              .accessibilityElement(children: .contain)
+              .accessibilityIdentifier("mobile-player-bottom-actions")
             }
-            .modifier(MobilePlayerGroupSurface())
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("mobile-player-bottom-actions")
           }
           if let landscapeChannel {
             MobileStreamDetails(channel: landscapeChannel, model: model, isVideoOverlay: true)
@@ -131,6 +132,115 @@ struct MobilePlayerControls: View {
       MobilePlayerControlScrim(hasBottomControls: model.presentationState == .ready,
                                reduceTransparency: reduceTransparency)
     }
+  }
+}
+
+struct MobilePlayerAudioControl: View {
+  let model: MobilePlaybackModel
+  var onInteraction: () -> Void = {}
+  var onInteractionChanged: (Bool) -> Void = { _ in }
+  @State private var isEditing = false
+  @State private var isHovered = false
+  @Environment(\.themePalette) private var palette
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+  var body: some View {
+    if MobilePlaybackModel.supportsVolumeAdjustment {
+      HStack(spacing: 8) {
+        MobilePlayerVolumeSlider(value: Binding(
+          get: { model.isMuted ? 0 : model.volume },
+          set: { model.setVolume($0); onInteraction() }),
+          foreground: reduceTransparency ? palette.chromeOnOpaque : palette.videoControlForeground
+        ) { editing in
+            isEditing = editing
+            onInteraction()
+          }
+          .frame(minWidth: 80, idealWidth: 140, maxWidth: 140)
+          .frame(height: 44)
+        Button {
+          onInteraction()
+          model.toggleMute()
+        } label: {
+          Icon(glyph: model.isMuted ? .volumeOff : .volume, size: 22)
+            .frame(width: 44, height: 44).contentShape(Rectangle())
+        }
+        .accessibilityLabel(model.isMuted ? "Unmute" : "Mute")
+        .accessibilityIdentifier("mobile-volume-mute")
+      }
+      .padding(.leading, 12)
+      .padding(.trailing, 4)
+      .frame(height: 44)
+      .modifier(MobilePlayerGroupSurface())
+      .accessibilityElement(children: .contain)
+      .accessibilityIdentifier("mobile-volume-control")
+      .onHover { isHovered = $0 }
+      .onChange(of: isEditing || isHovered) { _, interacting in onInteractionChanged(interacting) }
+      .onDisappear { onInteractionChanged(false) }
+    } else {
+      Button {
+        onInteraction()
+        model.toggleMute()
+      } label: {
+        Icon(glyph: model.isMuted ? .volumeOff : .volume, size: 22)
+          .frame(width: 44, height: 44).contentShape(Rectangle())
+      }
+      .accessibilityLabel(model.isMuted ? "Unmute" : "Mute")
+      .accessibilityIdentifier("mobile-mute")
+    }
+  }
+}
+
+// Keep native tracking and accessibility, with a compact round thumb rather than
+// SwiftUI's large slider thumb. Touch-down also holds controls before a drag starts.
+private struct MobilePlayerVolumeSlider: UIViewRepresentable {
+  @Binding var value: Float
+  let foreground: Color
+  let onEditingChanged: (Bool) -> Void
+
+  func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+  func makeUIView(context: Context) -> UISlider {
+    let slider = UISlider()
+    slider.minimumValue = 0
+    slider.maximumValue = 1
+    slider.isContinuous = true
+    slider.accessibilityLabel = String(localized: "Volume")
+    slider.accessibilityIdentifier = "mobile-volume-slider"
+    slider.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    slider.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
+    slider.addTarget(context.coordinator, action: #selector(Coordinator.began), for: .touchDown)
+    slider.addTarget(context.coordinator, action: #selector(Coordinator.ended),
+      for: [.touchUpInside, .touchUpOutside, .touchCancel])
+    return slider
+  }
+
+  func updateUIView(_ slider: UISlider, context: Context) {
+    context.coordinator.parent = self
+    slider.value = value
+    slider.accessibilityValue = Double(value).formatted(.percent.precision(.fractionLength(0)))
+    let color = UIColor(foreground)
+    slider.minimumTrackTintColor = color
+    slider.maximumTrackTintColor = color.withAlphaComponent(0.25)
+    if context.coordinator.thumbColor != color {
+      let thumb = UIGraphicsImageRenderer(size: CGSize(width: 20, height: 20)).image { _ in
+        color.setFill()
+        UIBezierPath(ovalIn: CGRect(x: 0, y: 0, width: 20, height: 20)).fill()
+      }
+      slider.setThumbImage(thumb, for: .normal)
+      slider.setThumbImage(thumb, for: .highlighted)
+      context.coordinator.thumbColor = color
+    }
+  }
+
+  @MainActor
+  final class Coordinator: NSObject {
+    var parent: MobilePlayerVolumeSlider
+    var thumbColor: UIColor?
+
+    init(_ parent: MobilePlayerVolumeSlider) { self.parent = parent }
+    @objc func changed(_ slider: UISlider) { parent.value = slider.value }
+    @objc func began() { parent.onEditingChanged(true) }
+    @objc func ended() { parent.onEditingChanged(false) }
   }
 }
 

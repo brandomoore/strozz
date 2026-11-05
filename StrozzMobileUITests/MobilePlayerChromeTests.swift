@@ -3,6 +3,288 @@ import XCTest
 
 @MainActor
 final class MobilePlayerChromeTests: XCTestCase {
+  func testMacVolumePillThemeAndTransparencyMatrix() throws {
+    #if !targetEnvironment(simulator)
+    throw XCTSkip("The appearance matrix changes Settings only on a simulator.")
+    #endif
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
+    app.launchEnvironment["STROZZ_PLAYER_VOLUME_FIXTURE"] = "1"
+    app.launchEnvironment["STROZZ_PLAYER_PAUSED_FIXTURE"] = "1"
+    let originalTransparency = setVerificationReduceTransparency(false)
+    defer { app.terminate(); setVerificationReduceTransparency(originalTransparency) }
+    for opaque in [false, true] {
+      setVerificationReduceTransparency(opaque)
+      for theme in ["system", "dark", "oled", "light"] {
+        let name = "Mac volume \(theme) \(opaque ? "opaque" : "glass")"
+        app.launchEnvironment["STROZZ_PLAYER_THEME"] = theme
+        app.launch()
+        let slider = app.sliders["mobile-volume-slider"]
+        XCTAssertTrue(slider.waitForExistence(timeout: 10))
+        captureVolumeVerification(app, "\(name) initial")
+        assertCompactVolumePill(app, beside: "mobile-player-bottom-actions")
+        slider.adjust(toNormalizedSliderPosition: 0.35)
+        let mute = app.buttons["mobile-volume-mute"]
+        XCTAssertTrue(slider.isHittable)
+        XCTAssertTrue(mute.isHittable)
+        XCTAssertTrue(app.frame.contains(slider.frame))
+        XCTAssertTrue(app.frame.contains(mute.frame))
+        XCTAssertFalse(slider.frame.intersects(mute.frame))
+        XCTAssertGreaterThanOrEqual(mute.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(mute.frame.height, 44)
+        captureVolumeVerification(app, "\(name) adjusted")
+        app.terminate()
+      }
+    }
+  }
+
+  func testIPadMuteRemainsAvailableWithoutMacVolumeOverride() {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
+    app.launchEnvironment["STROZZ_PLAYER_PAUSED_FIXTURE"] = "1"
+    app.launchEnvironment["STROZZ_PLAYER_THEME"] = "light"
+    app.launch()
+    defer { app.terminate() }
+    let mute = app.buttons["mobile-mute"]
+    XCTAssertTrue(mute.waitForExistence(timeout: 10))
+    XCTAssertFalse(app.sliders["mobile-volume-slider"].exists)
+    let initialLabel = mute.label
+    captureVolumeVerification(app, "iPad original mute")
+    mute.tap()
+    XCTAssertNotEqual(mute.label, initialLabel)
+    captureVolumeVerification(app, "iPad toggled mute")
+    mute.tap()
+    XCTAssertEqual(mute.label, initialLabel)
+    captureVolumeVerification(app, "iPad restored mute")
+  }
+
+  func testMacVolumeControlRemainsUsableInAudioOnlyMode() {
+    verifyMacVolumeControlInAudioOnlyMode()
+  }
+
+  func testMacVolumeControlRemainsOnScreenWithReducedTransparency() throws {
+    #if !targetEnvironment(simulator)
+    throw XCTSkip("This appearance check changes Settings only on a simulator.")
+    #endif
+    let original = setVerificationReduceTransparency(true)
+    defer { setVerificationReduceTransparency(original) }
+    verifyMacVolumeControlInAudioOnlyMode()
+  }
+
+  private func verifyMacVolumeControlInAudioOnlyMode() {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
+    app.launchEnvironment["STROZZ_PLAYER_VOLUME_FIXTURE"] = "1"
+    app.launchEnvironment["STROZZ_PLAYER_PAUSED_FIXTURE"] = "1"
+    app.launchEnvironment["STROZZ_PLAYER_THEME"] = "light"
+    app.launch()
+    defer { app.terminate() }
+    let mode = app.buttons["mobile-playback-mode"]
+    XCTAssertTrue(mode.waitForExistence(timeout: 10))
+    captureVolumeVerification(app, "Before audio-only mode")
+    mode.tap()
+    let audioOnly = app.buttons["Audio and chat"]
+    XCTAssertTrue(audioOnly.waitForExistence(timeout: 3))
+    captureVolumeVerification(app, "Audio-only mode selection")
+    audioOnly.tap()
+    let slider = app.sliders["mobile-volume-slider"]
+    XCTAssertTrue(slider.waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["mobile-audio-play-pause"].exists)
+    captureVolumeVerification(app, "Audio-only inline volume initial")
+    assertCompactVolumePill(app, beside: "mobile-player-mode-actions")
+    slider.adjust(toNormalizedSliderPosition: 0.35)
+    let audible = slider.value as? String
+    let mute = app.buttons["mobile-volume-mute"]
+    captureVolumeVerification(app, "Audio-only volume adjusted")
+    mute.tap()
+    XCTAssertEqual(mute.label, "Unmute")
+    captureVolumeVerification(app, "Audio-only volume muted")
+    mute.tap()
+    XCTAssertEqual(slider.value as? String, audible)
+    captureVolumeVerification(app, "Audio-only volume restored")
+    XCTAssertTrue(app.frame.contains(slider.frame), "The full volume slider must remain inside the window")
+    XCTAssertTrue(app.frame.contains(mute.frame))
+  }
+
+  private func captureVolumeVerification(_ app: XCUIApplication, _ name: String) {
+    capture(app, name)
+    let hierarchy = XCTAttachment(string: app.debugDescription)
+    hierarchy.name = "\(name) hierarchy"
+    hierarchy.lifetime = .keepAlways
+    add(hierarchy)
+  }
+
+  @discardableResult
+  private func setVerificationReduceTransparency(_ enabled: Bool) -> Bool {
+    let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
+    settings.launch()
+    defer { settings.terminate() }
+    captureVolumeVerification(settings, "Accessibility settings before navigation")
+    if !settings.switches["Reduce Transparency"].exists {
+      let accessibility = settings.buttons["com.apple.settings.accessibility"]
+      XCTAssertTrue(accessibility.waitForExistence(timeout: 5))
+      accessibility.tap()
+      captureVolumeVerification(settings, "Accessibility settings")
+      let display = settings.descendants(matching: .any)
+        .matching(NSPredicate(format: "label == %@", "Display & Text Size")).firstMatch
+      XCTAssertTrue(display.waitForExistence(timeout: 5))
+      display.tap()
+    }
+    let transparency = settings.switches["Reduce Transparency"]
+    XCTAssertTrue(transparency.waitForExistence(timeout: 5))
+    captureVolumeVerification(settings, "Reduce Transparency before setting \(enabled)")
+    let original = transparency.value as? String == "1"
+    if original != enabled {
+      let toggle = transparency.switches.firstMatch
+      XCTAssertTrue(toggle.exists)
+      toggle.tap()
+    }
+    let updated = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "value == %@", enabled ? "1" : "0"), object: transparency)
+    XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 3), .completed)
+    captureVolumeVerification(settings, "Reduce Transparency set \(enabled)")
+    return original
+  }
+
+  private func assertCompactVolumePill(_ app: XCUIApplication, beside actionsIdentifier: String) {
+    let pill = app.otherElements["mobile-volume-control"]
+    let actions = app.otherElements[actionsIdentifier]
+    let slider = app.sliders["mobile-volume-slider"]
+    let mute = app.buttons["mobile-volume-mute"]
+    XCTAssertTrue(pill.exists)
+    XCTAssertTrue(actions.exists)
+    XCTAssertEqual(pill.frame.height, 44, accuracy: 1)
+    XCTAssertEqual(pill.frame.height, actions.frame.height, accuracy: 1)
+    XCTAssertLessThanOrEqual(pill.frame.width, 212)
+    XCTAssertGreaterThanOrEqual(actions.frame.minX - pill.frame.maxX, 15,
+      "Volume must have its own surface, separate from the neighboring actions")
+    XCTAssertEqual(pill.frame.midY, actions.frame.midY, accuracy: 1)
+    XCTAssertLessThan(slider.frame.maxX, mute.frame.minX, "Slider precedes speaker, matching the reference")
+    XCTAssertTrue(app.frame.contains(pill.frame))
+    XCTAssertTrue(pill.frame.contains(slider.frame))
+    XCTAssertTrue(pill.frame.contains(mute.frame))
+  }
+
+  func testMacVolumePillAdjustsMutesAndKeepsControlsVisibleDuringDrag() throws {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
+    app.launchEnvironment["STROZZ_PLAYER_VOLUME_FIXTURE"] = "1"
+    app.launchEnvironment["STROZZ_PLAYER_PAUSED_FIXTURE"] = "1"
+    app.launch()
+    defer { app.terminate() }
+    let slider = app.sliders["mobile-volume-slider"]
+    XCTAssertTrue(slider.waitForExistence(timeout: 10))
+    XCTAssertFalse(app.buttons["mobile-mute"].exists)
+    captureVolumeVerification(app, "Inline volume before interaction")
+    assertCompactVolumePill(app, beside: "mobile-player-bottom-actions")
+    slider.adjust(toNormalizedSliderPosition: 0.35)
+    let mute = app.buttons["mobile-volume-mute"]
+    XCTAssertEqual(mute.label, "Mute")
+    let audible = slider.value as? String
+    mute.tap()
+    XCTAssertEqual(mute.label, "Unmute")
+    XCTAssertNotEqual(slider.value as? String, audible)
+    mute.tap()
+    XCTAssertEqual(slider.value as? String, audible)
+    captureVolumeVerification(app, "Inline volume before held drag")
+    app.buttons["mobile-play-pause"].tap()
+    // Holding the thumb beyond the usual auto-hide delay must not dismiss controls.
+    let thumb = slider.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5))
+    thumb.press(forDuration: 5, thenDragTo:
+      slider.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)))
+    capture(app, "Inline volume after held drag")
+    XCTAssertTrue(slider.exists)
+    let percentage = try XCTUnwrap(slider.value as? String).filter { $0.isNumber || $0 == "." }
+    XCTAssertGreaterThan(try XCTUnwrap(Double(percentage)), 60)
+    XCTAssertFalse(app.buttons["mobile-expand-player"].exists, "Dragging volume must not minimize the player")
+    XCTAssertTrue(app.frame.contains(slider.frame), "The full volume slider must remain inside the window")
+    XCTAssertTrue(app.frame.contains(mute.frame))
+    captureVolumeVerification(app, "Separate compact Mac volume pill in the bottom bar")
+    let hidden = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+      !slider.exists && !app.buttons["mobile-play-pause"].exists
+    }, object: nil)
+    XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 7), .completed,
+      "Volume editing must release the auto-hide hold after the drag ends")
+    captureVolumeVerification(app, "Inline volume controls hidden after release")
+    RunLoop.current.run(until: Date().addingTimeInterval(1))
+    XCTAssertFalse(slider.exists, "The volume control disappearing must not resurrect the overlay")
+    XCTAssertFalse(app.buttons["mobile-play-pause"].exists)
+  }
+
+  func testMacVolumePillFitsLandscapeAndNarrowVideoArea() throws {
+    XCUIDevice.shared.orientation = .landscapeLeft
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
+    app.launchEnvironment["STROZZ_PLAYER_VOLUME_FIXTURE"] = "1"
+    app.launchEnvironment["STROZZ_PLAYER_PAUSED_FIXTURE"] = "1"
+    app.launchEnvironment["STROZZ_CHAT_WIDTH_FIXTURE_RESET"] = "1"
+    app.launch()
+    defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
+    let slider = app.sliders["mobile-volume-slider"]
+    XCTAssertTrue(slider.waitForExistence(timeout: 10))
+    showSideChat(app)
+    captureVolumeVerification(app, "Inline volume landscape normal")
+    assertCompactVolumePill(app, beside: "mobile-player-bottom-actions")
+    let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+    let originalWidth = video.frame.width
+    let handle = app.descendants(matching: .any).matching(identifier: "mobile-chat-resize-handle").firstMatch
+    XCTAssertTrue(handle.exists)
+    let center = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+    center.press(forDuration: 0.1, thenDragTo: center.withOffset(CGVector(dx: -300, dy: 0)),
+      withVelocity: .slow, thenHoldForDuration: 0)
+    captureVolumeVerification(app, "Inline volume landscape narrow")
+    XCTAssertLessThan(video.frame.width, originalWidth - 80)
+    assertCompactVolumePill(app, beside: "mobile-player-bottom-actions")
+    let pill = app.otherElements["mobile-volume-control"]
+    let actions = app.otherElements["mobile-player-bottom-actions"]
+    XCTAssertTrue(video.frame.contains(pill.frame))
+    XCTAssertTrue(video.frame.contains(actions.frame))
+    XCTAssertGreaterThanOrEqual(pill.frame.minX - app.buttons["mobile-go-live"].frame.maxX, 8)
+    XCTAssertTrue(slider.isHittable)
+    slider.coordinate(withNormalizedOffset: CGVector(dx: 0.07, dy: 0.5))
+      .press(forDuration: 0.1, thenDragTo:
+        slider.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)),
+        withVelocity: .slow, thenHoldForDuration: 0)
+    captureVolumeVerification(app, "Inline volume landscape narrow adjusted")
+    let percentage = try XCTUnwrap(slider.value as? String).filter { $0.isNumber || $0 == "." }
+    XCTAssertGreaterThan(try XCTUnwrap(Double(percentage)), 60)
+    XCTAssertFalse(app.buttons["mobile-expand-player"].exists)
+  }
+
+  func testMacVolumePillActiveDragReleasesAutoHideHold() throws {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
+    app.launchEnvironment["STROZZ_PLAYER_VOLUME_FIXTURE"] = "1"
+    app.launchEnvironment["STROZZ_PLAYER_PAUSED_FIXTURE"] = "1"
+    app.launch()
+    defer { app.terminate() }
+    let slider = app.sliders["mobile-volume-slider"]
+    XCTAssertTrue(slider.waitForExistence(timeout: 10))
+    slider.adjust(toNormalizedSliderPosition: 0.35)
+    captureVolumeVerification(app, "Inline volume before active drag")
+    app.buttons["mobile-play-pause"].tap()
+    let thumb = slider.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5))
+    thumb.press(forDuration: 0.05, thenDragTo:
+      slider.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)),
+      withVelocity: .slow, thenHoldForDuration: 5)
+    capture(app, "Inline volume after active drag and five-second hold")
+    XCTAssertTrue(slider.exists, "Active slider editing must keep controls visible")
+    let percentage = try XCTUnwrap(slider.value as? String).filter { $0.isNumber || $0 == "." }
+    XCTAssertGreaterThan(try XCTUnwrap(Double(percentage)), 60)
+    XCTAssertFalse(app.buttons["mobile-expand-player"].exists)
+    XCTAssertTrue(app.frame.contains(slider.frame))
+    captureVolumeVerification(app, "Inline volume active drag released")
+    let hidden = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+      !slider.exists && !app.buttons["mobile-play-pause"].exists
+    }, object: nil)
+    XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 7), .completed,
+      "Ending active volume editing must release the auto-hide hold")
+    captureVolumeVerification(app, "Inline volume hidden after active drag")
+    RunLoop.current.run(until: Date().addingTimeInterval(1))
+    XCTAssertFalse(slider.exists, "Controls must stay hidden after their disappearance callbacks")
+    XCTAssertFalse(app.buttons["mobile-play-pause"].exists)
+  }
+
   func testNativeFailureOffersRetryWithoutStandardAuto() throws {
     let app = XCUIApplication()
     app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"

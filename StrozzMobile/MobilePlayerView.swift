@@ -484,6 +484,7 @@ struct MobileVideoView: View {
   @State private var showShare = false
   @State private var showRoutes = false
   @State private var showModes = false
+  @State private var volumeInteracting = false
   @State private var zoom = MobileVideoZoom()
   @State private var pinchStart: MobileVideoZoom?
   @State private var pinchAnchor = CGPoint.zero
@@ -505,7 +506,7 @@ struct MobileVideoView: View {
 
   var body: some View {
     let held = model.isPaused || model.presentationState != .ready
-      || voiceOver || showQuality || showShare || showRoutes || showModes || isManipulating
+      || voiceOver || showQuality || showShare || showRoutes || showModes || volumeInteracting || isManipulating
     let showsControls = model.mode == .video && (controlsVisible || held)
     ZStack {
       palette.playerBackdrop
@@ -615,11 +616,17 @@ struct MobileVideoView: View {
             showModes = showing
             controlsVisible = true
             interaction += 1
+          },
+          onVolumeInteraction: { interacting in
+            guard volumeInteracting != interacting else { return }
+            volumeInteracting = interacting
+            controlsVisible = true
+            interaction += 1
           })
       }
     }
     .gesture(MobileVideoPinchGesture(enabled: zoomEnabled, onChange: handlePinch))
-    .gesture(MobileVideoDragGesture(enabled: !isMinimized, onChange: handleVideoDrag))
+    .gesture(MobileVideoDragGesture(enabled: !isMinimized && !volumeInteracting, onChange: handleVideoDrag))
     .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
       videoViewport = size
       resetZoom()

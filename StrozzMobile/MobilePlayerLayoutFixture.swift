@@ -26,7 +26,7 @@ struct MobilePlayerLayoutFixture: View {
     .preferredColorScheme(theme.preferredColorScheme)
     .overlay {
       GeometryReader { geometry in
-        Color.clear
+        Color.clear.frame(width: 1, height: 1)
           .accessibilityElement()
           .accessibilityIdentifier("fixture-player-viewport")
           .accessibilityValue("\(geometry.frame(in: .global).minY) \(geometry.size.height)")
