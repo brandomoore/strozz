@@ -211,6 +211,9 @@ private struct MobilePlayerVolumeSlider: UIViewRepresentable {
     slider.addTarget(context.coordinator, action: #selector(Coordinator.began), for: .touchDown)
     slider.addTarget(context.coordinator, action: #selector(Coordinator.ended),
       for: [.touchUpInside, .touchUpOutside, .touchCancel])
+    // Taps cancel native tracking; drags fail this recognizer and continue normally.
+    let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tapped(_:)))
+    slider.addGestureRecognizer(tap)
     return slider
   }
 
@@ -241,6 +244,19 @@ private struct MobilePlayerVolumeSlider: UIViewRepresentable {
     @objc func changed(_ slider: UISlider) { parent.value = slider.value }
     @objc func began() { parent.onEditingChanged(true) }
     @objc func ended() { parent.onEditingChanged(false) }
+
+    @objc func tapped(_ gesture: UITapGestureRecognizer) {
+      guard let slider = gesture.view as? UISlider, slider.isEnabled else { return }
+      let track = slider.trackRect(forBounds: slider.bounds)
+      let start = slider.thumbRect(forBounds: slider.bounds, trackRect: track,
+        value: slider.minimumValue).midX
+      let end = slider.thumbRect(forBounds: slider.bounds, trackRect: track,
+        value: slider.maximumValue).midX
+      guard start != end else { return }
+      let fraction = Float(min(1, max(0, (gesture.location(in: slider).x - start) / (end - start))))
+      slider.value = slider.minimumValue + fraction * (slider.maximumValue - slider.minimumValue)
+      slider.sendActions(for: .valueChanged)
+    }
   }
 }
 

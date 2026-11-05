@@ -559,7 +559,8 @@ available when paused or using VoiceOver. AirPlay switches native low latency
 to standard playback because a receiver cannot access the app's loopback
 media server; keep the app open while using it. When running on a Mac, a separate
 compact volume pill in the bottom bar has a slider and mute button for Strozz's
-audio, without changing system volume. The level is retained when changing
+audio, without changing system volume. Click the track to jump to a level, or
+drag the thumb to adjust it. The level is retained when changing
 streams and is also available in audio-only mode. System,
 Dark, OLED, and Light appearances are available in Account, and chat follows
 Dynamic Type and Reduce Motion. App panels use opaque theme-aware surfaces.
