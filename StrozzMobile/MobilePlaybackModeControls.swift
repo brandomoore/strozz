@@ -63,6 +63,10 @@ struct MobileChatOnlyControls: View {
             .modifier(MobilePlayerButtonSurface())
           Text(channel.displayName).font(.headline).lineLimit(1)
           Spacer(minLength: 0)
+          if model.mode == .audioOnly && !model.isLoading && MobilePlaybackModel.supportsVolumeAdjustment {
+            MobilePlayerAudioControl(model: model)
+              .padding(.trailing, 8)
+          }
           HStack(spacing: 8) {
             if model.mode == .audioOnly {
               if model.isLoading {
@@ -76,7 +80,9 @@ struct MobileChatOnlyControls: View {
                 .accessibilityLabel(model.isPaused ? "Play audio" : "Pause audio")
                 .accessibilityIdentifier("mobile-audio-play-pause")
                 .disabled(model.errorMessage != nil)
-                MobilePlayerAudioControl(model: model)
+                if !MobilePlaybackModel.supportsVolumeAdjustment {
+                  MobilePlayerAudioControl(model: model)
+                }
               }
             }
             MobilePlaybackModeButton(model: model)
