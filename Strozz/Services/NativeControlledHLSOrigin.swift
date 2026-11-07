@@ -699,12 +699,17 @@ actor NativeControlledHLSOrigin {
             try checkRunning()
             total += chunk.data.count
             guard total < 32 * 1024 * 1024 else { throw NativeHLSError.invalidMedia }
-            try publish(remuxer.append(chunk.data), sequence: sequence)
+            try consume(chunk.data, remuxer: &remuxer, sequence: sequence)
           }
           bodyComplete = true
         }
         let finishStarted = ProcessInfo.processInfo.systemUptime
-        try publish(remuxer.finish(entry.duration), sequence: sequence)
+        let finalParts = try NativeHLSChunkReader.ProcessingTiming.measure(
+          pipeline: "controlled_cmaf", stage: "remux_finish",
+          counters: ["sequence": sequence], trace: trace) {
+            try remuxer.finish(entry.duration)
+          }
+        try publish(finalParts, sequence: sequence)
         let finishDuration = ProcessInfo.processInfo.systemUptime - finishStarted
         if finishDuration >= 0.1 {
           trace?(.init(event: .delivery,
@@ -843,7 +848,12 @@ actor NativeControlledHLSOrigin {
 
   private func consume(_ data: Data, remuxer: inout Remuxer, sequence: Int) throws {
     guard !data.isEmpty else { throw NativeHLSError.invalidMedia }
-    try publish(remuxer.append(data), sequence: sequence)
+    let parts = try NativeHLSChunkReader.ProcessingTiming.measure(
+      pipeline: "controlled_cmaf", stage: "remux_append",
+      counters: ["sequence": sequence, "input_bytes": data.count], trace: trace) {
+        try remuxer.append(data)
+      }
+    try publish(parts, sequence: sequence)
   }
 
   private func presentationScale(for segment: Segment) throws -> UInt64 {
@@ -855,6 +865,12 @@ actor NativeControlledHLSOrigin {
 
   private func publish(_ parts: [NativeTransportRemuxer.Part], sequence: Int) throws {
     guard !parts.isEmpty else { return }
+    let processing = trace.map { _ in NativeHLSChunkReader.ProcessingTiming() }
+    var completed = false
+    defer {
+      if let detail = processing?.finish(pipeline: "controlled_cmaf", stage: "remux_publish",
+        completed: completed, counters: ["sequence": sequence, "output_parts": parts.count]) { trace?(detail) }
+    }
     for part in parts {
       trim()
       guard let index = segments.firstIndex(where: { $0.sequence == sequence }) else { throw CancellationError() }
@@ -873,6 +889,7 @@ actor NativeControlledHLSOrigin {
         date: segments[index].date, presentationTime: part.decodeTime,
         scale: presentationScale(for: segments[index]))
     }
+    completed = true
   }
 
   private func trim() {

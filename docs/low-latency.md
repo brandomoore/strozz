@@ -597,6 +597,23 @@ have separate stages; incomplete bodies are not grouped with completed transfers
 Slow/failed local requests are rate-limited and identify only a resource kind;
 blocking playlist/part waits can be intentional.
 
+Manual-quality playback also emits `ingress_index` summaries, including
+`max_processing_seconds` (the legacy `max_remux_publish_seconds` is retained).
+Synchronous work taking at least 100 ms emits `remux_append`, `remux_finish`,
+`remux_publish`, `index_chunk`, `index_publish`, or `segment_finalize` stages.
+These include thread CPU time and `non_cpu_wall_seconds`, so an expensive remux
+can be distinguished from time blocked or descheduled. Non-CPU time does not
+identify the responsible lock or OS scheduler; nested indexing/publication
+measurements overlap and must not be added together. Failed work is marked
+`completed=false`; unavailable CPU clocks carry error codes, not zero CPU.
+
+Transfer summaries include maximum body-callback gaps, gaps excluding consumer
+backpressure, terminal unpaused body age, and delegate admission wait. A long
+`max_unpaused_body_gap_seconds` still includes URLSession/delegate scheduling,
+not just the network. Correlate it with scheduler delays and the processing
+stages before blaming connectivity. All fields are bounded numeric timings and
+stage names; no media URLs, credentials, or payloads are retained.
+
 The analysis tool groups these event metrics under `diagnostic_timing_groups`,
 separately from sampled player metrics. Detailed native traces and mobile logs
 retain their existing Debug scope; TV scheduler evidence uses retained telemetry.

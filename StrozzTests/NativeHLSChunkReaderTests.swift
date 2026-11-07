@@ -7,6 +7,84 @@ import XCTest
 #endif
 
 final class NativeHLSChunkReaderTests: XCTestCase {
+  func testSlowProcessingSeparatesCPUFromBlockedWallTime() throws {
+    let timer = NativeHLSChunkReader.ProcessingTiming(start: .init(uptime: 10, cpu: 2))
+    let report = try XCTUnwrap(timer.finish(at: .init(uptime: 15, cpu: 2.2),
+      pipeline: "controlled_cmaf", stage: "remux_append", completed: true, counters: ["input_bytes": 100]))
+    XCTAssertEqual(report.metrics["duration_seconds"], 5)
+    XCTAssertEqual(report.metrics["thread_cpu_seconds"] ?? -1, 0.2, accuracy: 0.0001)
+    XCTAssertEqual(report.metrics["non_cpu_wall_seconds"] ?? -1, 4.8, accuracy: 0.0001)
+    XCTAssertEqual(report.metrics["operation_started_uptime_seconds"], 10)
+    XCTAssertEqual(report.attributes["stage"], "remux_append")
+    XCTAssertEqual(report.attributes["completed"], "true")
+    XCTAssertEqual(report.counters["input_bytes"], 100)
+    XCTAssertNil(timer.finish(at: .init(uptime: 10.01, cpu: 2.005),
+      pipeline: "controlled_cmaf", stage: "remux_append", completed: true, counters: [:]),
+      "Fast chunks must not produce per-chunk logs")
+  }
+
+  func testMissingCPUClockIsExplicitAndNeverReportedAsZeroWork() throws {
+    let timer = NativeHLSChunkReader.ProcessingTiming(start: .init(uptime: 10, cpu: nil, errorCode: 22))
+    let report = try XCTUnwrap(timer.finish(at: .init(uptime: 11, cpu: nil, errorCode: 22),
+      pipeline: "passthrough", stage: "index_chunk", completed: false, counters: [:]))
+    XCTAssertEqual(report.metrics["duration_seconds"], 1)
+    XCTAssertNil(report.metrics["thread_cpu_seconds"])
+    XCTAssertNil(report.metrics["non_cpu_wall_seconds"])
+    XCTAssertEqual(report.counters["thread_cpu_start_error_code"], 22)
+    XCTAssertEqual(report.counters["thread_cpu_end_error_code"], 22)
+    XCTAssertEqual(report.attributes["completed"], "false")
+  }
+
+  func testSynchronousMeasurementPreservesResultAndReportsSlowThrownWork() throws {
+    let probe = TransferReportProbe()
+    let result = NativeHLSChunkReader.ProcessingTiming.measure(
+      pipeline: "passthrough", stage: "index_chunk", counters: [:], trace: { probe.append($0) }) { 42 }
+    XCTAssertEqual(result, 42)
+    XCTAssertThrowsError(try NativeHLSChunkReader.ProcessingTiming.measure(
+      pipeline: "passthrough", stage: "index_chunk", counters: [:], trace: { probe.append($0) }) {
+        Thread.sleep(forTimeInterval: 0.12)
+        throw URLError(.cannotDecodeContentData)
+      }) { XCTAssertEqual(($0 as? URLError)?.code, .cannotDecodeContentData) }
+    let report = try XCTUnwrap(probe.values.last)
+    XCTAssertEqual(report.attributes["completed"], "false")
+    XCTAssertGreaterThanOrEqual(report.metrics["duration_seconds"] ?? -1, 0.1)
+    XCTAssertNotNil(report.metrics["thread_cpu_seconds"])
+    XCTAssertNil(report.counters["thread_cpu_start_error_code"])
+    XCTAssertNil(report.counters["thread_cpu_end_error_code"])
+  }
+
+  func testBodyGapSeparatesConsumerPauseFromUnpausedDeliveryDelay() throws {
+    var timing = NativeHLSChunkReader.RequestTiming(startedAt: 0)
+    timing.received(bytes: 100, at: 1)
+    timing.consumed(pending: 0, at: 5)
+    timing.received(bytes: 100, at: 6, admittedAt: 6.25)
+    timing.consumed(pending: 0, at: 6.5)
+    timing.received(bytes: 100, at: 9)
+    let report = timing.diagnostic(error: URLError(.timedOut), at: 12)
+    XCTAssertEqual(report.metrics["max_body_delivery_gap_seconds"], 5)
+    XCTAssertEqual(report.metrics["max_unpaused_body_gap_seconds"], 2.5)
+    XCTAssertEqual(report.metrics["max_delegate_admission_wait_seconds"], 0.25)
+    XCTAssertEqual(report.metrics["terminal_unpaused_body_age_seconds"], 0,
+      "An unacknowledged final chunk is consumer backpressure, not missing upstream bytes")
+    timing.consumed(pending: 0, at: 12)
+    let afterResume = timing.diagnostic(error: URLError(.timedOut), at: 14)
+    XCTAssertEqual(afterResume.metrics["terminal_unpaused_body_age_seconds"], 2)
+  }
+
+  func testQueuedChunksDoNotTurnProcessingTimeIntoAnUpstreamGap() {
+    var timing = NativeHLSChunkReader.RequestTiming(startedAt: 0)
+    timing.received(bytes: 100, at: 1)
+    timing.received(bytes: 100, at: 2)
+    timing.consumed(pending: 1, at: 4)
+    timing.received(bytes: 100, at: 5)
+    let report = timing.diagnostic(error: nil, at: 6)
+    XCTAssertEqual(report.metrics["max_body_delivery_gap_seconds"], 3)
+    XCTAssertEqual(report.metrics["max_unpaused_body_gap_seconds"], 0)
+    XCTAssertEqual(report.metrics["terminal_unpaused_body_age_seconds"], 0)
+    let empty = NativeHLSChunkReader.RequestTiming(startedAt: 0).diagnostic(error: URLError(.timedOut), at: 8)
+    XCTAssertNil(empty.metrics["max_unpaused_body_gap_seconds"])
+  }
+
   func testFailedTransferDistinguishesNoResponseFromStoppedBodyBytes() {
     let noResponse = NativeHLSChunkReader.RequestTiming(startedAt: 10)
       .diagnostic(error: URLError(.timedOut), at: 18)
@@ -275,7 +353,7 @@ final class NativeHLSChunkReaderTests: XCTestCase {
     let base = try await server.start()
     let reader = NativeHLSChunkReader()
     defer { reader.stop(); server.stop() }
-    let pending = Task { try await Self.read(reader, url: base.appendingPathComponent("hold")) }
+    let pending = Task { try await NativeHLSChunkReaderTests.read(reader, url: base.appendingPathComponent("hold")) }
     for _ in 0..<100 {
       if server.requestCount > 0 { break }
       try await Task.sleep(for: .milliseconds(10))
@@ -312,7 +390,7 @@ final class NativeHLSChunkReaderTests: XCTestCase {
     let base = try await server.start()
     let reader = NativeHLSChunkReader()
     defer { reader.stop(); server.stop() }
-    let pending = Task { try await Self.read(reader, url: base.appendingPathComponent("hold")) }
+    let pending = Task { try await NativeHLSChunkReaderTests.read(reader, url: base.appendingPathComponent("hold")) }
     for _ in 0..<100 {
       if server.requestCount > 0 { break }
       try await Task.sleep(for: .milliseconds(10))

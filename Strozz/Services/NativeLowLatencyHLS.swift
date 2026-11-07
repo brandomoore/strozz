@@ -1002,6 +1002,7 @@ actor NativeHLSOrigin {
             metrics: detail.metrics,
             counters: detail.counters.merging(["rendition": index, "sequence": entry.sequence]) { _, new in new }))
         }
+        let deliveryStartedAt = ProcessInfo.processInfo.systemUptime
         #if DEBUG
         let chunks = reader.stream(request(entry.url), observeMetrics: { [weak self] values in
           Task { await self?.recordConnection(values, index: index, sequence: entry.sequence) }
@@ -1029,9 +1030,32 @@ actor NativeHLSOrigin {
         var tsPending = Data()
         var tsInitialization = Data()
         var cmafPending = Data()
+        var deliveryTiming = NativeHLSChunkReader.DeliveryTiming(startedAt: deliveryStartedAt)
+        var bodyComplete = false
+        defer {
+          if deliveryTiming.chunks > 0 {
+            emitTrace?(.init(event: .delivery,
+              attributes: ["pipeline": "passthrough", "stage": "ingress_index",
+                "body_complete": String(bodyComplete)],
+              metrics: deliveryTiming.metrics,
+              counters: ["rendition": index, "sequence": entry.sequence,
+                "ingress_chunks": deliveryTiming.chunks, "ingress_bytes": deliveryTiming.bytes]))
+          }
+        }
         operation = "media"
         for try await chunk in chunks {
-          defer { reader.consumedChunk(chunk) }
+          let consumedAt = ProcessInfo.processInfo.systemUptime
+          let processing = emitTrace.map { _ in NativeHLSChunkReader.ProcessingTiming() }
+          var completed = false
+          defer {
+            deliveryTiming.observe(bytes: chunk.data.count, receivedAt: chunk.receivedAtUptime,
+              consumedAt: consumedAt, finishedAt: ProcessInfo.processInfo.systemUptime)
+            let detail = processing?.finish(pipeline: "passthrough", stage: "index_chunk",
+              completed: completed,
+              counters: ["rendition": index, "sequence": entry.sequence, "input_bytes": chunk.data.count])
+            reader.consumedChunk(chunk)
+            if let detail { emitTrace?(detail) }
+          }
           try Task.checkCancellation()
           operation = "indexing"
           buffer.append(chunk.data)
@@ -1123,6 +1147,14 @@ actor NativeHLSOrigin {
           offset += boxLength
           }
           operation = "media"
+          completed = true
+        }
+        bodyComplete = true
+        let finalization = emitTrace.map { _ in NativeHLSChunkReader.ProcessingTiming() }
+        var finalized = false
+        defer {
+          if let detail = finalization?.finish(pipeline: "passthrough", stage: "segment_finalize",
+            completed: finalized, counters: ["rendition": index, "sequence": entry.sequence]) { emitTrace?(detail) }
         }
         operation = "indexing"
         guard buffer.isEmpty, timing == nil else { throw NativeHLSError.invalidMedia }
@@ -1163,6 +1195,7 @@ actor NativeHLSOrigin {
           }
           sources[index] = source
         }
+        finalized = true
         next = expected + 1
         #if DEBUG
         readCompleted = true
@@ -1185,6 +1218,14 @@ actor NativeHLSOrigin {
   }
 
   private func publish(_ index: Int, _ part: Part) throws {
+    let processing = trace.map { _ in NativeHLSChunkReader.ProcessingTiming() }
+    var completed = false
+    defer {
+      if let detail = processing?.finish(pipeline: "passthrough", stage: "index_publish",
+        completed: completed, counters: ["rendition": index, "output_bytes": part.media?.count ?? 0]) {
+        trace?(detail)
+      }
+    }
     guard var source = sources[index], !source.segments.isEmpty else { throw CancellationError() }
     let last = source.segments.count - 1
     guard cachedMediaBytes + (part.media?.count ?? 0) <= 96 * 1024 * 1024 else {
@@ -1205,6 +1246,7 @@ actor NativeHLSOrigin {
         started: Date(), served: true, bytes: part.media?.count)
     }
     #endif
+    completed = true
   }
 
   private func traceMedia(_ event: NativeHLSPlaybackDiagnostic.Event, index: Int,
