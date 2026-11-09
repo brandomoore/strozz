@@ -1,6 +1,14 @@
 import Foundation
 
 struct NativeTransportRemuxer {
+  struct Continuation {
+    fileprivate let transport: NativeTransportStream.Continuation
+    fileprivate let demuxer: NativeTransportDemuxer
+    fileprivate let configuration: NativeFragmentedMP4.Configuration
+    fileprivate let firstVideoDTS: UInt64
+    fileprivate let videoStart: UInt64
+    fileprivate let presentationEpoch: UInt64
+  }
   struct Part: Sendable {
     let bytes: Data
     let duration: Double
@@ -31,11 +39,12 @@ struct NativeTransportRemuxer {
   private(set) var configuration: NativeFragmentedMP4.Configuration?
   private(set) var nextSequence: UInt32
   private(set) var completed = false
+  private(set) var continuation: Continuation?
   private static let wrap: UInt64 = 1 << 33
 
   init(configuration: NativeFragmentedMP4.Configuration? = nil, videoDescriptionIndex: UInt32 = 1,
        firstSequence: UInt32 = 1, presentationEpoch: UInt64 = 0,
-       presentationReference: UInt64? = nil) throws {
+       presentationReference: UInt64? = nil, continuing predecessor: Continuation? = nil) throws {
     guard (1...16).contains(videoDescriptionIndex), presentationEpoch.isMultiple(of: Self.wrap),
       presentationEpoch <= NativeMediaClock.maximum,
       presentationReference.map({ $0 <= NativeMediaClock.maximum }) ?? true else {
@@ -46,6 +55,15 @@ struct NativeTransportRemuxer {
     self.presentationEpoch = presentationEpoch
     self.presentationReference = presentationReference
     nextSequence = firstSequence
+    if let predecessor {
+      guard configuration == predecessor.configuration else { throw NativeHLSError.transition }
+      transport = NativeTransportStream(continuing: predecessor.transport)
+      demuxer = predecessor.demuxer
+      self.configuration = predecessor.configuration
+      firstVideoDTS = predecessor.firstVideoDTS
+      videoStart = predecessor.videoStart
+      self.presentationEpoch = predecessor.presentationEpoch
+    }
   }
 
   mutating func append(_ packet: Data) throws -> [Part] {
@@ -79,6 +97,13 @@ struct NativeTransportRemuxer {
         video: queuedVideo.reduce(0) { $0 + $1.count }, audio: audio.count + rawAudio.count)
     }
     completed = true
+    if let transport = transport.continuation, let configuration, let firstVideoDTS, let videoStart {
+      continuation = Continuation(transport: transport, demuxer: try demuxer.continuationState(),
+        configuration: configuration,
+        firstVideoDTS: previousVideo.decodeTime,
+        videoStart: videoStart + (previousVideo.decodeTime + Self.wrap - firstVideoDTS) % Self.wrap,
+        presentationEpoch: presentationEpoch)
+    }
     return output
   }
 
@@ -174,7 +199,9 @@ struct NativeTransportRemuxer {
       let lastPart = final && queuedVideo.count == 1
       let count = lastPart ? audio.count : audio.prefix { $0.decodeTime * 90_000 < end * rate }.count
       let audioPart = Array(audio.prefix(count))
-      guard !audioPart.isEmpty else { throw NativeHLSError.transition }
+      guard !audioPart.isEmpty || (lastPart && end - beginning.decodeTime <= 9000) else {
+        throw NativeHLSError.transition
+      }
       let bytes = try NativeFragmentedMP4.fragment(sequence: nextSequence, video: first, audio: audioPart,
         videoDescriptionIndex: videoDescriptionIndex)
       guard nextSequence < UInt32.max else { throw NativeHLSError.invalidMedia }

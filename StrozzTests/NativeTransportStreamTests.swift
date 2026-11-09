@@ -164,6 +164,81 @@ final class NativeTransportStreamTests: XCTestCase {
     XCTAssertNoThrow(try value.append(video(frame: 1, clock: 1500)))
   }
 
+  func testContinuationHeavySegmentsPreserveRangesAndDiagnosticsForSlicedPackets() throws {
+    var plain = try parser(capturesDiagnostics: true)
+    var sliced = try parser(capturesDiagnostics: true)
+    var plainRanges: [NativeTransportStream.Range] = []
+    var slicedRanges: [NativeTransportStream.Range] = []
+    var packetCount = 2
+    for frame in 0..<120 {
+      var packets = [video(frame: frame * 4, clock: UInt64(frame * 1500), idr: frame == 0)]
+      for continuation in 1..<4 {
+        packets.append(boundedVideoPacket(counter: frame * 4 + continuation, start: false,
+          payload: Array(repeating: 0xAA, count: 182)))
+      }
+      packets.append(packet(pid: 256, counter: frame, payload:
+        [0, 0, 1, 0xC0, 0, 0, 0x80, 0x80, 5] + timestamp(UInt64(frame * 1500))))
+      packets.append(packet(pid: 8191, counter: frame, payload: [0xAA]))
+      for bytes in packets {
+        if let range = try plain.append(bytes) { plainRanges.append(range) }
+        var storage = Data([0, 1, 2, 3, 4])
+        storage.append(bytes)
+        let slice = storage.dropFirst(5)
+        XCTAssertEqual(slice.startIndex, 5)
+        if let range = try sliced.append(slice) { slicedRanges.append(range) }
+        packetCount += 1
+      }
+    }
+    plainRanges.append(try plain.finish(expectedDuration: 2))
+    slicedRanges.append(try sliced.finish(expectedDuration: 2))
+    XCTAssertEqual(slicedRanges, plainRanges)
+    XCTAssertEqual(plainRanges.map(\.offset), [0, 376 + 23 * 1128, 376 + 46 * 1128,
+      376 + 69 * 1128, 376 + 92 * 1128, 376 + 115 * 1128])
+    XCTAssertEqual(plainRanges.reduce(0) { $0 + $1.length }, packetCount * 188)
+    XCTAssertEqual(plainRanges.reduce(0) { $0 + $1.duration }, 2, accuracy: 0.00001)
+    XCTAssertEqual(plainRanges[0].timeline["audio_first_presentation_seconds"], 0)
+    XCTAssertTrue(plainRanges[0].independent)
+    XCTAssertTrue(plainRanges.dropFirst().allSatisfy { !$0.independent })
+  }
+
+  func testContinuationFastPathStillRejectsInvalidHeadersAndContinuity() throws {
+    var ready = try parser()
+    _ = try ready.append(video(frame: 0, clock: 0, idr: true))
+    let continuation = boundedVideoPacket(counter: 1, start: false, payload: [0xAA])
+    let corruptions: [(Int, UInt8)] = [(0, 1), (1, 0x80), (3, 0xC0)]
+    for (offset, mask) in corruptions {
+      var value = ready
+      var corrupt = continuation
+      corrupt[offset] |= mask
+      if offset == 0 { corrupt[offset] = 0 }
+      XCTAssertThrowsError(try value.append(corrupt)) {
+        XCTAssertEqual($0 as? NativeHLSError, .invalidMedia)
+      }
+    }
+    var value = ready
+    var invalidLength = continuation
+    invalidLength[4] = 184
+    XCTAssertThrowsError(try value.append(invalidLength)) {
+      XCTAssertEqual($0 as? NativeHLSError, .invalidMedia)
+    }
+    value = ready
+    var discontinuity = continuation
+    discontinuity[5] = 0x80
+    XCTAssertThrowsError(try value.append(discontinuity)) {
+      XCTAssertEqual($0 as? NativeHLSError, .transition)
+    }
+    value = ready
+    XCTAssertThrowsError(try value.append(boundedVideoPacket(counter: 2, start: false, payload: [0xAA]))) {
+      XCTAssertEqual($0 as? NativeHLSFailureDetail, .transportContinuity)
+    }
+    value = ready
+    XCTAssertNil(try value.append(continuation))
+    XCTAssertNil(try value.append(continuation), "An identical retransmission remains accepted")
+    XCTAssertThrowsError(try value.append(boundedVideoPacket(counter: 1, start: false, payload: [0xBB]))) {
+      XCTAssertEqual($0 as? NativeHLSFailureDetail, .transportContinuity)
+    }
+  }
+
   func testInvalidTimingAndNonRandomAccessStartFailExplicitly() throws {
     XCTAssertThrowsError(try NativeTransportStream.timestamp(Data(repeating: 0, count: 5), at: 0))
     var value = try parser()

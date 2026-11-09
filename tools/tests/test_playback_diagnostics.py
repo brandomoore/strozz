@@ -165,6 +165,32 @@ class PlaybackDiagnosticsTests(unittest.TestCase):
         self.session_one = str(uuid.uuid4())
         self.session_two = str(uuid.uuid4())
 
+    def test_processing_cpu_and_body_gaps_keep_stages_and_failures_separate(self):
+        self.write_records(f"playback-{self.session_one}-0001.jsonl", [
+            self.record(self.session_one, 1),
+            self.record(self.session_one, 2, kind="event", name="native_hls_delivery_timing",
+                        attributes={"stage": "remux_append", "completed": "true"},
+                        metrics={"duration_seconds": 5, "thread_cpu_seconds": 0.2,
+                                 "non_cpu_wall_seconds": 4.8}),
+            self.record(self.session_one, 3, kind="event", name="native_hls_delivery_timing",
+                        attributes={"stage": "index_chunk", "completed": "false"},
+                        metrics={"duration_seconds": 2}),
+            self.record(self.session_one, 4, kind="event", name="native_hls_delivery_timing",
+                        attributes={"stage": "media_transfer"},
+                        metrics={"max_unpaused_body_gap_seconds": 3.4}),
+        ])
+        session = playback_diagnostics.analyze(self.directory)["sessions"][0]
+        stages = session["diagnostic_timing_groups"]
+        remux = stages["native_hls_delivery_timing/remux_append/complete"]
+        self.assertEqual(remux["thread_cpu_seconds"]["max"], 0.2)
+        self.assertEqual(remux["non_cpu_wall_seconds"]["max"], 4.8)
+        partial = stages["native_hls_delivery_timing/index_chunk/partial"]
+        self.assertEqual(partial["duration_seconds"]["max"], 2)
+        self.assertNotIn("thread_cpu_seconds", partial)
+        self.assertEqual(stages["native_hls_delivery_timing/media_transfer"]
+                         ["max_unpaused_body_gap_seconds"]["max"], 3.4)
+        self.assertNotIn("thread_cpu_seconds", session["metric_distributions"])
+
     def tearDown(self):
         self.temp.cleanup()
 

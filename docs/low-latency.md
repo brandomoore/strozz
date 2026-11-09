@@ -224,6 +224,33 @@ iOS SDK. Provider availability and stream formats can change.
   including expensive virtual-memory copies for large keyframes. Preserve
   independent state when a demuxer is copied, and keep A/V payloads and clocks
   unchanged.
+- **Segment boundaries are not always keyframes.** Native TS normalization carries
+  drained codec state and the decode-clock anchor across completed, consecutive
+  segments of the same rendition and discontinuity period. Keep every dependent
+  leading frame on that path. Startup searches at most six segments for an
+  independent start; if none starts independently, it begins at a verified IDR
+  inside the oldest inspected segment and updates its date/duration. A declared
+  discontinuity likewise needs its own IDR, never the old decoder state. Only
+  these undecodable entry prefixes are discarded. Direct TS quality URLs use the same
+  normalization as Auto; their advertised bandwidth is estimated from a completed
+  upstream segment when no master supplies it.
+  Quality changes wait for a verified independent entry, including a briefly
+  lagging target playlist, rather than entering dependent media or abandoning
+  adaptation. Committing that choice must preserve capacity samples received
+  during validation. Never advertise `EXT-X-INDEPENDENT-SEGMENTS` for dependent
+  segments; part independence still comes from real sample flags.
+  Retain bounded continuation metadata for exact DVR regeneration, not old media
+  buffers. A short terminal video-only part is valid when the segment's audio
+  already covers it within the existing 100-ms end tolerance; do not duplicate
+  audio to fill it. Codec changes, missing predecessors and invalid clocks remain
+  explicit failures. Diagnostics distinguish startup preroll, an internal-IDR
+  trim, a deferred switch, and manifest/remux/finalization failures.
+- **Avoid copying unneeded transport payloads.** The shared TS indexer borrows
+  each packet's bytes for header checks. After verifying the starting access unit, video
+  continuation packets need only header/continuity validation, not a copied
+  payload. Still parse tables, PES starts and diagnostic audio timestamps, and
+  validate adaptation/discontinuity flags and retransmissions before skipping
+  payload inspection. This does not skip media bytes or demuxing in Auto.
 - **Respect format and part contracts.** Source-CMAF requires muxed AVC/AAC-LC,
   compatible track IDs/timebases and audio configuration within a period, and no
   edit lists. Unsupported media fails explicitly, not by silently hiding a
@@ -533,6 +560,23 @@ out of commits; never add signed URLs, tokens, headers or chat bodies.
 
 ## Short hiccups: separate delivery from delayed logging
 
+Native origins use per-origin serial dispatch executors for actor work and task
+continuations. Ingestion and loopback media requests carry the matching task
+executor preference, so an unrelated blocked Swift cooperative worker cannot
+hold received media behind it. Source and controlled Auto use the same mechanism
+on TV and mobile; buffering, rendition selection and bounded reader backpressure
+are unchanged. This isolates shared-worker contention, not OS-wide suspension or
+a slow operation on the playback executor itself.
+
+Slow executor turns emit `native_hls_delivery_timing` stage `executor_job`, with
+thread CPU and wall time. Jobs waiting at least 100 ms emit `executor_queue`.
+Correlate these with chunk consumer delay to distinguish a busy playback executor
+from delays elsewhere. Executor and chunk timings overlap; do not sum them.
+`NativeHLSExecutorTests` covers isolation, nonisolated continuations, cancellation
+and diagnostics. Its opt-in starvation regression requires a separate test host
+launched with `LIBDISPATCH_COOPERATIVE_POOL_STRICT=1`; never set that variable for
+normal playback.
+
 Native events retain `native_event_uptime_seconds` at their producer;
 `native_trace_retention_delay_seconds` separates buffered/replayed diagnostics
 from `main_actor_delivery_delay_seconds`, the dispatch-to-main wait.
@@ -596,6 +640,23 @@ Slow producer/probe manifests, movie preparation and segment-finalization work
 have separate stages; incomplete bodies are not grouped with completed transfers.
 Slow/failed local requests are rate-limited and identify only a resource kind;
 blocking playlist/part waits can be intentional.
+
+Manual-quality playback also emits `ingress_index` summaries, including
+`max_processing_seconds` (the legacy `max_remux_publish_seconds` is retained).
+Synchronous work taking at least 100 ms emits `remux_append`, `remux_finish`,
+`remux_publish`, `index_chunk`, `index_publish`, or `segment_finalize` stages.
+These include thread CPU time and `non_cpu_wall_seconds`, so an expensive remux
+can be distinguished from time blocked or descheduled. Non-CPU time does not
+identify the responsible lock or OS scheduler; nested indexing/publication
+measurements overlap and must not be added together. Failed work is marked
+`completed=false`; unavailable CPU clocks carry error codes, not zero CPU.
+
+Transfer summaries include maximum body-callback gaps, gaps excluding consumer
+backpressure, terminal unpaused body age, and delegate admission wait. A long
+`max_unpaused_body_gap_seconds` still includes URLSession/delegate scheduling,
+not just the network. Correlate it with scheduler delays and the processing
+stages before blaming connectivity. All fields are bounded numeric timings and
+stage names; no media URLs, credentials, or payloads are retained.
 
 The analysis tool groups these event metrics under `diagnostic_timing_groups`,
 separately from sampled player metrics. Detailed native traces and mobile logs

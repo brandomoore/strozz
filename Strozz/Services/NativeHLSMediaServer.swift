@@ -5,12 +5,14 @@ import Network
 final class NativeHLSMediaServer: @unchecked Sendable {
   private let queue = DispatchQueue(label: "strozz.native-hls.media")
   private let listener: NWListener
+  private let executor: NativeHLSExecutor?
   private let response: @Sendable (String) async -> Data?
   private var connections: [UUID: NWConnection] = [:]
   private var stopped = false
   private var startCompleted = false
 
-  init(response: @escaping @Sendable (String) async -> Data?) throws {
+  init(executor: NativeHLSExecutor? = nil, response: @escaping @Sendable (String) async -> Data?) throws {
+    self.executor = executor
     self.response = response
     let parameters = NWParameters.tcp
     parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
@@ -75,7 +77,7 @@ final class NativeHLSMediaServer: @unchecked Sendable {
       let range = lines.first { $0.lowercased().hasPrefix("range:") }?.split(separator: ":", maxSplits: 1).last
         .map { String($0).trimmingCharacters(in: .whitespaces) }
       let contentType = url.pathExtension == "mp4" ? "video/mp4" : "video/mp2t"
-      Task {
+      Task(executorPreference: self.executor) {
         let body = await self.response(url.path)
         self.queue.async {
           guard self.connections[id] != nil else { return }
