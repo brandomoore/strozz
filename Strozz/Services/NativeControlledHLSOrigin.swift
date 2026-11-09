@@ -2,6 +2,9 @@ import Foundation
 import OSLog
 
 actor NativeControlledHLSOrigin {
+  nonisolated let executor: NativeHLSExecutor
+  nonisolated var unownedExecutor: UnownedSerialExecutor { executor.asUnownedSerialExecutor() }
+
   private final class TransferMetrics: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var measuredSeconds: TimeInterval?
@@ -240,6 +243,7 @@ actor NativeControlledHLSOrigin {
     self.loadData = loadData
     self.diagnostic = diagnostic
     self.trace = trace
+    self.executor = NativeHLSExecutor(pipeline: "controlled_cmaf", trace: trace)
     self.failure = failure
     let configuration = URLSessionConfiguration.ephemeral
     configuration.urlCache = nil
@@ -297,7 +301,9 @@ actor NativeControlledHLSOrigin {
         return .playlist(bytes)
       }
       guard url.path == "/media/0.m3u8" else { throw NativeHLSError.invalidMedia }
-      if producer == nil { producer = Task { [weak self] in await self?.run() } }
+      if producer == nil {
+        producer = Task(executorPreference: executor) { [weak self] in await self?.run() }
+      }
       let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
       let msn = query.first(where: { $0.name == "_HLS_msn" })?.value.flatMap(Int.init)
       let part = query.first(where: { $0.name == "_HLS_part" })?.value.flatMap(Int.init)
@@ -421,7 +427,9 @@ actor NativeControlledHLSOrigin {
     guard let largest = values.max(by: { $0.width * $0.height < $1.width * $1.height }),
       let largestIndex = variants.firstIndex(where: { $0.id == largest.id }) else { throw NativeHLSError.invalidMedia }
     let movie = try NativeFragmentedMP4.switchingInitialization(inits, maximumResolutionIndex: largestIndex)
-    let listener = try NativeHLSMediaServer { [weak self] path in await self?.media(path) }
+    let listener = try NativeHLSMediaServer(executor: executor) { [weak self] path in
+      await self?.media(path)
+    }
     server = listener
     let base = try await listener.start()
     try checkRunning()

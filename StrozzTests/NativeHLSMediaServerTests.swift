@@ -1,7 +1,28 @@
 import XCTest
+#if os(tvOS)
 @testable import Strozz
+#else
+@testable import StrozzMobile
+#endif
 
 final class NativeHLSMediaServerTests: XCTestCase {
+  func testMediaServingRetainsPlaybackExecutorAcrossSuspension() async throws {
+    let executor = NativeHLSExecutor(pipeline: "test")
+    let server = try NativeHLSMediaServer(executor: executor) { _ in
+      executor.checkIsolated()
+      await Task.yield()
+      executor.checkIsolated()
+      return Data([1, 2, 3])
+    }
+    let base = try await server.start()
+    defer { server.stop() }
+    let session = URLSession(configuration: .ephemeral)
+    defer { session.invalidateAndCancel() }
+    let (body, response) = try await session.data(from: base.appendingPathComponent("part/0/1/0.ts"))
+    XCTAssertEqual(body, Data([1, 2, 3]))
+    XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+  }
+
   func testLoopbackPartsHonorRangesAndDoNotServeUnknownResources() async throws {
     let bytes = Data(repeating: 0x47, count: 188 * 10)
     let server = try NativeHLSMediaServer { path in path == "/part/0/1/0.ts" ? bytes : nil }

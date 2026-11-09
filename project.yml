@@ -175,6 +175,8 @@ targets:
       - path: StrozzTests/NativeAdaptiveRenditionPolicyTests.swift
       - path: StrozzTests/NativeBufferedStallRecoveryTests.swift
       - path: StrozzTests/NativeHLSChunkReaderTests.swift
+      - path: StrozzTests/NativeHLSExecutorTests.swift
+      - path: StrozzTests/NativeHLSMediaServerTests.swift
       - path: StrozzTests/NativePreviewTests.swift
       - path: StrozzTests/BroadcastUptimeTests.swift
       - path: StrozzTests/TwitchAutomaticSignInTests.swift

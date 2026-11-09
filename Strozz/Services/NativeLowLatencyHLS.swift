@@ -47,7 +47,7 @@ final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unche
     let key = ObjectIdentifier(request)
     lock.lock()
     guard !stopped else { lock.unlock(); request.finishLoading(with: URLError(.cancelled)); return true }
-    let task = Task { [weak self, origin] in
+    let task = Task(executorPreference: origin.executor) { [weak self, origin] in
       do {
         let response = try await origin.response(url)
         guard !Task.isCancelled else { return }
@@ -106,11 +106,14 @@ final class NativeLowLatencyHLS: NSObject, AVAssetResourceLoaderDelegate, @unche
     tasks.removeAll()
     lock.unlock()
     pending.forEach { $0.cancel() }
-    Task { await origin.stop() }
+    Task(executorPreference: origin.executor) { [origin] in await origin.stop() }
   }
 }
 
 actor NativeHLSOrigin {
+  nonisolated let executor: NativeHLSExecutor
+  nonisolated var unownedExecutor: UnownedSerialExecutor { executor.asUnownedSerialExecutor() }
+
   typealias DataLoader = @Sendable (URLRequest) async throws -> (Data, URLResponse)
   typealias Snapshot = (parts: Int, renditions: Int, edgeAge: Double?, holdBack: Double?, hasPrefetch: Bool?,
     forwardBuffer: Double?, reportRefreshSeconds: Double?, reportRefreshMaxSeconds: Double?,
@@ -312,6 +315,7 @@ actor NativeHLSOrigin {
     self.failure = failure
     self.diagnostic = diagnostic
     self.trace = trace
+    self.executor = NativeHLSExecutor(pipeline: "passthrough", trace: trace)
     self.loadData = loadData
     let config = URLSessionConfiguration.ephemeral
     config.urlCache = nil
@@ -707,7 +711,9 @@ actor NativeHLSOrigin {
         if sources[index]?.task == nil {
           sources[index]?.lastMediaRequest = Date()
           sources[index]?.reachedLiveEdge = false
-          sources[index]?.task = Task { [weak self] in await self?.run(index, startingAt: msn) }
+          sources[index]?.task = Task(executorPreference: executor) { [weak self] in
+            await self?.run(index, startingAt: msn)
+          }
         }
         updateRenditionReports()
       }
@@ -976,7 +982,9 @@ actor NativeHLSOrigin {
           sources[index]?.target = manifest.targetDuration
           sources[index]?.localMedia = true
           if mediaServer == nil {
-            let server = try NativeHLSMediaServer { [weak self] path in await self?.media(path) }
+            let server = try NativeHLSMediaServer(executor: executor) { [weak self] path in
+              await self?.media(path)
+            }
             mediaServer = server
             mediaBase = try await server.start()
           }

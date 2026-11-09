@@ -533,6 +533,23 @@ out of commits; never add signed URLs, tokens, headers or chat bodies.
 
 ## Short hiccups: separate delivery from delayed logging
 
+Native origins use per-origin serial dispatch executors for actor work and task
+continuations. Ingestion and loopback media requests carry the matching task
+executor preference, so an unrelated blocked Swift cooperative worker cannot
+hold received media behind it. Source and controlled Auto use the same mechanism
+on TV and mobile; buffering, rendition selection and bounded reader backpressure
+are unchanged. This isolates shared-worker contention, not OS-wide suspension or
+a slow operation on the playback executor itself.
+
+Slow executor turns emit `native_hls_delivery_timing` stage `executor_job`, with
+thread CPU and wall time. Jobs waiting at least 100 ms emit `executor_queue`.
+Correlate these with chunk consumer delay to distinguish a busy playback executor
+from delays elsewhere. Executor and chunk timings overlap; do not sum them.
+`NativeHLSExecutorTests` covers isolation, nonisolated continuations, cancellation
+and diagnostics. Its opt-in starvation regression requires a separate test host
+launched with `LIBDISPATCH_COOPERATIVE_POOL_STRICT=1`; never set that variable for
+normal playback.
+
 Native events retain `native_event_uptime_seconds` at their producer;
 `native_trace_retention_delay_seconds` separates buffered/replayed diagnostics
 from `main_actor_delivery_delay_seconds`, the dispatch-to-main wait.
