@@ -224,8 +224,29 @@ iOS SDK. Provider availability and stream formats can change.
   including expensive virtual-memory copies for large keyframes. Preserve
   independent state when a demuxer is copied, and keep A/V payloads and clocks
   unchanged.
+- **Segment boundaries are not always keyframes.** Native TS normalization carries
+  drained codec state and the decode-clock anchor across completed, consecutive
+  segments of the same rendition and discontinuity period. Keep every dependent
+  leading frame on that path. Startup searches at most six segments for an
+  independent start; if none starts independently, it begins at a verified IDR
+  inside the oldest inspected segment and updates its date/duration. A declared
+  discontinuity likewise needs its own IDR, never the old decoder state. Only
+  these undecodable entry prefixes are discarded. Direct TS quality URLs use the same
+  normalization as Auto; their advertised bandwidth is estimated from a completed
+  upstream segment when no master supplies it.
+  Quality changes wait for a verified independent entry, including a briefly
+  lagging target playlist, rather than entering dependent media or abandoning
+  adaptation. Committing that choice must preserve capacity samples received
+  during validation. Never advertise `EXT-X-INDEPENDENT-SEGMENTS` for dependent
+  segments; part independence still comes from real sample flags.
+  Retain bounded continuation metadata for exact DVR regeneration, not old media
+  buffers. A short terminal video-only part is valid when the segment's audio
+  already covers it within the existing 100-ms end tolerance; do not duplicate
+  audio to fill it. Codec changes, missing predecessors and invalid clocks remain
+  explicit failures. Diagnostics distinguish startup preroll, an internal-IDR
+  trim, a deferred switch, and manifest/remux/finalization failures.
 - **Avoid copying unneeded transport payloads.** The shared TS indexer borrows
-  each packet's bytes for header checks. After verifying the initial IDR, video
+  each packet's bytes for header checks. After verifying the starting access unit, video
   continuation packets need only header/continuity validation, not a copied
   payload. Still parse tables, PES starts and diagnostic audio timestamps, and
   validate adaptation/discontinuity flags and retransmissions before skipping

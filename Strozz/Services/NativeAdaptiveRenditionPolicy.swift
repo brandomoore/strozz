@@ -69,6 +69,18 @@ struct NativeAdaptiveRenditionPolicy: Sendable {
     upgradeVotes = 0
   }
 
+  mutating func adoptSelection(from proposal: Self) {
+    selected = proposal.selected
+    evaluatedSampleSerial = proposal.evaluatedSampleSerial
+    lastSelectionAt = proposal.lastSelectionAt
+    lastEvaluationAt = proposal.lastEvaluationAt
+    lastBudget = proposal.lastBudget
+    usedMeasuredCapacity = proposal.usedMeasuredCapacity
+    upgradeCandidate = proposal.upgradeCandidate
+    upgradeVotes = proposal.upgradeVotes
+    visibilityRestoreUntil = proposal.visibilityRestoreUntil
+  }
+
   /// Only completed upstream media transfers qualify; loopback delivery and
   /// encoder-paced prefetch bodies are not measurements of available bandwidth.
   @discardableResult

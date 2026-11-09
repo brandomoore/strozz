@@ -22,6 +22,19 @@ final class NativeAdaptiveRenditionPolicyTests: XCTestCase {
       seconds: Double(65_536 * 8) / (mbps * 1_000_000), at: now))
   }
 
+  func testCommittingAValidatedSwitchPreservesCapacityReceivedDuringValidation() throws {
+    var policy = try NativeAdaptiveRenditionPolicy(variants: variants)
+    try record(20, policy: &policy, at: 0)
+    var proposal = policy
+    _ = try proposal.select(budget: .init(), buffer: 2, deliveryLate: false, at: 0)
+    try record(1, policy: &policy, at: 1)
+    let updatedCapacity = policy.capacity
+    policy.adoptSelection(from: proposal)
+    XCTAssertEqual(policy.selected?.id, 4)
+    XCTAssertEqual(policy.capacity, updatedCapacity)
+    XCTAssertEqual(try policy.select(budget: .init(), buffer: 2, deliveryLate: false, at: 2).variant.id, 1)
+  }
+
   func testStartupUsesMeasuredCapacityAndRetainsEveryQuality() throws {
     var policy = try NativeAdaptiveRenditionPolicy(variants: variants)
     XCTAssertEqual(try policy.select(budget: .init(), buffer: 1.5, deliveryLate: false, at: 0).variant.id, 2)

@@ -58,6 +58,17 @@ struct NativeTransportDemuxer {
     mediaPIDs = nil
   }
 
+  func continuationState() throws -> Self {
+    guard pending.isEmpty, videoPending.isEmpty, currentVideoClock == nil else {
+      throw NativeHLSError.invalidMedia
+    }
+    var next = Self()
+    next.sps = sps
+    next.pps = pps
+    next.audioConfiguration = audioConfiguration
+    return next
+  }
+
   mutating func append(_ packet: Data, videoPID: Int, audioPID: Int) throws -> [Unit] {
     guard videoPID != audioPID else { throw NativeHLSError.transportCodec }
     if let mediaPIDs, mediaPIDs.video != videoPID || mediaPIDs.audio != audioPID {

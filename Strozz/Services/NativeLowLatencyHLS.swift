@@ -142,6 +142,8 @@ actor NativeHLSOrigin {
     var parts: [Part] = []
     var complete = false
     var declaredDuration: Double?
+    var hasTransportPredecessor = false
+    var transportContinuation: NativeTransportStream.Continuation?
     var duration: Double { parts.isEmpty ? (declaredDuration ?? 0) : parts.reduce(0) { $0 + $1.duration } }
   }
   struct Rendition {
@@ -453,7 +455,7 @@ actor NativeHLSOrigin {
     return request
   }
 
-  private func data(_ url: URL, timeout: TimeInterval? = nil) async throws -> Data {
+  private func data(_ url: URL, timeout: TimeInterval? = nil, media: Bool = false) async throws -> Data {
     try Task.checkCancellation()
     guard !stopped else { throw CancellationError() }
     inFlightRequests += 1
@@ -476,7 +478,7 @@ actor NativeHLSOrigin {
     guard (response as? HTTPURLResponse)?.statusCode == 200 else {
       throw NativeHLSFailureDetail.httpStatus((response as? HTTPURLResponse)?.statusCode ?? -1)
     }
-    guard data.count < 4 * 1024 * 1024 else { throw NativeHLSError.invalidMedia }
+    guard data.count < (media ? 32 : 4) * 1024 * 1024 else { throw NativeHLSError.invalidMedia }
     return data
   }
 
@@ -532,6 +534,20 @@ actor NativeHLSOrigin {
     if !text.contains("#EXT-X-STREAM-INF:") {
       guard fixedRenditionID == nil else { throw NativeHLSError.unsupported }
       sources[0] = Rendition(url: root)
+      let manifest = try NativeCMAF.manifest(text, url: root)
+      if controlledAuto, let entry = manifest.entries.last(where: { $0.duration != nil }),
+        entry.initialization == nil, let duration = entry.duration, duration > 0 {
+        let sample = try await data(entry.url, media: true)
+        let bitrate = max(1, Int((Double(sample.count) * 8 / duration).rounded(.up)))
+        controlled = NativeControlledHLSOrigin(variants: [
+          .init(id: 0, url: root, bitrate: bitrate, manifest: manifest),
+        ], headers: headers, history: history, target: manifest.targetDuration,
+          namespace: variantNamespace, budget: initialBudget, loadData: loadData,
+          diagnostic: diagnostic, trace: trace, failure: failure)
+        #if DEBUG
+        if capturesRequests { await controlled?.enableRequestDiagnostics() }
+        #endif
+      }
       master = ""
       return
     }
@@ -607,7 +623,8 @@ actor NativeHLSOrigin {
     advertisedTargetDuration = manifests.values.map(\.targetDuration).max()
     sources = prepared
     reportsUpdatedAt = Date()
-    if (controlledAuto && prepared.count > 1) || fixedRenditionID != nil {
+    let transportOnly = manifests.values.allSatisfy { $0.entries.allSatisfy { $0.initialization == nil } }
+    if (controlledAuto && (prepared.count > 1 || transportOnly)) || fixedRenditionID != nil {
       let values = try prepared.sorted(by: { $0.key < $1.key }).map { index, source in
         guard let bitrate = source.bandwidth, let manifest = manifests[index] else { throw NativeHLSError.invalidMedia }
         return NativeControlledHLSOrigin.Variant(id: index, url: source.url, bitrate: bitrate, manifest: manifest)
@@ -778,7 +795,7 @@ actor NativeHLSOrigin {
     guard let first = published.first, let last = published.last else { throw NativeHLSError.unavailable }
     let holdBack = source.liveHoldBack
     let target = advertisedTargetDuration ?? source.target
-    var lines = ["#EXTM3U", "#EXT-X-VERSION:9", "#EXT-X-INDEPENDENT-SEGMENTS",
+    var lines = ["#EXTM3U", "#EXT-X-VERSION:9",
       "#EXT-X-TARGETDURATION:\(target)", "#EXT-X-MEDIA-SEQUENCE:\(first.sequence)",
       "#EXT-X-DISCONTINUITY-SEQUENCE:\(first.discontinuity)",
       "#EXT-X-PART-INF:PART-TARGET=0.45",
@@ -906,6 +923,33 @@ actor NativeHLSOrigin {
     return try NativeCMAF.manifest(String(decoding: bytes, as: UTF8.self), url: url)
   }
 
+  private func transportAnchor(in entries: [NativeCMAF.Entry],
+                               at entry: NativeCMAF.Entry) async throws -> NativeCMAF.Entry {
+    guard entry.initialization == nil else { return entry }
+    let candidates = entries.filter {
+      $0.sequence <= entry.sequence && $0.discontinuity == entry.discontinuity
+    }.suffix(6)
+    var expected = entry.sequence
+    for candidate in candidates.reversed() {
+      guard candidate.sequence == expected else { throw NativeHLSError.transition }
+      let bytes = try await data(candidate.url, media: true)
+      guard !bytes.isEmpty, bytes.count <= 32 * 1024 * 1024, bytes.count.isMultiple(of: 188) else {
+        throw NativeHLSError.invalidMedia
+      }
+      var transport = NativeTransportStream()
+      do {
+        for offset in stride(from: 0, to: bytes.count, by: 188) {
+          _ = try transport.append(bytes.subdata(in: offset..<offset + 188))
+        }
+        _ = try transport.finish(expectedDuration: candidate.duration)
+        return candidate
+      } catch NativeHLSError.transportKeyframe {
+        expected -= 1
+      }
+    }
+    throw NativeHLSError.transportKeyframe
+  }
+
   private func run(_ index: Int, startingAt requestedSequence: Int? = nil) async {
     let reader = NativeHLSChunkReader()
     defer { reader.stop() }
@@ -931,8 +975,9 @@ actor NativeHLSOrigin {
         sources[index]?.publicationDuration = manifest.entries.compactMap(\.duration).max()
         if next == nil {
           let completed = manifest.entries.filter { $0.duration != nil && $0.date != nil }
-          guard let first = Self.initialEntry(in: completed, requestedSequence: requestedSequence)
+          guard let selected = Self.initialEntry(in: completed, requestedSequence: requestedSequence)
           else { throw NativeHLSError.unsupported }
+          let first = try await transportAnchor(in: completed, at: selected)
           // Keep the timeline prefix seen before this rendition was selected.
           // Starting its playlist at a newer upstream window rebases AVPlayer's
           // time mapping during an adaptive switch, even as new parts arrive.
@@ -1001,8 +1046,13 @@ actor NativeHLSOrigin {
           period += 1
           endClock = nil
         }
+        let predecessor = previous.flatMap {
+          $0.sequence + 1 == entry.sequence && $0.discontinuity == period && $0.complete
+            ? $0.transportContinuation : nil
+        }
         sources[index]?.segments.append(Segment(sequence: entry.sequence, url: entry.url, date: date,
-          initialization: entry.initialization, discontinuity: period, tags: entry.tags))
+          initialization: entry.initialization, discontinuity: period, tags: entry.tags,
+          hasTransportPredecessor: predecessor != nil))
         let emitTrace = trace
         let transfer: @Sendable (NativeHLSPlaybackDiagnostic) -> Void = { detail in
           emitTrace?(.init(event: detail.event,
@@ -1034,7 +1084,7 @@ actor NativeHLSOrigin {
         var partDuration = 0.0
         var cmafStart: Double?
         var independent = false
-        var transportStream = NativeTransportStream(capturesDiagnostics: trace != nil)
+        var transportStream = NativeTransportStream(capturesDiagnostics: trace != nil, continuing: predecessor)
         var tsPending = Data()
         var tsInitialization = Data()
         var cmafPending = Data()
@@ -1181,6 +1231,7 @@ actor NativeHLSOrigin {
         if var source = sources[index], !source.segments.isEmpty {
           let last = source.segments.count - 1
           source.segments[last].complete = true
+          source.segments[last].transportContinuation = transportStream.continuation
           let duration = source.segments[last].duration
           guard duration > 0, duration.rounded() <= Double(advertisedTargetDuration ?? source.target)
           else { throw NativeHLSError.unsupported }
@@ -1239,7 +1290,9 @@ actor NativeHLSOrigin {
     guard cachedMediaBytes + (part.media?.count ?? 0) <= 96 * 1024 * 1024 else {
       throw NativeHLSFailureDetail.cacheCapacity(cachedMediaBytes)
     }
-    if source.segments[last].parts.isEmpty, !part.independent { throw NativeHLSError.invalidMedia }
+    if source.segments[last].parts.isEmpty, !part.independent, !source.segments[last].hasTransportPredecessor {
+      throw NativeHLSError.invalidMedia
+    }
     source.segments[last].parts.append(part)
     if source.indexingPrefetch { source.reachedLiveEdge = true }
     cachedMediaBytes += part.media?.count ?? 0

@@ -113,6 +113,10 @@ final class NativeSourceDecodingLiveTests: XCTestCase {
     let engine = native ? NativeLowLatencyHLS(sourceURL: url, headers: PlaybackService.streamHeaders,
       history: 1800, loadData: loadData, diagnostic: { value in
         print("ADAPTIVE_NATIVE_FAILURE \(value.attributes) \(value.metrics) \(value.counters)")
+      }, trace: { value in
+        if value.event == .rendition || value.attributes["reason"] == "switch_waiting_for_keyframe" {
+          print("ADAPTIVE_NATIVE_SELECTION \(value.attributes) \(value.metrics) \(value.counters)")
+        }
       }) { error in XCTFail("Native comparison failed: \(error.rawValue)") } : nil
     let asset = AVURLAsset(url: engine?.assetURL ?? url,
       options: ["AVURLAssetHTTPHeaderFieldsKey": PlaybackService.streamHeaders])

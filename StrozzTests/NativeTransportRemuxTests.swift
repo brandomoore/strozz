@@ -412,7 +412,8 @@ final class NativeTransportRemuxTests: XCTestCase {
     XCTAssertThrowsError(try NativeMediaClock.unwrap(NativeMediaClock.wrap, near: 0))
   }
 
-  private func transportFixture(clock: UInt64) -> [Data] {
+  private func transportFixture(clock: UInt64, independent: Bool = true, keyframeFrame: Int = 0,
+                                frames: Int = 60, presentationOffset: UInt64 = 0) -> [Data] {
     var tableCounter = 0
     var output = packets(Data([0, 0, 0xB0, 13, 0, 1, 0xC1, 0, 0, 0, 1, 0xF0, 0, 0, 0, 0, 0]),
       pid: 0, counter: &tableCounter)
@@ -422,12 +423,13 @@ final class NativeTransportRemuxTests: XCTestCase {
     var videoCounter = 0
     var audioCounter = 0
     var audioClock = clock
-    for frame in 0..<60 {
+    for frame in 0..<frames {
       let time = clock + UInt64(frame * 3000)
       let payload = nal(Data([9, 0xF0]))
-        + (frame == 0 ? nal(sps) + nal(pps) : Data())
-        + nal(Data([frame == 0 ? 0x65 : 0x41, 0x80, 0x88]))
-      output += packets(pes(payload, pts: time), pid: 257, counter: &videoCounter)
+        + (frame == keyframeFrame && independent ? nal(sps) + nal(pps) : Data())
+        + nal(Data([frame == keyframeFrame && independent ? 0x65 : 0x41, 0x80, 0x88]))
+      output += packets(pes(payload, pts: time + presentationOffset,
+        dts: presentationOffset == 0 ? nil : time), pid: 257, counter: &videoCounter)
       while audioClock <= time + 3000 {
         output += packets(pes(adts(Data([0x21, 0x10, 0x04])), audio: true, pts: audioClock),
           pid: 256, counter: &audioCounter)
@@ -453,6 +455,91 @@ final class NativeTransportRemuxTests: XCTestCase {
     XCTAssertTrue(parts.dropFirst().allSatisfy { !$0.independent })
     XCTAssertTrue(parts.allSatisfy { (0.3825...0.45).contains($0.duration) })
     XCTAssertThrowsError(try remuxer.append(packets[0]))
+  }
+
+  func testDependentSegmentPreservesEveryFrameAndReplaysFromBoundedContinuation() throws {
+    var first = try NativeTransportRemuxer()
+    for packet in transportFixture(clock: 90_000) { _ = try first.append(packet) }
+    XCTAssertNil(first.continuation, "An unfinished predecessor cannot authorize dependent frames")
+    _ = try first.finish(expectedDuration: 2)
+    let predecessor = try XCTUnwrap(first.continuation)
+    let fixture = transportFixture(clock: 270_000, independent: false)
+    var isolated = try NativeTransportRemuxer(configuration: first.configuration)
+    XCTAssertThrowsError(try fixture.forEach { _ = try isolated.append($0) }) {
+      XCTAssertEqual($0 as? NativeHLSError, .transportKeyframe)
+    }
+    var outputs: [[NativeTransportRemuxer.Part]] = []
+    for _ in 0..<2 {
+      var continued = try NativeTransportRemuxer(configuration: first.configuration,
+        firstSequence: first.nextSequence, continuing: predecessor)
+      var parts: [NativeTransportRemuxer.Part] = []
+      for packet in fixture { parts += try continued.append(packet) }
+      parts += try continued.finish(expectedDuration: 2)
+      XCTAssertEqual(parts.reduce(0) { $0 + $1.videoSamples }, 60)
+      XCTAssertEqual(parts.reduce(0) { $0 + $1.audioSamples }, 94)
+      XCTAssertEqual(parts.first?.decodeTime, 270_000)
+      XCTAssertEqual(parts.first?.presentationTime, 270_000)
+      XCTAssertTrue(parts.allSatisfy { !$0.independent })
+      XCTAssertEqual(continued.configuration, first.configuration)
+      XCTAssertNotNil(continued.continuation)
+      outputs.append(parts)
+    }
+    XCTAssertEqual(outputs[0].map(\.bytes), outputs[1].map(\.bytes),
+      "Historical regeneration must reproduce exactly the live fragment bytes")
+    for clock: UInt64 in [90_000, 267_000, 450_000] {
+      var invalid = try NativeTransportRemuxer(configuration: first.configuration, continuing: predecessor)
+      XCTAssertThrowsError(try transportFixture(clock: clock, independent: false)
+        .forEach { _ = try invalid.append($0) })
+    }
+    XCTAssertThrowsError(try NativeTransportRemuxer(continuing: predecessor))
+  }
+
+  func testShortFinalReorderedVideoTailDoesNotRequireDuplicatedAudio() throws {
+    var remuxer = try NativeTransportRemuxer()
+    var parts: [NativeTransportRemuxer.Part] = []
+    for packet in transportFixture(clock: 90_000, frames: 61, presentationOffset: 3000) {
+      parts += try remuxer.append(packet)
+    }
+    parts += try remuxer.finish(expectedDuration: 61.0 / 30)
+    XCTAssertEqual(parts.reduce(0) { $0 + $1.videoSamples }, 61)
+    XCTAssertEqual(parts.reduce(0) { $0 + $1.audioSamples }, 96)
+    XCTAssertEqual(parts.last?.audioSamples, 0)
+    XCTAssertEqual(parts.last?.videoSamples, 1)
+    XCTAssertTrue(parts.dropLast().allSatisfy { $0.audioSamples > 0 })
+  }
+
+  func testStartupFindsRealIDRInsideAnOtherwiseDependentSegment() throws {
+    let bytes = transportFixture(clock: 90_000, keyframeFrame: 30).reduce(into: Data()) { $0.append($1) }
+    let start = try NativeTransportStream.randomAccessSegment(bytes)
+    XCTAssertEqual(start.skippedDuration, 1, accuracy: 0.000001)
+    var remuxer = try NativeTransportRemuxer()
+    var parts: [NativeTransportRemuxer.Part] = []
+    for offset in stride(from: 0, to: start.bytes.count, by: 188) {
+      parts += try remuxer.append(start.bytes.subdata(in: offset..<offset + 188))
+    }
+    parts += try remuxer.finish(expectedDuration: 1)
+    XCTAssertEqual(parts.reduce(0) { $0 + $1.videoSamples }, 30)
+    XCTAssertEqual(parts.first?.decodeTime, 180_000)
+    XCTAssertEqual(parts.first?.independent, true)
+    XCTAssertThrowsError(try NativeTransportStream.randomAccessSegment(
+      transportFixture(clock: 90_000, independent: false).reduce(into: Data()) { $0.append($1) }))
+  }
+
+  func testDependentContinuationCrossesTransportTimestampWrap() throws {
+    var predecessor: NativeTransportRemuxer.Continuation?
+    var configuration: NativeFragmentedMP4.Configuration?
+    let start = NativeMediaClock.wrap - 90_000
+    for index in 0..<3 {
+      var remuxer = try NativeTransportRemuxer(configuration: configuration, continuing: predecessor)
+      var parts: [NativeTransportRemuxer.Part] = []
+      for packet in transportFixture(clock: start + UInt64(index * 180_000), independent: index == 0) {
+        parts += try remuxer.append(packet)
+      }
+      parts += try remuxer.finish(expectedDuration: 2)
+      XCTAssertEqual(parts.first?.decodeTime, start + UInt64(index * 180_000))
+      configuration = remuxer.configuration
+      predecessor = remuxer.continuation
+    }
   }
 
   func testExplicitRenditionUsesControlledRemuxWithoutFetchingUnselectedMetadata() async throws {
@@ -499,6 +586,8 @@ final class NativeTransportRemuxTests: XCTestCase {
 
   private func controlledFixture(slow: Bool, crossesDiscontinuity: Bool = false,
                                  noisyProbe: Bool = false,
+                                 dependentSegments: Bool = false,
+                                 unalignedKeyframes: Bool = false,
                                  advancesTo: Int? = nil,
                                  trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil,
                                  failure: @escaping @Sendable (NativeHLSError) -> Void) throws
@@ -531,7 +620,9 @@ final class NativeTransportRemuxTests: XCTestCase {
     text += "#EXT-X-TWITCH-PREFETCH:20.ts\n"
     for sequence in 0...(advancesTo ?? 20) {
       let localSequence = crossesDiscontinuity ? sequence % 10 : sequence
-      media["\(sequence).ts"] = transportFixture(clock: UInt64((localSequence * 2 + 1) * 90_000))
+      media["\(sequence).ts"] = transportFixture(clock: UInt64((localSequence * 2 + 1) * 90_000),
+        independent: !dependentSegments || sequence.isMultiple(of: 2),
+        keyframeFrame: unalignedKeyframes ? 30 : 0)
         .reduce(into: Data()) { $0.append($1) }
     }
     var advancingManifests: [Int: Data] = [:]
@@ -606,6 +697,7 @@ final class NativeTransportRemuxTests: XCTestCase {
         XCTAssertGreaterThan(detail.metrics["estimated_capacity_bps"] ?? 0, 1_400_000 / 0.75)
         capacity.fulfill()
       }
+
     }) { _ in failure.fulfill() }
     addTeardownBlock { await origin.stop() }
     _ = try await origin.response(URL(string: "strozz-native-ll://fixture/root.m3u8")!)
@@ -613,6 +705,77 @@ final class NativeTransportRemuxTests: XCTestCase {
     await fulfillment(of: [capacity], timeout: 5)
     await origin.stop()
     await fulfillment(of: [failure], timeout: 0.1)
+  }
+
+  func testControlledAutoStartsBeforeDependentSegmentAndRegeneratesEvictedHistory() async throws {
+    let failed = expectation(description: "Dependent segments must not fail the controlled origin")
+    failed.isInverted = true
+    let origin = try controlledFixture(slow: false, dependentSegments: true, advancesTo: 36) { _ in
+      failed.fulfill()
+    }
+    addTeardownBlock { await origin.stop() }
+    _ = try await origin.response(URL(string: "strozz-native-ll://fixture/root.m3u8")!)
+    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+    var playlist = ""
+    repeat {
+      guard case .playlist(let bytes) = try await origin.response(
+        URL(string: "strozz-native-ll://fixture/media/0.m3u8")!) else { return XCTFail("Expected playlist") }
+      playlist = String(decoding: bytes, as: UTF8.self)
+      if playlist.contains("#EXT-X-ENDLIST") { break }
+      try await Task.sleep(for: .milliseconds(25))
+    } while ContinuousClock.now < deadline
+    XCTAssertTrue(playlist.contains("#EXT-X-ENDLIST"))
+    XCTAssertFalse(playlist.contains("#EXT-X-INDEPENDENT-SEGMENTS"))
+    XCTAssertTrue(playlist.contains("/segment/0/23.mp4"))
+    let bytes = await origin.media("/segment/0/23.mp4")
+    XCTAssertNotNil(bytes, "A dependent segment must regenerate after its live bytes are evicted")
+    await origin.stop()
+    await fulfillment(of: [failed], timeout: 0.1)
+  }
+
+  func testControlledStartupTrimsOnlyUndecodablePrerollWhenNoSegmentStartsWithIDR() async throws {
+    let failed = expectation(description: "Unaligned keyframes must not fail startup")
+    failed.isInverted = true
+    let origin = try controlledFixture(slow: false, unalignedKeyframes: true, advancesTo: 22) { _ in
+      failed.fulfill()
+    }
+    addTeardownBlock { await origin.stop() }
+    _ = try await origin.response(URL(string: "strozz-native-ll://fixture/root.m3u8")!)
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    var playlist = ""
+    repeat {
+      guard case .playlist(let bytes) = try await origin.response(
+        URL(string: "strozz-native-ll://fixture/media/0.m3u8")!) else { return XCTFail("Expected playlist") }
+      playlist = String(decoding: bytes, as: UTF8.self)
+      if playlist.contains("#EXT-X-ENDLIST") { break }
+      try await Task.sleep(for: .milliseconds(25))
+    } while ContinuousClock.now < deadline
+    XCTAssertTrue(playlist.contains("#EXT-X-ENDLIST"))
+    XCTAssertTrue(playlist.contains("#EXT-X-MEDIA-SEQUENCE:14"))
+    XCTAssertTrue(playlist.contains("#EXTINF:1.000000,"))
+    XCTAssertEqual(playlist.components(separatedBy: "#EXTINF:2.000000,").count - 1, 8,
+      "Consecutive segments must retain all their dependent leading frames")
+    await origin.stop()
+    await fulfillment(of: [failed], timeout: 0.1)
+  }
+
+  func testDiscontinuityStartsAtItsOwnIDRWithoutReusingOldDecoderState() async throws {
+    let failed = expectation(description: "A new period can have a short undecodable prefix")
+    failed.isInverted = true
+    let origin = try controlledFixture(slow: false, crossesDiscontinuity: true, unalignedKeyframes: true) { _ in
+      failed.fulfill()
+    }
+    addTeardownBlock { await origin.stop() }
+    _ = try await origin.response(URL(string: "strozz-native-ll://fixture/root.m3u8")!)
+    guard case .playlist(let bytes) = try await origin.response(
+      URL(string: "strozz-native-ll://fixture/media/0.m3u8")!) else { return XCTFail("Expected playlist") }
+    let playlist = String(decoding: bytes, as: UTF8.self)
+    XCTAssertTrue(playlist.contains("#EXT-X-ENDLIST"))
+    XCTAssertTrue(playlist.contains("#EXT-X-DISCONTINUITY\n"))
+    XCTAssertTrue(playlist.contains("/init/0/2.mp4"))
+    XCTAssertEqual(playlist.components(separatedBy: "#EXTINF:1.000000,").count - 1, 2)
+    await origin.stop()
+    await fulfillment(of: [failed], timeout: 0.1)
   }
 
   func testControlledProducerCrossesTimestampResetAndRetainsOldPeriodRewindAfterManifestRolls() async throws {
