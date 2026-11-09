@@ -77,7 +77,12 @@ struct NativeTransportStream {
 
   mutating func append(_ packet: Data) throws -> Range? {
     guard packet.count == 188 else { throw NativeHLSError.invalidMedia }
-    let b = Array(packet)
+    return try packet.withUnsafeBytes { bytes in
+      try append(packet, bytes: bytes.bindMemory(to: UInt8.self))
+    }
+  }
+
+  private mutating func append(_ packet: Data, bytes b: UnsafeBufferPointer<UInt8>) throws -> Range? {
     guard b[0] == 0x47, b[1] & 0x80 == 0, b[3] & 0xC0 == 0 else { throw NativeHLSError.invalidMedia }
     let pid = Int(b[1] & 31) << 8 | Int(b[2])
     let start = b[1] & 0x40 != 0
@@ -95,13 +100,13 @@ struct NativeTransportStream {
     let offset = byteCount
     byteCount += 188
     guard adaptation & 1 != 0, position < 188 else { return nil }
-    let payload = Data(b[position...])
     if start, pid == 0 || pid == pmtPID {
-      try readTable(payload, pid: pid)
+      try readTable(Data(b[position...]), pid: pid)
       if pid == pmtPID, firstClock == nil { initializationLength = byteCount }
       return nil
     }
     if capturesDiagnostics, pid == audioPID, start, firstAudioClock == nil {
+      let payload = Data(b[position...])
       if payload.count >= 14, payload.prefix(3) == Data([0, 0, 1]),
         payload[7] >> 6 == 2 || payload[7] >> 6 == 3 {
         firstAudioClock = diagnosticTimestamp(payload, at: 9)
@@ -117,6 +122,10 @@ struct NativeTransportStream {
     }
     lastContinuity = continuity
     lastVideoPacket = packet
+    // Once random access is verified, continuation payloads do not affect the index.
+    // Keep validating their headers and continuity without allocating payload copies.
+    guard start || !hasInitialIDR else { return nil }
+    let payload = Data(b[position...])
     var result: Range?
     var videoOffset = 0
     if start {

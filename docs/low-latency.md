@@ -224,6 +224,12 @@ iOS SDK. Provider availability and stream formats can change.
   including expensive virtual-memory copies for large keyframes. Preserve
   independent state when a demuxer is copied, and keep A/V payloads and clocks
   unchanged.
+- **Avoid copying unneeded transport payloads.** The shared TS indexer borrows
+  each packet's bytes for header checks. After verifying the initial IDR, video
+  continuation packets need only header/continuity validation, not a copied
+  payload. Still parse tables, PES starts and diagnostic audio timestamps, and
+  validate adaptation/discontinuity flags and retransmissions before skipping
+  payload inspection. This does not skip media bytes or demuxing in Auto.
 - **Respect format and part contracts.** Source-CMAF requires muxed AVC/AAC-LC,
   compatible track IDs/timebases and audio configuration within a period, and no
   edit lists. Unsupported media fails explicitly, not by silently hiding a
