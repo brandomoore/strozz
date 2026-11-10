@@ -58,4 +58,5 @@ struct ChannelProfile: Hashable {
   let lastBroadcastStartedAt: Date?
 
   let socialLinks: [ChannelSocialLink]
+  var broadcasterID: String? = nil
 }

@@ -23,6 +23,7 @@ struct StrozzMobileApp: App {
     SDImageCodersManager.shared.addCoder(SDImageWebPCoder.shared)
     ImageCacheConfigurator.configure()
     ChatSyncDefaultsMigration.runIfNeeded()
+    YouTubeAccountRemoval.run()
   }
 
   var body: some Scene {

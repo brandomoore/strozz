@@ -49,12 +49,6 @@ final class AppEnvironment {
   /// Anonymous watch-page scraper for live YouTube concurrent viewer counts,
   /// used to fill in counts the public snapshot ships as `nil`.
   let youtubeConcurrentViewers = YouTubeConcurrentViewersService()
-  /// YouTube account / device-code session.
-  let youtubeAuth = YouTubeAuthSession()
-  /// The viewer's YouTube subscriptions.
-  let youtubeSubscriptions = YouTubeSubscriptionsService()
-  /// Resolves live presence for subscribed YouTube channels.
-  let youtubeResolver = YouTubeLiveResolver()
   /// Active theme selection + palette resolution.
   let themeManager = ThemeManager()
   /// Night Shift warm-wash schedule + live tint.

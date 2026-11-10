@@ -49,7 +49,7 @@ install_apple_build_lease_traps
 # build secrets in via `#include? "<name>.xcconfig.local"` lines (gitignored,
 # per-worktree). When one of those files is missing or empty the include
 # silently no-ops, the keys resolve empty, and dependent features quietly
-# disappear (e.g. YouTube sign-in vanishes from Settings) — with a green build
+# disappear or fail at runtime — with a green build
 # and no error. Surface that here so a build "without the correct keys" is
 # visible instead of silent. Warnings only; external contributors can build
 # without secrets on purpose, so this never fails the build. All output goes to
@@ -60,9 +60,9 @@ if [[ "$*" != *"-showBuildSettings"* ]]; then
     while IFS= read -r _inc; do
       _f="$_xcbuild_root/Config/$_inc"
       if [[ ! -f "$_f" ]]; then
-        echo "xcbuild.sh: WARNING: Config/$_inc is missing; the secrets it provides will be empty and dependent features may be hidden (e.g. YouTube sign-in). Run ./tools/bootstrap-worktree.sh" >&2
+        echo "xcbuild.sh: WARNING: Config/$_inc is missing; the secrets it provides will be empty and dependent features may be unavailable. Run ./tools/bootstrap-worktree.sh" >&2
       elif ! grep -Eq '^[[:space:]]*[A-Za-z0-9_]+[[:space:]]*=[[:space:]]*[^[:space:]]' "$_f"; then
-        echo "xcbuild.sh: WARNING: Config/$_inc has no non-empty values; dependent features may be hidden (e.g. YouTube sign-in)." >&2
+        echo "xcbuild.sh: WARNING: Config/$_inc has no non-empty values; dependent features may be unavailable." >&2
       fi
     done < <(grep -oE '#include\? +"[^"]+\.xcconfig\.local"' "$_xcbuild_app_xcconfig" | sed -E 's/.*"([^"]+)".*/\1/')
   fi

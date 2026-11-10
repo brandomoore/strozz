@@ -4,7 +4,6 @@ import SwiftUI
 /// coherent group at a time instead of a single wall of unrelated controls.
 struct SettingsView: View {
   var onRequestSignIn: () -> Void = {}
-  var onRequestYouTubeSignIn: () -> Void = {}
   var onClearWatchHistory: () -> Void = {}
   var onResetNotInterested: () -> Void = {}
   var onAccountChanged: () -> Void = {}
@@ -35,7 +34,6 @@ struct SettingsView: View {
             SettingsPaneDetail(
               pane: selectedPane,
               onRequestSignIn: onRequestSignIn,
-              onRequestYouTubeSignIn: onRequestYouTubeSignIn,
               onClearWatchHistory: onClearWatchHistory,
               onResetNotInterested: onResetNotInterested,
               onAccountChanged: onAccountChanged
@@ -217,7 +215,6 @@ private struct SettingsPaneButtonBody: View {
 private struct SettingsPaneDetail: View {
   let pane: SettingsPane
   let onRequestSignIn: () -> Void
-  let onRequestYouTubeSignIn: () -> Void
   let onClearWatchHistory: () -> Void
   let onResetNotInterested: () -> Void
   let onAccountChanged: () -> Void
@@ -274,10 +271,6 @@ private struct SettingsPaneDetail: View {
           if StreamPlatformPreferences.shared.selection.includesKick {
             SettingsKickAccountSection()
           }
-          SettingsYouTubeAccountSection(
-            onRequestYouTubeSignIn: onRequestYouTubeSignIn,
-            onAccountChanged: onAccountChanged
-          )
         case .about:
           SettingsAboutSection(showsTitle: false)
         }

@@ -15,6 +15,7 @@ struct StrozzApp: App {
     ImageCacheConfigurator.configure()
     ChatAppearanceMigration.runIfNeeded()
     ChatSyncDefaultsMigration.runIfNeeded()
+    YouTubeAccountRemoval.run()
   }
 
   var body: some Scene {

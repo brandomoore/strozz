@@ -23,8 +23,7 @@ main_worktree="$(git worktree list --porcelain | awk '/^worktree / && !seen { pr
 # Files that are gitignored but wanted in every worktree: maintainer-local agent
 # instructions, plus EVERY local build-secrets xcconfig. The secrets list is
 # discovered dynamically (not hardcoded) so adding a new Config/*.xcconfig.local
-# in the primary worktree — e.g. YouTubeSecrets — is picked up automatically and
-# can never be silently dropped, which previously hid YouTube sign-in.
+# in the primary worktree is picked up automatically and cannot be silently dropped.
 LOCAL_FILES=(
   "AGENTS.local.md"
 )

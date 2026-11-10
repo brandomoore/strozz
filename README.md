@@ -90,6 +90,10 @@ The feature list below describes the Apple TV app. See
   creator links, and watch history are kept. Existing YouTube features are unchanged.
 - **Home built around your follows.** See the channels you follow that are live
   now, plus recommendations.
+- **Streaming together.** Live Twitch channel pages on Apple TV, iPhone, and
+  iPad list confirmed Stream Together participants, such as "Burn + willneff."
+  Names refresh while the page is active; channel identity, follows, and playback
+  still belong to the channel you opened.
 - **Stable loading rows.** Home and Browse use card-sized skeletons while their
   first results load. Existing cards stay visible during refresh, and Home's
   horizontal rails keep their space even when a result is empty.
@@ -102,9 +106,10 @@ The feature list below describes the Apple TV app. See
   channel.
 - **Top Shelf.** Your live follows and recommendations surface on the tvOS home
   screen above the app icon.
-- **YouTube, too.** Connect a YouTube account to see your subscribed streamers
-  who are live and watch YouTube-only streams; streamers live on both platforms
-  show up as one combined card.
+- **YouTube, too.** Watch supported creators' public YouTube live streams and
+  simulcasts without a YouTube account. YouTube sign-in and subscription import
+  are not supported; existing local YouTube credentials and imported subscriptions
+  are removed when the app starts. Saved creator links and watch history are kept.
 
 ### Make it comfortable
 

@@ -45,9 +45,6 @@ struct HomeView: View {
   private var youtubeConcurrentViewers: YouTubeConcurrentViewersService {
     environment.youtubeConcurrentViewers
   }
-  private var youtubeAuth: YouTubeAuthSession { environment.youtubeAuth }
-  private var youtubeSubscriptions: YouTubeSubscriptionsService { environment.youtubeSubscriptions }
-  private var youtubeResolver: YouTubeLiveResolver { environment.youtubeResolver }
   private var themeManager: ThemeManager { environment.themeManager }
   private var goLive: GoLiveWatcher { environment.goLive }
   private var goLiveSettings: GoLiveNotificationSettings { environment.goLiveSettings }
@@ -65,10 +62,8 @@ struct HomeView: View {
   @State private var showingFollowingDirectory = false
   @State private var firstFocusRequested = false
   @State private var showSignIn = false
-  @State private var showYouTubeSignIn = false
   @State private var showGoLiveSetup = false
   @State private var youtubePlayback: YouTubePlaybackTarget?
-  @AppStorage(YouTubePreferences.showSubscriptionsKey) private var showYouTubeSubscriptions = true
   @State private var refreshToast: RefreshToastState?
   /// When the viewer last did anything on Home (moved focus, switched tabs,
   /// opened or closed a cover). Drives the idle auto-refresh so the rails never
@@ -264,7 +259,6 @@ struct HomeView: View {
       tabContainer {
         SettingsView(
           onRequestSignIn: { showSignIn = true },
-          onRequestYouTubeSignIn: { showYouTubeSignIn = true },
           onClearWatchHistory: {
             watchHistory.clear()
             Task { await refreshPersonalizedIfNeeded(force: true) }
@@ -341,7 +335,6 @@ struct HomeView: View {
         restore: {
           await environment.accountSync.start(auth: auth, rewards: environment.watchRewards)
           guard !Task.isCancelled else { return }
-          youtubeAuth.restore()
           goLive.start(using: auth)
           promptFirstLaunchSignInIfNeeded()
         },
@@ -349,8 +342,6 @@ struct HomeView: View {
       guard !Task.isCancelled else { return }
       requestFocusIfPossible(force: true)
       openDeepLinkedChannelIfNeeded(deepLinkRouter.pendingChannelLogin)
-      await youtubeSubscriptions.refresh(using: youtubeAuth)
-      await refreshYouTubeSubscriptionLiveness()
       promptGoLiveSetupIfNeeded()
     }
     .task {
@@ -367,8 +358,6 @@ struct HomeView: View {
         guard isForeground, !Task.isCancelled else { return }
         promptGoLiveSetupIfNeeded()
         await refreshHomeSections(force: false)
-        await youtubeSubscriptions.refresh(using: youtubeAuth)
-        await refreshYouTubeSubscriptionLiveness()
       }
     }
     .onChange(of: interactionSignature) { _, _ in
@@ -400,13 +389,6 @@ struct HomeView: View {
       guard homeRefresh.hasCompletedInitialLoad, auth.isAuthenticated,
             follows.errorMessage != nil || follows.isUsingDemoData else { return }
       Task { await refreshHomeSections(force: true) }
-    }
-    .onChange(of: youtubeAuth.isAuthenticated) { _, _ in
-      guard homeRefresh.hasCompletedInitialLoad else { return }
-      Task {
-        await youtubeSubscriptions.refresh(using: youtubeAuth, force: true)
-        await refreshYouTubeSubscriptionLiveness(force: true)
-      }
     }
     .onChange(of: selectedSidebarTab) { _, tab in
       guard tab == .home, homeRefresh.hasCompletedInitialLoad else { return }
@@ -485,16 +467,6 @@ struct HomeView: View {
         Task {
           await refreshFollowedChannelsIfNeeded(force: true)
           requestFocusIfPossible(force: true)
-        }
-      }
-      .environment(\.themePalette, resolvedPalette)
-      .preferredColorScheme(themeManager.theme.preferredColorScheme)
-    }
-    .fullScreenCover(isPresented: $showYouTubeSignIn, onDismiss: { promptGoLiveSetupIfNeeded() }) {
-      YouTubeSignInView(auth: youtubeAuth) {
-        Task {
-          await youtubeSubscriptions.refresh(using: youtubeAuth, force: true)
-          await refreshYouTubeSubscriptionLiveness(force: true)
         }
       }
       .environment(\.themePalette, resolvedPalette)
@@ -622,75 +594,11 @@ struct HomeView: View {
     }
   }
 
-  // MARK: - YouTube subscriptions
+  // MARK: - Following playback
 
-  /// Normalizes a streamer name for cross-platform identity matching: lowercased
-  /// with everything but letters/digits stripped, so "Ludwig" (Twitch) and
-  /// "Ludwig" (YouTube), or "fuslie"/"Fuslie", collapse to the same key.
-  private func normalizedStreamerKey(_ name: String) -> String {
-    name.lowercased().unicodeScalars.filter {
-      CharacterSet.alphanumerics.contains($0)
-    }.map(String.init).joined()
-  }
-
-  /// Identity keys for streamers already shown on the Following (Twitch) rail —
-  /// by YouTube channel ID (enriched presence or alias table) and by normalized
-  /// display name / login — so a streamer live on both platforms is never
-  /// duplicated as a separate YouTube card.
-  private var twitchRepresentedKeys: (channelIDs: Set<String>, names: Set<String>) {
-    var channelIDs = Set(follows.channels.compactMap { $0.youtube?.channelID })
-    var names = Set<String>()
-    for channel in follows.channels {
-      if let mapped = youtubeAliases.youtubeChannelID(forTwitchLogin: channel.login) {
-        channelIDs.insert(mapped)
-      }
-      names.insert(normalizedStreamerKey(channel.displayName))
-      names.insert(normalizedStreamerKey(channel.login))
-    }
-    names.remove("")
-    return (channelIDs, names)
-  }
-
-  /// Subscribed YouTube streamers who are live right now, as standard cards, with
-  /// any streamer already on the Following (Twitch) rail removed so there's a
-  /// single card per streamer. Rendered with the shared `LiveBadge` like every
-  /// other card — `isLive`/`viewerCount` carry the YouTube live state.
-  private var liveYouTubeSubscriptionCards: [FollowedChannel] {
-    guard showYouTubeSubscriptions else { return [] }
-    let represented = twitchRepresentedKeys
-    return youtubeSubscriptions.subscriptions.compactMap { sub in
-      guard let presence = youtubeResolver.presence(forChannelID: sub.channelID),
-        presence.isLive,
-        !represented.channelIDs.contains(sub.channelID),
-        !represented.names.contains(normalizedStreamerKey(sub.title))
-      else { return nil }
-
-      let thumbnailURL = presence.videoID.flatMap {
-        URL(string: "https://i.ytimg.com/vi/\($0)/hqdefault.jpg")
-      }
-      var channel = FollowedChannel(
-        id: "yt-\(sub.channelID)",
-        login: sub.channelID,
-        displayName: sub.title,
-        title: presence.title ?? "",
-        gameName: "",
-        viewerCount: presence.viewerCount,
-        thumbnailURL: thumbnailURL,
-        profileImageURL: sub.thumbnailURL,
-        isLive: true
-      )
-      channel.youtube = presence
-      channel.platform = .youtube
-      return channel
-    }
-  }
-
-  /// The single Following rail: Twitch follows plus the deduped, currently-live
-  /// YouTube-only subscriptions.
   private var followingRowChannels: [FollowedChannel] {
     kick.mergedFollowing(
       follows.isUsingDemoData && kick.isConnected ? [] : follows.channels, liveOnly: true)
-      + liveYouTubeSubscriptionCards
   }
 
   /// A merged card that should play via YouTube (no Twitch equivalent).
@@ -704,12 +612,6 @@ struct HomeView: View {
     } else {
       selectedChannel = channel
     }
-  }
-
-  private func refreshYouTubeSubscriptionLiveness(force: Bool = false) async {
-    guard youtubeAuth.isAuthenticated, showYouTubeSubscriptions else { return }
-    let ids = youtubeSubscriptions.subscriptions.map(\.channelID)
-    await youtubeResolver.refresh(channelIDs: ids, using: youtubeAuth, force: force)
   }
 
   private func playYouTube(_ channel: FollowedChannel) {
@@ -778,8 +680,6 @@ struct HomeView: View {
   private func handlePlayerDismissal() {
     playbackReturnRefresh.playerDidDismiss {
       await refreshHomeSections(force: true)
-      guard !Task.isCancelled else { return }
-      await refreshYouTubeSubscriptionLiveness(force: true)
     }
     promptGoLiveSetupIfNeeded()
   }
@@ -818,7 +718,7 @@ struct HomeView: View {
   /// sign-in). The idle watchdog stays out of the way while one is presented,
   /// and dismissing one counts as an interaction.
   private var isPresentingCover: Bool {
-    isPresentingPlayer || channelPageTarget != nil || showSignIn || showYouTubeSignIn
+    isPresentingPlayer || channelPageTarget != nil || showSignIn
       || showGoLiveSetup || multiview.isOpeningPlayback
   }
 
@@ -860,7 +760,6 @@ struct HomeView: View {
       guard !Task.isCancelled else { return }
       guard canIdleAutoRefresh else { continue }
       await refreshHomeSections(force: false)
-      await refreshYouTubeSubscriptionLiveness()
     }
   }
 
