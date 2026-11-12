@@ -340,6 +340,7 @@ struct MobileChannelGrid: View {
         .disabled(!channel.isLive)
         .contextMenu {
           NavigationLink("View channel") { MobileChannelProfileView(channel: channel, onLive: onSelect) }
+          StreamCategoryLink(channel: channel, onWatch: onSelect)
         }
         .accessibilityIdentifier("stream-\(channel.channelKey)")
         .accessibilityHint(channel.isLive ? "Watch live stream" : "Channel is offline")

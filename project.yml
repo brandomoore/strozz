@@ -58,6 +58,7 @@ targets:
           - "StreamerAffinityService.swift"
           - "ChannelContentService.swift"
           - "ChannelProfileService.swift"
+          - "StreamCategoryService.swift"
           - "TwitchCollaborationService.swift"
           - "FollowedChannels*.swift"
           - "TwitchAuthSession*.swift"
@@ -113,6 +114,7 @@ targets:
       - path: Strozz/Views/BroadcastUptimeView.swift
       - path: Strozz/Views/TwitchICloudSyncControls.swift
       - path: Strozz/Views/ChannelFollowButton.swift
+      - path: Strozz/Views/StreamCategoryLink.swift
       - path: Strozz/Views/TwitchCollaborationNames.swift
       - path: Strozz/Views/ChannelFollowFixture.swift
       - path: Strozz/Resources/StreamerAffinity.json
@@ -192,6 +194,7 @@ targets:
       - path: StrozzTests/YouTubeMergedChatViewerTests.swift
       - path: StrozzTests/YouTubeAccountRemovalTests.swift
       - path: StrozzTests/TwitchCollaborationTests.swift
+      - path: StrozzTests/StreamCategoryTests.swift
     dependencies:
       - target: StrozzMobile
     settings:

@@ -90,6 +90,9 @@ The feature list below describes the Apple TV app. See
   creator links, and watch history are kept. Existing YouTube features are unchanged.
 - **Home built around your follows.** See the channels you follow that are live
   now, plus recommendations.
+  Press and hold a stream card, then choose **Go to [game name]** to browse
+  that category on the stream's platform. Available for Twitch and Kick on
+  Apple TV, iPhone, and iPad when the card has a category.
 - **Streaming together.** Live Twitch channel pages on Apple TV, iPhone, and
   iPad list confirmed Stream Together participants, such as "Burn + willneff."
   Names refresh while the page is active; channel identity, follows, and playback

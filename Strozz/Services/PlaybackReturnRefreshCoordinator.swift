@@ -20,6 +20,13 @@ final class PlaybackReturnRefreshCoordinator {
     originRefresh = refresh
   }
 
+  /// A pushed directory owns the return refresh, not its parent's playback callback.
+  func preservingOrigin(while action: () -> Void) {
+    let refresh = originRefresh
+    action()
+    originRefresh = refresh
+  }
+
   func cancelRefresh() {
     inFlight?.cancel()
     inFlight = nil

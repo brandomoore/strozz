@@ -483,6 +483,9 @@ private extension View {
             Label("Go to Channel", systemImage: "person.crop.circle")
           }
         }
+        if let onWatch {
+          StreamCategoryLink(channel: channel, onWatch: onWatch)
+        }
         MultiviewSelectionAction(channel: channel)
         if let onNotInterested {
           Button(role: .destructive) {

@@ -605,6 +605,7 @@ struct MobileFollowingContent: View {
             .accessibilityHint(channel.isLive ? "Watch live stream" : "Open channel profile")
             .contextMenu {
               Button("Channel profile") { (onProfile ?? onSelect)(channel) }
+              StreamCategoryLink(channel: channel, onWatch: onSelect)
               if let entry = resumeEntries.first(where: { $0.login.lowercased() == channel.channelKey }), let onResume {
                 Button("Continue broadcast") { onResume(entry.selection) }
               }
