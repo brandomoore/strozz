@@ -67,6 +67,18 @@ final class PlaybackReturnRefreshTests: XCTestCase {
     XCTAssertEqual(calls, ["search", "home"])
   }
 
+  func testPushedCategoryPreservesOriginThroughParentPlaybackCallback() async {
+    let coordinator = PlaybackReturnRefreshCoordinator()
+    var calls: [String] = []
+    coordinator.prepareOrigin { calls.append("category") }
+    coordinator.preservingOrigin {
+      coordinator.prepareOrigin { calls.append("parent search") }
+    }
+    coordinator.playerDidDismiss { calls.append("home") }
+    await coordinator.inFlight?.value
+    XCTAssertEqual(calls, ["category", "home"])
+  }
+
   func testStartingPlayerPreservesChannelPageOrigin() async {
     let coordinator = PlaybackReturnRefreshCoordinator()
     var calls: [String] = []

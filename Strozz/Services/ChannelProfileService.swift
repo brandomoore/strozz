@@ -43,6 +43,7 @@ struct ChannelProfileService {
     let query = """
       query ChannelPage($login: String!) {
         user(login: $login) {
+          id
           login
           displayName
           description
@@ -107,7 +108,8 @@ struct ChannelProfileService {
         .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
       lastBroadcastGame: user.lastBroadcast?.game?.displayName,
       lastBroadcastStartedAt: parseDate(user.lastBroadcast?.startedAt),
-      socialLinks: socialLinks
+      socialLinks: socialLinks,
+      broadcasterID: user.id
     )
   }
 
@@ -117,6 +119,7 @@ struct ChannelProfileService {
   private struct GQLData: Decodable { let user: UserNode? }
 
   private struct UserNode: Decodable {
+    let id: String?
     let login: String?
     let displayName: String?
     let description: String?

@@ -49,6 +49,10 @@ final class MultiviewLineup {
       remove(channel.channelKey)
       return
     }
+    guard !channel.hasUnsupportedLiveProtection else {
+      notice = PlaybackError.protectedBroadcast.localizedDescription
+      return
+    }
     guard channel.platform != .youtube, channel.isLive else {
       notice = String(localized: "Only live Twitch and Kick streams can be added.")
       return

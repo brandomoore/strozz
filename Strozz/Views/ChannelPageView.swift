@@ -250,6 +250,9 @@ struct ChannelPageView: View {
           .accessibilityAddTraits(.isHeader)
 
         infoChips
+        if let profile, profile.isLive, let channelID = profile.broadcasterID {
+          TwitchCollaborationNames(channelID: channelID)
+        }
       }
 
       Spacer(minLength: 0)

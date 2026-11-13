@@ -358,6 +358,7 @@ final class BrowseService {
         limit: Int
     ) async throws -> [FollowedChannel] {
         struct StreamNode: Decodable {
+            let isEncrypted: Bool?
             let id: String?
             let title: String?
             let viewersCount: Int?
@@ -401,6 +402,7 @@ final class BrowseService {
                       title
                       viewersCount
                       isMature
+                      isEncrypted
                       previewImageURL(width: 640, height: 360)
                       broadcaster {
                         login
@@ -442,7 +444,8 @@ final class BrowseService {
                 thumbnailURL: previewURL,
                 profileImageURL: profileURL,
                 isLive: true,
-                isMature: node.isMature ?? false
+                isMature: node.isMature ?? false,
+                isEncrypted: node.isEncrypted == true
             )
         }
     }

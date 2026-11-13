@@ -102,6 +102,9 @@ struct MobileChannelProfileHeader: View {
           }
         }
       }
+      if let profile, profile.isLive, let channelID = profile.broadcasterID {
+        TwitchCollaborationNames(channelID: channelID)
+      }
       if let description = profile?.description { Text(description).font(.subheadline) }
       if auth.userLogin?.lowercased() != channel.login.lowercased() {
         ChannelFollowButton(login: channel.login, displayName: profile?.displayName ?? channel.displayName,

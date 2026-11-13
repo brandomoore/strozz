@@ -165,6 +165,7 @@ final class SearchService {
 
     private func fetchSearchResults(for query: String) async throws -> SearchResults {
         struct StreamNode: Decodable {
+            let isEncrypted: Bool?
             let id: String?
             let title: String?
             let viewersCount: Int?
@@ -209,6 +210,7 @@ final class SearchService {
                         displayName
                         profileImageURL(width: 70)
                         stream {
+                          isEncrypted
                           id
                           title
                           viewersCount
@@ -262,7 +264,8 @@ final class SearchService {
                 viewerCount: stream?.viewersCount,
                 thumbnailURL: previewURL,
                 profileImageURL: profileURL,
-                isLive: isLive
+                isLive: isLive,
+                isEncrypted: stream?.isEncrypted == true
             )
         }
 

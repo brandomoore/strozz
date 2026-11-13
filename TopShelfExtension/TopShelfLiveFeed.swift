@@ -171,7 +171,19 @@ enum TopShelfLiveFeed {
         url: URL,
         _ credentials: TopShelfCredentials
     ) async throws -> [Stream] {
-        try await decodeStreams(url: url, credentials: credentials)
+        let streams = try await decodeStreams(url: url, credentials: credentials)
+        do {
+            let encrypted = try await TwitchStreamProtection.encryptedLogins(
+                streams.filter { $0.type == "live" }.map(\.userLogin),
+                clientID: TwitchConfig.webPublicClientID,
+                load: { try await URLSession.shared.data(for: $0) })
+            return streams.filter { !encrypted.contains($0.userLogin.lowercased()) }
+        } catch {
+            try Task.checkCancellation()
+            Logger(subsystem: "com.thatcube.Strozz", category: "top-shelf")
+                .warning("Stream protection metadata unavailable: \((error as NSError).domain) \((error as NSError).code)")
+            return streams
+        }
     }
 
     private static func decodeStreams(

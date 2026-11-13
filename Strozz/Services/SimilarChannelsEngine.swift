@@ -226,7 +226,7 @@ struct SimilarChannelsEngine {
           profileImageURL(width: 70)
           broadcastSettings { language }
           stream {
-            id title viewersCount
+            id title viewersCount isEncrypted
             previewImageURL(width: 320, height: 180)
             game { name displayName }
             freeformTags { name }
@@ -247,7 +247,7 @@ struct SimilarChannelsEngine {
     return users.compactMap { user -> FollowedChannel? in
       guard let user,
             let login = user.login?.trimmingCharacters(in: .whitespaces), !login.isEmpty,
-            let stream = user.stream
+            let stream = user.stream, stream.isEncrypted != true
       else { return nil }
 
       if let required = requiredLanguage,
@@ -278,7 +278,7 @@ struct SimilarChannelsEngine {
         game(name: $name) {
           streams(first: $first) {
             edges { node {
-              id title viewersCount type
+              id title viewersCount type isEncrypted
               previewImageURL(width: 320, height: 180)
               broadcaster {
                 login displayName
@@ -303,7 +303,7 @@ struct SimilarChannelsEngine {
     else { return [] }
 
     return edges.compactMap { edge -> CandidateStream? in
-      guard let node = edge.node,
+      guard let node = edge.node, node.isEncrypted != true,
             let broadcaster = node.broadcaster,
             let login = broadcaster.login?.trimmingCharacters(in: .whitespaces),
             !login.isEmpty
@@ -372,6 +372,7 @@ struct SimilarChannelsEngine {
   private struct StreamsConn: Decodable { let edges: [StreamEdge]? }
   private struct StreamEdge: Decodable { let node: StreamNode? }
   private struct StreamNode: Decodable {
+    let isEncrypted: Bool?
     let id: String?
     let title: String?
     let viewersCount: Int?
@@ -401,6 +402,7 @@ struct SimilarChannelsEngine {
     let stream: AffinityStream?
   }
   private struct AffinityStream: Decodable {
+    let isEncrypted: Bool?
     let id: String?
     let title: String?
     let viewersCount: Int?

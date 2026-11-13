@@ -30,7 +30,7 @@ enum PersistenceKey {
   static let twitchProfileImageURL = "twitch.auth.profileImageURL"
   static let twitchLastValidatedAt = "twitch.auth.lastValidatedAt"
 
-  // MARK: YouTube auth — shared App Group suite (`TopShelf.appGroupID`)
+  // MARK: Retired YouTube auth — retained only for local-data removal
 
   static let youTubeAccessToken = "youtube.auth.accessToken"
   static let youTubeRefreshToken = "youtube.auth.refreshToken"

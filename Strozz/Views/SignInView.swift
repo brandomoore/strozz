@@ -250,8 +250,8 @@ struct SignInView: View {
   }
 }
 
-/// Casual "we're waiting on you" status shown while polling Twitch *or* YouTube
-/// for authorization (shared by `SignInView` and `YouTubeSignInView`). Cycles
+/// Casual "we're waiting on you" status shown while polling Twitch
+/// for authorization. Cycles
 /// through a broad, randomized set of playful stream-culture phrases — each
 /// paired with a real 7TV emote so the app's native emote support is on show
 /// right from the sign-in screen. `accent` tints the pulsing dots to match the

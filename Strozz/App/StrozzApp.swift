@@ -15,13 +15,16 @@ struct StrozzApp: App {
     ImageCacheConfigurator.configure()
     ChatAppearanceMigration.runIfNeeded()
     ChatSyncDefaultsMigration.runIfNeeded()
+    YouTubeAccountRemoval.run()
   }
 
   var body: some Scene {
     WindowGroup {
       Group {
         #if DEBUG && targetEnvironment(simulator)
-        if ProcessInfo.processInfo.environment["STROZZ_KICK_UI_FIXTURE"] == "1" {
+        if ProcessInfo.processInfo.environment["STROZZ_CATEGORY_UI_FIXTURE"] == "1" {
+          StreamCategoryFixture()
+        } else if ProcessInfo.processInfo.environment["STROZZ_KICK_UI_FIXTURE"] == "1" {
           KickDirectoryView(initialQuery: ProcessInfo.processInfo.environment["STROZZ_KICK_CHANNEL"] ?? "xqc")
         } else if ProcessInfo.processInfo.environment["STROZZ_FOLLOW_FIXTURE"] == "1" {
           ChannelFollowFixture()

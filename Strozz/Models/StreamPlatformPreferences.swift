@@ -52,7 +52,7 @@ extension StreamPlatforms {
 
   func filter(_ channels: [FollowedChannel]) -> [FollowedChannel] {
     channels.compactMap { channel in
-      if !includes(channel.platform) {
+      if !includes(channel.platform) || channel.hasUnsupportedLiveProtection {
         guard channel.platform == .twitch, includesKick, let kick = channel.kick else { return nil }
         var counterpart = kick.followedChannel
         counterpart.youtube = channel.youtube

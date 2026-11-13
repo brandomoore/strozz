@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// Networking + decode/mapping collaborator for `FollowedChannelsService`.
 ///
@@ -18,6 +19,13 @@ struct FollowedChannelsFetcher {
   var loadData: NetworkClient.DataLoader = { try await NetworkClient.api.data(for: $0) }
 
   func fetchLiveFollowedChannels(clientID: String, accessToken: String, userID: String)
+    async throws -> [FollowedChannel]
+  {
+    let channels = try await fetchLiveChannels(clientID: clientID, accessToken: accessToken, userID: userID)
+    return try await applyingProtection(to: channels)
+  }
+
+  private func fetchLiveChannels(clientID: String, accessToken: String, userID: String)
     async throws -> [FollowedChannel]
   {
     do {
@@ -142,12 +150,29 @@ struct FollowedChannelsFetcher {
       )
     }
 
-    return channels.sorted { lhs, rhs in
+    return try await applyingProtection(to: channels).sorted { lhs, rhs in
       if lhs.isLive != rhs.isLive { return lhs.isLive }
       if lhs.isLive && rhs.isLive {
         return (lhs.viewerCount ?? 0) > (rhs.viewerCount ?? 0)
       }
       return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+    }
+  }
+
+  private func applyingProtection(to channels: [FollowedChannel]) async throws -> [FollowedChannel] {
+    do {
+      let encrypted = try await TwitchStreamProtection.encryptedLogins(
+        channels.filter(\.isLive).map(\.login), clientID: TwitchConfig.webPublicClientID, load: loadData)
+      return channels.map {
+        var channel = $0
+        channel.isEncrypted = channel.isLive && encrypted.contains(channel.login.lowercased())
+        return channel
+      }
+    } catch {
+      try Task.checkCancellation()
+      Logger(subsystem: "com.thatcube.Strozz", category: "following")
+        .warning("Stream protection metadata unavailable: \((error as NSError).domain) \((error as NSError).code)")
+      return channels
     }
   }
 
