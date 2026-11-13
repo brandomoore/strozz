@@ -109,6 +109,7 @@ targets:
           - "CredentialKeychain.swift"
           - "TopShelfSnapshot.swift"
           - "StreamPlatforms.swift"
+          - "TwitchStreamProtection.swift"
       - path: Strozz/Views/Icon.swift
       - path: Strozz/Views/StreamLoadingView.swift
       - path: Strozz/Views/BroadcastUptimeView.swift
@@ -195,6 +196,7 @@ targets:
       - path: StrozzTests/YouTubeAccountRemovalTests.swift
       - path: StrozzTests/TwitchCollaborationTests.swift
       - path: StrozzTests/StreamCategoryTests.swift
+      - path: StrozzTests/TwitchStreamProtectionTests.swift
     dependencies:
       - target: StrozzMobile
     settings:
@@ -263,6 +265,8 @@ targets:
       - path: TopShelfExtension/TopShelfLiveFeed.swift
       - path: Strozz/Shared/TopShelfSnapshot.swift
       - path: Strozz/Shared/StreamPlatforms.swift
+      - path: Strozz/Shared/TwitchStreamProtection.swift
+      - path: Strozz/Shared/TwitchConfig.swift
       - path: Strozz/Shared/TopShelfStore.swift
       - path: Strozz/Shared/TopShelfCredentialStore.swift
       - path: Strozz/Shared/CredentialKeychain.swift

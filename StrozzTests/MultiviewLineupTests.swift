@@ -44,6 +44,18 @@ final class MultiviewLineupTests: XCTestCase {
     XCTAssertNil(lineup.controller)
   }
 
+  func testEncryptedBroadcastCannotEnterDraftButLaterPlayableBroadcastCan() {
+    let lineup = MultiviewLineup { _ in .live }
+    var protected = channel("primevideo")
+    protected.isEncrypted = true
+    lineup.toggle(protected)
+    XCTAssertTrue(lineup.entries.isEmpty)
+    XCTAssertEqual(lineup.notice, PlaybackError.protectedBroadcast.localizedDescription)
+    protected.isEncrypted = false
+    lineup.toggle(protected)
+    XCTAssertEqual(lineup.liveChannels.map(\.login), ["primevideo"])
+  }
+
   func testExplicitOfflineFreesCapacityAndExpiresAfterTenSeconds() {
     let lineup = MultiviewLineup { _ in .live }
     for index in 0..<6 { lineup.toggle(channel("channel\(index)")) }

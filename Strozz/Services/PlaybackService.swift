@@ -12,6 +12,7 @@ enum PlaybackError: LocalizedError, Equatable {
     case integrityRequired
     case offline
     case badResponse
+    case protectedBroadcast
 
     var errorDescription: String? {
         switch self {
@@ -19,6 +20,7 @@ enum PlaybackError: LocalizedError, Equatable {
         case .integrityRequired: return "Twitch requires extra verification for this channel."
         case .offline: return "This channel is offline or doesn't exist."
         case .badResponse: return "Unexpected response from Twitch."
+        case .protectedBroadcast: return "This broadcast requires DRM playback that Strozz doesn't support."
         }
     }
 }
@@ -519,10 +521,9 @@ struct PlaybackService {
     private static func validatePlaylist(_ url: URL) async throws {
         var req = URLRequest(url: url)
         for (k, v) in streamHeaders { req.setValue(v, forHTTPHeaderField: k) }
-        let (_, response) = try await networkSession.data(for: req)
+        let (data, response) = try await networkSession.data(for: req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-        if status == 404 { throw PlaybackError.offline }
-        guard (200...299).contains(status) else { throw PlaybackError.http(status) }
+        try validatePlaylistResponse(data, status: status)
     }
 
     /// Fetches the master playlist and parses its variants into `StreamQuality` values.
@@ -532,11 +533,20 @@ struct PlaybackService {
         for (k, v) in streamHeaders { req.setValue(v, forHTTPHeaderField: k) }
         let (data, response) = try await networkSession.data(for: req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-        if status == 404 { throw PlaybackError.offline }
-        guard (200...299).contains(status) else { throw PlaybackError.http(status) }
+        try validatePlaylistResponse(data, status: status)
 
         let text = String(decoding: data, as: UTF8.self)
         return parseMaster(text)
+    }
+
+    static func validatePlaylistResponse(_ data: Data, status: Int) throws {
+        if status == 403,
+           let errors = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+           errors.contains(where: { ($0["error_code"] as? String) == "no_cdm_specified" }) {
+            throw PlaybackError.protectedBroadcast
+        }
+        if status == 404 { throw PlaybackError.offline }
+        guard (200...299).contains(status) else { throw PlaybackError.http(status) }
     }
 
     /// Parses a Twitch HLS master playlist. Each rendition is a single

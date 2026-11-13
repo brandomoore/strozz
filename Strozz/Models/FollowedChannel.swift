@@ -12,6 +12,7 @@ struct FollowedChannel: Identifiable, Hashable, Sendable {
     let profileImageURL: URL?
     let isLive: Bool
     let isMature: Bool
+    var isEncrypted: Bool = false
     var platform: LivePlatform = .twitch
     var language: String? = nil
     var kick: KickChannel?
@@ -34,7 +35,8 @@ struct FollowedChannel: Identifiable, Hashable, Sendable {
         thumbnailURL: URL?,
         profileImageURL: URL?,
         isLive: Bool,
-        isMature: Bool = false
+        isMature: Bool = false,
+        isEncrypted: Bool = false
     ) {
         self.id = id
         self.login = login
@@ -46,10 +48,13 @@ struct FollowedChannel: Identifiable, Hashable, Sendable {
         self.profileImageURL = profileImageURL
         self.isLive = isLive
         self.isMature = isMature
+        self.isEncrypted = isEncrypted
     }
 }
 
 extension FollowedChannel {
+    var hasUnsupportedLiveProtection: Bool { platform == .twitch && isLive && isEncrypted }
+
     /// Stable identity for the same channel across pools. `id` is **not**
     /// comparable between them: the follows path carries the Twitch *user* id
     /// while the browse / recommendation / similar-channel GraphQL paths carry

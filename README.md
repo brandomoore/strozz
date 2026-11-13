@@ -90,6 +90,9 @@ The feature list below describes the Apple TV app. See
   creator links, and watch history are kept. Existing YouTube features are unchanged.
 - **Home built around your follows.** See the channels you follow that are live
   now, plus recommendations.
+  Twitch broadcasts marked as DRM-encrypted are hidden from live discovery because
+  Strozz cannot play them. Channels return when their broadcasts are unencrypted;
+  your follows are never changed.
   Press and hold a stream card, then choose **Go to [game name]** to browse
   that category on the stream's platform. Available for Twitch and Kick on
   Apple TV, iPhone, and iPad when the card has a category.

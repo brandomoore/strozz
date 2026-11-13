@@ -41,6 +41,22 @@ revive its removed Auto profiles or use it as an automatic failure fallback.
 | Recovery, drift and chat timing policies | `NativePlaybackRecovery.swift`, `NativeLiveCatchUp.swift`, `LiveChatSyncBaseline.swift` in `Strozz/Services/` |
 | Retained evidence and analysis | `PlaybackTelemetry.swift`, `PlaybackTelemetryWriter.swift` in `Strozz/Services/`; [`playback-diagnostics.py`](../tools/playback-diagnostics.py) |
 
+### Protected Twitch broadcasts
+
+Live discovery requests Twitch's `Stream.isEncrypted` alongside existing GraphQL
+metadata and hides only broadcasts explicitly marked encrypted. This is a
+broadcast capability check, not a channel blacklist or a copyright determination.
+Unencrypted and unknown-status broadcasts remain visible; follows are untouched.
+The next normal refresh replaces the flag, so a later playable broadcast returns.
+
+Helix does not expose this flag. Following and Top Shelf supplement their existing
+refresh with `TwitchStreamProtection` metadata batches of at most 100 live logins,
+with a six-second request timeout. Empty/offline lists require no extra request.
+There are no per-channel playlist probes, new polling timers, or durable bans.
+Lookup failures are logged and do not classify unknown streams as protected.
+Direct playback of an old link still reports an explicit unsupported-DRM error
+when Twitch's playlist endpoint returns `no_cdm_specified`.
+
 ### Kick and cross-platform viewing
 
 `KickPlaybackService` resolves a public Kick channel document and its signed IVS
