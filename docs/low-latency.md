@@ -240,6 +240,12 @@ iOS SDK. Provider availability and stream formats can change.
   including expensive virtual-memory copies for large keyframes. Preserve
   independent state when a demuxer is copied, and keep A/V payloads and clocks
   unchanged.
+- **Do not block known media behind a playlist refresh.** After a completed
+  segment, the controlled origin consumes an already-advertised exact successor
+  in the same rendition without another producer playlist round trip. Refresh
+  when no successor is known, and still obtain fresh metadata for a proposed
+  rendition switch. This avoids metadata-induced starvation; it cannot prevent
+  an upstream media-body outage.
 - **Segment boundaries are not always keyframes.** Native TS normalization carries
   drained codec state and the decode-clock anchor across completed, consecutive
   segments of the same rendition and discontinuity period. Keep every dependent

@@ -589,6 +589,7 @@ final class NativeTransportRemuxTests: XCTestCase {
                                  dependentSegments: Bool = false,
                                  unalignedKeyframes: Bool = false,
                                  advancesTo: Int? = nil,
+                                 blockManifestUntilPrefetch: Bool = false,
                                  trace: (@Sendable (NativeHLSPlaybackDiagnostic) -> Void)? = nil,
                                  failure: @escaping @Sendable (NativeHLSError) -> Void) throws
     -> NativeControlledHLSOrigin {
@@ -596,11 +597,16 @@ final class NativeTransportRemuxTests: XCTestCase {
       private var crossed = false
       private var probes = 0
       private var completedSequence = 19
+      private var manifests = 0
       func advance() { crossed = true }
       func hasAdvanced() -> Bool { crossed }
       func nextProbe() -> Int { probes += 1; return probes }
       func completed(_ sequence: Int) { completedSequence = max(completedSequence, sequence) }
       func latest() -> Int { completedSequence }
+      func shouldBlockManifest() -> Bool {
+        manifests += 1
+        return manifests > 1 && completedSequence < 20
+      }
     }
     let publication = Publication()
     let base = Date().addingTimeInterval(-40)
@@ -661,6 +667,9 @@ final class NativeTransportRemuxTests: XCTestCase {
         guard let url = request.url else { throw URLError(.badURL) }
         let data: Data
         if url.pathExtension == "m3u8" {
+          if blockManifestUntilPrefetch, await publication.shouldBlockManifest() {
+            try await Task.sleep(for: .seconds(5))
+          }
           let advanced = await publication.hasAdvanced()
           let latest = await publication.latest()
           data = advancingBodies[latest] ?? (crossesDiscontinuity && advanced ? rolledBody : body)
@@ -673,7 +682,7 @@ final class NativeTransportRemuxTests: XCTestCase {
           }
           guard let sample = mediaSamples[url.lastPathComponent] else { throw URLError(.fileDoesNotExist) }
           data = sample
-          if advancesTo != nil, request.value(forHTTPHeaderField: "Range") == nil,
+          if (advancesTo != nil || blockManifestUntilPrefetch), request.value(forHTTPHeaderField: "Range") == nil,
             let sequence = Int(url.deletingPathExtension().lastPathComponent) {
             await publication.completed(sequence)
           }
@@ -705,6 +714,19 @@ final class NativeTransportRemuxTests: XCTestCase {
     await fulfillment(of: [capacity], timeout: 5)
     await origin.stop()
     await fulfillment(of: [failure], timeout: 0.1)
+  }
+
+  func testAdvertisedPrefetchDoesNotWaitForAnotherManifestRoundTrip() async throws {
+    let published = expectation(description: "Advertised prefetch publishes before the metadata delay")
+    let origin = try controlledFixture(slow: false, blockManifestUntilPrefetch: true, trace: { detail in
+      if detail.event == .segment, detail.counters["sequence"] == 20 { published.fulfill() }
+    }) { error in XCTFail("Unexpected origin failure: \(error)") }
+    addTeardownBlock { await origin.stop() }
+    _ = try await origin.response(URL(string: "strozz-native-ll://fixture/root.m3u8")!)
+    _ = try await origin.response(URL(string: "strozz-native-ll://fixture/media/0.m3u8")!)
+    await fulfillment(of: [published], timeout: 2)
+    let media = await origin.media("/segment/0/20.mp4")
+    XCTAssertNotNil(media, "The cached manifest's prefetch must be consumed without dropping media")
   }
 
   func testControlledAutoStartsBeforeDependentSegmentAndRegeneratesEvictedHistory() async throws {

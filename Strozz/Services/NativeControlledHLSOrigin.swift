@@ -656,7 +656,22 @@ actor NativeControlledHLSOrigin {
           var variant = variants.first(where: { $0.id == chosen.variant.id }) else {
           throw NativeHLSError.invalidMedia
         }
-        var current = try await manifest(variant, purpose: "producer")
+        let advertised: NativeCMAF.Manifest?
+        if let previous = segments.last, previous.complete, previous.variant == variant.id,
+          let nextDate, let cached = manifests[variant.id],
+          Self.successor(in: dated(cached.entries),
+            previousSequence: previous.entry.sequence, previousVariant: previous.variant,
+            previousPeriod: previous.entry.discontinuity, previousDate: previous.date,
+            variant: variant.id, nextDate: nextDate) != nil {
+          advertised = cached
+        } else {
+          advertised = nil
+        }
+        // The next media URL is already authoritative. A redundant playlist
+        // round trip must not hold its download behind a slow metadata request.
+        var current: NativeCMAF.Manifest
+        if let advertised { current = advertised }
+        else { current = try await manifest(variant, purpose: "producer") }
         if let previous = segments.last, let nextDate, previous.variant != variant.id {
           let successor = Self.successor(in: dated(current.entries),
             previousSequence: previous.entry.sequence, previousVariant: previous.variant,
