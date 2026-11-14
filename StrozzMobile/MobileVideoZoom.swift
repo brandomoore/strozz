@@ -56,9 +56,15 @@ struct MobileVideoPinchGesture: UIGestureRecognizerRepresentable {
   }
 }
 
+struct MobileVideoDragValue {
+  var translation: CGSize = .zero
+  var velocity: CGSize = .zero
+  var startLocation: CGPoint = .zero
+}
+
 struct MobileVideoDragGesture: UIGestureRecognizerRepresentable {
   let enabled: Bool
-  let onChange: (UIGestureRecognizer.State, CGSize, CGSize) -> Void
+  let onChange: (UIGestureRecognizer.State, MobileVideoDragValue) -> Void
 
   func makeUIGestureRecognizer(context: Context) -> MobileVideoPanGestureRecognizer {
     let recognizer = MobileVideoPanGestureRecognizer()
@@ -77,14 +83,16 @@ struct MobileVideoDragGesture: UIGestureRecognizerRepresentable {
     // view. Measure in the fixed window so resizing cannot consume finger travel.
     let translation = recognizer.touchTranslation
     let velocity = recognizer.velocity(in: nil)
-    onChange(recognizer.state, CGSize(width: translation.x, height: translation.y),
-             CGSize(width: velocity.x, height: velocity.y))
+    onChange(recognizer.state, .init(
+      translation: CGSize(width: translation.x, height: translation.y),
+      velocity: CGSize(width: velocity.x, height: velocity.y),
+      startLocation: recognizer.touchOrigin ?? recognizer.location(in: nil)))
   }
 }
 
 final class MobileVideoPanGestureRecognizer: UIPanGestureRecognizer {
   // Preserve travel before UIPan recognizes the drag, including short flicks.
-  private var touchOrigin: CGPoint?
+  private(set) var touchOrigin: CGPoint?
 
   var touchTranslation: CGPoint {
     guard let touchOrigin else { return translation(in: nil) }

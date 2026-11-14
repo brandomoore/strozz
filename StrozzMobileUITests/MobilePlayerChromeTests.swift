@@ -3,6 +3,32 @@ import XCTest
 
 @MainActor
 final class MobilePlayerChromeTests: XCTestCase {
+  func testCollapseDropsNearTheFingerInsteadOfThePresetCorner() {
+    XCUIDevice.shared.orientation = .portrait
+    let app = launch()
+    defer { app.terminate() }
+    let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+    XCTAssertTrue(video.waitForExistence(timeout: 10))
+    let expanded = video.frame
+    let anchor = CGVector(dx: 0.3, dy: 0.25)
+    let start = video.coordinate(withNormalizedOffset: anchor)
+    let translation = CGVector(dx: 20, dy: 150)
+    let expected = CGPoint(x: expanded.minX + expanded.width * anchor.dx + translation.dx,
+                           y: expanded.minY + expanded.height * anchor.dy + translation.dy)
+    start.press(forDuration: 0.01, thenDragTo: start.withOffset(translation),
+                withVelocity: .slow, thenHoldForDuration: 0.3)
+    let mini = app.buttons["mobile-expand-player"]
+    XCTAssertTrue(mini.waitForExistence(timeout: 2))
+    let dropped = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+      let frame = video.frame
+      return abs(frame.minX + frame.width * anchor.dx - expected.x) < 3
+        && abs(frame.minY + frame.height * anchor.dy - expected.y) < 3
+    }, object: nil)
+    XCTAssertEqual(XCTWaiter.wait(for: [dropped], timeout: 2), .completed,
+                   "A stationary release must keep the grabbed point at the finger's endpoint")
+    XCTAssertTrue(app.frame.contains(video.frame))
+  }
+
   func testFirstShortDownwardFlickMinimizesWithVisibleAndHiddenControls() {
     XCUIDevice.shared.orientation = .portrait
     let app = launch()

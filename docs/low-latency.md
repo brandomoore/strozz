@@ -349,6 +349,11 @@ iOS SDK. Provider availability and stream formats can change.
   commits; a short flick needs at least 20 points plus predominantly downward
   velocity of 500 points/second. Slow short drags, jitter and sideways motion
   must not collapse the player. Pinches remain separate.
+  While held, shrinking happens around the original grab point: that point
+  moves exactly by the finger's window-space translation, including reversals.
+  Release places the mini-player near the drop point using the existing bounded
+  directional glide, not a fixed bottom-corner destination. Screen bounds apply
+  when settling; Reduce Motion removes the glide.
 - **Audio ownership is separate from video health.** One multiview pane is
   audible. See `PlayerView+AudioSession.swift` and `PlaybackAudioSessionTests`
   before changing interruption/reclaim behavior; do not repeatedly fight another

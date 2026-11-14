@@ -160,6 +160,42 @@ enum MobileMiniPlayerLayout {
   }
 }
 
+struct MobilePlayerCollapseDrag {
+  let startFrame: CGRect
+  let compactSize: CGSize
+  let anchor: UnitPoint
+  var translation: CGSize
+
+  init(startFrame: CGRect, compactSize: CGSize, startLocation: CGPoint, translation: CGSize) {
+    self.startFrame = startFrame
+    self.compactSize = compactSize
+    anchor = UnitPoint(
+      x: startFrame.width > 0 ? min(1, max(0, (startLocation.x - startFrame.minX) / startFrame.width)) : 0.5,
+      y: startFrame.height > 0 ? min(1, max(0, (startLocation.y - startFrame.minY) / startFrame.height)) : 0.5)
+    self.translation = translation
+  }
+
+  var progress: CGFloat {
+    min(1, max(0, translation.height / max(120, min(360, startFrame.height))))
+  }
+
+  var frame: CGRect { frame(progress: progress) }
+
+  private func frame(progress: CGFloat) -> CGRect {
+    let width = startFrame.width + (compactSize.width - startFrame.width) * progress
+    let height = startFrame.height + (compactSize.height - startFrame.height) * progress
+    return CGRect(
+      x: startFrame.minX + translation.width + (startFrame.width - width) * anchor.x,
+      y: startFrame.minY + translation.height + (startFrame.height - height) * anchor.y,
+      width: width, height: height)
+  }
+
+  func released(velocity: CGSize, in size: CGSize, isPhone: Bool, reduceMotion: Bool) -> CGRect {
+    MobileMiniPlayerLayout.released(.init(), from: frame(progress: 1), velocity: velocity,
+                                   in: size, isPhone: isPhone, reduceMotion: reduceMotion)
+  }
+}
+
 struct MobilePlayerView: View {
   let channel: FollowedChannel
   let session: MobilePlaybackSession
@@ -173,7 +209,7 @@ struct MobilePlayerView: View {
   @State private var windowScene: UIWindowScene?
   @State private var rotationError: String?
   @State private var streamDetailsVisible = true
-  @State private var collapseProgress: CGFloat = 0
+  @State private var collapseDrag: MobilePlayerCollapseDrag?
   @State private var miniPlayerPlacement = MobileMiniPlayerLayout.Placement()
   @GestureState private var miniPlayerManipulation = MobileMiniPlayerLayout.Manipulation()
   @GestureState private var chatWidthDrag = MobileChatWidthDrag()
@@ -223,8 +259,9 @@ struct MobilePlayerView: View {
         miniPlayerManipulation, to: miniPlayerManipulation.startFrame ?? restingCompact,
         in: geometry.size, isPhone: isPhone,
         elastic: miniPlayerManipulation.startFrame != nil && !reduceMotion)
+      let collapseProgress = collapseDrag?.progress ?? 0
       let progress = session.isExpanded ? collapseProgress : 1
-      let videoFrame = MobileMiniPlayerLayout.interpolate(from: expanded, to: compact, progress: progress)
+      let videoFrame = session.isExpanded ? collapseDrag?.frame ?? expanded : compact
       ZStack(alignment: .topLeading) {
         palette.playerBackdrop
           .ignoresSafeArea()
@@ -267,8 +304,11 @@ struct MobilePlayerView: View {
           isManipulating: miniPlayerManipulation.startFrame != nil || chatWidthDrag.initialWidth != nil,
           videoController: videoController,
           onCollapse: session.collapse, onClose: session.close, onExpand: session.expand,
-          onCollapseDragChanged: { updateCollapseDrag($0, distance: max(120, min(360, compact.midY))) },
-          onCollapseDragEnded: endCollapseDrag,
+          onCollapseDragChanged: {
+            updateCollapseDrag($0, expanded: expanded, compact: restingCompact,
+                               origin: geometry.frame(in: .global).origin)
+          },
+          onCollapseDragEnded: { endCollapseDrag($0, in: geometry.size, isPhone: isPhone) },
           onFullscreen: { toggleFullscreen(exiting: isPhone ? phoneLandscape : layout == .videoOnly) },
           onScene: { windowScene = $0 },
           onLayout: { [weak session] frame in
@@ -340,13 +380,13 @@ struct MobilePlayerView: View {
       .statusBarHidden(session.isExpanded && layout == .videoOnly)
       .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: streamDetailsVisible)
       .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.9), value: session.isExpanded)
-      .onChange(of: session.isExpanded) { _, _ in collapseProgress = 0 }
+      .onChange(of: session.isExpanded) { _, _ in collapseDrag = nil }
       .onChange(of: model.creatorSession.generation) { _, _ in
         chatComposer = MobileChatComposerState()
         chatScroll = MobileChatScrollState()
       }
       .onChange(of: layout) { _, _ in
-        collapseProgress = 0
+        collapseDrag = nil
         windowScene?.keyWindow?.endEditing(true)
       }
       .onChange(of: model.mode) { _, mode in
@@ -392,24 +432,35 @@ struct MobilePlayerView: View {
       }
   }
 
-  private func updateCollapseDrag(_ translation: CGSize, distance: CGFloat) {
+  private func updateCollapseDrag(_ value: MobileVideoDragValue, expanded: CGRect, compact: CGRect, origin: CGPoint) {
     guard session.isExpanded else { return }
-    if translation.height > abs(translation.width) {
-      var transaction = Transaction(animation: nil)
-      transaction.disablesAnimations = true
-      withTransaction(transaction) {
-        collapseProgress = min(1, max(0, translation.height / distance))
+    guard collapseDrag != nil || value.translation.height > abs(value.translation.width) else { return }
+    var transaction = Transaction(animation: nil)
+    transaction.disablesAnimations = true
+    withTransaction(transaction) {
+      if collapseDrag == nil {
+        let start = videoController.presentedFrame?.offsetBy(dx: -origin.x, dy: -origin.y) ?? expanded
+        collapseDrag = .init(startFrame: start, compactSize: compact.size,
+          startLocation: CGPoint(x: value.startLocation.x - origin.x, y: value.startLocation.y - origin.y),
+          translation: value.translation)
+      } else {
+        collapseDrag?.translation = value.translation
       }
     }
   }
 
-  private func endCollapseDrag(_ translation: CGSize, velocity: CGSize) {
+  private func endCollapseDrag(_ value: MobileVideoDragValue?, in size: CGSize, isPhone: Bool) {
     guard session.isExpanded else { return }
-    if MobilePlayerCollapseGesture.shouldCollapse(translation: translation, velocity: velocity) {
-      session.collapse()
-    }
     withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85)) {
-      collapseProgress = 0
+      if let value, var drag = collapseDrag,
+         MobilePlayerCollapseGesture.shouldCollapse(translation: value.translation, velocity: value.velocity) {
+        drag.translation = value.translation
+        let destination = drag.released(velocity: value.velocity, in: size, isPhone: isPhone, reduceMotion: reduceMotion)
+        miniPlayerPlacement = MobileMiniPlayerLayout.placement(
+          for: destination, in: size, isPhone: isPhone, previous: miniPlayerPlacement)
+        session.collapse()
+      }
+      collapseDrag = nil
     }
   }
 
@@ -469,8 +520,8 @@ struct MobileVideoView: View {
   let onCollapse: () -> Void
   let onClose: () -> Void
   let onExpand: () -> Void
-  let onCollapseDragChanged: (CGSize) -> Void
-  let onCollapseDragEnded: (CGSize, CGSize) -> Void
+  let onCollapseDragChanged: (MobileVideoDragValue) -> Void
+  let onCollapseDragEnded: (MobileVideoDragValue?) -> Void
   let onFullscreen: () -> Void
   let onScene: (UIWindowScene) -> Void
   let onLayout: (CGRect) -> Void
@@ -675,7 +726,7 @@ struct MobileVideoView: View {
     case .began:
       pinchStart = zoom
       pinchAnchor = location
-      onCollapseDragEnded(.zero, .zero)
+      onCollapseDragEnded(nil)
       onVideoTap?()
     case .changed, .ended:
       if let pinchStart {
@@ -694,7 +745,7 @@ struct MobileVideoView: View {
     }
   }
 
-  private func handleVideoDrag(_ phase: UIGestureRecognizer.State, _ translation: CGSize, _ velocity: CGSize) {
+  private func handleVideoDrag(_ phase: UIGestureRecognizer.State, _ value: MobileVideoDragValue) {
     switch phase {
     case .began:
       videoDragActive = true
@@ -702,10 +753,10 @@ struct MobileVideoView: View {
       fallthrough
     case .changed, .ended:
       if let panStart {
-        zoom = panStart.panned(translation, viewport: videoViewport, videoSize: videoSize)
+        zoom = panStart.panned(value.translation, viewport: videoViewport, videoSize: videoSize)
       } else if pinchStart == nil && !zoom.isZoomed {
-        if phase == .ended { onCollapseDragEnded(translation, velocity) }
-        else { onCollapseDragChanged(translation) }
+        if phase == .ended { onCollapseDragEnded(value) }
+        else { onCollapseDragChanged(value) }
       }
       if phase == .ended {
         videoDragActive = false
@@ -716,7 +767,7 @@ struct MobileVideoView: View {
       if let panStart { zoom = panStart }
       panStart = nil
       videoDragActive = false
-      onCollapseDragEnded(.zero, .zero)
+      onCollapseDragEnded(nil)
     default:
       break
     }

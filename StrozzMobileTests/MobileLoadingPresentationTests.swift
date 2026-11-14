@@ -157,7 +157,7 @@ final class MobileLoadingPresentationTests: XCTestCase {
       let content = MobileVideoView(
         model: model, channel: channel, hideChat: .constant(false), isFullscreen: false,
         isMinimized: true, isManipulating: false, videoController: MobileVideoController(), onCollapse: {},
-        onClose: {}, onExpand: {}, onCollapseDragChanged: { _ in }, onCollapseDragEnded: { _, _ in },
+        onClose: {}, onExpand: {}, onCollapseDragChanged: { _ in }, onCollapseDragEnded: { _ in },
         onFullscreen: {}, onScene: { _ in }, onLayout: { _ in })
         .frame(width: 240, height: 135)
         .environment(\.themePalette, theme.palette(systemColorScheme: .light))
@@ -219,7 +219,7 @@ final class MobileLoadingPresentationTests: XCTestCase {
         model: model, channel: channel, hideChat: .constant(false),
         isFullscreen: false, isMinimized: false, isManipulating: false,
         videoController: MobileVideoController(), onCollapse: {},
-        onClose: {}, onExpand: {}, onCollapseDragChanged: { _ in }, onCollapseDragEnded: { _, _ in },
+        onClose: {}, onExpand: {}, onCollapseDragChanged: { _ in }, onCollapseDragEnded: { _ in },
         onFullscreen: {}, onScene: { _ in }, onLayout: { _ in }
       )
       .frame(height: UIDevice.current.userInterfaceIdiom == .pad ? 500 : 220)
@@ -265,7 +265,7 @@ final class MobileLoadingPresentationTests: XCTestCase {
       model: model, channel: channel, hideChat: .constant(false),
       isFullscreen: false, isMinimized: false, isManipulating: false,
       videoController: controller, onCollapse: {}, onClose: {}, onExpand: {},
-      onCollapseDragChanged: { _ in }, onCollapseDragEnded: { _, _ in },
+      onCollapseDragChanged: { _ in }, onCollapseDragEnded: { _ in },
       onFullscreen: {}, onScene: { _ in }, onLayout: { _ in },
       onControlsVisibilityChange: { changes.append($0) }).frame(height: 220))
     window.rootViewController = host

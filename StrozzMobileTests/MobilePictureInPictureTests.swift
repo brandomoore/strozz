@@ -44,6 +44,51 @@ final class MobilePictureInPictureTests: XCTestCase {
     }
   }
 
+  func testCollapseKeepsGrabbedPointUnderFingerWhileShrinkingAndReversing() {
+    for start in [CGRect(x: 0, y: 0, width: 390, height: 220),
+                  CGRect(x: 30, y: 180, width: 900, height: 506),
+                  CGRect(x: 120, y: 15, width: 660, height: 380)] {
+      for anchor in [UnitPoint.topLeading, .init(x: 0.3, y: 0.25), .center, .bottomTrailing] {
+        let touch = CGPoint(x: start.minX + start.width * anchor.x, y: start.minY + start.height * anchor.y)
+        var drag = MobilePlayerCollapseDrag(startFrame: start, compactSize: .init(width: 240, height: 135),
+                                           startLocation: touch, translation: .zero)
+        for translation in [CGSize(width: 0, height: 8), .init(width: 40, height: 100),
+                            .init(width: -90, height: 400), .init(width: -140, height: 700),
+                            .init(width: 20, height: 30), .zero, .init(width: 0, height: -20)] {
+          drag.translation = translation
+          XCTAssertEqual(drag.frame.minX + drag.frame.width * anchor.x,
+                         touch.x + translation.width, accuracy: 0.001)
+          XCTAssertEqual(drag.frame.minY + drag.frame.height * anchor.y,
+                         touch.y + translation.height, accuracy: 0.001)
+          XCTAssertGreaterThanOrEqual(drag.frame.width, 240)
+          XCTAssertLessThanOrEqual(drag.frame.width, start.width)
+        }
+      }
+    }
+  }
+
+  func testCollapseReleaseUsesLocalDropPositionAndBoundedDirectionalMomentum() {
+    let size = CGSize(width: 1024, height: 1200)
+    let start = CGRect(x: 0, y: 0, width: 1024, height: 576)
+    let drag = MobilePlayerCollapseDrag(startFrame: start, compactSize: .init(width: 320, height: 180),
+      startLocation: .init(x: 512, y: 288), translation: .init(width: 30, height: 200))
+    let resting = drag.released(velocity: .zero, in: size, isPhone: false, reduceMotion: false)
+    XCTAssertEqual(resting.midX, 542)
+    XCTAssertEqual(resting.midY, 488, "Release should not send the video to a preset bottom corner")
+    let slow = drag.released(velocity: .init(width: 300, height: 400), in: size, isPhone: false, reduceMotion: false)
+    let fast = drag.released(velocity: .init(width: 1200, height: 1600), in: size, isPhone: false, reduceMotion: false)
+    XCTAssertGreaterThan(slow.minX, resting.minX)
+    XCTAssertGreaterThan(slow.minY, resting.minY)
+    XCTAssertGreaterThan(fast.minY, slow.minY)
+    XCTAssertEqual(hypot(fast.minX - resting.minX, fast.minY - resting.minY), 140, accuracy: 0.001)
+    XCTAssertEqual(drag.released(velocity: .init(width: 1200, height: 1600),
+                                in: size, isPhone: false, reduceMotion: true), resting)
+    var edge = drag
+    edge.translation = .init(width: -2000, height: 2000)
+    XCTAssertTrue(MobileMiniPlayerLayout.bounds(in: size, isPhone: false).contains(
+      edge.released(velocity: .init(width: -2000, height: 2000), in: size, isPhone: false, reduceMotion: false)))
+  }
+
   func testMiniPlayerGeometryStaysInsidePhoneTabletAndSplitView() {
     for size in [CGSize(width: 390, height: 750), .init(width: 800, height: 350),
                  .init(width: 1024, height: 1300), .init(width: 320, height: 600)] {
