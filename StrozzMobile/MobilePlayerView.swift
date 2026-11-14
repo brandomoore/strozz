@@ -510,7 +510,11 @@ struct MobileVideoView: View {
     let showsControls = model.mode == .video && (controlsVisible || held)
     ZStack {
       palette.playerBackdrop
-      MobilePlayerSurface(controller: videoController, onScene: onScene, onLayout: onLayout)
+      MobilePlayerSurface(controller: videoController, onScene: onScene, onLayout: onLayout,
+        miniPlayerScrim: isMinimized && showsControls
+          ? .init(color: UIColor(palette.videoControlScrim),
+                  hasError: model.errorMessage != nil, reduceTransparency: reduceTransparency) : nil,
+        reduceMotion: reduceMotion)
         .id(ObjectIdentifier(videoController))
         .scaleEffect(zoomEnabled ? zoom.scale : 1)
         .offset(zoomEnabled ? zoom.clamped(viewport: videoViewport, videoSize: videoSize).offset : .zero)
@@ -590,10 +594,6 @@ struct MobileVideoView: View {
         }
         .padding(6)
         .buttonStyle(.plain)
-        .background {
-          MobileMiniPlayerControlScrim(hasError: model.errorMessage != nil,
-                                       reduceTransparency: reduceTransparency)
-        }
       } else if !isMinimized && showsControls {
         MobilePlayerControls(
           model: model, viewerCount: model.creatorSession.sources == nil ? channel.viewerCount : nil,
@@ -721,22 +721,28 @@ struct MobilePlayerSurface: UIViewControllerRepresentable {
   let controller: MobileVideoController
   let onScene: (UIWindowScene) -> Void
   let onLayout: (CGRect) -> Void
+  let miniPlayerScrim: MobileMiniPlayerControlScrim.Configuration?
+  let reduceMotion: Bool
 
   func makeUIViewController(context: Context) -> MobileVideoController {
     controller.onScene = onScene
     controller.onLayout = onLayout
+    controller.miniPlayerScrim.update(miniPlayerScrim, animated: false)
     return controller
   }
 
   func updateUIViewController(_ controller: MobileVideoController, context: Context) {
     controller.onScene = onScene
     controller.onLayout = onLayout
+    controller.miniPlayerScrim.update(miniPlayerScrim,
+      animated: !reduceMotion && context.transaction.animation != nil)
   }
 }
 
 final class MobileVideoController: UIViewController {
   // Share one layer between the animated in-app player and AVKit's native PiP.
   let playerLayer = AVPlayerLayer()
+  let miniPlayerScrim = MobileMiniPlayerControlScrim()
   var onScene: ((UIWindowScene) -> Void)?
   var onLayout: ((CGRect) -> Void)?
   var onReady: ((Bool, AVPlayer) -> Void)?
@@ -804,6 +810,8 @@ final class MobileVideoController: UIViewController {
     view = UIView()
     view.isUserInteractionEnabled = false
     view.layer.addSublayer(playerLayer)
+    // A sibling stays inline when AVKit takes the player layer for system PiP.
+    view.layer.addSublayer(miniPlayerScrim.layer)
   }
 
   override func viewDidLayoutSubviews() {
@@ -819,6 +827,7 @@ final class MobileVideoController: UIViewController {
       }
     }
     playerLayer.frame = view.bounds
+    miniPlayerScrim.layout(in: view.bounds, scale: view.traitCollection.displayScale)
     CATransaction.commit()
   }
 

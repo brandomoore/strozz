@@ -95,11 +95,17 @@ final class MobileLoadingPresentationTests: XCTestCase {
       for reduceTransparency in [false, true] {
         for (size, fadeHeight) in sizes {
           for hasError in [false, true] {
-            let image = try render(
-              MobileMiniPlayerControlScrim(hasError: hasError, reduceTransparency: reduceTransparency)
-                .frame(width: size.width, height: size.height)
-                .background(Color.white)
-                .environment(\.themePalette, theme.palette(systemColorScheme: .light)))
+            let controller = MobileVideoController()
+            controller.miniPlayerScrim.update(.init(
+              color: UIColor(theme.palette(systemColorScheme: .light).videoControlScrim),
+              hasError: hasError, reduceTransparency: reduceTransparency), animated: false)
+            let image = try renderMiniPlayerScrim(controller, size: size)
+            if size.width == 240 && reduceTransparency && !hasError && theme == .light {
+              let attachment = XCTAttachment(image: UIImage(cgImage: image))
+              attachment.name = "mini-player-native-scrim"
+              attachment.lifetime = .keepAlways
+              add(attachment)
+            }
             for x in [28, image.width - 28] {
               for offset in [-9, 0, 9] {
                 let background = try luminance(image, x: x + offset, y: 28 + offset)
@@ -114,13 +120,16 @@ final class MobileLoadingPresentationTests: XCTestCase {
               var previous = try luminance(image, x: image.width / 2, y: 0)
               XCTAssertLessThan(previous, 0.12, "The fade must cover the whole top edge")
               for y in 0..<image.height {
-                let middle = try luminance(image, x: image.width / 2, y: y)
+                // Average native gradient dithering before comparing adjacent rows.
+                let middle = try (-2...2).map { try luminance(image, x: image.width / 2 + $0, y: y) }
+                  .reduce(0, +) / 5
                 for column in 0...4 {
                   XCTAssertEqual(try luminance(image, x: (image.width - 1) * column / 4, y: y),
                                  middle, accuracy: 0.009, "One full-width fade without circular patches")
                 }
                 XCTAssertGreaterThanOrEqual(middle + 0.009, previous, "The fade must lighten toward the bottom")
-                XCTAssertLessThan(abs(middle - previous), 0.04, "No abrupt cutoff, including on small cards")
+                XCTAssertLessThan(abs(middle - previous), 0.04,
+                  "No abrupt cutoff: \(size), y \(y), opaque \(reduceTransparency)")
                 if CGFloat(y) >= fadeHeight {
                   XCTAssertGreaterThan(middle, 0.98, "Video below the fade must remain undimmed")
                 }
@@ -158,6 +167,39 @@ final class MobileLoadingPresentationTests: XCTestCase {
       window.rootViewController = host
       await layout(host)
       capture(host, name: "mini-\(theme.rawValue)")
+    }
+  }
+
+  func testMiniPlayerScrimCoversEdgesDuringRapidResizingWithoutGeometryAnimations() throws {
+    let controller = MobileVideoController()
+    controller.miniPlayerScrim.update(.init(color: .black, hasError: true, reduceTransparency: false),
+                                      animated: false)
+    let player = controller.playerLayer
+    let scrim = controller.miniPlayerScrim.layer
+    for width in [640.0, 160, 390, 240, 560, 180, 320, 161, 639] {
+      let size = CGSize(width: width, height: width * 9 / 16)
+      CATransaction.begin()
+      CATransaction.setAnimationDuration(0.4)
+      let image = try renderMiniPlayerScrim(controller, size: size)
+      CATransaction.commit()
+      XCTAssertTrue(player.superlayer === scrim.superlayer)
+      XCTAssertFalse(scrim.superlayer === player, "The scrim must not follow AVKit into system PiP")
+      XCTAssertEqual(player.frame, scrim.frame, "Video and scrim must resize in the same layout pass")
+      XCTAssertTrue(scrim.masksToBounds)
+      for gradient in try XCTUnwrap(scrim.sublayers) {
+        XCTAssertLessThan(gradient.frame.minX, 0)
+        XCTAssertGreaterThan(gradient.frame.maxX, player.bounds.width)
+        XCTAssertNil(gradient.animationKeys(), "Overscan geometry must not animate behind the video")
+      }
+      XCTAssertNil(scrim.animationKeys())
+      for y in [0, 20, image.height - 20, Int(floor(size.height)) - 1] {
+        let middle = try luminance(image, x: image.width / 2, y: y)
+        XCTAssertLessThan(middle, 0.3)
+        for x in [0, 1, image.width - 2, image.width - 1] {
+          XCTAssertEqual(try luminance(image, x: x, y: y), middle, accuracy: 0.009,
+                         "No undimmed sliver at the newly resized video edge")
+        }
+      }
     }
   }
 
@@ -255,6 +297,27 @@ final class MobileLoadingPresentationTests: XCTestCase {
     let renderer = ImageRenderer(content: content)
     renderer.scale = 1
     return try XCTUnwrap(renderer.cgImage)
+  }
+
+  private func renderMiniPlayerScrim(_ controller: MobileVideoController, size: CGSize) throws -> CGImage {
+    controller.view.frame = CGRect(origin: .zero, size: size)
+    controller.view.backgroundColor = .white
+    controller.view.setNeedsLayout()
+    controller.view.layoutIfNeeded()
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = max(1, controller.view.traitCollection.displayScale)
+    format.opaque = true
+    let canvas = CGRect(x: 0, y: 0, width: ceil(size.width), height: ceil(size.height))
+    let image = UIGraphicsImageRenderer(bounds: canvas, format: format).image { context in
+      context.cgContext.setFillColor(UIColor.white.cgColor)
+      context.cgContext.fill(canvas)
+      controller.view.layer.render(in: context.cgContext)
+    }
+    format.scale = 1
+    let sampled = UIGraphicsImageRenderer(bounds: canvas, format: format).image { _ in
+      image.draw(in: canvas)
+    }
+    return try XCTUnwrap(sampled.cgImage)
   }
 
   private func luminance(_ image: CGImage, x: Int, y: Int) throws -> Double {

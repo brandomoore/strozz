@@ -171,6 +171,51 @@ final class MobilePlayerGeometryTests: XCTestCase {
     }
   }
 
+  func testMiniPlayerScrimTracksVideoDuringInterruptedCollapseAndExpansion() async throws {
+    let state = RotationMountState()
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let previous = scene.keyWindow
+    let host = UIHostingController(rootView: RotationMountHarness(state: state))
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = host
+    window.makeKeyAndVisible()
+    defer {
+      window.isHidden = true
+      window.rootViewController = nil
+      previous?.makeKey()
+      state.session.close()
+      state.defaults.removePersistentDomain(forName: state.suite)
+    }
+    host.view.layoutIfNeeded()
+    try await Task.sleep(for: .milliseconds(100))
+    let controller = state.session.videoController
+    let player = controller.playerLayer
+    let scrim = controller.miniPlayerScrim.layer
+    for _ in 0..<4 {
+      state.session.collapse()
+      for _ in 0..<8 {
+        try await Task.sleep(for: .milliseconds(16))
+        host.view.layoutIfNeeded()
+        XCTAssertEqual(scrim.opacity, 1, "The minimized controls must use the video-owned scrim")
+        XCTAssertEqual(scrim.frame, player.frame)
+        if let videoPresentation = player.presentation(), let scrimPresentation = scrim.presentation(),
+           let windowPresentation = window.layer.presentation() {
+          let videoRect = videoPresentation.convert(videoPresentation.bounds, to: windowPresentation)
+          let scrimRect = scrimPresentation.convert(scrimPresentation.bounds, to: windowPresentation)
+          XCTAssertEqual(videoRect.minX, scrimRect.minX, accuracy: 0.01)
+          XCTAssertEqual(videoRect.minY, scrimRect.minY, accuracy: 0.01)
+          XCTAssertEqual(videoRect.width, scrimRect.width, accuracy: 0.01)
+          XCTAssertEqual(videoRect.height, scrimRect.height, accuracy: 0.01)
+        }
+      }
+      state.session.expand()
+      try await Task.sleep(for: .milliseconds(32))
+      host.view.layoutIfNeeded()
+      XCTAssertEqual(scrim.opacity, 0, "Expanded controls must not be double-dimmed")
+      XCTAssertTrue(controller.playerLayer === player)
+    }
+  }
+
   private func findChat(in view: UIView) -> UIScrollView? {
     if let scroll = view as? UIScrollView, !(view is UITextView) { return scroll }
     return view.subviews.lazy.compactMap { self.findChat(in: $0) }.first

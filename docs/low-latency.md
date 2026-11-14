@@ -329,7 +329,11 @@ iOS SDK. Provider availability and stream formats can change.
   expand/return retain surviving AVPlayers, items and video surfaces. Mobile
   expanded/mini-player layouts share one mounted video owner; an outgoing
   `MobilePlayerView` captures its own model/controller so teardown cannot detach
-  its replacement. Native PiP is a separate background lifecycle. Deliberate
+  its replacement. The mobile mini-player scrim is an inline sibling of the
+  video layer, laid out in the same no-actions transaction; only its visibility
+  fades. Its gradients overscan by two physical pixels inside a clipped boundary,
+  so rapid resizing cannot expose undimmed edge slivers. Native PiP is a separate
+  background lifecycle and does not inherit the inline scrim. Deliberate
   foreground/error recovery can rebuild the engine/player; TV must also replace
   its AVKit surface then, preserving mute/volume and pause/DVR intent.
   Fully hidden expanded peers do not owe visible decoded frames: the same

@@ -348,36 +348,74 @@ struct MobilePlayerControlScrim: View {
   }
 }
 
-struct MobileMiniPlayerControlScrim: View {
-  let hasError: Bool
-  let reduceTransparency: Bool
-  @Environment(\.themePalette) private var palette
+final class MobileMiniPlayerControlScrim {
+  struct Configuration: Equatable {
+    let color: UIColor
+    let hasError: Bool
+    let reduceTransparency: Bool
+  }
 
-  var body: some View {
-    let strength = reduceTransparency ? 1.25 : 1.0
-    GeometryReader { geometry in
-      ZStack {
-        LinearGradient(stops: [
-          .init(color: palette.videoControlScrim.opacity(0.66 * strength), location: 0),
-          .init(color: palette.videoControlScrim.opacity(0.60 * strength), location: 0.25),
-          .init(color: palette.videoControlScrim.opacity(0.40 * strength), location: 0.55),
-          .init(color: palette.videoControlScrim.opacity(0), location: 1),
-        ], startPoint: .top, endPoint: .bottom)
-        .frame(height: min(geometry.size.height, max(96, geometry.size.height * 0.5)))
-        .frame(maxHeight: .infinity, alignment: .top)
-        if hasError {
-          LinearGradient(stops: [
-            .init(color: palette.videoControlScrim.opacity(0.64 * strength), location: 0),
-            .init(color: palette.videoControlScrim.opacity(0.58 * strength), location: 0.6),
-            .init(color: palette.videoControlScrim.opacity(0), location: 1),
-          ], startPoint: .bottom, endPoint: .top)
-          .frame(height: min(72, geometry.size.height))
-          .frame(maxHeight: .infinity, alignment: .bottom)
-        }
+  let layer = CALayer()
+  private let top = CAGradientLayer()
+  private let bottom = CAGradientLayer()
+  private var configuration: Configuration?
+
+  init() {
+    layer.masksToBounds = true
+    layer.opacity = 0
+    layer.addSublayer(top)
+    layer.addSublayer(bottom)
+    top.locations = [0, 0.25, 0.55, 1]
+    bottom.locations = [0, 0.6, 1]
+  }
+
+  func update(_ configuration: Configuration?, animated: Bool) {
+    guard configuration != self.configuration else { return }
+    let wasVisible = self.configuration != nil
+    let opacity = layer.presentation()?.opacity ?? layer.opacity
+    self.configuration = configuration
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    if let configuration {
+      let strength = configuration.reduceTransparency ? 1.25 : 1.0
+      top.colors = [0.66, 0.60, 0.40, 0].map { configuration.color.withAlphaComponent($0 * strength).cgColor }
+      bottom.colors = [0.64, 0.58, 0].map { configuration.color.withAlphaComponent($0 * strength).cgColor }
+      bottom.isHidden = !configuration.hasError
+    }
+    layer.opacity = configuration == nil ? 0 : 1
+    if wasVisible != (configuration != nil) {
+      layer.removeAnimation(forKey: "visibility")
+      if animated {
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = opacity
+        fade.toValue = layer.opacity
+        fade.duration = 0.18
+        fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(fade, forKey: "visibility")
       }
     }
-    .allowsHitTesting(false)
-    .accessibilityHidden(true)
+    CATransaction.commit()
+  }
+
+  // Called in the same no-actions transaction as AVPlayerLayer layout. Only
+  // visibility fades; geometry never starts a second, lagging animation.
+  func layout(in bounds: CGRect, scale: CGFloat) {
+    layer.frame = bounds
+    let scale = max(1, scale)
+    layer.contentsScale = scale
+    top.contentsScale = scale
+    bottom.contentsScale = scale
+    let bleed = 2 / scale
+    let topHeight = min(bounds.height, max(96, bounds.height * 0.5))
+    let bottomHeight = min(72, bounds.height)
+    top.frame = CGRect(x: 0, y: 0, width: bounds.width, height: topHeight).insetBy(dx: -bleed, dy: -bleed)
+    bottom.frame = CGRect(x: 0, y: bounds.height - bottomHeight, width: bounds.width, height: bottomHeight)
+      .insetBy(dx: -bleed, dy: -bleed)
+    // Keep the original fade positions inside the clipped two-pixel overscan.
+    top.startPoint = CGPoint(x: 0.5, y: bleed / top.frame.height)
+    top.endPoint = CGPoint(x: 0.5, y: (bleed + topHeight) / top.frame.height)
+    bottom.startPoint = CGPoint(x: 0.5, y: (bleed + bottomHeight) / bottom.frame.height)
+    bottom.endPoint = CGPoint(x: 0.5, y: bleed / bottom.frame.height)
   }
 }
 
