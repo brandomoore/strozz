@@ -611,6 +611,17 @@ and diagnostics. Its opt-in starvation regression requires a separate test host
 launched with `LIBDISPATCH_COOPERATIVE_POOL_STRICT=1`; never set that variable for
 normal playback.
 
+Acknowledging a consumed media chunk releases URLSession backpressure on a
+separate per-reader control queue, not the playback executor. A blocked
+`URLSessionTask.resume()` must not prevent the origin from serving already
+published audio/video. The existing 32-chunk admission bound and one
+acknowledgement per chunk remain unchanged; queued acknowledgements retain the
+original task, never a replacement transfer. Consumer-pause timing includes the
+queued resume until it returns. Slow handoffs emit `chunk_resume_queue` and
+`chunk_resume` stages (100-ms threshold), separately from remux work. This
+isolates transport-control blocking; it cannot prevent an OS-wide scheduling
+pause or guarantee uninterrupted audio when upstream media stops arriving.
+
 Native events retain `native_event_uptime_seconds` at their producer;
 `native_trace_retention_delay_seconds` separates buffered/replayed diagnostics
 from `main_actor_delivery_delay_seconds`, the dispatch-to-main wait.

@@ -7,6 +7,49 @@ import XCTest
 #endif
 
 final class NativeHLSChunkReaderTests: XCTestCase {
+  func testBlockedTransportResumeDoesNotHoldThePlaybackExecutor() async throws {
+    let server = try ChunkReaderServer()
+    let base = try await server.start()
+    let entered = expectation(description: "Transport resume blocked")
+    let acknowledged = expectation(description: "Chunk acknowledgement returned")
+    let playbackAvailable = expectation(description: "Playback executor remains available")
+    let reported = expectation(description: "Transport blocking is attributed")
+    let gate = DispatchSemaphore(value: 0)
+    let reader = NativeHLSChunkReader(resumeConsumedTask: { task in
+      entered.fulfill()
+      XCTAssertEqual(gate.wait(timeout: .now() + 5), .success)
+      task.resume()
+    })
+    defer { gate.signal(); reader.stop(); server.stop() }
+    let executor = NativeHLSExecutor(pipeline: "test")
+    let stream = reader.stream(URLRequest(url: base.appendingPathComponent("segment")),
+      observeTransfer: { report in
+        if report.attributes["stage"] == "chunk_resume" {
+          XCTAssertGreaterThanOrEqual(report.metrics["duration_seconds"] ?? 0, 0.1)
+          XCTAssertNotNil(report.metrics["thread_cpu_seconds"])
+          reported.fulfill()
+        }
+      })
+    let pending = Task(executorPreference: executor) {
+      var bytes = Data()
+      for try await chunk in stream {
+        bytes.append(chunk.data)
+        reader.consumedChunk(chunk)
+        acknowledged.fulfill()
+      }
+      return bytes
+    }
+    await fulfillment(of: [entered, acknowledged], timeout: 2)
+    let otherWork = Task(executorPreference: executor) { playbackAvailable.fulfill() }
+    await fulfillment(of: [playbackAvailable], timeout: 1)
+    try await Task.sleep(for: .milliseconds(120))
+    gate.signal()
+    let bytes = try await pending.value
+    await otherWork.value
+    XCTAssertEqual(bytes, Data([1, 2, 3, 4]))
+    await fulfillment(of: [reported], timeout: 2)
+  }
+
   func testSlowProcessingSeparatesCPUFromBlockedWallTime() throws {
     let timer = NativeHLSChunkReader.ProcessingTiming(start: .init(uptime: 10, cpu: 2))
     let report = try XCTUnwrap(timer.finish(at: .init(uptime: 15, cpu: 2.2),
@@ -157,14 +200,17 @@ final class NativeHLSChunkReaderTests: XCTestCase {
   func testPartialBodyTimeoutRetainsBytesAndReportsBeforeTheErrorReachesTheConsumer() async throws {
     let server = try ChunkReaderServer()
     let base = try await server.start()
-    let reader = NativeHLSChunkReader()
+    let reader = NativeHLSChunkReader(resumeConsumedTask: { task in
+      Thread.sleep(forTimeInterval: 0.15)
+      task.resume()
+    })
     let probe = TransferReportProbe()
     defer { reader.stop(); server.stop() }
     var bytes = Data()
     do {
       for try await chunk in reader.stream(
         URLRequest(url: base.appendingPathComponent("hold")),
-        observeTransfer: { probe.append($0) }) {
+        observeTransfer: { if $0.attributes["stage"] == "media_transfer" { probe.append($0) } }) {
         bytes += chunk.data
         reader.consumedChunk(chunk)
       }
@@ -179,6 +225,8 @@ final class NativeHLSChunkReaderTests: XCTestCase {
     XCTAssertEqual(report.attributes["error_code"], "-1001")
     XCTAssertEqual(report.counters["response_bytes_received"], 4)
     XCTAssertNotNil(report.metrics["last_body_age_seconds"])
+    XCTAssertGreaterThanOrEqual(report.metrics["consumer_pause_seconds"] ?? 0, 0.15,
+      "Waiting for transport resume must not be misreported as an upstream delivery gap")
     XCTAssertFalse(report.attributes.values.joined().contains("127.0.0.1"))
     XCTAssertFalse(report.attributes.values.joined().contains("http://"))
   }

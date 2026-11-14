@@ -187,6 +187,7 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
   private struct TransferObservation {
     var timing: RequestTiming
     let report: @Sendable (NativeHLSPlaybackDiagnostic) -> Void
+    var pendingResumes = 0
   }
 
   private static let capacity = 32
@@ -202,9 +203,13 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
   private var nextChunkID = 0
   private var stopped = false
   private let configuration: URLSessionConfiguration
+  private let taskControlQueue = DispatchQueue(label: "strozz.native-hls.transfer-control", qos: .userInitiated)
+  private let resumeConsumedTask: @Sendable (URLSessionDataTask) -> Void
 
-  init(configuration: URLSessionConfiguration = .ephemeral) {
+  init(configuration: URLSessionConfiguration = .ephemeral,
+       resumeConsumedTask: @escaping @Sendable (URLSessionDataTask) -> Void = { $0.resume() }) {
     self.configuration = configuration
+    self.resumeConsumedTask = resumeConsumedTask
     super.init()
   }
 
@@ -334,13 +339,39 @@ final class NativeHLSChunkReader: NSObject, URLSessionDataDelegate, @unchecked S
   func consumedChunk(_ chunk: Chunk) {
     lock.lock()
     let consumed = task === chunk.task && pendingChunks.remove(chunk.id) != nil
+    let report = transfers[chunk.task.taskIdentifier]?.report
     if consumed {
+      transfers[chunk.task.taskIdentifier]?.pendingResumes += 1
+      let pending = pendingChunks.count + (transfers[chunk.task.taskIdentifier]?.pendingResumes ?? 0)
       transfers[chunk.task.taskIdentifier]?.timing.consumed(
-        pending: pendingChunks.count, at: ProcessInfo.processInfo.systemUptime)
+        pending: pending, at: ProcessInfo.processInfo.systemUptime)
       lock.signal()
     }
     lock.unlock()
-    if consumed { chunk.task.resume() }
+    guard consumed else { return }
+    // URLSession task control can block on its own synchronization. Never hold
+    // the media executor (or our lock) while releasing transport backpressure.
+    let enqueuedAt = ProcessInfo.processInfo.systemUptime
+    taskControlQueue.async { [self, task = chunk.task] in
+      let startedAt = ProcessInfo.processInfo.systemUptime
+      if startedAt - enqueuedAt >= 0.1 {
+        report?(.init(event: .delivery, attributes: ["stage": "chunk_resume_queue"],
+          metrics: ["duration_seconds": startedAt - enqueuedAt,
+                    "enqueued_uptime_seconds": enqueuedAt], counters: [:]))
+      }
+      NativeHLSChunkReader.ProcessingTiming.measure(
+        pipeline: "transport", stage: "chunk_resume", counters: [:], trace: report) {
+          resumeConsumedTask(task)
+        }
+      lock.lock()
+      if self.task === task, transfers[task.taskIdentifier] != nil {
+        transfers[task.taskIdentifier]?.pendingResumes -= 1
+        let pending = pendingChunks.count + (transfers[task.taskIdentifier]?.pendingResumes ?? 0)
+        transfers[task.taskIdentifier]?.timing.consumed(
+          pending: pending, at: ProcessInfo.processInfo.systemUptime)
+      }
+      lock.unlock()
+    }
   }
 
   func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
