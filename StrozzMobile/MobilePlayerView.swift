@@ -395,13 +395,17 @@ struct MobilePlayerView: View {
   private func updateCollapseDrag(_ translation: CGSize, distance: CGFloat) {
     guard session.isExpanded else { return }
     if translation.height > abs(translation.width) {
-      collapseProgress = min(1, max(0, translation.height / distance))
+      var transaction = Transaction(animation: nil)
+      transaction.disablesAnimations = true
+      withTransaction(transaction) {
+        collapseProgress = min(1, max(0, translation.height / distance))
+      }
     }
   }
 
-  private func endCollapseDrag(_ translation: CGSize) {
+  private func endCollapseDrag(_ translation: CGSize, velocity: CGSize) {
     guard session.isExpanded else { return }
-    if MobilePlayerCollapseGesture.shouldCollapse(translation: translation) {
+    if MobilePlayerCollapseGesture.shouldCollapse(translation: translation, velocity: velocity) {
       session.collapse()
     }
     withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85)) {
@@ -466,7 +470,7 @@ struct MobileVideoView: View {
   let onClose: () -> Void
   let onExpand: () -> Void
   let onCollapseDragChanged: (CGSize) -> Void
-  let onCollapseDragEnded: (CGSize) -> Void
+  let onCollapseDragEnded: (CGSize, CGSize) -> Void
   let onFullscreen: () -> Void
   let onScene: (UIWindowScene) -> Void
   let onLayout: (CGRect) -> Void
@@ -489,6 +493,7 @@ struct MobileVideoView: View {
   @State private var pinchStart: MobileVideoZoom?
   @State private var pinchAnchor = CGPoint.zero
   @State private var panStart: MobileVideoZoom?
+  @State private var videoDragActive = false
   @State private var videoViewport = CGSize.zero
   @Environment(\.scenePhase) private var scenePhase
 
@@ -507,6 +512,7 @@ struct MobileVideoView: View {
   var body: some View {
     let held = model.isPaused || model.presentationState != .ready
       || voiceOver || showQuality || showShare || showRoutes || showModes || volumeInteracting || isManipulating
+      || videoDragActive
     let showsControls = model.mode == .video && (controlsVisible || held)
     let usesSurfaceScrim = isMinimized || (model.presentationState == .ready && !model.isExternalPlayback)
     ZStack {
@@ -669,7 +675,7 @@ struct MobileVideoView: View {
     case .began:
       pinchStart = zoom
       pinchAnchor = location
-      onCollapseDragEnded(.zero)
+      onCollapseDragEnded(.zero, .zero)
       onVideoTap?()
     case .changed, .ended:
       if let pinchStart {
@@ -688,25 +694,29 @@ struct MobileVideoView: View {
     }
   }
 
-  private func handleVideoDrag(_ phase: UIGestureRecognizer.State, _ translation: CGSize) {
+  private func handleVideoDrag(_ phase: UIGestureRecognizer.State, _ translation: CGSize, _ velocity: CGSize) {
     switch phase {
     case .began:
+      videoDragActive = true
       panStart = zoomEnabled && zoom.isZoomed ? zoom : nil
+      fallthrough
     case .changed, .ended:
       if let panStart {
         zoom = panStart.panned(translation, viewport: videoViewport, videoSize: videoSize)
       } else if pinchStart == nil && !zoom.isZoomed {
-        if phase == .ended { onCollapseDragEnded(translation) }
+        if phase == .ended { onCollapseDragEnded(translation, velocity) }
         else { onCollapseDragChanged(translation) }
       }
       if phase == .ended {
+        videoDragActive = false
         panStart = nil
         interaction += 1
       }
     case .cancelled, .failed:
       if let panStart { zoom = panStart }
       panStart = nil
-      onCollapseDragEnded(.zero)
+      videoDragActive = false
+      onCollapseDragEnded(.zero, .zero)
     default:
       break
     }

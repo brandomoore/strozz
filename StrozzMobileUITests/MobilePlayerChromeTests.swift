@@ -3,6 +3,39 @@ import XCTest
 
 @MainActor
 final class MobilePlayerChromeTests: XCTestCase {
+  func testFirstShortDownwardFlickMinimizesWithVisibleAndHiddenControls() {
+    XCUIDevice.shared.orientation = .portrait
+    let app = launch()
+    defer { app.terminate() }
+    let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+    XCTAssertTrue(video.waitForExistence(timeout: 10))
+    for hideControls in [false, true, false] {
+      if hideControls { waitForHidden(app.buttons["mobile-play-pause"]) }
+      let start = video.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.3))
+      start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 50)),
+                  withVelocity: XCUIGestureVelocity(rawValue: 1200), thenHoldForDuration: 0)
+      let mini = app.buttons["mobile-expand-player"]
+      XCTAssertTrue(mini.waitForExistence(timeout: 2), "The first deliberate flick must minimize, not require a second drag")
+      guard mini.exists else { return }
+      mini.tap()
+      XCTAssertTrue(app.buttons["mobile-minimize-player"].waitForExistence(timeout: 2))
+    }
+  }
+
+  func testSlowShortDragReturnsWithoutMinimizingAndRestartsControlsTimeout() {
+    XCUIDevice.shared.orientation = .portrait
+    let app = launch()
+    defer { app.terminate() }
+    let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+    XCTAssertTrue(video.waitForExistence(timeout: 10))
+    let start = video.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.3))
+    start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 45)),
+                withVelocity: .slow, thenHoldForDuration: 5)
+    XCTAssertFalse(app.buttons["mobile-expand-player"].exists, "A held short drag is not a flick")
+    XCTAssertTrue(app.buttons["mobile-play-pause"].exists, "Dragging keeps controls alive past the idle timeout")
+    waitForHidden(app.buttons["mobile-play-pause"])
+  }
+
   func testMacVolumeTrackTapsJumpWithoutDragging() throws {
     let app = XCUIApplication()
     app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"

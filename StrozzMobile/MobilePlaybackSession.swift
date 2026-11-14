@@ -370,7 +370,11 @@ final class MobilePlaybackSession: NSObject, @preconcurrency AVPictureInPictureC
 }
 
 enum MobilePlayerCollapseGesture {
-  static func shouldCollapse(translation: CGSize) -> Bool {
-    translation.height >= 70 && translation.height > abs(translation.width) * 1.5
+  static func shouldCollapse(translation: CGSize, velocity: CGSize = .zero) -> Bool {
+    guard translation.height > abs(translation.width) * 1.5 else { return false }
+    if translation.height >= 70 { return true }
+    return translation.height >= 20 && velocity.height >= 500
+      && velocity.height > abs(velocity.width) * 1.5
+      && translation.height + velocity.height * 0.12 >= 70
   }
 }

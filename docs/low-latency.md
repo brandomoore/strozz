@@ -342,6 +342,13 @@ iOS SDK. Provider availability and stream formats can change.
   visibility state drives opacity and decoder-watchdog eligibility. Their clock,
   network and engine-error monitoring remains active; missing hidden frames must
   not force a fixed-quality decode recovery.
+- **Mobile collapse tracks the original touch.** Measure one-finger video drags
+  from touch-down in window coordinates, not the moving view or the pan
+  recognizer's post-threshold origin. Apply the first recognized movement without
+  animation and hold controls visible until release. A 70-point downward drag
+  commits; a short flick needs at least 20 points plus predominantly downward
+  velocity of 500 points/second. Slow short drags, jitter and sideways motion
+  must not collapse the player. Pinches remain separate.
 - **Audio ownership is separate from video health.** One multiview pane is
   audible. See `PlayerView+AudioSession.swift` and `PlaybackAudioSessionTests`
   before changing interruption/reclaim behavior; do not repeatedly fight another

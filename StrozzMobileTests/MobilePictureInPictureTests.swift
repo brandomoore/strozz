@@ -26,6 +26,24 @@ final class MobilePictureInPictureTests: XCTestCase {
     }
   }
 
+  func testShortDownwardFlickUsesVelocityWithoutAcceptingJitterOrSidewaysGestures() {
+    for translation in [CGSize(width: 0, height: 20), .init(width: -20, height: 50)] {
+      XCTAssertTrue(MobilePlayerCollapseGesture.shouldCollapse(
+        translation: translation, velocity: .init(width: 0, height: 600)))
+      XCTAssertFalse(MobilePlayerCollapseGesture.shouldCollapse(
+        translation: translation, velocity: .init(width: 0, height: 100)))
+      XCTAssertFalse(MobilePlayerCollapseGesture.shouldCollapse(
+        translation: translation, velocity: .init(width: 0, height: -1000)))
+      XCTAssertFalse(MobilePlayerCollapseGesture.shouldCollapse(
+        translation: translation, velocity: .init(width: 1000, height: 600)))
+    }
+    for translation in [CGSize(width: 0, height: 19), .init(width: 50, height: 40),
+                        .init(width: 0, height: -50), .zero] {
+      XCTAssertFalse(MobilePlayerCollapseGesture.shouldCollapse(
+        translation: translation, velocity: .init(width: 0, height: 2000)))
+    }
+  }
+
   func testMiniPlayerGeometryStaysInsidePhoneTabletAndSplitView() {
     for size in [CGSize(width: 390, height: 750), .init(width: 800, height: 350),
                  .init(width: 1024, height: 1300), .init(width: 320, height: 600)] {

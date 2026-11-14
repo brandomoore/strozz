@@ -58,25 +58,47 @@ struct MobileVideoPinchGesture: UIGestureRecognizerRepresentable {
 
 struct MobileVideoDragGesture: UIGestureRecognizerRepresentable {
   let enabled: Bool
-  let onChange: (UIGestureRecognizer.State, CGSize) -> Void
+  let onChange: (UIGestureRecognizer.State, CGSize, CGSize) -> Void
 
-  func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
-    let recognizer = UIPanGestureRecognizer()
+  func makeUIGestureRecognizer(context: Context) -> MobileVideoPanGestureRecognizer {
+    let recognizer = MobileVideoPanGestureRecognizer()
     // A two-finger pinch must never become the existing swipe-to-minimize gesture.
     recognizer.maximumNumberOfTouches = 1
     recognizer.isEnabled = enabled
     return recognizer
   }
 
-  func updateUIGestureRecognizer(_ recognizer: UIPanGestureRecognizer, context: Context) {
+  func updateUIGestureRecognizer(_ recognizer: MobileVideoPanGestureRecognizer, context: Context) {
     recognizer.isEnabled = enabled
   }
 
-  func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
-    guard let translation = context.converter.translation(in: .global) else {
-      onChange(.cancelled, .zero)
-      return
-    }
-    onChange(recognizer.state, CGSize(width: translation.x, height: translation.y))
+  func handleUIGestureRecognizerAction(_ recognizer: MobileVideoPanGestureRecognizer, context: Context) {
+    // SwiftUI's converter is reprojected while collapse moves the gesture's
+    // view. Measure in the fixed window so resizing cannot consume finger travel.
+    let translation = recognizer.touchTranslation
+    let velocity = recognizer.velocity(in: nil)
+    onChange(recognizer.state, CGSize(width: translation.x, height: translation.y),
+             CGSize(width: velocity.x, height: velocity.y))
+  }
+}
+
+final class MobileVideoPanGestureRecognizer: UIPanGestureRecognizer {
+  // Preserve travel before UIPan recognizes the drag, including short flicks.
+  private var touchOrigin: CGPoint?
+
+  var touchTranslation: CGPoint {
+    guard let touchOrigin else { return translation(in: nil) }
+    let current = location(in: nil)
+    return CGPoint(x: current.x - touchOrigin.x, y: current.y - touchOrigin.y)
+  }
+
+  override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+    if touchOrigin == nil { touchOrigin = touches.first?.location(in: nil) }
+    super.touchesBegan(touches, with: event)
+  }
+
+  override func reset() {
+    super.reset()
+    touchOrigin = nil
   }
 }
