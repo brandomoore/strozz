@@ -98,7 +98,8 @@ final class MobileLivePlaybackTests: XCTestCase {
       XCTAssertTrue(current.player === session.model.player)
       XCTAssertTrue(current.playerLayer.isReadyForDisplay)
       XCTAssertNotNil(current.viewIfLoaded?.window)
-      XCTAssertTrue(current.playerLayer.superlayer === current.view.layer)
+      XCTAssertTrue(current.playerLayer.superlayer === current.videoContentLayer)
+      XCTAssertTrue(current.videoContentLayer.superlayer === current.view.layer)
       XCTAssertGreaterThan(current.view.bounds.width, 400)
       if index > 0 { XCTAssertNil(oldController.viewIfLoaded?.window) }
       let diagnostic = XCTAttachment(string: describe(host, model: session.model)

@@ -508,16 +508,18 @@ struct MobileVideoView: View {
     let held = model.isPaused || model.presentationState != .ready
       || voiceOver || showQuality || showShare || showRoutes || showModes || volumeInteracting || isManipulating
     let showsControls = model.mode == .video && (controlsVisible || held)
+    let usesSurfaceScrim = isMinimized || (model.presentationState == .ready && !model.isExternalPlayback)
     ZStack {
       palette.playerBackdrop
       MobilePlayerSurface(controller: videoController, onScene: onScene, onLayout: onLayout,
-        miniPlayerScrim: isMinimized && showsControls
+        scrim: usesSurfaceScrim && showsControls
           ? .init(color: UIColor(palette.videoControlScrim),
-                  hasError: model.errorMessage != nil, reduceTransparency: reduceTransparency) : nil,
-        reduceMotion: reduceMotion)
+                  style: isMinimized ? .minimized(hasError: model.errorMessage != nil)
+                    : .expanded(hasBottomControls: model.presentationState == .ready),
+                  reduceTransparency: reduceTransparency) : nil,
+        reduceMotion: reduceMotion,
+        zoom: zoomEnabled ? zoom.clamped(viewport: videoViewport, videoSize: videoSize) : .init())
         .id(ObjectIdentifier(videoController))
-        .scaleEffect(zoomEnabled ? zoom.scale : 1)
-        .offset(zoomEnabled ? zoom.clamped(viewport: videoViewport, videoSize: videoSize).offset : .zero)
         .clipped()
         .opacity(model.isLoading ? 0 : 1)
         .accessibilityIdentifier("mobile-video-surface")
@@ -622,7 +624,7 @@ struct MobileVideoView: View {
             volumeInteracting = interacting
             controlsVisible = true
             interaction += 1
-          })
+          }, showsScrim: !usesSurfaceScrim)
       }
     }
     .gesture(MobileVideoPinchGesture(enabled: zoomEnabled, onChange: handlePinch))
@@ -721,28 +723,37 @@ struct MobilePlayerSurface: UIViewControllerRepresentable {
   let controller: MobileVideoController
   let onScene: (UIWindowScene) -> Void
   let onLayout: (CGRect) -> Void
-  let miniPlayerScrim: MobileMiniPlayerControlScrim.Configuration?
+  let scrim: MobilePlayerSurfaceScrim.Configuration?
   let reduceMotion: Bool
+  let zoom: MobileVideoZoom
 
   func makeUIViewController(context: Context) -> MobileVideoController {
     controller.onScene = onScene
     controller.onLayout = onLayout
-    controller.miniPlayerScrim.update(miniPlayerScrim, animated: false)
+    controller.scrim.update(scrim, animated: false)
+    controller.videoZoom = zoom
     return controller
   }
 
   func updateUIViewController(_ controller: MobileVideoController, context: Context) {
     controller.onScene = onScene
     controller.onLayout = onLayout
-    controller.miniPlayerScrim.update(miniPlayerScrim,
+    controller.scrim.update(scrim,
       animated: !reduceMotion && context.transaction.animation != nil)
+    controller.videoZoom = zoom
   }
 }
 
 final class MobileVideoController: UIViewController {
   // Share one layer between the animated in-app player and AVKit's native PiP.
   let playerLayer = AVPlayerLayer()
-  let miniPlayerScrim = MobileMiniPlayerControlScrim()
+  let scrim = MobilePlayerSurfaceScrim()
+  let videoContentLayer = CALayer()
+  var videoZoom = MobileVideoZoom() {
+    didSet {
+      if videoZoom != oldValue { viewIfLoaded?.setNeedsLayout() }
+    }
+  }
   var onScene: ((UIWindowScene) -> Void)?
   var onLayout: ((CGRect) -> Void)?
   var onReady: ((Bool, AVPlayer) -> Void)?
@@ -767,7 +778,9 @@ final class MobileVideoController: UIViewController {
     var snapshot = PlaybackTelemetrySnapshot()
     let window = viewIfLoaded?.window
     snapshot.flags["surface_in_window"] = window != nil
-    snapshot.flags["layer_attached"] = viewIfLoaded.map { playerLayer.superlayer === $0.layer } ?? false
+    snapshot.flags["layer_attached"] = viewIfLoaded.map {
+      playerLayer.superlayer === videoContentLayer && videoContentLayer.superlayer === $0.layer
+    } ?? false
     snapshot.flags["layer_display_ready"] = playerLayer.isReadyForDisplay
     snapshot.metrics["layer_width"] = playerLayer.bounds.width
     snapshot.metrics["layer_height"] = playerLayer.bounds.height
@@ -809,9 +822,11 @@ final class MobileVideoController: UIViewController {
   override func loadView() {
     view = UIView()
     view.isUserInteractionEnabled = false
-    view.layer.addSublayer(playerLayer)
+    view.clipsToBounds = true
+    view.layer.addSublayer(videoContentLayer)
+    videoContentLayer.addSublayer(playerLayer)
     // A sibling stays inline when AVKit takes the player layer for system PiP.
-    view.layer.addSublayer(miniPlayerScrim.layer)
+    view.layer.addSublayer(scrim.layer)
   }
 
   override func viewDidLayoutSubviews() {
@@ -826,8 +841,14 @@ final class MobileVideoController: UIViewController {
         self.onLayout?(self.playerLayer.convert(self.playerLayer.bounds, to: window.layer))
       }
     }
-    playerLayer.frame = view.bounds
-    miniPlayerScrim.layout(in: view.bounds, scale: view.traitCollection.displayScale)
+    videoContentLayer.bounds = CGRect(origin: .zero, size: view.bounds.size)
+    videoContentLayer.position = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+    // Zoom only the inline video ancestor, never the scrim or AVKit's PiP layer.
+    videoContentLayer.setAffineTransform(
+      CGAffineTransform(translationX: videoZoom.offset.width, y: videoZoom.offset.height)
+        .scaledBy(x: videoZoom.scale, y: videoZoom.scale))
+    playerLayer.frame = videoContentLayer.bounds
+    scrim.layout(in: view.bounds, scale: view.traitCollection.displayScale)
     CATransaction.commit()
   }
 

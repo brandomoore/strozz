@@ -43,12 +43,11 @@ final class MobileLoadingPresentationTests: XCTestCase {
       for reduceTransparency in [false, true] {
         for size in [CGSize(width: 390, height: 220), .init(width: 844, height: 390),
                      .init(width: 820, height: 500), .init(width: 820, height: 1180)] {
-          let image = try render(
-            MobilePlayerControlScrim(hasBottomControls: true,
-                                     reduceTransparency: reduceTransparency)
-              .frame(width: size.width, height: size.height)
-              .background(Color.white)
-              .environment(\.themePalette, theme.palette(systemColorScheme: .light)))
+          let controller = MobileVideoController()
+          controller.scrim.update(.init(
+            color: UIColor(theme.palette(systemColorScheme: .light).videoControlScrim),
+            style: .expanded(hasBottomControls: true), reduceTransparency: reduceTransparency), animated: false)
+          let image = try renderPlayerScrim(controller, size: size)
           let iconCenters = [CGPoint(x: 32, y: 32), CGPoint(x: size.width - 32, y: 32),
                              CGPoint(x: size.width / 2, y: size.height / 2),
                              CGPoint(x: size.width - 32, y: size.height - 32)]
@@ -96,10 +95,10 @@ final class MobileLoadingPresentationTests: XCTestCase {
         for (size, fadeHeight) in sizes {
           for hasError in [false, true] {
             let controller = MobileVideoController()
-            controller.miniPlayerScrim.update(.init(
+            controller.scrim.update(.init(
               color: UIColor(theme.palette(systemColorScheme: .light).videoControlScrim),
-              hasError: hasError, reduceTransparency: reduceTransparency), animated: false)
-            let image = try renderMiniPlayerScrim(controller, size: size)
+              style: .minimized(hasError: hasError), reduceTransparency: reduceTransparency), animated: false)
+            let image = try renderPlayerScrim(controller, size: size)
             if size.width == 240 && reduceTransparency && !hasError && theme == .light {
               let attachment = XCTAttachment(image: UIImage(cgImage: image))
               attachment.name = "mini-player-native-scrim"
@@ -172,17 +171,17 @@ final class MobileLoadingPresentationTests: XCTestCase {
 
   func testMiniPlayerScrimCoversEdgesDuringRapidResizingWithoutGeometryAnimations() throws {
     let controller = MobileVideoController()
-    controller.miniPlayerScrim.update(.init(color: .black, hasError: true, reduceTransparency: false),
+    controller.scrim.update(.init(color: .black, style: .minimized(hasError: true), reduceTransparency: false),
                                       animated: false)
     let player = controller.playerLayer
-    let scrim = controller.miniPlayerScrim.layer
+    let scrim = controller.scrim.layer
     for width in [640.0, 160, 390, 240, 560, 180, 320, 161, 639] {
       let size = CGSize(width: width, height: width * 9 / 16)
       CATransaction.begin()
       CATransaction.setAnimationDuration(0.4)
-      let image = try renderMiniPlayerScrim(controller, size: size)
+      let image = try renderPlayerScrim(controller, size: size)
       CATransaction.commit()
-      XCTAssertTrue(player.superlayer === scrim.superlayer)
+      XCTAssertTrue(player.superlayer?.superlayer === scrim.superlayer)
       XCTAssertFalse(scrim.superlayer === player, "The scrim must not follow AVKit into system PiP")
       XCTAssertEqual(player.frame, scrim.frame, "Video and scrim must resize in the same layout pass")
       XCTAssertTrue(scrim.masksToBounds)
@@ -299,7 +298,7 @@ final class MobileLoadingPresentationTests: XCTestCase {
     return try XCTUnwrap(renderer.cgImage)
   }
 
-  private func renderMiniPlayerScrim(_ controller: MobileVideoController, size: CGSize) throws -> CGImage {
+  private func renderPlayerScrim(_ controller: MobileVideoController, size: CGSize) throws -> CGImage {
     controller.view.frame = CGRect(origin: .zero, size: size)
     controller.view.backgroundColor = .white
     controller.view.setNeedsLayout()

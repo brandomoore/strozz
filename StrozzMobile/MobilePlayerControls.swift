@@ -17,6 +17,7 @@ struct MobilePlayerControls: View {
   var landscapeChannel: FollowedChannel? = nil
   var onModePresentation: (Bool) -> Void = { _ in }
   var onVolumeInteraction: (Bool) -> Void = { _ in }
+  var showsScrim = true
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
   @AppStorage(PersistenceKey.showStreamDuration) private var showStreamDuration = true
 
@@ -129,8 +130,10 @@ struct MobilePlayerControls: View {
     .buttonStyle(.plain)
     .padding(landscapeChannel == nil ? 10 : 6)
     .background {
-      MobilePlayerControlScrim(hasBottomControls: model.presentationState == .ready,
-                               reduceTransparency: reduceTransparency)
+      if showsScrim {
+        MobilePlayerControlScrim(hasBottomControls: model.presentationState == .ready,
+                                 reduceTransparency: reduceTransparency)
+      }
     }
   }
 }
@@ -348,14 +351,20 @@ struct MobilePlayerControlScrim: View {
   }
 }
 
-final class MobileMiniPlayerControlScrim {
+final class MobilePlayerSurfaceScrim {
+  enum Style: Equatable {
+    case minimized(hasError: Bool)
+    case expanded(hasBottomControls: Bool)
+  }
+
   struct Configuration: Equatable {
     let color: UIColor
-    let hasError: Bool
+    let style: Style
     let reduceTransparency: Bool
   }
 
   let layer = CALayer()
+  private let expanded = CAGradientLayer()
   private let top = CAGradientLayer()
   private let bottom = CAGradientLayer()
   private var configuration: Configuration?
@@ -363,8 +372,10 @@ final class MobileMiniPlayerControlScrim {
   init() {
     layer.masksToBounds = true
     layer.opacity = 0
+    layer.addSublayer(expanded)
     layer.addSublayer(top)
     layer.addSublayer(bottom)
+    expanded.locations = [0, 0.45, 0.55, 1]
     top.locations = [0, 0.25, 0.55, 1]
     bottom.locations = [0, 0.6, 1]
   }
@@ -378,9 +389,20 @@ final class MobileMiniPlayerControlScrim {
     CATransaction.setDisableActions(true)
     if let configuration {
       let strength = configuration.reduceTransparency ? 1.25 : 1.0
-      top.colors = [0.66, 0.60, 0.40, 0].map { configuration.color.withAlphaComponent($0 * strength).cgColor }
-      bottom.colors = [0.64, 0.58, 0].map { configuration.color.withAlphaComponent($0 * strength).cgColor }
-      bottom.isHidden = !configuration.hasError
+      switch configuration.style {
+      case .minimized(let hasError):
+        expanded.isHidden = true
+        top.isHidden = false
+        bottom.isHidden = !hasError
+        top.colors = [0.66, 0.60, 0.40, 0].map { configuration.color.withAlphaComponent($0 * strength).cgColor }
+        bottom.colors = [0.64, 0.58, 0].map { configuration.color.withAlphaComponent($0 * strength).cgColor }
+      case .expanded(let hasBottomControls):
+        expanded.isHidden = false
+        top.isHidden = true
+        bottom.isHidden = true
+        expanded.colors = [0.60, 0.54, 0.54, hasBottomControls ? 0.64 : 0.50]
+          .map { configuration.color.withAlphaComponent($0 * strength).cgColor }
+      }
     }
     layer.opacity = configuration == nil ? 0 : 1
     if wasVisible != (configuration != nil) {
@@ -403,9 +425,13 @@ final class MobileMiniPlayerControlScrim {
     layer.frame = bounds
     let scale = max(1, scale)
     layer.contentsScale = scale
+    expanded.contentsScale = scale
     top.contentsScale = scale
     bottom.contentsScale = scale
     let bleed = 2 / scale
+    expanded.frame = layer.bounds.insetBy(dx: -bleed, dy: -bleed)
+    expanded.startPoint = CGPoint(x: 0.5, y: bleed / expanded.frame.height)
+    expanded.endPoint = CGPoint(x: 0.5, y: (bleed + bounds.height) / expanded.frame.height)
     let topHeight = min(bounds.height, max(96, bounds.height * 0.5))
     let bottomHeight = min(72, bounds.height)
     top.frame = CGRect(x: 0, y: 0, width: bounds.width, height: topHeight).insetBy(dx: -bleed, dy: -bleed)
