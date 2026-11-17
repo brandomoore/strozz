@@ -405,6 +405,8 @@ chat stays below the video without a misleading sideways collapse button.
 Fullscreen video hides the system status bar; leaving fullscreen or minimizing
 restores the normal system appearance. On iPhone, fullscreen video fills the
 landscape height through the bottom safe area; controls retain their safe inset.
+The scrim covers the entire video; only fullscreen controls receive extra bottom
+clearance, not portrait or side-chat controls.
 Opening the portrait chat keyboard keeps the video full-width at 16:9 and reduces
 the space available to chat instead.
 Pinch an expanded live video to zoom continuously from 1x to 4x, then drag to pan

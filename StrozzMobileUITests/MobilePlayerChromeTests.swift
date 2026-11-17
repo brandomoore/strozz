@@ -946,6 +946,50 @@ final class MobilePlayerChromeTests: XCTestCase {
     XCTAssertFalse(pause.exists)
   }
 
+  func testExpandedControlsAndScrimReachTheVideoBottom() throws {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
+    app.launchEnvironment["STROZZ_PLAYER_SURFACE_FIXTURE"] = "1"
+    app.launchEnvironment["STROZZ_PLAYER_PAUSED_FIXTURE"] = "1"
+    defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
+    for theme in ["light", "dark"] {
+      for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
+        XCUIDevice.shared.orientation = orientation
+        app.launchEnvironment["STROZZ_PLAYER_THEME"] = theme
+        app.launch()
+        let actions = app.otherElements["mobile-player-bottom-actions"]
+        let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+        XCTAssertTrue(actions.waitForExistence(timeout: 10))
+        let frame = video.frame
+        let gap = frame.maxY - actions.frame.maxY
+        if orientation == .portrait {
+          XCTAssertEqual(gap, 10, accuracy: 1, "Portrait controls must not reserve a home-indicator inset")
+        } else {
+          XCTAssertEqual(frame.maxY, app.frame.maxY, accuracy: 1)
+          XCTAssertGreaterThanOrEqual(gap, 20, "Fullscreen controls stay above the home indicator")
+          XCTAssertLessThanOrEqual(gap, 36)
+        }
+        let screenshot = app.screenshot()
+        let image = try XCTUnwrap(screenshot.image.cgImage)
+        let scale = CGFloat(image.width) / app.frame.width
+        for offset: CGFloat in [3, 24] {
+          let pixel = try XCTUnwrap(image.cropping(to: CGRect(
+            x: (frame.midX - app.frame.minX) * scale,
+            y: (frame.maxY - offset - app.frame.minY) * scale, width: 1, height: 1)))
+          var rgba = [UInt8](repeating: 0, count: 4)
+          let context = try XCTUnwrap(CGContext(data: &rgba, width: 1, height: 1,
+            bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+          context.draw(pixel, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+          XCTAssertLessThan(Double(rgba.prefix(3).max() ?? 255) / 255, 0.5,
+            "The scrim must shade the cyan video through its bottom edge, not stop above it")
+        }
+        capture(app, "Full-height scrim \(theme) \(orientation.rawValue)")
+        app.terminate()
+      }
+    }
+  }
+
   func testLandscapePreservesTheVideoAndSideChatLayout() {
     XCUIDevice.shared.orientation = .landscapeLeft
     let app = launch()

@@ -622,7 +622,6 @@ struct MobileVideoView: View {
             controlsVisible = true
             interaction += 1
           })
-          .safeAreaPadding(.bottom)
       }
     }
     .gesture(MobileVideoPinchGesture(enabled: zoomEnabled, onChange: handlePinch))

@@ -128,6 +128,7 @@ struct MobilePlayerControls: View {
     }
     .buttonStyle(.plain)
     .padding(landscapeChannel == nil ? 10 : 6)
+    .safeAreaPadding(.bottom, isFullscreen && landscapeChannel == nil ? nil : 0)
     .background {
       MobilePlayerControlScrim(hasBottomControls: model.presentationState == .ready,
                                reduceTransparency: reduceTransparency)
