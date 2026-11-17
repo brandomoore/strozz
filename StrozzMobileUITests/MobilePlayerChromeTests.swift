@@ -695,6 +695,54 @@ final class MobilePlayerChromeTests: XCTestCase {
     }
   }
 
+  func testMiniPlayerFlicksKeepSurfaceAndControlsTogether() {
+    let app = XCUIApplication()
+    app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
+    app.launchEnvironment["STROZZ_PLAYER_SURFACE_FIXTURE"] = "1"
+    app.launchEnvironment["STROZZ_PLAYER_PAUSED_FIXTURE"] = "1"
+    defer { app.terminate() }
+    for theme in ["light", "dark"] {
+      app.launchEnvironment["STROZZ_PLAYER_THEME"] = theme
+      app.launch()
+      let minimize = app.buttons["mobile-minimize-player"]
+      XCTAssertTrue(minimize.waitForExistence(timeout: 10))
+      let video = app.descendants(matching: .any).matching(identifier: "mobile-video-surface").firstMatch
+      minimize.tap()
+      let mini = app.buttons["mobile-expand-player"]
+      XCTAssertTrue(mini.waitForExistence(timeout: 3))
+      let width: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? 240 : 320
+      expectation(for: NSPredicate { _, _ in abs(mini.frame.width - width) < 0.1 }, evaluatedWith: mini)
+      waitForExpectations(timeout: 3)
+      let bottom = mini.frame
+      for distance: CGFloat in [-140, 140, -140, 140] {
+        let origin = mini.frame
+        let start = mini.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance)),
+          withVelocity: XCUIGestureVelocity(rawValue: 2000), thenHoldForDuration: 0)
+        var previous = CGRect.null
+        expectation(for: NSPredicate { _, _ in
+          let frame = mini.frame
+          defer { previous = frame }
+          return frame == previous && abs(video.frame.minY - frame.minY) < 0.5
+        }, evaluatedWith: mini)
+        waitForExpectations(timeout: 5)
+        XCTAssertEqual(video.frame.minX, mini.frame.minX, accuracy: 1)
+        XCTAssertEqual(video.frame.minY, mini.frame.minY, accuracy: 1)
+        XCTAssertEqual(video.frame.width, bottom.width, accuracy: 1)
+        XCTAssertEqual(video.frame.height, bottom.height, accuracy: 1)
+        XCTAssertTrue(mini.frame.contains(app.buttons["mobile-mini-play-pause"].frame))
+        XCTAssertTrue(app.frame.contains(mini.frame))
+        if distance < 0 {
+          XCTAssertLessThan(mini.frame.minY, origin.minY - 100)
+        } else {
+          XCTAssertGreaterThan(mini.frame.minY, origin.minY + 100)
+        }
+        capture(app, "Mini-player \(theme) after \(distance < 0 ? "upward" : "downward") flick")
+      }
+      app.terminate()
+    }
+  }
+
   func testThreePlaybackModesRetainChatAndDraftAndRestoreVideo() {
     let app = XCUIApplication()
     app.launchEnvironment["STROZZ_LAYOUT_FIXTURE"] = "player-chrome"
@@ -915,6 +963,9 @@ final class MobilePlayerChromeTests: XCTestCase {
       XCTAssertFalse(details.exists, "Phone fullscreen must not reveal an offscreen profile")
       XCTAssertFalse(timeline.isHittable)
       XCTAssertGreaterThan(video.frame.width, video.frame.height)
+      XCTAssertEqual(video.frame.minY, app.frame.minY, accuracy: 1)
+      XCTAssertEqual(video.frame.maxY, app.frame.maxY, accuracy: 1,
+        "Fullscreen video must extend through the bottom safe area")
       let fullscreenWidth = video.frame.width
       let toggle = app.buttons["mobile-toggle-chat"]
       tapVideo(app)
@@ -977,6 +1028,10 @@ final class MobilePlayerChromeTests: XCTestCase {
     field.typeText("Keep this draft while rotating")
     XCTAssertEqual(video.frame.width, portraitWidth, accuracy: 1,
       "The portrait keyboard must not move chat into a sidebar")
+    XCTAssertEqual(video.frame.height, portraitWidth * 9 / 16, accuracy: 1,
+      "The keyboard must not shorten the video and introduce aspect-fit side margins")
+    XCTAssertLessThanOrEqual(field.frame.maxY, app.keyboards.firstMatch.frame.minY + 1,
+      "The composer must remain above the keyboard")
     XCTAssertFalse(app.buttons["mobile-toggle-chat"].exists,
       "Opening the keyboard in portrait must not switch to the landscape layout")
     tapVideo(app)

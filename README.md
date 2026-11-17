@@ -403,12 +403,17 @@ in landscape: iPhone starts video-only and can open or hide side-by-side chat;
 iPad offers the same toggle when its side-by-side layout is available. Portrait
 chat stays below the video without a misleading sideways collapse button.
 Fullscreen video hides the system status bar; leaving fullscreen or minimizing
-restores the normal system appearance.
+restores the normal system appearance. On iPhone, fullscreen video fills the
+landscape height through the bottom safe area; controls retain their safe inset.
+Opening the portrait chat keyboard keeps the video full-width at 16:9 and reduces
+the space available to chat instead.
 Pinch an expanded live video to zoom continuously from 1x to 4x, then drag to pan
 within the picture. Controls and chat do not scale. Pinch back to 1x to reset;
 minimizing, backgrounding, switching playback modes, or changing the video layout
 also resets the zoom. Native PiP remains uncropped, and the in-app mini-player
 keeps its existing move/resize gestures rather than content zoom.
+The mini-player's shadow follows the same animated surface as the video, without
+a separately animated background panel.
 By default, side chat uses at most one third of the available width, capped at 320 points.
 Drag the divider beside the video, or use **Chat settings > Side chat > Width**,
 to make it narrower or wider. The saved width is local to the mobile app and

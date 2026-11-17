@@ -13,6 +13,9 @@ struct MobilePlayerLayoutFixture: View {
 
   var body: some View {
     ZStack {
+      if ProcessInfo.processInfo.environment["STROZZ_PLAYER_SURFACE_FIXTURE"] == "1" {
+        theme.palette(systemColorScheme: .light).liftPrimaryText.ignoresSafeArea()
+      }
       if let session, let channel = session.channel {
         MobilePlayerView(channel: channel, session: session)
       } else if let failure {
@@ -79,6 +82,9 @@ struct MobilePlayerLayoutFixture: View {
           title: "A stream description that appears with the controls", gameName: "Just Chatting",
           viewerCount: 1200, thumbnailURL: nil, profileImageURL: url, isLive: true)
         let player = MobilePlaybackSession.layoutFixture(channel: channel)
+        if ProcessInfo.processInfo.environment["STROZZ_PLAYER_SURFACE_FIXTURE"] == "1" {
+          player.videoController.playerLayer.backgroundColor = UIColor.systemTeal.cgColor
+        }
         if ProcessInfo.processInfo.environment["STROZZ_PLAYER_NATIVE_ERROR_FIXTURE"] == "1" {
           player.model.recoverNative(.unsupported)
         }

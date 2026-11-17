@@ -21,12 +21,14 @@ enum MobilePlayerLayout: Equatable {
                max(min(MobileChatWidth.range.lowerBound, size.width / 3), preferredWidth))
   }
 
-  func videoFrame(in size: CGSize, preferredChatWidth: CGFloat = MobileChatWidth.automatic) -> CGRect {
+  func videoFrame(in size: CGSize, preferredChatWidth: CGFloat = MobileChatWidth.automatic,
+                  isPhone: Bool = false) -> CGRect {
     switch self {
     case .chatOnly:
       return .zero
     case .portrait:
-      return CGRect(x: 0, y: 0, width: size.width, height: min(size.width * 9 / 16, size.height * 0.42))
+      let height = isPhone ? size.width * 9 / 16 : min(size.width * 9 / 16, size.height * 0.42)
+      return CGRect(x: 0, y: 0, width: size.width, height: height)
     case .videoOnly:
       return CGRect(origin: .zero, size: size)
     case .sideBySide:
@@ -212,7 +214,7 @@ struct MobilePlayerView: View {
       let sideChatWidth = chatWidthDrag.width(in: geometry.size, preferredWidth: preferredChatWidth)
       let chatWidth = layout == .sideBySide ? sideChatWidth : 0
       let leftWidth = geometry.size.width - chatWidth
-      let expanded = layout.videoFrame(in: geometry.size, preferredChatWidth: sideChatWidth)
+      let expanded = layout.videoFrame(in: geometry.size, preferredChatWidth: sideChatWidth, isPhone: isPhone)
       let chatIsSide = layout == .sideBySide || layout == .videoOnly
       let chatIsVisible = session.isExpanded && layout != .videoOnly
       let expandedWindowFrame = expanded.offsetBy(
@@ -292,15 +294,9 @@ struct MobilePlayerView: View {
                 progress * (miniPlayerManipulation.startFrame == nil ? 0.2 : 0.32)), lineWidth: 1)
               .allowsHitTesting(false)
           }
-          .background {
-            RoundedRectangle(cornerRadius: progress * 14)
-              .fill(palette.playerBackdrop)
-              .shadow(color: palette.playerBackdrop.opacity(0.28),
-                      radius: miniPlayerManipulation.startFrame == nil ? 8 : 18,
-                      y: miniPlayerManipulation.startFrame == nil ? 3 : 8)
-              .opacity(progress)
-              .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: miniPlayerManipulation.startFrame == nil)
-          }
+          .shadow(color: palette.playerBackdrop.opacity(0.28 * progress),
+                  radius: miniPlayerManipulation.startFrame == nil ? 8 : 18,
+                  y: miniPlayerManipulation.startFrame == nil ? 3 : 8)
           .simultaneousGesture(
             miniPlayerGesture(from: restingCompact, in: geometry.size, isPhone: isPhone,
                               origin: geometry.frame(in: .global).origin),
@@ -357,6 +353,9 @@ struct MobilePlayerView: View {
         }
       }
     }
+    .ignoresSafeArea(.container, edges:
+      session.isExpanded && model.mode == .video && UIDevice.current.userInterfaceIdiom == .phone
+        && verticalSizeClass == .compact && !landscapeChatVisible ? .bottom : [])
     .alert("Picture in Picture", isPresented: Binding(
       get: { session.errorMessage != nil }, set: { if !$0 { session.errorMessage = nil } }
     )) {
@@ -623,6 +622,7 @@ struct MobileVideoView: View {
             controlsVisible = true
             interaction += 1
           })
+          .safeAreaPadding(.bottom)
       }
     }
     .gesture(MobileVideoPinchGesture(enabled: zoomEnabled, onChange: handlePinch))

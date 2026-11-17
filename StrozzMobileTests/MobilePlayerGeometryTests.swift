@@ -130,6 +130,19 @@ final class MobilePlayerGeometryTests: XCTestCase {
     XCTAssertEqual(MobilePlayerLayout.videoOnly.videoFrame(in: size), CGRect(origin: .zero, size: size))
   }
 
+  func testPortraitKeyboardDoesNotShrinkTheFullWidthVideo() {
+    for width in [320.0, 390, 402, 440] {
+      for height in [380.0, 480, 750] {
+        let frame = MobilePlayerLayout.portrait.videoFrame(in: CGSize(width: width, height: height), isPhone: true)
+        XCTAssertEqual(frame, CGRect(x: 0, y: 0, width: width, height: width * 9 / 16),
+          "Keyboard avoidance must reduce chat space, not the video's aspect-fitted width")
+      }
+      let tablet = CGSize(width: 834, height: 500)
+      XCTAssertEqual(MobilePlayerLayout.portrait.videoFrame(in: tablet).height, tablet.height * 0.42,
+        "Short tablet windows must still reserve room for chat")
+    }
+  }
+
   func testResizingBetweenPortraitAndLandscapeKeepsTheMountedChatAndVideo() async throws {
     let state = RotationMountState()
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
